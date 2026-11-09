@@ -305,6 +305,81 @@ public sealed class BacktestPlanTests
         Assert.Empty(await fixture.Jobs.GetAllJobsAsync(default));
     }
 
+    /// <summary>Random group order is rebuilt exactly from its saved seed, covers every stock once, and differs by seed.</summary>
+    [Fact]
+    public async Task RandomGroups_SameSeedRebuildsTheSavedGroups()
+    {
+        string[] symbols = ["ASTS", "BKSY", "BXDC", "CRCL", "CRDO", "DASH", "DIOD", "FPS", "MIAX", "MRVL",
+            "MVST", "MXL", "NBIS", "NVTS", "OUST", "PATH", "PGY", "POET", "RDW", "RGTI", "RKLB", "SIVE", "SMCI", "STM"];
+        await using var fixture = await Fixture.CreateAsync(24, 1, sourceSymbols: symbols);
+        var request = new SaveBacktestPlanRequest(fixture.Request, 5, GroupOrder: "random", GroupSeed: 20261109);
+
+        var saved = await fixture.Service.SaveAsync(request);
+        var reopened = (await fixture.Service.GetAsync(saved.PlanId))!;
+        var again = await fixture.Service.PreviewAsync(request);
+        var otherSeed = await fixture.Service.PreviewAsync(request with { GroupSeed = 7 });
+        var alphabetical = await fixture.Service.PreviewAsync(new(fixture.Request, 5));
+
+        static string[][] Groups(BacktestPlanResponse plan) => plan.Cohorts.Select(group => group.Symbols.ToArray()).ToArray();
+        Assert.Equal(("random", 20261109), (reopened.GroupOrder, reopened.GroupSeed!.Value));
+        Assert.Equal(Groups(saved), Groups(reopened));
+        Assert.Equal(Groups(saved), Groups(again));
+        Assert.Equal(new[] { 5, 5, 5, 5, 4 }, reopened.Cohorts.Select(group => group.Symbols.Count));
+        Assert.Equal(symbols.Order(), reopened.Cohorts.SelectMany(group => group.Symbols).Order());
+        Assert.All(reopened.Cohorts, group => Assert.Equal(group.Symbols.Order(StringComparer.Ordinal), group.Symbols));
+        Assert.NotEqual(Groups(saved), Groups(otherSeed));
+        Assert.NotEqual(Groups(saved), Groups(alphabetical));
+        Assert.Null(alphabetical.GroupOrder);
+        Assert.Null(alphabetical.GroupSeed);
+    }
+
+    /// <summary>A missing seed, a seed without random order, random order with manual groups, or an unknown order fail before saving.</summary>
+    [Theory]
+    [InlineData("random", null, false)]
+    [InlineData("alphabetical", 3, false)]
+    [InlineData("random", 3, true)]
+    [InlineData("shuffled", 3, false)]
+    [InlineData("random", -1, false)]
+    public async Task InvalidGroupOrder_IsRejectedBeforeSaving(string order, int? seed, bool manual)
+    {
+        await using var fixture = await Fixture.CreateAsync(4, 1);
+        var symbols = fixture.Source.Members.Select(member => member.Symbol).ToArray();
+        var request = manual
+            ? new SaveBacktestPlanRequest(fixture.Request, null, [new("All", symbols, 10000m)], GroupOrder: order, GroupSeed: seed)
+            : new SaveBacktestPlanRequest(fixture.Request, 2, GroupOrder: order, GroupSeed: seed);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SaveAsync(request));
+        Assert.Empty(await fixture.Service.ListAsync());
+    }
+
+    /// <summary>
+    /// Daily eligibility rules are saved with the plan, reach every generated cohort run, and invalid rules fail at preview.
+    /// Comparing the session open is allowed for intraday entries only: a daily strategy fills at that same open.
+    /// </summary>
+    [Fact]
+    public async Task DailyEligibility_IsSavedAndReachesEveryCohortRun()
+    {
+        await using var fixture = await Fixture.CreateAsync(4, 1);
+        fixture.ResolvedReplayPolicy = TradingFlow.Domain.Backtesting.ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1;
+        var rules = new BacktestEligibilityRules(5m, "session_open", 14, 14, MinAverageVolume: 1_000_000m, AtrPeriod: 14, MinAtr: 0.5m);
+        var request = new SaveBacktestPlanRequest(fixture.Request with { Eligibility = rules }, 2);
+
+        var saved = await fixture.Service.SaveAsync(request);
+        var reopened = (await fixture.Service.GetAsync(saved.PlanId))!;
+        await fixture.Service.StartAsync(saved.PlanId, new("1.0", "eligibility"));
+
+        Assert.Equal(rules, reopened.Run.Eligibility);
+        Assert.Equal(2, fixture.Written.Count);
+        Assert.All(fixture.Written, written => Assert.Equal(rules, written.Run.Eligibility));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.PreviewAsync(
+            request with { Run = fixture.Request with { Eligibility = rules with { MinAtr = 0.5m, AtrPeriod = null } } }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.PreviewAsync(
+            request with { Run = fixture.Request with { Eligibility = rules with { PriceBasis = "close" } } }));
+        fixture.ResolvedReplayPolicy = null;
+        var openAtDailyFill = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.PreviewAsync(request));
+        Assert.Contains("session_open", openAtDailyFill.Message, StringComparison.Ordinal);
+        Assert.NotNull(await fixture.Service.PreviewAsync(request with { Run = fixture.Request with { Eligibility = rules with { PriceBasis = "prior_close" } } }));
+    }
+
     /// <summary>Provides explicitly synthetic transport facts without representing a real classifier evaluation or provider observation.</summary>
     private static DecisionContextEvidenceSummary SyntheticEvidence() => new(new("synthetic/profile.yaml", new('d', 64)),
         "synthetic-test", "1", ["synthetic-taxonomy"], ["synthetic-classifier"], [new string('e', 64)],

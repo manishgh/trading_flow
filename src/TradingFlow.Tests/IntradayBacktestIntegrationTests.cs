@@ -118,6 +118,48 @@ public sealed partial class IntradayBacktestIntegrationTests
     [Fact]
     public async Task PublishedRecipe_PlacesOneStopOrderAtTheRangeWithAtrStopAndNoTarget()
     {
+        await WithRecipeRunAsync(null, (result, _) =>
+        {
+            Assert.True(result.EconomicResultsComplete);
+            var trade = Assert.Single(result.CompletedTrades);
+            Assert.Equal("long", trade.Direction);
+            // The 09:35-09:40 bar trades through the trigger after its open; an intrabar stop fill is stamped at that bar's end.
+            Assert.Equal(DateTimeOffset.Parse("2026-10-01T13:40:00Z"), trade.EntryTimestamp);
+            Assert.Equal(99.5m, trade.StopLossPrice);
+            Assert.Equal(0m, trade.TakeProfitPrice);
+            // Entry and stop fall in the same five-minute bar: counted as a loss and labelled because their order is unknown.
+            Assert.Equal("stop_loss_entry_bar_order_unknown", trade.ExitReason);
+            Assert.Equal(1, result.CandidateTradeCount);
+        });
+    }
+
+    // A saved plan's daily eligibility reaches the five-minute ORB replay: the stock (prior close $99, 7.8M shares a day)
+    // trades when it passes, and its candidate is refused as universe_membership_missing when the minimum price is $200.
+    [Theory]
+    [InlineData(5, true)]
+    [InlineData(200, false)]
+    public async Task PublishedRecipe_TradesOnlyOnDaysTheStockIsEligible(int minPrice, bool eligible)
+    {
+        var rules = new DailyScreenRules(minPrice, DailyScreenPriceBasis.PriorClose, 5, MinAverageShareVolume: 1_000_000m, MinHistorySessions: 5);
+        await WithRecipeRunAsync(rules, (result, root) =>
+        {
+            Assert.True(result.EconomicResultsComplete);
+            Assert.Equal(1, result.CandidateTradeCount);
+            Assert.Equal(eligible ? 1 : 0, result.CompletedTrades.Count);
+            var refusals = result.UnifiedPortfolio!.AdmissionRejectionCounts ?? new Dictionary<string, int>();
+            Assert.Equal(eligible ? 0 : 1, refusals.GetValueOrDefault("portfolio_universe_membership_missing"));
+            // The published record lists the days the stock qualified on, so each refusal can be checked afterwards.
+            var record = Assert.Single(Directory.EnumerateFiles(root, "synthetic-orb-recipe-daily-eligibility.json", SearchOption.AllDirectories));
+            using var json = JsonDocument.Parse(File.ReadAllText(record));
+            var days = json.RootElement.GetProperty("eligibleDays").GetProperty("ABC").EnumerateArray().Select(day => day.GetString()).ToArray();
+            Assert.Equal(eligible ? "2026-10-01" : "none", days.SingleOrDefault() ?? "none");
+        });
+    }
+
+    // Runs the published ORB recipe on one synthetic stock and session through the ordinary prepared runner, optionally with
+    // a plan's daily eligibility rules on its resolved stock list, then deletes the isolated temporary folder.
+    private static async Task WithRecipeRunAsync(DailyScreenRules? eligibility, Action<BacktestResult, string> verify)
+    {
         var root = Path.Combine(Path.GetTempPath(), "tf-orb-recipe-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -140,7 +182,7 @@ public sealed partial class IntradayBacktestIntegrationTests
                 RawRoot = Path.Combine(root, "raw"), NormalizedRoot = Path.Combine(root, "normalized"), ResultsRoot = Path.Combine(root, "results"),
                 CachePolicy = "use_cache",
                 Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,
-                    ResolvedSource = "synthetic_fixture", SelectedSourceTickers = ["ABC"], ResolvedAtUtc = start },
+                    ResolvedSource = "synthetic_fixture", SelectedSourceTickers = ["ABC"], ResolvedAtUtc = start, DailyEligibility = eligibility },
                 Portfolio = profile.Portfolio with { MaxConcurrentPositions = 1, PreventOverlappingTickerPositions = true },
                 Artifacts = new("full")
             };
@@ -157,16 +199,7 @@ public sealed partial class IntradayBacktestIntegrationTests
             var result = await runner.RunAsync(run, [runtime.Definition], DateTimeOffset.UtcNow,
                 Path.Combine(run.ResultsRoot, "result.json"), default, preparedDataReference: reference);
 
-            Assert.True(result.EconomicResultsComplete);
-            var trade = Assert.Single(result.CompletedTrades);
-            Assert.Equal("long", trade.Direction);
-            // The 09:35-09:40 bar trades through the trigger after its open; an intrabar stop fill is stamped at that bar's end.
-            Assert.Equal(start.AddMinutes(10), trade.EntryTimestamp);
-            Assert.Equal(99.5m, trade.StopLossPrice);
-            Assert.Equal(0m, trade.TakeProfitPrice);
-            // Entry and stop fall in the same five-minute bar: counted as a loss and labelled because their order is unknown.
-            Assert.Equal("stop_loss_entry_bar_order_unknown", trade.ExitReason);
-            Assert.Equal(1, result.CandidateTradeCount);
+            verify(result, root);
         }
         finally
         {
@@ -263,6 +296,19 @@ public sealed partial class IntradayBacktestIntegrationTests
             foreach (var timeframe in timeframes)
             {
                 RequestedTimeframes.Add(timeframe);
+                if (timeframe == "1d")
+                {
+                    // Daily candles for the daily eligibility check: one per session dated midnight New York, matching the
+                    // regular-session five-minute candles below (78 bars of 100,000 shares, open and close $99).
+                    foreach (var ticker in tickers)
+                    foreach (var date in sessionDates)
+                    {
+                        var at = new DateTimeOffset(date.ToDateTime(new TimeOnly(4, 0), DateTimeKind.Utc));
+                        if (at < start || at >= end) continue;
+                        yield return new(ticker, at, timeframe, 99m, 100.2m, 95m, 99m, 7_800_000m, "sip", adjustmentPolicy, at.AddHours(16), end);
+                    }
+                    continue;
+                }
                 Assert.Equal("5m", timeframe);
                 foreach (var ticker in tickers)
                 foreach (var date in sessionDates)

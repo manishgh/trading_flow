@@ -92,8 +92,12 @@ public sealed class HistoricalScreenerUniverseProvider(IMarketDataProvider provi
                     continue;
                 }
 
-                var priorBars = ordered.Take(index).Select(item => item.Bar).ToList();
-                var (eligible, _, _) = Evaluate(ticker, priorBars, universe);
+                // A fixed trailing window of completed sessions, so a day's decision does not depend on where the run starts.
+                // The legacy screen reads only its look-back too, so its decisions are unchanged.
+                var first = Math.Max(0, index - universe.ScreenLookbackSessions);
+                var priorBars = ordered.Skip(first).Take(index - first).Select(item => item.Bar).ToList();
+                // The decision day's own open is known once that session opens; it is read only when the rules compare it.
+                var (eligible, _, _) = Evaluate(ticker, priorBars, universe, ordered[index].Bar.Open);
                 if (eligible)
                 {
                     eligibleDays.Add(day);
@@ -118,12 +122,9 @@ public sealed class HistoricalScreenerUniverseProvider(IMarketDataProvider provi
             .ToArray();
     }
 
-    private static DateTimeOffset FetchStart(DateTimeOffset asOf, UniverseConfig universe)
-    {
-        var lookback = Math.Max(universe.LookbackDays, 1);
-        // Over-fetch calendar days so at least `lookback` trading days exist before the window.
-        return asOf.AddDays(-((lookback * 3) + 15));
-    }
+    // Over-fetch calendar days so the screen's required completed sessions exist before the window.
+    private static DateTimeOffset FetchStart(DateTimeOffset asOf, UniverseConfig universe) =>
+        asOf.AddDays(-universe.ScreenFetchCalendarDays);
 
     private async Task<Dictionary<string, List<OhlcvBar>>> FetchDailyBarsAsync(
         IReadOnlyList<string> candidates,
@@ -179,16 +180,18 @@ public sealed class HistoricalScreenerUniverseProvider(IMarketDataProvider provi
             .ToList();
     }
 
-    // Shared eligibility rule so the as-of screen and per-day membership stay identical.
+    // Shared eligibility rule so the as-of screen and per-day membership stay identical. A run's explicit daily eligibility
+    // rules replace the legacy price and dollar-volume fields; sessionOpen is the decision day's open when it is known.
     private static (bool Eligible, UniverseSelection? Selection, string? Rejection) Evaluate(
         string ticker,
         IReadOnlyList<OhlcvBar> priorBars,
-        UniverseConfig universe)
+        UniverseConfig universe,
+        decimal? sessionOpen = null)
     {
         var lookback = Math.Max(universe.LookbackDays, 1);
-        var screen = DailyScreen.Evaluate(ticker, priorBars, sessionOpen: null,
-            new DailyScreenRules(universe.MinPrice, DailyScreenPriceBasis.PriorClose, lookback,
-                MinAverageDollarVolume: universe.MinAvgDollarVolume));
+        var rules = universe.DailyEligibility ?? new DailyScreenRules(universe.MinPrice, DailyScreenPriceBasis.PriorClose, lookback,
+            MinAverageDollarVolume: universe.MinAvgDollarVolume);
+        var screen = DailyScreen.Evaluate(ticker, priorBars, sessionOpen, rules);
         if (!screen.Eligible)
         {
             return (false, null, screen.Rejection);

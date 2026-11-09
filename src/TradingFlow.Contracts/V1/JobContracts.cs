@@ -17,7 +17,9 @@ public sealed record StartBacktestRequest(
     string? ConfigurationKey = null,
     string? ConfigurationSha256 = null,
     DecisionContextEvidenceReference? DecisionContextEvidence = null,
-    string? ExecutionReplayPolicyId = null);
+    string? ExecutionReplayPolicyId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    BacktestEligibilityRules? Eligibility = null);
 
 public sealed record StartPaperRunRequest(
     string ContractVersion,

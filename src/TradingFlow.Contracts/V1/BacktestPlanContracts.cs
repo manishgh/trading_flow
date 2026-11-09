@@ -12,7 +12,15 @@ public sealed record BacktestCohort(string Name, IReadOnlyList<string> Symbols, 
 
 /// <summary>Saving this request stores choices only; it never starts execution.</summary>
 public sealed record SaveBacktestPlanRequest(StartBacktestRequest Run, int? GroupSize,
-    IReadOnlyList<BacktestCohort>? Cohorts = null, IReadOnlyList<string>? ExcludedSymbols = null);
+    IReadOnlyList<BacktestCohort>? Cohorts = null, IReadOnlyList<string>? ExcludedSymbols = null,
+    string? GroupOrder = null, int? GroupSeed = null);
+
+/// <summary>
+/// Per-day stock eligibility judged only from completed earlier sessions; a stock may trade only on days it passes.
+/// PriceBasis is prior_close or session_open. Null thresholds are not applied.
+/// </summary>
+public sealed record BacktestEligibilityRules(decimal MinPrice, string PriceBasis, int AverageSessions, int MinHistorySessions,
+    decimal? MinAverageVolume = null, decimal? MinAverageDollarVolume = null, int? AtrPeriod = null, decimal? MinAtr = null);
 
 /// <summary>An immutable saved choice; re-saving edited choices creates another explicit plan.</summary>
 public sealed record BacktestPlanResponse(long PlanId, DateTimeOffset SavedAtUtc,
@@ -20,7 +28,11 @@ public sealed record BacktestPlanResponse(long PlanId, DateTimeOffset SavedAtUtc
     int MaximumAcceptedExecutions, string MembershipDescription, UniversePreviewResponse Source,
     string ConfigurationSha256, IReadOnlyList<string>? ExcludedSymbols = null,
     DecisionContextEvidenceSummary? EvidenceSummary = null,
-    BacktestResolvedSettingsResponse? ResolvedSettings = null)
+    BacktestResolvedSettingsResponse? ResolvedSettings = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? GroupOrder = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? GroupSeed = null)
 {
     /// <summary>Gives saved-plan pickers a human-readable identity without exposing the serialized record.</summary>
     public override string ToString() => $"{Run.RunName} · {Cohorts.Count} groups · {SavedAtUtc:u}";

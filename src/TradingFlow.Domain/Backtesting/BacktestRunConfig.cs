@@ -1,3 +1,5 @@
+using TradingFlow.Domain.Market;
+
 namespace TradingFlow.Domain.Backtesting;
 
 public sealed record BacktestRunConfig(
@@ -88,8 +90,15 @@ public sealed record UniverseConfig(
     IReadOnlyList<string>? SelectedSourceTickers = null,
     IReadOnlyList<string>? ScreenerTickers = null,
     string? ResolvedScreenerQuery = null,
-    DateTimeOffset? ResolvedAtUtc = null)
+    DateTimeOffset? ResolvedAtUtc = null,
+    DailyScreenRules? DailyEligibility = null)
 {
+    /// <summary>Completed daily sessions the screen reads before a decision day: the eligibility rules' needs, or the legacy look-back.</summary>
+    public int ScreenLookbackSessions => DailyEligibility?.PriorSessionsNeeded ?? Math.Max(LookbackDays, 1);
+
+    /// <summary>Calendar days fetched before the first decision day so at least <see cref="ScreenLookbackSessions"/> sessions exist.</summary>
+    public int ScreenFetchCalendarDays => checked(ScreenLookbackSessions * 3 + 15);
+
     public const string RescreenPerRun = "per_run";
     public const string RescreenPerDay = "per_day";
 

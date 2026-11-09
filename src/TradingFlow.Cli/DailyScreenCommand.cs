@@ -16,9 +16,6 @@ public static class DailyScreenCommand
 {
     public const string Name = "research-daily-screen";
 
-    // Wilder ATR weights the earliest of 100 sessions by about 0.2%, so older history cannot change a decision.
-    private const int PriorSessionsUsed = 100;
-
     /// <summary>
     /// Usage: research-daily-screen --catalog path --artifact-root path --bars datasetId --actions datasetId
     /// --from yyyy-MM-dd --to yyyy-MM-dd --out folder [--exclude-symbols file] with the stocks-in-play rules:
@@ -34,12 +31,7 @@ public static class DailyScreenCommand
         var actions = await Manifest(catalog, Require(options, "--actions"), cancellationToken);
         var rules = new DailyScreenRules(
             Number(Require(options, "--min-price")),
-            Require(options, "--price-basis") switch
-            {
-                "session_open" => DailyScreenPriceBasis.SessionOpen,
-                "prior_close" => DailyScreenPriceBasis.PriorClose,
-                var other => throw new ArgumentException($"Unknown price basis '{other}'.")
-            },
+            DailyScreenRules.ParsePriceBasis(Require(options, "--price-basis")),
             Int32.Parse(Require(options, "--average-sessions"), CultureInfo.InvariantCulture),
             MinAverageShareVolume: Optional(options, "--min-average-volume"),
             MinAverageDollarVolume: Optional(options, "--min-average-dollar-volume"),
@@ -92,7 +84,7 @@ public static class DailyScreenCommand
         {
             var date = DateOnly.FromDateTime(series[index].Timestamp.UtcDateTime);
             if (date < from || date > to) continue;
-            var start = Math.Max(0, index - PriorSessionsUsed);
+            var start = Math.Max(0, index - DailyScreenRules.AtrStabilizationSessions);
             var prior = SplitBasis.AsOf(series.Skip(start).Take(index - start).ToArray(), splits, date);
             var result = DailyScreen.Evaluate(ticker, prior, series[index].Open, rules);
             if (result.Eligible) yield return (date, result.Values!);

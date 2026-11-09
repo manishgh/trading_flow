@@ -33,6 +33,37 @@ universe:
 The Web/API layer resolves the selected wishlist at run creation. Finviz membership
 is discovery evidence only and never bypasses strategy admission.
 
+### Saved-plan group order and daily eligibility (9 November 2026)
+
+A saved backtest plan splits its stocks into groups alphabetically or, with
+`groupOrder: random` and a `groupSeed`, in an order set by the SHA-256 of seed and
+symbol. The same seed always rebuilds the same groups; the seed is saved with the plan.
+
+A plan may also carry daily eligibility rules. The generated run then writes them under
+its fixed stock list:
+
+```yaml
+universe:
+  mode: resolved_snapshot
+  daily_eligibility:
+    min_price: 5
+    price_basis: session_open      # or prior_close
+    average_sessions: 14
+    min_average_volume: 1000000    # optional, shares
+    atr_period: 14                 # optional
+    min_atr: 0.5                   # optional, needs atr_period
+    min_history_sessions: 14
+```
+
+For every session in the test window, each stock is judged with the shared
+`DailyScreen` rule from completed earlier daily candles only (plus that session's open
+when `price_basis: session_open`). A candidate on a day its stock did not qualify is
+refused as `universe_membership_missing`, in daily swing runs and in the five-minute
+opening-range replay alike. Each stock's eligible days are published as
+`universe/{run}-daily-eligibility.json` beside the results. This removes look-ahead in
+which days a listed stock may trade; it does not make today's wishlist or Finviz list
+a historical membership record.
+
 ## Market Data
 
 The retained profiles use Alpaca SIP:

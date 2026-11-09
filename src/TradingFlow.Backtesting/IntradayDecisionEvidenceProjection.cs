@@ -8,9 +8,13 @@ public static class IntradayDecisionEvidenceProjection
 {
     public const int MaximumDisplayDecisions = 50;
 
-    /// <summary>Copies source levels/times and last observed protection without simulating orders or changing economic state.</summary>
+    /// <summary>
+    /// Copies source levels/times and last observed protection without simulating orders or changing economic state.
+    /// Candidates refused before the replay (for example a stock not eligible that day) show their refusal reason.
+    /// </summary>
     public static BacktestPortfolioState Attach(BacktestPortfolioState state,
-        IReadOnlyList<BacktestCandidateTrade> candidates, IntradayPortfolioReplayOutcome replay)
+        IReadOnlyList<BacktestCandidateTrade> candidates, IntradayPortfolioReplayOutcome replay,
+        IReadOnlyDictionary<string, string>? refusedBeforeReplay = null)
     {
         var events = replay.Events.ToLookup(item => item.CandidateId, StringComparer.Ordinal);
         var fills = state.Fills.Where(fill => fill.IsEntry).ToLookup(fill => fill.CandidateId, StringComparer.Ordinal);
@@ -40,8 +44,9 @@ public static class IntradayDecisionEvidenceProjection
                 intent.SessionDeadlineUtc, intent.LimitPrice, candidate.StopLossPrice,
                 quantity == 0 ? null : entries.Sum(fill => fill.Quantity * fill.Price) / quantity,
                 protection?.StopPrice ?? candidate.StopLossPrice, target > 0 ? target : null,
-                closed is not null ? "closed" : latest?.State ?? "not_observed",
-                closed?.ExitReason ?? latest?.Reason ?? "No replay event was published for this hypothesis.",
+                closed is not null ? "closed" : latest?.State ?? (refusedBeforeReplay?.ContainsKey(candidate.CandidateId) == true ? "refused" : "not_observed"),
+                closed?.ExitReason ?? latest?.Reason ?? refusedBeforeReplay?.GetValueOrDefault(candidate.CandidateId)
+                    ?? "No replay event was published for this hypothesis.",
                 latest?.TimestampUtc, adjustment?.EffectiveAfterUtc,
                 intent.EntryOrderMode == IntradayEntryOrderMode.NextBarMarket ? "next_bar_market"
                     : intent.EntryOrderMode == IntradayEntryOrderMode.StopMarket ? "stop_market" : "next_bar_limit",

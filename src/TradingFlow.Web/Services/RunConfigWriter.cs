@@ -123,6 +123,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  wishlist_id: {request.WishlistId?.ToString() ?? String.Empty}");
         yaml.AppendLine($"  wishlist_name: {RunYamlScalar(request.WishlistName ?? String.Empty, "universe.wishlist_name")}");
         yaml.AppendLine("  resolved_at_utc: " + (request.UniverseResolvedAtUtc ?? DateTimeOffset.UtcNow).ToString("O", CultureInfo.InvariantCulture));
+        AppendDailyEligibility(yaml, request.DailyEligibility);
         yaml.AppendLine();
         yaml.AppendLine("tickers:");
         foreach (var ticker in request.Tickers.Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -742,6 +743,26 @@ public sealed class RunConfigWriter
 
     private static string QuoteYaml(string value) =>
         $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)}\"";
+
+    /// <summary>
+    /// Writes a saved plan's per-day eligibility rules under the resolved stock list, so each stock trades only on days it
+    /// qualified from completed earlier sessions. Writes nothing when the plan has no rules; unset thresholds are omitted.
+    /// </summary>
+    private static void AppendDailyEligibility(StringBuilder yaml, TradingFlow.Domain.Market.DailyScreenRules? rules)
+    {
+        if (rules is null) return;
+        rules.Validate();
+        static string Text(decimal value) => value.ToString(CultureInfo.InvariantCulture);
+        yaml.AppendLine("  daily_eligibility:");
+        yaml.AppendLine($"    min_price: {Text(rules.MinPrice)}");
+        yaml.AppendLine($"    price_basis: {TradingFlow.Domain.Market.DailyScreenRules.PriceBasisName(rules.PriceBasis)}");
+        yaml.AppendLine($"    average_sessions: {rules.AverageLookbackSessions.ToString(CultureInfo.InvariantCulture)}");
+        if (rules.MinAverageShareVolume is { } shares) yaml.AppendLine($"    min_average_volume: {Text(shares)}");
+        if (rules.MinAverageDollarVolume is { } dollars) yaml.AppendLine($"    min_average_dollar_volume: {Text(dollars)}");
+        if (rules.AtrPeriod is { } period) yaml.AppendLine($"    atr_period: {period.ToString(CultureInfo.InvariantCulture)}");
+        if (rules.MinAtr is { } atr) yaml.AppendLine($"    min_atr: {Text(atr)}");
+        yaml.AppendLine($"    min_history_sessions: {rules.MinHistorySessions.ToString(CultureInfo.InvariantCulture)}");
+    }
 
     private static void AppendTickerList(StringBuilder yaml, string key, IEnumerable<string>? tickers)
     {

@@ -3,35 +3,6 @@ using TradingFlow.Domain.Market;
 
 namespace TradingFlow.Engine.Universe;
 
-/// <summary>Which price a daily screen compares with its minimum.</summary>
-public enum DailyScreenPriceBasis
-{
-    /// <summary>Close of the last completed session.</summary>
-    PriorClose,
-
-    /// <summary>Official open of the session being decided, known once it opens.</summary>
-    SessionOpen
-}
-
-/// <summary>Frozen daily eligibility rules. A null threshold means that rule is not applied.</summary>
-public sealed record DailyScreenRules(
-    decimal MinPrice,
-    DailyScreenPriceBasis PriceBasis = DailyScreenPriceBasis.PriorClose,
-    int AverageLookbackSessions = 20,
-    decimal? MinAverageShareVolume = null,
-    decimal? MinAverageDollarVolume = null,
-    int? AtrPeriod = null,
-    decimal? MinAtr = null,
-    int MinHistorySessions = 1)
-{
-    public void Validate()
-    {
-        if (MinPrice < 0m || AverageLookbackSessions < 1 || MinHistorySessions < 1 ||
-            MinAtr is not null && AtrPeriod is not { } period || AtrPeriod is < 1)
-            throw new ArgumentException("Daily screen rules need non-negative prices, positive look-backs, and an ATR period for an ATR minimum.");
-    }
-}
-
 /// <summary>The measured values behind one screen decision, kept so every inclusion can be audited.</summary>
 public sealed record DailyScreenValues(
     string Ticker,

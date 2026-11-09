@@ -294,7 +294,9 @@
         }
         const exclusions = document.createElement('p');
         exclusions.textContent = 'Excluded stocks: ' + (plan.excludedSymbols?.length ? plan.excludedSymbols.join(', ') : 'None');
-        planPreview.append(description, exclusions, list);
+        const selection = document.createElement('p');
+        selection.textContent = describePlanSelection(plan);
+        planPreview.append(description, exclusions, selection, list);
         const strategies = document.createElement('p');
         strategies.textContent = 'Strategies: ' + plan.run.strategies.map(item => `${item.strategyId} ${item.semanticVersion} (${item.contentSha256})`).join('; ');
         planPreview.append(strategies);
@@ -315,6 +317,35 @@
         savedPlans = await api('backtests/plans');
         planPicker.replaceChildren(new Option('Select a saved plan', ''));
         for (const plan of savedPlans) planPicker.add(new Option(`${plan.run.runName} · ${plan.cohorts.length} groups · ${new Date(plan.savedAtUtc).toLocaleString()}`, String(plan.planId)));
+    }
+    // Reads an optional numeric field; a blank field means that rule is not applied.
+    function optionalNumber(name) {
+        const value = String(form.elements[name]?.value ?? '').trim();
+        return value === '' ? null : Number(value);
+    }
+    // Builds the plan's per-day eligibility rules, or null when no minimum price is entered (the rules are off).
+    function dailyEligibility() {
+        const minPrice = optionalNumber('EligibilityMinPrice');
+        if (minPrice === null) return null;
+        if (optionalNumber('EligibilityAverageSessions') === null || optionalNumber('EligibilityMinHistorySessions') === null)
+            throw new Error('Daily eligibility needs "Average over" and "Minimum history" when a minimum price is entered.');
+        return { minPrice, priceBasis: form.elements.EligibilityPriceBasis.value,
+            averageSessions: optionalNumber('EligibilityAverageSessions'), minHistorySessions: optionalNumber('EligibilityMinHistorySessions'),
+            minAverageVolume: optionalNumber('EligibilityMinAverageVolume'), minAverageDollarVolume: optionalNumber('EligibilityMinAverageDollarVolume'),
+            atrPeriod: optionalNumber('EligibilityAtrPeriod'), minAtr: optionalNumber('EligibilityMinAtr') };
+    }
+    // Describes the saved group order and daily eligibility so the reviewer sees exactly what the plan stores.
+    function describePlanSelection(plan) {
+        const order = plan.groupOrder === 'random' ? `Group order: random, seed ${plan.groupSeed}` : 'Group order: alphabetical';
+        const rules = plan.run.eligibility;
+        if (!rules) return `${order}. Daily eligibility: off (every stock may trade every day).`;
+        const set = value => value !== null && value !== undefined;
+        const parts = [`price at least $${rules.minPrice} (${rules.priceBasis === 'session_open' ? "that day's open" : 'previous close'})`,
+            `averages over ${rules.averageSessions} sessions`, `at least ${rules.minHistorySessions} sessions of history`];
+        if (set(rules.minAverageVolume)) parts.push(`average volume at least ${rules.minAverageVolume} shares`);
+        if (set(rules.minAverageDollarVolume)) parts.push(`average dollar volume at least $${rules.minAverageDollarVolume}`);
+        if (set(rules.minAtr)) parts.push(`ATR(${rules.atrPeriod}) above $${rules.minAtr}`);
+        return `${order}. Daily eligibility from earlier sessions: ${parts.join(', ')}.`;
     }
     // Parses the human-entered rows; the server performs authoritative membership/capital validation.
     function manualGroups(value) {
@@ -415,6 +446,7 @@
                         maxPositionNotionalPct: Number(get("MaxPositionNotionalPct")), maxConcurrentPositions: Number(get("MaxConcurrentPositions")),
                         cachePolicy: get("CachePolicy") || "use_cache", retentionPolicy: "full",
                         executionReplayPolicyId: get("ExecutionReplayPolicyId") || null,
+                        ...(dailyEligibility() ? { eligibility: dailyEligibility() } : {}),
                         ...(decisionContextEvidence ? { decisionContextEvidence } : {}) };
                 } else {
                     pending = { ...base, strategy: identities[0], newsEnabled: data.getAll("NewsEnabled").includes("true"),
@@ -430,6 +462,8 @@
                 // Saving retains the reviewed hash; an explicit preview asks to review the current profile again.
                 const payload = { run: saving ? pending : { ...pending, configurationSha256: null },
                     groupSize: manual ? null : Number(data.get('GroupSize')), cohorts: manual ? manualGroups(manual) : null,
+                    groupOrder: manual ? null : String(data.get('GroupOrder') || 'alphabetical'),
+                    groupSeed: !manual && data.get('GroupOrder') === 'random' ? optionalNumber('GroupSeed') : null,
                     excludedSymbols: String(data.get('ExcludedSymbols') || '').split(',').map(symbol => symbol.trim()).filter(Boolean) };
                 const action = saving ? 'backtests/plans' : 'backtests/plans/preview';
                 const plan = await api(action, payload);

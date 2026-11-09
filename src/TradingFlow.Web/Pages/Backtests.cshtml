@@ -180,9 +180,64 @@
             <p class="note" id="ExcludedSymbolsHelp">Optional comma-separated stock symbols to exclude from this plan. The original wishlist or saved Finviz list stays unchanged.</p>
             <label for="GroupSize">Stocks per group</label>
             <input class="input" id="GroupSize" name="GroupSize" type="number" min="1" step="1" />
+            <div class="lab-parameters">
+                <div class="field">
+                    <label for="GroupOrder">Group order</label>
+                    <select class="input" id="GroupOrder" name="GroupOrder" aria-describedby="GroupOrderHelp">
+                        <option value="alphabetical" selected>Alphabetical</option>
+                        <option value="random">Random (seeded)</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="GroupSeed">Random seed</label>
+                    <input class="input" id="GroupSeed" name="GroupSeed" type="number" min="0" step="1" aria-describedby="GroupOrderHelp" />
+                </div>
+            </div>
+            <p class="note" id="GroupOrderHelp">Random order shuffles the stocks by seed before splitting them into groups. The same seed always rebuilds the same groups, and the seed is saved with the plan.</p>
             <label for="ManualCohorts">Or enter your own groups</label>
             <textarea class="input" id="ManualCohorts" name="ManualCohorts" rows="4" aria-describedby="ManualCohortsHelp"></textarea>
-            <p class="note" id="ManualCohortsHelp">One group per line: name | starting capital | stock symbols separated by commas. Leave stocks per group blank when entering your own groups. Automatic groups use symbols in alphabetical order and keep the final smaller group. Each strategy and group has separate capital.</p>
+            <p class="note" id="ManualCohortsHelp">One group per line: name | starting capital | stock symbols separated by commas. Leave stocks per group blank when entering your own groups. Automatic groups use the chosen order and keep the final smaller group. Each strategy and group has separate capital.</p>
+        </fieldset>
+        <fieldset class="lab-block">
+            <legend class="section-heading">Daily eligibility</legend>
+            <div class="lab-parameters">
+                <div class="field">
+                    <label for="EligibilityMinPrice">Minimum price (USD)</label>
+                    <input class="input" id="EligibilityMinPrice" name="EligibilityMinPrice" type="number" min="0" step="any" aria-describedby="EligibilityHelp" />
+                </div>
+                <div class="field">
+                    <label for="EligibilityPriceBasis">Price compared</label>
+                    <select class="input" id="EligibilityPriceBasis" name="EligibilityPriceBasis">
+                        <option value="prior_close" selected>Previous close</option>
+                        <option value="session_open">That day's open</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="EligibilityAverageSessions">Average over (sessions)</label>
+                    <input class="input" id="EligibilityAverageSessions" name="EligibilityAverageSessions" type="number" min="1" step="1" value="20" />
+                </div>
+                <div class="field">
+                    <label for="EligibilityMinAverageVolume">Minimum average volume (shares)</label>
+                    <input class="input" id="EligibilityMinAverageVolume" name="EligibilityMinAverageVolume" type="number" min="0" step="any" />
+                </div>
+                <div class="field">
+                    <label for="EligibilityMinAverageDollarVolume">Minimum average dollar volume (USD)</label>
+                    <input class="input" id="EligibilityMinAverageDollarVolume" name="EligibilityMinAverageDollarVolume" type="number" min="0" step="any" />
+                </div>
+                <div class="field">
+                    <label for="EligibilityAtrPeriod">ATR period (sessions)</label>
+                    <input class="input" id="EligibilityAtrPeriod" name="EligibilityAtrPeriod" type="number" min="1" step="1" />
+                </div>
+                <div class="field">
+                    <label for="EligibilityMinAtr">Minimum ATR (USD)</label>
+                    <input class="input" id="EligibilityMinAtr" name="EligibilityMinAtr" type="number" min="0" step="any" />
+                </div>
+                <div class="field">
+                    <label for="EligibilityMinHistorySessions">Minimum history (sessions)</label>
+                    <input class="input" id="EligibilityMinHistorySessions" name="EligibilityMinHistorySessions" type="number" min="1" step="1" value="20" />
+                </div>
+            </div>
+            <p class="note" id="EligibilityHelp">Optional. Enter a minimum price to switch it on. Each stock may then trade only on days it passes these rules, judged from completed earlier sessions (and that day's open when chosen). Blank thresholds are not applied. Every stock's eligible days are saved with the results.</p>
         </fieldset>
         <fieldset class="lab-block">
             <legend class="section-heading">Portfolio limits</legend>

@@ -3,6 +3,7 @@ using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Universe;
 
@@ -33,7 +34,8 @@ public sealed partial class BacktestRunner
     // Feed shared decisions into the chronological intraday adapter and publish through ordinary result retention.
     private async Task<BacktestResult> RunIntradayPreparedAsync(BacktestRunConfig run, StrategyDefinition strategy,
         DateTimeOffset startedAt, string resultPath, PreparedBacktestMarket preparedMarket,
-        CancellationToken token, IProgress<BacktestProgress>? progress, UniversePromotionEvidence? promotionEvidence)
+        CancellationToken token, IProgress<BacktestProgress>? progress, UniversePromotionEvidence? promotionEvidence,
+        UniverseMembership? membership = null)
     {
         progress?.Report(BacktestProgress.StageOnly("intraday_candidates", "Evaluating completed intraday entry evidence."));
         await BuildRegimeCalendarsAsync(run, [strategy], preparedMarket.DataStart, preparedMarket.WindowEnd, token);
@@ -46,9 +48,10 @@ public sealed partial class BacktestRunner
             .SelectMany(state => state.BarsByTimeframe["5m"]).ToArray();
         using var hypotheses = new ExecutionEventJournal(CreateExecutionJournalPath("candidate"));
         using var execution = new ExecutionEventJournal(CreateExecutionJournalPath("portfolio"));
-        var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], candidates, bars,
+        var (eligible, notEligible) = SplitByDailyEligibility(candidates, membership);
+        var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], eligible, bars,
             sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd), token);
-        var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart);
+        var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart, notEligible);
         IntradayPortfolioEvidence.Publish(hypotheses, execution, candidates, replay);
         // Warm-up candles remain execution/indicator inputs; reported days and bar counts describe only completed evaluation intervals.
         var evaluationBars = bars.Where(bar => bar.Timestamp >= preparedMarket.EvaluationStart &&
@@ -95,16 +98,30 @@ public sealed partial class BacktestRunner
         };
     }
 
-    // Adapt replay accounting to the existing result builders and withhold claims for failed source work items.
+    // Same per-day rule as the daily paths: a candidate whose stock did not qualify on its entry day (UTC date, which equals
+    // the New York date during regular hours) never reaches the order replay. No membership means every candidate proceeds.
+    private static (IReadOnlyList<BacktestCandidateTrade> Eligible, IReadOnlyList<BacktestCandidateTrade> NotEligible) SplitByDailyEligibility(
+        IReadOnlyList<BacktestCandidateTrade> candidates, UniverseMembership? membership)
+    {
+        if (membership is null) return (candidates, []);
+        var lookup = candidates.ToLookup(candidate => membership.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)));
+        return (lookup[true].ToArray(), lookup[false].ToArray());
+    }
+
+    // Adapt replay accounting to the existing result builders and withhold claims for failed source work items. Candidates
+    // refused before the replay are recorded in the admission audit and shown with that reason in the decision view.
     private static PortfolioBuildOutcome IntradayOutcome(IntradayPortfolioReplayOutcome replay,
         IReadOnlyList<BacktestCandidateTrade> candidates, IReadOnlyList<StrategyTickerBacktestBatch> batches,
-        DateTimeOffset start)
+        DateTimeOffset start, IReadOnlyList<BacktestCandidateTrade>? notEligible = null)
     {
+        const string NotEligibleReason = "universe_membership_missing";
         var audit = new PortfolioAdmissionAudit();
+        foreach (var candidate in notEligible ?? []) audit.Reject(candidate, NotEligibleReason);
+        var refused = (notEligible ?? []).ToDictionary(candidate => candidate.CandidateId, _ => NotEligibleReason, StringComparer.Ordinal);
         var byId = candidates.ToDictionary(candidate => candidate.CandidateId, StringComparer.Ordinal);
         foreach (var disposition in replay.Dispositions.Where(item => !item.Accepted))
             if (byId.TryGetValue(disposition.CandidateId, out var candidate)) audit.Reject(candidate, disposition.Reason);
-        var state = IntradayDecisionEvidenceProjection.Attach(replay.PortfolioState, candidates, replay);
+        var state = IntradayDecisionEvidenceProjection.Attach(replay.PortfolioState, candidates, replay, refused);
         if (batches.Any(batch => !batch.Succeeded))
         {
             var unavailableFrom = batches.Where(batch => !batch.Succeeded)

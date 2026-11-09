@@ -76,14 +76,16 @@ public sealed partial class PreparedMarketDataService
                 foreach (var interval in new[] { "1d" }.Concat(intervals.Where(interval => !TimeframeParser.IsDailyOrHigher(interval))).Distinct())
                     Add(regime.BenchmarkSymbol, interval, benchmarkStart, end);
             }
-            if (run.Universe is { IsHistoricalScreener: true } historical)
+            // Per-day screens (historical screener or a saved plan's daily eligibility) read daily bars from before the window.
+            if (run.Universe is { IsHistoricalScreener: true } or { DailyEligibility: not null })
             {
-                var screeningStart = run.TimeWindow.Start.Value.AddDays(-checked(Math.Max(historical.LookbackDays, 1) * 3 + 15));
+                var screen = run.Universe;
+                var screeningStart = run.TimeWindow.Start.Value.AddDays(-screen.ScreenFetchCalendarDays);
                 var daily = intervals.FirstOrDefault(interval => interval.Equals("1d", StringComparison.OrdinalIgnoreCase) || interval.Equals("1day", StringComparison.OrdinalIgnoreCase)) ?? "1d";
                 foreach (var ticker in tickers.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    Add(ticker, daily, screeningStart, run.TimeWindow.Start.Value);
-                    if (historical.IsPerDayRescreen) Add(ticker, daily, screeningStart, end);
+                    if (screen.IsHistoricalScreener) Add(ticker, daily, screeningStart, run.TimeWindow.Start.Value);
+                    if (screen.IsPerDayRescreen || screen.DailyEligibility is not null) Add(ticker, daily, screeningStart, end);
                 }
             }
             if (provider is IMarketSessionScheduleProvider)

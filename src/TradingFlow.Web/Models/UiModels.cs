@@ -47,7 +47,8 @@ public sealed record BacktestRunRequest(
     string UniverseSource = "wishlist",
     EngineConfig? EvidenceBoundEngine = null,
     string? ExecutionReplayPolicyId = null,
-    BacktestRunConfig? ResolvedProfile = null);
+    BacktestRunConfig? ResolvedProfile = null,
+    TradingFlow.Domain.Market.DailyScreenRules? DailyEligibility = null);
 
 public sealed record StrategyParameterOverride(
     string StrategyPath,

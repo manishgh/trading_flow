@@ -20,6 +20,8 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
     {
         RunWorkflowService.ValidateBacktest(request.Run, clock.GetUtcNow());
         request = request with { Run = await configuration.NormalizeBacktestRequestAsync(request.Run, token) };
+        _ = BacktestEligibility.ToRules(request.Run.Eligibility, request.Run.ExecutionReplayPolicyId);
+        var groupOrder = NormalizeGroupOrder(request);
         await workflow.RequireSelectedStrategiesAsync(request.Run.Strategies, "backtest", token);
         var stored = await previews.GetAsync(request.Run.UniverseSnapshotId, token)
             ?? throw new InvalidOperationException("Preview the stock source before saving a plan.");
@@ -43,7 +45,7 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
             throw new InvalidOperationException("The backtest profile changed since this preview. Preview the groups again before saving.");
         return new(0, clock.GetUtcNow(), request.Run with { ConfigurationSha256 = configurationHash }, cohorts, count, limits.Backtest,
             "Cohorts use the source stocks after explicit exclusions. The original source snapshot is retained; current wishlist/Finviz membership does not establish historical membership.", source,
-            configurationHash, request.ExcludedSymbols, evidence, settings);
+            configurationHash, request.ExcludedSymbols, evidence, settings, groupOrder, groupOrder is null ? null : request.GroupSeed);
     }
 
     /// <summary>Appends one immutable plan; the event sequence is its stable database identity.</summary>
@@ -156,9 +158,10 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         var excludedSet = excluded.ToHashSet(StringComparer.Ordinal);
         source = source.Where(symbol => !excludedSet.Contains(symbol)).ToArray();
         if (source.Length == 0) throw new InvalidOperationException("The exclusions leave no stocks to run.");
+        var groupOrder = NormalizeGroupOrder(request);
         if (request.Cohorts is { Count: > 0 } manual)
         {
-            if (request.GroupSize is not null || manual.Any(group => String.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 100 ||
+            if (request.GroupSize is not null || groupOrder is not null || manual.Any(group => String.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 100 ||
                     group.StartingCapital <= 0 || group.Symbols is null || group.Symbols.Count == 0) ||
                 manual.Select(group => group.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manual.Count)
                 throw new InvalidOperationException("Use automatic grouping or distinct named manual groups with positive capital.");
@@ -177,9 +180,38 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         }
         if (request.GroupSize is not > 0)
             throw new InvalidOperationException("Enter a positive group size or provide manual groups.");
-        return source.Chunk(request.GroupSize.Value).Select((symbols, index) =>
-            new BacktestCohort($"Group {index + 1}", symbols, request.Run.StartingCapital)).ToArray();
+        var ordered = groupOrder == RandomGroupOrder ? SeededOrder(source, request.GroupSeed!.Value) : source;
+        return ordered.Chunk(request.GroupSize.Value).Select((symbols, index) =>
+            new BacktestCohort($"Group {index + 1}", symbols.Order(StringComparer.Ordinal).ToArray(), request.Run.StartingCapital)).ToArray();
     }
+
+    private const string RandomGroupOrder = "random";
+
+    /// <summary>
+    /// Reads the requested automatic group order. Alphabetical (the default) is stored as null so earlier plans keep their
+    /// exact payload; random needs a non-negative seed, and a seed without random order fails instead of being ignored.
+    /// </summary>
+    private static string? NormalizeGroupOrder(SaveBacktestPlanRequest request)
+    {
+        var order = request.GroupOrder?.Trim().ToLowerInvariant();
+        if (order is null or "" or "alphabetical")
+        {
+            if (request.GroupSeed is not null) throw new InvalidOperationException("A group seed applies only to random group order.");
+            return null;
+        }
+        if (order != RandomGroupOrder) throw new InvalidOperationException("Group order must be alphabetical or random.");
+        if (request.GroupSeed is not >= 0) throw new InvalidOperationException("Random group order needs a seed of zero or more, so the same groups can be rebuilt.");
+        return RandomGroupOrder;
+    }
+
+    /// <summary>
+    /// Shuffles stocks by the SHA-256 of seed and symbol. The order depends only on those two values, so it is the same on
+    /// every machine and .NET version, unlike System.Random, and adding one stock does not reorder the others.
+    /// </summary>
+    internal static IReadOnlyList<string> SeededOrder(IEnumerable<string> symbols, int seed) => symbols
+        .Select(symbol => (Symbol: symbol, Key: Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{seed}:{symbol}")))))
+        .OrderBy(item => item.Key, StringComparer.Ordinal).ThenBy(item => item.Symbol, StringComparer.Ordinal)
+        .Select(item => item.Symbol).ToArray();
 
     /// <summary>Stores exclusions in one canonical form; blank entries fail rather than silently changing the requested selection.</summary>
     private static string[] NormalizeExclusions(IReadOnlyList<string>? symbols)

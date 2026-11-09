@@ -1,5 +1,6 @@
 using System.Globalization;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Optimization;
 
@@ -452,6 +453,8 @@ public sealed class SimpleYamlReader
         if (String.IsNullOrWhiteSpace(mode) ||
             mode.Equals(UniverseConfig.StaticMode, StringComparison.OrdinalIgnoreCase))
         {
+            // Rules on a static list would be dropped silently; ReadDailyEligibility refuses every mode but resolved_snapshot.
+            _ = ReadDailyEligibility(runMap, UniverseConfig.StaticMode);
             return null;
         }
 
@@ -474,7 +477,32 @@ public sealed class SimpleYamlReader
             OptionalString(runMap, "universe.resolved_screener_query", String.Empty) is { Length: > 0 } resolvedQuery
                 ? resolvedQuery
                 : null,
-            OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"));
+            OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"),
+            ReadDailyEligibility(runMap, mode));
+    }
+
+    /// <summary>
+    /// Reads the optional per-day eligibility block of a resolved stock snapshot. When present, each stock may trade only on
+    /// days it passes these rules from completed earlier sessions. A partial or contradictory block fails instead of defaulting.
+    /// </summary>
+    private static DailyScreenRules? ReadDailyEligibility(IReadOnlyDictionary<string, List<string>> runMap, string mode)
+    {
+        const string prefix = "universe.daily_eligibility.";
+        if (!runMap.Keys.Any(key => key.StartsWith(prefix, StringComparison.Ordinal))) return null;
+        if (!mode.Equals(UniverseConfig.ResolvedSnapshotMode, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("universe.daily_eligibility applies only to a resolved_snapshot stock list.");
+        var rules = new DailyScreenRules(
+            RequireDecimal(runMap, prefix + "min_price"),
+            DailyScreenRules.ParsePriceBasis(RequireString(runMap, prefix + "price_basis")),
+            RequireInt(runMap, prefix + "average_sessions"),
+            OptionalDecimal(runMap, prefix + "min_average_volume"),
+            OptionalDecimal(runMap, prefix + "min_average_dollar_volume"),
+            OptionalNullableInt(runMap, prefix + "atr_period"),
+            OptionalDecimal(runMap, prefix + "min_atr"),
+            RequireInt(runMap, prefix + "min_history_sessions"));
+        try { rules.Validate(); }
+        catch (ArgumentException exception) { throw new InvalidDataException(exception.Message, exception); }
+        return rules;
     }
 
     private static DiscoveryRuntimeConfig? ReadDiscoveryRuntimeConfig(

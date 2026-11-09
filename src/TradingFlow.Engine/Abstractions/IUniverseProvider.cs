@@ -27,6 +27,10 @@ public sealed class UniverseMembership
 
     public bool IsMember(string ticker, DateOnly day) =>
         eligibleDaysByTicker.TryGetValue(ticker, out var days) && days.Contains(day);
+
+    /// <summary>The days a ticker qualified on, in date order; empty when it never qualified. Used to publish the audit record.</summary>
+    public IReadOnlyList<DateOnly> EligibleDays(string ticker) =>
+        eligibleDaysByTicker.TryGetValue(ticker, out var days) ? days.Order().ToArray() : [];
 }
 
 public sealed record UniverseSelection(

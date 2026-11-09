@@ -172,6 +172,26 @@ public sealed class EffectiveRunSettingsTests
         }
     }
 
+    // A saved plan's daily eligibility rules are written under the resolved stock list and read back exactly; a run without
+    // rules has none, and a partial block written by hand fails instead of silently trading every stock every day.
+    [Fact]
+    public async Task GeneratedRun_RoundTripsDailyEligibility()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var rules = new TradingFlow.Domain.Market.DailyScreenRules(5m, TradingFlow.Domain.Market.DailyScreenPriceBasis.SessionOpen, 14,
+            MinAverageShareVolume: 1_000_000m, AtrPeriod: 14, MinAtr: 0.5m, MinHistorySessions: 14);
+
+        var withRules = fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request with { DailyEligibility = rules }));
+        var withoutRules = fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request));
+
+        Assert.Equal(rules, withRules.Universe!.DailyEligibility);
+        Assert.Equal(UniverseConfig.ResolvedSnapshotMode, withRules.Universe.Mode);
+        Assert.Null(withoutRules.Universe!.DailyEligibility);
+        var path = fixture.Writer.WriteBacktestConfig(fixture.Request with { DailyEligibility = rules });
+        File.WriteAllText(path, File.ReadAllText(path).Replace("    min_history_sessions: 14", String.Empty, StringComparison.Ordinal));
+        Assert.ThrowsAny<Exception>(() => fixture.Reader.ReadBacktestRun(path));
+    }
+
     // Reject a typo before writing snapshots, instead of accidentally falling back to native daily execution.
     [Fact]
     public async Task UnknownReplayPolicy_DoesNotCreateRunFiles()

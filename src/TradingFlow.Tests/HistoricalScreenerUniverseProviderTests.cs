@@ -94,6 +94,42 @@ public sealed class HistoricalScreenerUniverseProviderTests
         Assert.True(membership.IsMember("RAMP", new DateOnly(2026, 6, 6)));
     }
 
+    // A saved plan's daily eligibility rules replace the legacy screen fields. With the session-open basis a stock that
+    // closed below the minimum qualifies once that day opens above it; share volume uses only earlier sessions, so a
+    // volume spike on the decision day itself cannot qualify it.
+    [Fact]
+    public async Task ResolveMembershipAsync_AppliesDailyEligibilityRulesFromEarlierSessions()
+    {
+        var day = new DateTimeOffset(2026, 6, 1, 4, 0, 0, TimeSpan.Zero);
+        var bars = new List<OhlcvBar>();
+        for (var i = 0; i < 6; i++)
+        {
+            var at = day.AddDays(i);
+            // GAPUP closes at $4 every day, but opens at $6 from 06-05 (day index 4).
+            bars.Add(new OhlcvBar("GAPUP", at, "1d", i >= 4 ? 6m : 4m, 7m, 3m, 4m, 5_000m));
+            // THIN trades 100 shares a day before 06-05 and 1,000,000 shares on 06-05 itself.
+            bars.Add(new OhlcvBar("THIN", at, "1d", 50m, 51m, 49m, 50m, i == 4 ? 1_000_000m : 100m));
+        }
+
+        var rules = new DailyScreenRules(5m, DailyScreenPriceBasis.SessionOpen, 2, MinAverageShareVolume: 1_000m, MinHistorySessions: 2);
+        var universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode, DailyEligibility = rules };
+        var membership = await new HistoricalScreenerUniverseProvider(new FakeDailyProvider(bars)).ResolveMembershipAsync(
+            new UniverseRequest(["GAPUP", "THIN"], universe, day.AddDays(2), "1d", day.AddDays(5)), CancellationToken.None);
+
+        Assert.False(membership.IsMember("GAPUP", new DateOnly(2026, 6, 4)));
+        Assert.True(membership.IsMember("GAPUP", new DateOnly(2026, 6, 5)));
+        Assert.True(membership.IsMember("GAPUP", new DateOnly(2026, 6, 6)));
+        Assert.False(membership.IsMember("THIN", new DateOnly(2026, 6, 5)));
+        Assert.True(membership.IsMember("THIN", new DateOnly(2026, 6, 6)));
+        Assert.Equal([new DateOnly(2026, 6, 5), new DateOnly(2026, 6, 6)], membership.EligibleDays("GAPUP"));
+        Assert.Equal(DailyScreenRules.AtrStabilizationSessions * 3 + 15,
+            (universe with { DailyEligibility = rules with { AtrPeriod = 14, MinAtr = 0.5m } }).ScreenFetchCalendarDays);
+        // A longer ATR period reads seven periods of earlier sessions so its starting estimate no longer matters.
+        Assert.Equal(350, (rules with { AtrPeriod = 50, MinAtr = 0.5m }).PriorSessionsNeeded);
+        Assert.Throws<ArgumentException>(() => rules.RequireKnownBeforeEntry(entriesFillAtSessionOpen: true));
+        (rules with { PriceBasis = DailyScreenPriceBasis.PriorClose }).RequireKnownBeforeEntry(entriesFillAtSessionOpen: true);
+    }
+
     private static Task<UniverseResolution> Resolve(IReadOnlyList<OhlcvBar> bars)
     {
         var universe = new UniverseConfig(

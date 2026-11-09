@@ -290,6 +290,11 @@ public sealed partial class BacktestRunner(
         IProgress<BacktestProgress>? progress)
     {
         RunUniverseValidator.RequireResolved(run);
+        if (run.Universe is { IsHistoricalScreener: false, DailyEligibility: not null } fixedList)
+        {
+            return (run, await ResolveDailyEligibilityAsync(run, fixedList, cancellationToken, progress), null);
+        }
+
         if (run.Universe is not { } universe || !universe.IsHistoricalScreener)
         {
             return (run, null, null);
@@ -522,7 +527,7 @@ public sealed partial class BacktestRunner(
         {
             EnsureStrategyWorkItemLimit(run.Tickers.Count, strategies.Length, run.Engine.MaxStrategyWorkItems);
             return await RunIntradayPreparedAsync(run, strategies.Single(), startedAt, resultPath,
-                preparedMarket, cancellationToken, progress, universePromotionEvidence);
+                preparedMarket, cancellationToken, progress, universePromotionEvidence, universeMembership);
         }
         using var candidateHypothesisJournal = new ExecutionEventJournal(CreateExecutionJournalPath("candidate"));
         using var portfolioExecutionJournal = new ExecutionEventJournal(CreateExecutionJournalPath("portfolio"));
