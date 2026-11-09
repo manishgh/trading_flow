@@ -1,0 +1,950 @@
+{
+  "createdAtUtc": "2026-10-21T00:00:00+00:00",
+  "runId": "news-plan97-20260416-20261021",
+  "configHash": "8a92bb7e8916056d4964d3029042eb1bb8110b7e21e6b11d129542f11e7b3977",
+  "codeVersion": "evidence-plan-news-v1",
+  "collectionPolicyVersion": "alpaca-news-collection-v1",
+  "partitionPolicyVersion": "alpaca-news-partition-v1",
+  "datasetKind": 6,
+  "schemaVersion": 1,
+  "normalizerVersion": "alpaca-news-normalizer-v1",
+  "outputNamespace": "normalized/news-revisions",
+  "requests": [
+    {
+      "requestId": "news-00000",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-04-16T00:00:00+00:00",
+      "requestedEndUtc": "2026-05-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00001",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-04-16T00:00:00+00:00",
+      "requestedEndUtc": "2026-05-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00002",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-04-16T00:00:00+00:00",
+      "requestedEndUtc": "2026-05-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00003",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-04-16T00:00:00+00:00",
+      "requestedEndUtc": "2026-05-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00004",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-04-16T00:00:00+00:00",
+      "requestedEndUtc": "2026-05-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00005",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-05-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-06-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00006",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-05-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-06-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00007",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-05-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-06-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00008",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-05-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-06-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00009",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-05-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-06-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00010",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-06-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-07-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00011",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-06-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-07-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00012",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-06-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-07-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00013",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-06-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-07-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00014",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-06-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-07-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00015",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-07-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-08-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00016",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-07-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-08-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00017",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-07-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-08-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00018",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-07-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-08-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00019",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-07-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-08-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00020",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-08-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-09-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00021",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-08-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-09-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00022",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-08-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-09-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00023",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-08-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-09-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00024",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-08-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-09-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00025",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-09-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00026",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-09-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00027",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-09-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00028",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-09-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00029",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-09-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-01T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00030",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "ASTS",
+        "BKSY",
+        "BXDC",
+        "CRCL",
+        "CRDO"
+      ],
+      "requestedStartUtc": "2026-10-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-21T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00031",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "DASH",
+        "DIOD",
+        "FPS",
+        "MIAX",
+        "MRVL"
+      ],
+      "requestedStartUtc": "2026-10-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-21T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00032",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "MVST",
+        "MXL",
+        "NBIS",
+        "NVTS",
+        "OUST"
+      ],
+      "requestedStartUtc": "2026-10-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-21T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00033",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "PATH",
+        "PGY",
+        "POET",
+        "RDW",
+        "RGTI"
+      ],
+      "requestedStartUtc": "2026-10-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-21T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    },
+    {
+      "requestId": "news-00034",
+      "provider": "alpaca",
+      "endpoint": "/v1beta1/news",
+      "symbols": [
+        "RKLB",
+        "SMCI",
+        "STM"
+      ],
+      "requestedStartUtc": "2026-10-01T00:00:00+00:00",
+      "requestedEndUtc": "2026-10-21T00:00:00+00:00",
+      "dataFeed": "alpaca_news",
+      "adjustment": "raw",
+      "currency": "USD",
+      "asOfDate": "2026-10-21",
+      "parameters": {
+        "exclude_contentless": "false",
+        "include_content": "true",
+        "limit": "50",
+        "sort": "asc"
+      }
+    }
+  ],
+  "securities": [
+    {
+      "securityId": "548bb94e-da40-4dba-9b1f-5770d31d66f1",
+      "symbol": "ASTS"
+    },
+    {
+      "securityId": "a09da076-d5ca-4a9c-b1bd-a577a434a647",
+      "symbol": "BKSY"
+    },
+    {
+      "securityId": "4af2a8c5-aa03-4793-b99b-62c9b67f3424",
+      "symbol": "BXDC"
+    },
+    {
+      "securityId": "9af5ec24-875e-4405-992b-b26ef3f0c75c",
+      "symbol": "CRCL"
+    },
+    {
+      "securityId": "73fa2018-e4b3-4956-a6d7-6c47ccdbcd83",
+      "symbol": "CRDO"
+    },
+    {
+      "securityId": "5453d1f0-0efc-4738-b1b1-d330e5910e2f",
+      "symbol": "DASH"
+    },
+    {
+      "securityId": "56288839-5e01-474f-9501-2d392fee0cf6",
+      "symbol": "DIOD"
+    },
+    {
+      "securityId": "c4f791e4-a144-435d-bcbd-3ad5cb11aedb",
+      "symbol": "FPS"
+    },
+    {
+      "securityId": "467b7a6a-2ee1-463d-a5f4-28572bb4a4ea",
+      "symbol": "MIAX"
+    },
+    {
+      "securityId": "723c21be-11af-4450-9b64-20346a6905fc",
+      "symbol": "MRVL"
+    },
+    {
+      "securityId": "f226d845-d61f-4679-905c-f11dd5521fdf",
+      "symbol": "MVST"
+    },
+    {
+      "securityId": "8057a280-5ebc-414e-bf77-c2771c4d481b",
+      "symbol": "MXL"
+    },
+    {
+      "securityId": "44d23ccc-a7b5-4cfd-968d-590a6274f43b",
+      "symbol": "NBIS"
+    },
+    {
+      "securityId": "c246693f-d7ef-449d-b026-9962de4d5d79",
+      "symbol": "NVTS"
+    },
+    {
+      "securityId": "02afaf0c-ecc0-4608-961b-1f1b06a14ae6",
+      "symbol": "OUST"
+    },
+    {
+      "securityId": "b839dd23-cd51-4d0f-8352-7a14b517391c",
+      "symbol": "PATH"
+    },
+    {
+      "securityId": "c41bbf4b-f1a2-4b60-b450-18942b6e1585",
+      "symbol": "PGY"
+    },
+    {
+      "securityId": "bea38c94-9dfd-445e-9178-9c0825a689b5",
+      "symbol": "POET"
+    },
+    {
+      "securityId": "edecb586-9fd1-481a-af2e-fe2d40d8bd41",
+      "symbol": "RDW"
+    },
+    {
+      "securityId": "96f02726-cdd4-4333-b56a-b3e1bfbb26d9",
+      "symbol": "RGTI"
+    },
+    {
+      "securityId": "91cee411-1675-48eb-a902-45c8c152f2a1",
+      "symbol": "RKLB"
+    },
+    {
+      "securityId": "e4870680-5a31-43e0-a477-c47d158ac43d",
+      "symbol": "SMCI"
+    },
+    {
+      "securityId": "b24553aa-e1ce-4474-88ab-3ddd3f9dfa28",
+      "symbol": "STM"
+    }
+  ],
+  "newsAvailabilityEvidence": 2,
+  "attributes": {
+    "collected_after_the_fact": "true",
+    "collection_scope": "current saved-plan stocks, not historical universe membership",
+    "historical_availability_proven": "false",
+    "news_source": "benzinga-via-alpaca",
+    "promotion_eligible": "false",
+    "provider_updated_timestamp_only": "true",
+    "purpose": "saved-plan-company-news-for-historical-news-diagnostic",
+    "revision_history_completeness_proven": "false",
+    "saved_plan_id": "97",
+    "saved_plan_sha256": "b7bdef7f6dfb4357e75c075c23c5f532c31adc686ed15c1af35744be54939069",
+    "security_master_dataset_id": "6720a7d927abee37f61685306bb2b7e66e270b85b0133164e83b5feeb22af3ce"
+  },
+  "normalizationContractHash": "c913fd597f0ba716d21f6e610498adbc4aa035f81a608f7ef637fe696e3bb9ae",
+  "effectiveConfigHash": "60030e507fb1477eda5bfc78a93fd57faa45e08ce3985a0178efd8fd2ade140f"
+}
