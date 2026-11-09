@@ -47,6 +47,16 @@ public sealed class ConfiguredDataProviders
     public AlpacaOptions AlpacaOptionsFor(BacktestRunConfig run) =>
         alpacaOptions() with { MarketDataFeed = run.Providers.Alpaca.DataFeed };
 
+    /// <summary>An HttpClient carrying the host's Alpaca key headers for raw market-data archives; keys are never archived.</summary>
+    public HttpClient CreateAlpacaMarketDataClient(BacktestRunConfig run)
+    {
+        var options = AlpacaOptionsFor(run);
+        var client = createHttpClient();
+        client.DefaultRequestHeaders.Add("APCA-API-KEY-ID", options.KeyId);
+        client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", options.SecretKey);
+        return client;
+    }
+
     /// <summary>Archives online responses with the caller's durable writer and preserves the run's requested price basis.</summary>
     public IMarketDataProvider CreateMarket(BacktestRunConfig run, IRawArchiveWriter rawArchiveWriter, string? csvRoot = null) =>
         run.Provider.ToLowerInvariant() switch {

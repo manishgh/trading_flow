@@ -156,9 +156,48 @@ public sealed partial class IntradayBacktestIntegrationTests
         });
     }
 
+    // A missing candle (on the trade day or the prior day that feeds the ATR) no longer withholds the economics when trade
+    // records show only odd-lot prints in it; a regular sale in it keeps the gap and the economics stay unavailable.
+    [Theory]
+    [InlineData("2026-10-01T15:00:00Z", "I", true)]
+    [InlineData("2026-09-30T15:00:00Z", "I", true)]
+    [InlineData("2026-10-01T15:00:00Z", "", false)]
+    public async Task PublishedRecipe_ConfirmedQuietIntervalKeepsEconomics(string omitted, string code, bool quiet)
+    {
+        var gap = DateTimeOffset.Parse(omitted);
+        var trades = new FixedTradeSource(new SipTradePrint(gap.AddSeconds(20), "A", code.Length == 0 ? [" "] : [" ", code]));
+        await WithRecipeRunAsync(null, (result, root) =>
+        {
+            Assert.Equal(quiet, result.EconomicResultsComplete);
+            Assert.Equal([(gap, gap.AddMinutes(5))], trades.Requests);
+            var record = Assert.Single(Directory.EnumerateFiles(root, "synthetic-orb-recipe-quiet-intervals.json", SearchOption.AllDirectories));
+            using var json = JsonDocument.Parse(File.ReadAllText(record));
+            var stock = json.RootElement.GetProperty("stocks").GetProperty("ABC");
+            Assert.Equal(quiet ? 1 : 0, stock.GetProperty("confirmedQuietIntervalsUtc").GetArrayLength());
+            Assert.Equal(quiet ? 0 : 1, stock.GetProperty("unresolvedGapsUtc").GetArrayLength());
+            if (!quiet) return;
+            var trade = Assert.Single(result.CompletedTrades);
+            Assert.Equal(99.5m, trade.StopLossPrice);
+        }, omitBarAt: gap, trades: trades);
+    }
+
+    // Answers every request with the same prints and records the requested ranges.
+    private sealed class FixedTradeSource(params SipTradePrint[] prints) : IIntervalTradePrintSource
+    {
+        public List<(DateTimeOffset Start, DateTimeOffset End)> Requests { get; } = [];
+
+        public Task<IntervalTradePrints?> GetTradesAsync(string ticker, DateTimeOffset startUtc, DateTimeOffset endUtc,
+            DateOnly sessionDate, CancellationToken cancellationToken)
+        {
+            Requests.Add((startUtc, endUtc));
+            return Task.FromResult<IntervalTradePrints?>(new(prints, "synthetic-trades"));
+        }
+    }
+
     // Runs the published ORB recipe on one synthetic stock and session through the ordinary prepared runner, optionally with
-    // a plan's daily eligibility rules on its resolved stock list, then deletes the isolated temporary folder.
-    private static async Task WithRecipeRunAsync(DailyScreenRules? eligibility, Action<BacktestResult, string> verify)
+    // a plan's daily eligibility rules, one omitted candle and a trade-record source, then deletes the isolated folder.
+    private static async Task WithRecipeRunAsync(DailyScreenRules? eligibility, Action<BacktestResult, string> verify,
+        DateTimeOffset? omitBarAt = null, IIntervalTradePrintSource? trades = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "tf-orb-recipe-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -187,14 +226,15 @@ public sealed partial class IntradayBacktestIntegrationTests
                 Artifacts = new("full")
             };
             Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, run.Engine.ExecutionReplayPolicyId);
-            var provider = new SyntheticIntradayProvider(run.RawRoot, outwardRounding: false);
+            var provider = new SyntheticIntradayProvider(run.RawRoot, outwardRounding: false) { OmitBarAt = omitBarAt };
             var calendar = await provider.LoadMarketSessionSchedulesAsync(new(2026, 8, 1), new(2026, 10, 1), default);
             run = BacktestSessionContextResolver.IncludeCompletedSessions(run, start, calendar,
                 TimeZoneInfo.FindSystemTimeZoneById("America/New_York"), 20);
             var request = new PreparedMarketDataRequest(1, "synthetic-orb-recipe", end,
                 [new(run.RunName, run with { Strategies = [] }, [runtime.Definition])]);
             var reference = await PreparedMarketDataService.WriteRequestAsync(request, Path.Combine(root, "admission", "request.json"), default);
-            var runner = new BacktestRunner(reader, artifacts, marketDataProviderFactory: _ => provider);
+            var runner = new BacktestRunner(reader, artifacts, marketDataProviderFactory: _ => provider,
+                intervalTradePrintSourceFactory: _ => trades);
 
             var result = await runner.RunAsync(run, [runtime.Definition], DateTimeOffset.UtcNow,
                 Path.Combine(run.ResultsRoot, "result.json"), default, preparedDataReference: reference);
@@ -255,6 +295,8 @@ public sealed partial class IntradayBacktestIntegrationTests
         private readonly IRawArchiveWriter archive = new FileSystemRawArchiveWriter(new(rawRoot));
         private readonly IReadOnlyList<DateOnly> sessionDates = SessionDates();
         public int BarCaptures { get; private set; }
+        // One five-minute interval to leave out, as a provider does when no trade in it sets a price.
+        public DateTimeOffset? OmitBarAt { get; init; }
         public int CapturedBars { get; private set; }
         public List<string> RequestedTimeframes { get; } = [];
         public MarketDataProvenance MarketDataProvenance => new("synthetic-intraday-v1", "sip", adjustmentPolicy);
@@ -316,7 +358,7 @@ public sealed partial class IntradayBacktestIntegrationTests
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var at = new DateTimeOffset(date.ToDateTime(new TimeOnly(13, 30), DateTimeKind.Utc)).AddMinutes(slot * 5);
-                    if (at < start || at >= end) continue;
+                    if (at < start || at >= end || at == OmitBarAt) continue;
                     var current = date == new DateOnly(2026, 10, 1);
                     var (open, high, low, close) = !current ? (99m, 100m, 95m, 99m) : slot switch {
                         < 3 => (99m, outwardRounding ? 100.0051m : 100m, outwardRounding ? 97.9976m : 98m, 99.5m),

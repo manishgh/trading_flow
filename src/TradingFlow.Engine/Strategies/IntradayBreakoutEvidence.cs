@@ -12,7 +12,10 @@ public sealed record IntradayBreakoutContext(
     string? TickEvidenceId = null,
     string CalendarAvailabilityEvidence = "caller_supplied_schedule;original_calendar_receipt_not_asserted",
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<OhlcvBar>? OpeningRangeBaselineBars = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<OhlcvBar>? PriorSessionDailyBars = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<OhlcvBar>? PriorSessionDailyBars = null,
+    // Regular-session interval starts with no candle that trade records prove had no price-setting trade. Backtests
+    // supply them; paper and live leave them null, so a missing candle there stays missing evidence.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlySet<DateTimeOffset>? ConfirmedQuietIntervalsUtc = null);
 
 /// <summary>Frozen completed-candle breakout order intent, including the previous-session range and opening-range evidence.</summary>
 public sealed record IntradayBreakoutSignal(
@@ -73,13 +76,27 @@ public static class IntradayFiveMinuteBars
         return true;
     }
 
-    // Require every expected five-minute interval, including the last interval of an early-close session.
-    internal static bool HasCompleteCoverage(IReadOnlyList<OhlcvBar> bars, DateTimeOffset open, DateTimeOffset close)
+    // Require every expected five-minute interval, including the last interval of an early-close session. An interval may
+    // instead be a confirmed quiet interval (no price-setting trade, proven by trade records); bars stay strictly ordered.
+    public static bool HasCompleteCoverage(IReadOnlyList<OhlcvBar> bars, DateTimeOffset open, DateTimeOffset close,
+        IReadOnlySet<DateTimeOffset>? quietIntervals = null)
     {
-        if (bars.Count == 0 || close <= open || (close - open).Ticks % Interval.Ticks != 0 ||
-            bars.Count != (close - open).Ticks / Interval.Ticks) return false;
-        for (var index = 0; index < bars.Count; index++)
-            if (bars[index].Timestamp != open.AddTicks(Interval.Ticks * index)) return false;
+        if (bars.Count == 0 || close <= open || (close - open).Ticks % Interval.Ticks != 0) return false;
+        var index = 0;
+        for (var time = open; time < close; time = time.Add(Interval))
+        {
+            if (index < bars.Count && bars[index].Timestamp == time) index++;
+            else if (quietIntervals?.Contains(time) != true) return false;
+        }
+        return index == bars.Count;
+    }
+
+    // True when the first bars are exactly the opening-range intervals; a quiet opening interval has no price to range.
+    internal static bool OpeningIntervalsHavePrices(IReadOnlyList<OhlcvBar> opening, DateTimeOffset open, int rangeBars)
+    {
+        if (opening.Count != rangeBars) return false;
+        for (var index = 0; index < rangeBars; index++)
+            if (opening[index].Timestamp != open.AddTicks(Interval.Ticks * index)) return false;
         return true;
     }
 

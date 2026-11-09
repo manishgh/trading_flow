@@ -10,7 +10,9 @@ namespace TradingFlow.Backtesting;
 public sealed record IntradayPortfolioReplayRequest(PortfolioConfig Portfolio,
     IReadOnlyList<StrategyDefinition> Strategies, IReadOnlyList<BacktestCandidateTrade> Candidates,
     IReadOnlyCollection<OhlcvBar> MarketBars, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Sessions,
-    DateTimeOffset StartUtc, DateTimeOffset EndUtc);
+    DateTimeOffset StartUtc, DateTimeOffset EndUtc,
+    // Per stock (upper case): interval starts with no candle that trade records prove had no price-setting trade.
+    IReadOnlyDictionary<string, IReadOnlySet<DateTimeOffset>>? ConfirmedQuietIntervals = null);
 public sealed record IntradayReplayEvent(string CandidateId, string Ticker, DateTimeOffset TimestampUtc,
     string State, string Reason, int Quantity = 0, decimal? Price = null,
     decimal? StopPrice = null, decimal? TargetPrice = null, DateTimeOffset? EffectiveAfterUtc = null)
@@ -316,13 +318,21 @@ public static partial class IntradayPortfolioExecution
         private static decimal ReservedNotional(Intent intent) =>
             (intent.Pending ? intent.Requested : intent.Open) * Math.Max(intent.Evidence.LimitPrice, intent.Entry);
 
-        /// <summary>Resolve only active work against its exact interval; missing bars preserve unknown exposure instead of shifting fills.</summary>
+        /// <summary>
+        /// Resolve only active work against its exact interval; missing bars preserve unknown exposure instead of shifting
+        /// fills. A confirmed quiet interval had no price-setting trade, so nothing can fill, trigger or exit in it.
+        /// </summary>
         private void CompleteInterval(DateTimeOffset start, DateTimeOffset end)
         {
             foreach (var intent in live.Where(x => !x.Failed && x.Evidence.ActiveAtUtc <= start && start < x.Evidence.SessionDeadlineUtc).ToArray())
             {
-                if (!bars.TryGetValue((intent.Candidate.Ticker.ToUpperInvariant(), start), out var bar))
-                { Fail(intent, start, "required_five_minute_execution_bar_missing"); continue; }
+                var symbol = intent.Candidate.Ticker.ToUpperInvariant();
+                if (!bars.TryGetValue((symbol, start), out var bar))
+                {
+                    if (request.ConfirmedQuietIntervals?.GetValueOrDefault(symbol)?.Contains(start) == true) PassQuietInterval(intent, start, end);
+                    else Fail(intent, start, "required_five_minute_execution_bar_missing");
+                    continue;
+                }
                 if (!ValidBar(bar) || bar.KnownAtUtc > end)
                 { Fail(intent, start, "execution_bar_invalid_or_unavailable_at_completion"); continue; }
                 ProcessInterval(intent, bar, end);
@@ -366,6 +376,20 @@ public static partial class IntradayPortfolioExecution
             if (intent.Pending && (end >= intent.Evidence.ExpiresAtUtc || InsidePreviousRange(intent, bar.Close)))
                 CancelRemainder(intent, end, InsidePreviousRange(intent, bar.Close) ? "completed_close_back_inside_previous_range" : "one_bar_entry_expiry");
             FinishInterval(intent, bar, end);
+        }
+
+        /// <summary>
+        /// A confirmed quiet interval had no price-setting trade: a resting stop or limit cannot trigger or fill in it.
+        /// Market work due in it (a next-bar market entry, a triggered entry remainder or a triggered stop exit) would have
+        /// traded at an unknown price, so the intent fails rather than filling later. A one-bar limit still expires.
+        /// </summary>
+        private void PassQuietInterval(Intent intent, DateTimeOffset start, DateTimeOffset end)
+        {
+            var marketDue = intent.Pending && (intent.EntryTriggered || intent.NextBarMarket && intent.Evidence.ActiveAtUtc == start) ||
+                intent.Open > 0 && intent.StopTriggered;
+            if (marketDue) { Fail(intent, start, "market_order_due_in_interval_without_price_setting_trade"); return; }
+            if (intent.Pending && end >= intent.Evidence.ExpiresAtUtc) CancelRemainder(intent, end, "one_bar_entry_expiry");
+            if (intent.Open == 0 && !intent.Pending) Resolve(intent, end);
         }
 
         /// <summary>Resolve known opening protection, then a triggered market remainder, before unknown later OHLC extremes.</summary>

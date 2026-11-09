@@ -49,8 +49,9 @@ public sealed partial class BacktestRunner
         using var hypotheses = new ExecutionEventJournal(CreateExecutionJournalPath("candidate"));
         using var execution = new ExecutionEventJournal(CreateExecutionJournalPath("portfolio"));
         var (eligible, notEligible) = SplitByDailyEligibility(candidates, membership);
+        var quiet = await PublishQuietIntervalsAsync(run, batches, token);
         var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], eligible, bars,
-            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd), token);
+            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet), token);
         var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart, notEligible);
         IntradayPortfolioEvidence.Publish(hypotheses, execution, candidates, replay);
         // Warm-up candles remain execution/indicator inputs; reported days and bar counts describe only completed evaluation intervals.

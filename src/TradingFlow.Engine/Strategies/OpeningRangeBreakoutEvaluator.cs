@@ -41,12 +41,14 @@ public sealed class OpeningRangeBreakoutEvaluator
         var previousOpen = AtUtc(previousSession.TradeDate, previousSession.RegularOpen, zone);
         var previousClose = AtUtc(previousSession.TradeDate, previousSession.RegularClose, zone);
         var previousBars = completedBars.Where(bar => bar.Timestamp >= previousOpen && bar.Timestamp < previousClose).ToArray();
-        if (!HasCompleteCoverage(previousBars, previousOpen, previousClose))
+        if (!HasCompleteCoverage(previousBars, previousOpen, previousClose, context.ConfirmedQuietIntervalsUtc))
             return Reject("previous_session_five_minute_coverage_incomplete");
         var current = completedBars.Where(bar => bar.Timestamp >= open).ToArray();
-        if (!HasCompleteCoverage(current, open, asOfUtc))
+        if (!HasCompleteCoverage(current, open, asOfUtc, context.ConfirmedQuietIntervalsUtc))
             return Reject("opening_range_current_session_coverage_incomplete");
         var opening = current.Take(3).ToArray();
+        if (!OpeningIntervalsHavePrices(opening, open, 3))
+            return Reject("opening_range_interval_without_price_setting_trade");
         if (!TryOpeningBaseline(context, date, zone, rangeCompletedAt, opening[0], out var baselineMedian, out var baselineSha256))
             return Reject("opening_range_volume_baseline_unavailable");
         var snapshot = completedSnapshots.SingleOrDefault(item => item.Timestamp == opening[2].Timestamp);
@@ -88,9 +90,11 @@ public sealed class OpeningRangeBreakoutEvaluator
         if (asOfUtc != rangeCompletedAt || asOfUtc >= deadline)
             return Reject(asOfUtc < rangeCompletedAt ? "outside_opening_range_entry_window" : "opening_range_order_placed_at_range_completion");
         var current = completedBars.Where(bar => bar.Timestamp >= open).ToArray();
-        if (!HasCompleteCoverage(current, open, asOfUtc))
+        if (!HasCompleteCoverage(current, open, asOfUtc, context.ConfirmedQuietIntervalsUtc))
             return Reject("opening_range_current_session_coverage_incomplete");
         var opening = current.Take(policy.RangeBars).ToArray();
+        if (!OpeningIntervalsHavePrices(opening, open, policy.RangeBars))
+            return Reject("opening_range_interval_without_price_setting_trade");
         if (!TryMeanOpeningBaseline(context, date, zone, rangeCompletedAt, opening[0], policy, out var baselineMean, out var baselineSha256))
             return Reject("opening_range_volume_baseline_unavailable");
         var relativeVolume = opening.Sum(bar => bar.Volume) / baselineMean;

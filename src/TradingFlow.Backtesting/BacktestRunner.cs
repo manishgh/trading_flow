@@ -43,7 +43,8 @@ public sealed partial class BacktestRunner(
     IBacktestOpportunityObserver? opportunityObserver = null,
     EventPortfolioReplayBinding? eventPortfolioReplay = null,
     ConfiguredDataProviders? dataProviders = null,
-    IPreparedMarketDataBindingStore? preparedDataBindingStore = null)
+    IPreparedMarketDataBindingStore? preparedDataBindingStore = null,
+    Func<BacktestRunConfig, IIntervalTradePrintSource?>? intervalTradePrintSourceFactory = null)
 {
     private readonly ConfiguredDataProviders _dataProviders = dataProviders ?? ConfiguredDataProviders.FromEnvironment();
     private readonly IStrategyDecisionContextProvider? _decisionContextProvider = decisionContextProvider;
@@ -231,7 +232,8 @@ public sealed partial class BacktestRunner(
         if (Directory.Exists(inputs)) throw new IOException("Run input workspace already exists.");
         Directory.CreateDirectory(inputs);
         var scoped = new BacktestRunner(yamlReader, strategyArtifacts, _artifactWriter, _logger, marketDataProviderFactory,
-            contextProvider, _opportunityObserver, executionBinding, _dataProviders, preparedDataBindingStore) {
+            contextProvider, _opportunityObserver, executionBinding, _dataProviders, preparedDataBindingStore,
+            intervalTradePrintSourceFactory) {
             _csvSourceRoot = _csvSourceRoot ?? inputRoots.NormalizedRoot,
             _transientArtifactRoot = inputs,
             logicalInputRoots = inputRoots,
@@ -2060,6 +2062,7 @@ internal sealed record StrategyTickerBacktestBatch(
 {
     public BacktestHistoryEligibility? HistoryEligibility { get; init; }
     public DateTimeOffset? IntradayUnavailableFromUtc { get; init; }
+    public QuietIntervalResolution? IntradayQuietIntervals { get; init; }
     public static StrategyTickerBacktestBatch Failed(
         string ticker,
         StrategyDefinition strategy,

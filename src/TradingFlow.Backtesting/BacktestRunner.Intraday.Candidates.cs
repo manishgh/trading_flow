@@ -39,8 +39,11 @@ public sealed partial class BacktestRunner
             var snapshotMap = snapshots.ToDictionary(snapshot => snapshot.Timestamp);
             var candidates = new List<BacktestCandidateTrade>();
             var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
+            var quiet = await IntradayQuietIntervals.ResolveAsync(ticker, IntradayQuietIntervals.ListGaps(sessionBars, schedules, zone),
+                zone, CreateIntervalTradePrintSource(run), MaximumQuietIntervalGapsPerStock, cancellationToken);
+            var quietIntervals = quiet.QuietIntervals.Count > 0 ? quiet.QuietIntervals : null;
             DateTimeOffset? unavailableFrom = FindIntradaySourceGap(sessionBars, schedules, priorDates, zone,
-                preparedMarket.WindowStart, preparedMarket.WindowEnd);
+                preparedMarket.WindowStart, preparedMarket.WindowEnd, quietIntervals);
             if (!sessionBars.Values.SelectMany(value => value).Any(bar => bar.Timestamp >= preparedMarket.WindowStart &&
                 bar.Timestamp.AddMinutes(5) <= preparedMarket.WindowEnd)) unavailableFrom = preparedMarket.WindowStart;
             if (unavailableFrom is not null) diagnostics.IncrementRejection("required_five_minute_setup_source_incomplete");
@@ -66,7 +69,7 @@ public sealed partial class BacktestRunner
                     : OpeningRangeBaselineBars(sessionBars, baselineSessions.TakeLast(recipe.VolumeLookbackSessions!.Value).ToList(),
                         zone, recipe.RangeMinutes!.Value);
                 var dailyBars = recipe is null ? null
-                    : PriorSessionDailyBars(sessionBars, baselineSessions.TakeLast(recipe.AtrSessions!.Value + 1).ToList(), zone);
+                    : PriorSessionDailyBars(sessionBars, baselineSessions.TakeLast(recipe.AtrSessions!.Value + 1).ToList(), zone, quietIntervals);
                 var calendarStart = baselineSessions.Length > 0 ? baselineSessions[0].TradeDate : priorDate;
                 var boundedCalendar = schedules.Where(pair => pair.Key >= calendarStart && pair.Key <= day.Key)
                     .ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -80,6 +83,12 @@ public sealed partial class BacktestRunner
                     var asOf = confirmation.Timestamp.AddMinutes(5);
                     if (asOf < preparedMarket.EvaluationStart || asOf > preparedMarket.WindowEnd) continue;
                     diagnostics.EvaluatedBarCount++;
+                    // A quiet opening interval has no price to form the range: no setup that day, not missing evidence.
+                    if (recipe is not null && OpeningRangeHasQuietInterval(day.Key, schedules, zone, recipe.RangeBars, quietIntervals))
+                    {
+                        diagnostics.IncrementRejection("opening_range_interval_without_price_setting_trade");
+                        continue;
+                    }
                     var completed = priorBars.Concat(day.Value.Take(index + 1)).ToArray();
                     var increment = UsEquityOrderIncrementResolver.Resolve(day.Key,
                         completed.Min(bar => bar.Low), completed.Max(bar => bar.High));
@@ -93,7 +102,12 @@ public sealed partial class BacktestRunner
                         asOf, increment.PolicyId + ":" + increment.SourceUrl + ";" +
                         UsEquityOrderIncrementResolver.EffectiveBoundarySourceUrl + ";" + UsEquityOrderIncrementResolver.EndBoundarySourceUrl,
                         "retrospectively_downloaded_exchange_calendar;scheduled_session_bounds_assumed_available_at_decision;original_receipt_time_not_observed")
-                    { OpeningRangeBaselineBars = baselineBars, PriorSessionDailyBars = dailyBars };
+                    {
+                        OpeningRangeBaselineBars = baselineBars, PriorSessionDailyBars = dailyBars,
+                        // Only the previous and current session up to the decision, so audit records hold no later times.
+                        ConfirmedQuietIntervalsUtc = IntradayQuietIntervals.Window(quietIntervals,
+                            IntradayCalendarAtUtc(priorDate, schedules[priorDate].RegularOpen, zone), asOf)
+                    };
                     var completedSnapshots = completed.Where(bar => snapshotMap.ContainsKey(bar.Timestamp))
                         .Select(bar => snapshotMap[bar.Timestamp]).ToArray();
                     var preview = openingEvaluator.Evaluate(strategy, completed, completedSnapshots, context, asOf);
@@ -139,7 +153,7 @@ public sealed partial class BacktestRunner
             batches.Add(new StrategyTickerBacktestBatch(ticker, strategy.StrategyId, strategy.StrategyName,
                 unavailableFrom is null, unavailableFrom is null ? null :
                     $"Required previous/current regular-session five-minute setup evidence is incomplete; first affected time {unavailableFrom:O}.",
-                candidates, [], journal.DurableJournalPath, diagnostics) { IntradayUnavailableFromUtc = unavailableFrom });
+                candidates, [], journal.DurableJournalPath, diagnostics) { IntradayUnavailableFromUtc = unavailableFrom, IntradayQuietIntervals = quiet });
         }
         return batches;
     }
@@ -160,9 +174,10 @@ public sealed partial class BacktestRunner
 
     // One daily bar per prior session built from its complete regular-session five-minute bars (open, high, low, close,
     // volume). A session with any missing interval is omitted, so the evaluator sees too few bars and rejects instead of
-    // computing an ATR from partial evidence.
+    // computing an ATR from partial evidence. A confirmed quiet interval (no price-setting trade) is not missing: the daily
+    // open, high, low and close come from the price-setting trades, exactly as the consolidated tape forms them.
     private static IReadOnlyList<OhlcvBar> PriorSessionDailyBars(IReadOnlyDictionary<DateOnly, OhlcvBar[]> sessionBars,
-        IReadOnlyList<MarketSessionSchedule> sessions, TimeZoneInfo zone)
+        IReadOnlyList<MarketSessionSchedule> sessions, TimeZoneInfo zone, IReadOnlySet<DateTimeOffset>? quietIntervals = null)
     {
         var result = new List<OhlcvBar>(sessions.Count);
         foreach (var session in sessions)
@@ -170,8 +185,7 @@ public sealed partial class BacktestRunner
             if (!sessionBars.TryGetValue(session.TradeDate, out var source) || source.Length == 0) continue;
             var open = IntradayCalendarAtUtc(session.TradeDate, session.RegularOpen, zone);
             var close = IntradayCalendarAtUtc(session.TradeDate, session.RegularClose, zone);
-            var expected = (int)((close - open).Ticks / TimeSpan.FromMinutes(5).Ticks);
-            if (source.Length != expected || source[0].Timestamp != open) continue;
+            if (!IntradayFiveMinuteBars.HasCompleteCoverage(source, open, close, quietIntervals)) continue;
             var last = source[^1];
             result.Add(new OhlcvBar(last.Ticker, open, "1d", source[0].Open, source.Max(bar => bar.High),
                 source.Min(bar => bar.Low), last.Close, source.Sum(bar => bar.Volume), last.DataFeed, last.AdjustmentPolicy,
@@ -193,9 +207,19 @@ public sealed partial class BacktestRunner
         existing is { } earlier && earlier < proposed ? earlier : proposed;
 
     // Mark the first missing mandatory source interval only when it can affect this study; warm-up-only dates do not fail a work item.
+    // True when any opening-range interval of the session is a confirmed quiet interval (no price-setting trade in it).
+    private static bool OpeningRangeHasQuietInterval(DateOnly date, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules,
+        TimeZoneInfo zone, int rangeBars, IReadOnlySet<DateTimeOffset>? quietIntervals)
+    {
+        if (quietIntervals is null || !schedules.TryGetValue(date, out var session)) return false;
+        var open = IntradayCalendarAtUtc(date, session.RegularOpen, zone);
+        return Enumerable.Range(0, rangeBars).Any(slot => quietIntervals.Contains(open.AddMinutes(slot * 5)));
+    }
+
+    // Confirmed quiet intervals (no price-setting trade, proven by trade records) count as covered.
     internal static DateTimeOffset? FindIntradaySourceGap(IReadOnlyDictionary<DateOnly, OhlcvBar[]> sessionBars,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules, IReadOnlyDictionary<DateOnly, DateOnly> priorDates,
-        TimeZoneInfo zone, DateTimeOffset start, DateTimeOffset end)
+        TimeZoneInfo zone, DateTimeOffset start, DateTimeOffset end, IReadOnlySet<DateTimeOffset>? quietIntervals = null)
     {
         foreach (var session in schedules.Values.Where(value => value.IsTradingDay).OrderBy(value => value.TradeDate))
         {
@@ -210,11 +234,11 @@ public sealed partial class BacktestRunner
             var priorClose = IntradayCalendarAtUtc(previous, priorSession.RegularClose, zone);
             var priorStarts = priorBars.Select(bar => bar.Timestamp).ToHashSet();
             for (var time = priorOpen; time < priorClose; time = time.AddMinutes(5))
-                if (!priorStarts.Contains(time)) return boundary;
+                if (!priorStarts.Contains(time) && quietIntervals?.Contains(time) != true) return boundary;
             if (!sessionBars.TryGetValue(session.TradeDate, out var currentBars)) return boundary;
             var currentStarts = currentBars.Select(bar => bar.Timestamp).ToHashSet();
             for (var time = open; time.AddMinutes(5) <= close && time.AddMinutes(5) <= end; time = time.AddMinutes(5))
-                if (time >= start && !currentStarts.Contains(time)) return time;
+                if (time >= start && !currentStarts.Contains(time) && quietIntervals?.Contains(time) != true) return time;
         }
         return null;
     }
