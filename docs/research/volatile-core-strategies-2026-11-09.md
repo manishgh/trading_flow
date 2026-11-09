@@ -115,12 +115,46 @@ Group 1 is still withheld:
 Per-run evidence: `data/backtest/results/evidence/*-quiet-intervals.json`; trade archives under
 `data/backtest/raw/sip-interval-trades`.
 
-## Snapback not run
+## Snapback (rebuilt news evidence, 9 November 2026)
 
-Snapback 2.0.0 and snapback short 2.0.0 require the frozen company-news package
-`historical-news:12629c5c...`. 2,744 of its 3,015 news revisions live in
-`C:\Users\manis\Documents\Codex\2026-10-03\c\outputs\data-gap-collection-20261019`, deleted on
-31 October 2026, so the server cannot verify the package and refuses the plan. The remaining
-271 revisions are in `data/research/evidence/historical-news-source-packages/diagnostic-20261022-verified`.
+The original company-news package `historical-news:12629c5c...` cannot be verified: 2,744 of its
+3,015 news revisions lived in a Codex outputs folder deleted on 31 October 2026. The news was
+collected again:
+
+- `evidence-plan-news` (commit `0c7db16`) wrote a frozen request for the 23 stocks of selection
+  plan 97 (SOXL and SIVE excluded), 16 Apr - 21 Oct 2026; `evidence-collect-normalize` collected
+  3,064 revisions (dataset `4bf2d98d...`, 35 requests, no failures). Inputs are kept in
+  `docs/research/inputs`.
+- Query semantics were re-observed: the Alpaca news `start`/`end` filter on `updated_at`
+  (`docs/research/inputs/alpaca-news-query-timestamp-evidence-20261109.md`).
+- Package `historical-news:7360e18a...`: 2,814 revisions, 37 of 37 query windows complete, exchange
+  calendar from the 25 October `/v2/calendar` capture (17 Mar 2025 - 30 Oct 2026). Two earlier
+  packages from the same day are kept but unusable: `f7747074...` (no query semantics) and
+  `d10368ae...` (no calendar, so recent news came back "unknown"; plan 99's runs on it made no trades).
+- News is downloaded today, so an article counts as known 24 hours after its provider update time,
+  the frozen research assumption; earlier revisions of edited articles are not available.
+
+Run: plan 102 `snapback-volatile-6m-calendar-20261109`, 21 Apr - 21 Oct 2026, groups G1 DIOD FPS
+PATH RDW RGTI; G2 BKSY BXDC MIAX MRVL OUST; G3 CRCL MXL NBIS PGY STM; G4 ASTS MVST NVTS POET SMCI;
+G5 CRDO DASH RKLB; eligibility previous close >= $20 and 20-session average volume >= 2M shares.
+
+Monthly returns, % (closed trades; "o" = positions still open at month end):
+
+| Month | Long G2 | Long G5 | Short G2 | Short G3 | Short G4 | Short G5 |
+|---|---|---|---|---|---|---|
+| 2026-04 (partial) | 0.00 | 0.00 | 0.54 (1) | -2.57 (1) | 0.00 | 0.00 |
+| 2026-05 | 0.00 | 0.00 | -1.44 (1o) | -0.02 (5, 1o) | 0.02 (1) | 0.00 |
+| 2026-06 | 0.00 | 0.00 | 0.01 (1) | -0.91 (2) | 0.00 | -1.05 (1) |
+| 2026-07 | 0.00 | 0.00 | 3.47 (1) | 5.09 (1) | 0.00 | 0.00 |
+| 2026-08 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| 2026-09 | 0.00 | 0.40 (1o) | 0.00 | 0.00 | 0.00 | 0.00 |
+| 2026-10 (partial) | 0.44 (1) | -1.12 (1, 1o) | 0.00 | 0.00 | 0.00 | 0.00 |
+
+Every other strategy/group/month is 0.00 with no trades (long G1, G3, G4; short G1).
+
+Why so few trades (stock-days, all ten runs): 1,352 failed the $20 / 2M-share eligibility rule;
+long: 1,176 had RSI(14) not below 30, 6 were vetoed by recent company news; short: 1,069 had
+RSI(14) not above 70, 3 were not 10% above SMA20, 86 were vetoed by recent company news, 13 were
+skipped because the stock was already held. Too few trades to judge either version.
 
 Results are retained under `C:\project\trading_flow\data\backtest\results\.durable-attempts\backtest`.
