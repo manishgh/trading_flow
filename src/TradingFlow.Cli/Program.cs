@@ -57,6 +57,13 @@ if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyBarsCollectionPlanCom
     return;
 }
 
+// Frozen Alpaca news collection request for a saved backtest plan's stocks; evidence-collect-normalize runs it.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.NewsCollectionPlanCommand.Name, StringComparison.Ordinal))
+{
+    Environment.ExitCode = await TradingFlow.Cli.NewsCollectionPlanCommand.RunAsync(args[1..], Console.Out, CancellationToken.None);
+    return;
+}
+
 // Point-in-time daily screen over a published as-traded bar dataset.
 if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyScreenCommand.Name, StringComparison.Ordinal))
 {
