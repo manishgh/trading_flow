@@ -89,6 +89,32 @@ None of these trade types sets a bar's price, so the missing candle is correct p
 behaviour, not lost data. The replay treats any missing regular-session candle as missing
 evidence; resolving that needs an engine decision, not more data.
 
+### Re-run with confirmed quiet intervals (build `5d648cb`)
+
+The replay now downloads Alpaca SIP trades for each missing interval and treats it as quiet
+only when it holds trades and none sets a price (CTS Pillar Output Specification v2.11b p. 83;
+UTP Data Feed Services Specification section 3.14.2). Same saved plans 77, 79, 84 and 86,
+re-started on 9 November 2026 at 11:58 UTC.
+
+| Version | G1 (no SIVE) | G2 | G3 | G4 | G5 |
+|---|---|---|---|---|---|
+| 1.2.0 return | n/a (22 trades) | -3.34% (40) | -6.99% (63) | -0.13% (35) | -6.80% (37) |
+| 2.0.0 return | n/a (15 trades) | -3.57% (20) | -6.80% (44) | -2.29% (23) | -5.32% (19) |
+
+Monthly drawdown: 1.2.0 4.03 / 7.11 / 1.91 / 7.06%; 2.0.0 3.57 / 8.25 / 2.29 / 5.32% (G2-G5).
+Every group with a figure lost money in October on both versions.
+
+Group 1 is still withheld:
+- FPS: three intervals with no candle in which Alpaca's trade records hold no trades at all.
+  An empty answer cannot be told apart from a provider outage, so they stay gaps
+  (`no_trade_records_in_interval`); ORB 2.0.0 is affected from 22 Oct 19:15 UTC.
+- DIOD (ORB 1.2.0 only): all 112 of its gaps are confirmed quiet, but a quiet opening interval in
+  an earlier session leaves the twenty-session opening-volume baseline unavailable from
+  1 Oct 13:45 UTC.
+
+Per-run evidence: `data/backtest/results/evidence/*-quiet-intervals.json`; trade archives under
+`data/backtest/raw/sip-interval-trades`.
+
 ## Snapback not run
 
 Snapback 2.0.0 and snapback short 2.0.0 require the frozen company-news package
