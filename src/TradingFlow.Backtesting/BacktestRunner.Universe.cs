@@ -9,6 +9,33 @@ namespace TradingFlow.Backtesting;
 // per-day screening logic itself lives in the Engine (HistoricalScreenerUniverseProvider).
 public sealed partial class BacktestRunner
 {
+    /// <summary>
+    /// The failed stock work items that withhold a daily run's economics. A research-screen run (whole market) never stops
+    /// because one stock's data is unavailable: its failed items are skipped, published and counted instead, so none stop
+    /// it. Every other run keeps the existing rule that any failed item withholds the results.
+    /// </summary>
+    internal static IReadOnlyList<StrategyTickerBacktestBatch> StoppingBatches(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches) =>
+        run.Universe?.RankedMembership is not null ? [] : batches.Where(batch => !batch.Succeeded).ToArray();
+
+    /// <summary>
+    /// Publishes each skipped stock work item (stock, strategy, reason) and their count beside the results when failed items
+    /// were skipped rather than stopping the run; writes nothing otherwise.
+    /// </summary>
+    private async Task PublishSkippedStocksAsync(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches,
+        IReadOnlyList<StrategyTickerBacktestBatch> stopping, CancellationToken cancellationToken)
+    {
+        var skipped = batches.Where(batch => !batch.Succeeded && !stopping.Contains(batch)).ToArray();
+        if (skipped.Length == 0) return;
+        var payload = new
+        {
+            runName = run.RunName, skippedStockWorkItems = skipped.Length,
+            items = skipped.OrderBy(batch => batch.Ticker, StringComparer.Ordinal)
+                .Select(batch => new { ticker = batch.Ticker, strategyId = batch.StrategyId, reason = batch.ErrorMessage }).ToArray()
+        };
+        await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-skipped-stocks.json"),
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+    }
+
     private static string ResolveDailyTimeframe(BacktestRunConfig run)
     {
         return run.Intervals.FirstOrDefault(interval =>

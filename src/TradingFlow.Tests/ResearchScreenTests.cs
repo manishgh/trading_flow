@@ -162,6 +162,38 @@ public sealed class ResearchScreenTests
         Assert.Equal(before, await ResearchScreenManifest.Sha256FileAsync(path, default));
     }
 
+    // A research-screen run never stops because one stock's data is unavailable: its failed work items are skipped (and
+    // published); any other run keeps withholding its results for a failed item, exactly as before.
+    [Fact]
+    public void FailedStockWorkItems_StopOnlyRunsThatAreNotResearchScreens()
+    {
+        var profile = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
+            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml"));
+        TradingFlow.Backtesting.StrategyTickerBacktestBatch Batch(string ticker, bool succeeded) => new(ticker, "s", "S", succeeded,
+            succeeded ? null : "daily_bars_unavailable", [], [], null, new TradingFlow.Backtesting.StrategyCandidateDiagnostics("s", "S"));
+        TradingFlow.Backtesting.StrategyTickerBacktestBatch[] batches = [Batch("AAA", true), Batch("BBB", false)];
+        var screen = profile with { Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,
+            RankedMembership = new(Path.Combine(Path.GetTempPath(), "screen-manifest.json"), new string('a', 64)) } };
+
+        Assert.Empty(TradingFlow.Backtesting.BacktestRunner.StoppingBatches(screen, batches));
+        Assert.Equal(["BBB"], TradingFlow.Backtesting.BacktestRunner.StoppingBatches(profile, batches).Select(batch => batch.Ticker));
+    }
+
+    // The approved whole-market daily set-up reads back exactly: daily bars only, $100,000, 10 positions of 10% each, no
+    // commission, and a replay allowance for about 2,000 stocks over 7.5 years plus warm-up.
+    [Fact]
+    public void ConnorsDailyProfile_ReadsBackTheApprovedRunValues()
+    {
+        var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
+            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml"));
+
+        Assert.Equal(["1d"], run.Intervals);
+        Assert.Equal("1d", run.DerivedTimeframes.Source);
+        Assert.Equal((100_000m, 10, 10m, 0m, 0m), (run.Portfolio.StartingCapital, run.Portfolio.MaxConcurrentPositions,
+            run.Portfolio.MaxPositionNotionalPct, run.Portfolio.FixedBuyFee, run.Portfolio.FixedSellFee));
+        Assert.Equal(5_200_000, run.Engine.MaxRetainedReplayBars);
+    }
+
     // The five-minute variant of the minute planner asks for the full 09:30-16:00 session of each selected stock-session and
     // of the stock's own earlier traded sessions.
     [Fact]

@@ -700,11 +700,13 @@ public sealed partial class BacktestRunner(
                 universeMembership, regimeCalendars, portfolioExecutionJournal, cancellationToken)
             : accounting is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
                 universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting) : null;
-        if (eventOutcome?.State is { } nativeState && batches.Any(batch => !batch.Succeeded))
+        var stoppingBatches = StoppingBatches(run, batches);
+        await PublishSkippedStocksAsync(run, batches, stoppingBatches, cancellationToken);
+        if (eventOutcome?.State is { } nativeState && stoppingBatches.Count > 0)
             eventOutcome = eventOutcome with { State = NativeDailySessionLedger.MarkUnavailableFrom(nativeState,
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(preparedMarket.WindowStart,
                     TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime),
-                "Selected work items failed: " + String.Join("; ", batches.Where(b => !b.Succeeded)
+                "Selected work items failed: " + String.Join("; ", stoppingBatches
                     .Select(b => $"{b.Ticker} ({b.StrategyId}): {b.ErrorMessage}"))) };
         var unifiedPortfolio = BuildUnifiedPortfolioResult(
             run.Portfolio,
@@ -715,8 +717,7 @@ public sealed partial class BacktestRunner(
             regimeCalendars,
             portfolioExecutionJournal, eventOutcome);
         var unifiedCompletedTradesForAudit = unifiedPortfolio.CompletedTrades;
-        var economicResultsComplete = unifiedPortfolio.EconomicResultsComplete &&
-            batches.All(batch => batch.Succeeded);
+        var economicResultsComplete = unifiedPortfolio.EconomicResultsComplete && stoppingBatches.Count == 0;
         if (!economicResultsComplete)
         {
             unifiedPortfolio = SuppressUnifiedPortfolioEconomicClaims(unifiedPortfolio);
