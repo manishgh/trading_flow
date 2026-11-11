@@ -187,7 +187,14 @@ Decisions needed from the user:
 5. Ranking inside a backtest downloads five-minute candles for every candidate (about 1,500 stocks
    over six months); the research command route is practical for now.
 
-Independent code review (10 November), checked against the code; to fix before any result is read:
+Status, 10 November: all findings below are fixed and re-reviewed except loading one-minute candles in
+real backtests (decision 4) and per-session 09:30 download windows (the data cache and prepared runs
+serve exact ranges only). Further fixes from the re-review: missing opening candles are unproven
+(`opening_bar_coverage_missing`) unless trade-free is proven; room under the 4x cap is frozen at the
+start of each five-minute candle so later events in that candle cannot affect sizing; the minimum
+relative volume must be above 0.
+
+Independent code review (10 November), checked against the code (original findings):
 
 - **High:** a missing 09:30-09:35 candle counts as zero volume
   (`HistoricalScreenerUniverseProvider.cs:148,150`, `DailyRankingOutput.cs:53`). Missing candles in
