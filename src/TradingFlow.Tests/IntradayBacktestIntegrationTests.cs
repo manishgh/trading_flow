@@ -133,6 +133,23 @@ public sealed partial class IntradayBacktestIntegrationTests
         });
     }
 
+    // ORB 2.1.0 exits at the official close, which it reads from daily bars. Through the ordinary prepared runner those
+    // bars must be read with the exact range the plan downloaded (from the warmup start); on 11 November 2026 every real
+    // 2.1.0 run stopped with "No unique pinned source request" because the reader asked from the window start instead.
+    [Fact]
+    public async Task PublishedRecipeWithCloseExit_ReadsTheDailyClosesThePlanDownloaded()
+    {
+        await WithRecipeRunAsync(null, (result, _) =>
+        {
+            Assert.True(result.EconomicResultsComplete);
+            var trade = Assert.Single(result.CompletedTrades);
+            // The stop is measured from the actual fill (trigger 100 plus the profile's slippage), 0.1 x ATR 5 below it.
+            Assert.True(trade.EntryPrice > 100m);
+            Assert.Equal(trade.EntryPrice - 0.5m, trade.StopLossPrice);
+            Assert.Equal("stop_loss_entry_bar_order_unknown", trade.ExitReason);
+        }, strategyFile: "opening-range-breakout.bt-v5.yaml", profileFile: "orb-published-recipe-profile.yaml");
+    }
+
     // A saved plan's daily eligibility reaches the five-minute ORB replay: the stock (prior close $99, 7.8M shares a day)
     // trades when it passes, and its candidate is refused as universe_membership_missing when the minimum price is $200.
     [Theory]
@@ -197,7 +214,8 @@ public sealed partial class IntradayBacktestIntegrationTests
     // Runs the published ORB recipe on one synthetic stock and session through the ordinary prepared runner, optionally with
     // a plan's daily eligibility rules, one omitted candle and a trade-record source, then deletes the isolated folder.
     private static async Task WithRecipeRunAsync(DailyScreenRules? eligibility, Action<BacktestResult, string> verify,
-        DateTimeOffset? omitBarAt = null, IIntervalTradePrintSource? trades = null)
+        DateTimeOffset? omitBarAt = null, IIntervalTradePrintSource? trades = null,
+        string strategyFile = "opening-range-breakout.bt-v4.yaml", string profileFile = "swing-backtest-profile.yaml")
     {
         var root = Path.Combine(Path.GetTempPath(), "tf-orb-recipe-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -206,9 +224,9 @@ public sealed partial class IntradayBacktestIntegrationTests
             var repo = TestRepository.FindRoot();
             var reader = new SimpleYamlReader();
             var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
-            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v4.yaml");
+            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", strategyFile);
             var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
-            var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "swing-backtest-profile.yaml"));
+            var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", profileFile));
             var start = DateTimeOffset.Parse("2026-10-01T13:30:00Z");
             var end = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
             var run = BacktestExecutionProfileResolver.Resolve(profile, [runtime.Definition]) with

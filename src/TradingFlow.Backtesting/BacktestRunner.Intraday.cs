@@ -51,7 +51,7 @@ public sealed partial class BacktestRunner
         var (eligible, notEligible) = SplitByDailyEligibility(candidates, membership);
         var quiet = await PublishQuietIntervalsAsync(run, batches, token);
         var closes = strategy.EntryRules.OpeningRangeBreakout is { ExitAtSessionClose: true }
-            ? await LoadSessionClosePricesAsync(run, preparedMarket.WindowStart, preparedMarket.WindowEnd, token) : null;
+            ? await LoadSessionClosePricesAsync(run, preparedMarket.DataStart, preparedMarket.WindowEnd, token) : null;
         var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], eligible, bars,
             sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet, closes), token);
         var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart, notEligible);
@@ -104,7 +104,8 @@ public sealed partial class BacktestRunner
     /// <summary>
     /// Each stock's official closing price per session (the daily bar close, keyed by the daily bar's date, which is the New
     /// York session date for midnight-stamped daily bars) for strategies that exit at the close. Read through the run's own
-    /// provider, so a prepared run reads the frozen daily bars its plan admitted.
+    /// provider, so a prepared run reads the frozen daily bars its plan admitted. A prepared run serves only the exact range
+    /// its plan requested, so <paramref name="start"/> must be the warmup start the plan used (the run's data start).
     /// </summary>
     private async Task<IReadOnlyDictionary<(string Ticker, DateOnly Session), decimal>> LoadSessionClosePricesAsync(
         BacktestRunConfig run, DateTimeOffset start, DateTimeOffset end, CancellationToken token)
