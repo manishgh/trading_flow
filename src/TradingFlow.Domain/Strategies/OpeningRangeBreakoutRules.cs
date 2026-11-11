@@ -15,7 +15,12 @@ public sealed record OpeningRangeBreakoutRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? RangeMinutes = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? VolumeLookbackSessions = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinRelativeVolume = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? AtrSessions = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? AtrSessions = null,
+    // Published recipe only: re-measure the protective stop from the actual average entry fill instead of the trigger.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool StopFromFill = false,
+    // Published recipe only: keep the entry order live until 16:00 and exit at the session's official close (daily close)
+    // instead of the opening of the last five-minute bar.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitAtSessionClose = false)
 {
     public const string SetupType = "opening_range_breakout";
     public const string ExecutionTimingPolicy = "completed-bar-pending-stop-market-session-deadline-v1";
@@ -46,6 +51,8 @@ public sealed record OpeningRangeBreakoutRules(
             strategy.Direction != "long_short" || !strategy.EntryRules.EnableShort ||
             strategy.EntryRules.ShortSetupType != SetupType)
             throw new InvalidOperationException("Opening-range breakout requires its exclusive long/short research policy and a positive filled-parent session limit.");
+        if (!IsPublishedRecipe && (StopFromFill || ExitAtSessionClose))
+            throw new InvalidOperationException("stop_from_fill and exit_at_session_close belong only to the published recipe policy.");
         var recipeParameters = new object?[] { RangeMinutes, VolumeLookbackSessions, MinRelativeVolume, AtrSessions };
         if (IsPublishedRecipe
                 ? RangeMinutes is not (> 0 and <= 60) || RangeMinutes % 5 != 0 || VolumeLookbackSessions is not (> 0 and <= 20) ||

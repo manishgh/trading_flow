@@ -51,7 +51,10 @@ public sealed record ExecutionSimulationPolicy(
     decimal FinraTafPerShare,
     decimal FinraTafCap,
     bool InputPriceIncludesExecutionFriction = false,
-    int MaximumTrackedOrderContracts = 1_000_000);
+    int MaximumTrackedOrderContracts = 1_000_000,
+    // Broker commission per filled share, charged on every fill of either side; zero (the default) charges none.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    decimal CommissionPerShare = 0m);
 
 public sealed record ExecutionSimulationRequest(
     SimulatedOrderSide Side,
@@ -136,7 +139,7 @@ public sealed partial class DeterministicExecutionSimulator : IDeterministicExec
 
         var fees = EstimateExecutionFees(fillPrice, fillableQuantity, request.Side,
             request.Policy.FixedBuyFee, request.Policy.FixedSellFee, request.Policy.SecFeeRate,
-            request.Policy.FinraTafPerShare, request.Policy.FinraTafCap);
+            request.Policy.FinraTafPerShare, request.Policy.FinraTafCap) + fillableQuantity * request.Policy.CommissionPerShare;
         var remaining = request.RequestedQuantity - fillableQuantity;
         return new ExecutionSimulationResult(
             remaining == 0 ? SimulatedFillStatus.Filled : SimulatedFillStatus.PartialFill,
@@ -413,7 +416,7 @@ public sealed partial class DeterministicExecutionSimulator : IDeterministicExec
             policy.BaseSlippageBps < 0m || policy.SyntheticSpreadBps < 0m ||
             policy.ImpactBpsAtMaxParticipation < 0m ||
             policy.FixedBuyFee < 0m || policy.FixedSellFee < 0m ||
-            policy.SecFeeRate < 0m || policy.FinraTafPerShare < 0m || policy.FinraTafCap < 0m)
+            policy.SecFeeRate < 0m || policy.FinraTafPerShare < 0m || policy.FinraTafCap < 0m || policy.CommissionPerShare < 0m)
         {
             throw new ArgumentException("Execution policy values are outside their valid range.", nameof(request));
         }

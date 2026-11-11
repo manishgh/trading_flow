@@ -76,6 +76,9 @@ public sealed partial class PreparedMarketDataService
                 foreach (var interval in new[] { "1d" }.Concat(intervals.Where(interval => !TimeframeParser.IsDailyOrHigher(interval))).Distinct())
                     Add(regime.BenchmarkSymbol, interval, benchmarkStart, end);
             }
+            // A strategy that exits at the official close reads each session's daily close.
+            if (strategies.Any(strategy => strategy.EntryRules.OpeningRangeBreakout is { ExitAtSessionClose: true }))
+                foreach (var ticker in run.Tickers.Distinct(StringComparer.OrdinalIgnoreCase)) Add(ticker, "1d", start, end);
             // Per-day screens (historical screener or a saved plan's daily eligibility) read daily bars from before the window.
             if (run.Universe is { IsHistoricalScreener: true } or { DailyEligibility: not null })
             {
@@ -86,6 +89,9 @@ public sealed partial class PreparedMarketDataService
                 {
                     if (screen.IsHistoricalScreener) Add(ticker, daily, screeningStart, run.TimeWindow.Start.Value);
                     if (screen.IsPerDayRescreen || screen.DailyEligibility is not null) Add(ticker, daily, screeningStart, end);
+                    // A first-five-minute ranking reads the opening five-minute bar of the sessions before each decision day.
+                    if (screen.DailyRanking is { } ranking)
+                        Add(ticker, "5m", run.TimeWindow.Start.Value.AddDays(-ranking.BaselineFetchCalendarDays), end);
                 }
             }
             if (provider is IMarketSessionScheduleProvider)

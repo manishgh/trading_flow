@@ -91,7 +91,9 @@ public sealed record UniverseConfig(
     IReadOnlyList<string>? ScreenerTickers = null,
     string? ResolvedScreenerQuery = null,
     DateTimeOffset? ResolvedAtUtc = null,
-    DailyScreenRules? DailyEligibility = null)
+    DailyScreenRules? DailyEligibility = null,
+    // Optional per-session ranking of the daily-eligible stocks (stocks in play); omitted from settings when unset.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DailyRankingRules? DailyRanking = null)
 {
     /// <summary>Completed daily sessions the screen reads before a decision day: the eligibility rules' needs, or the legacy look-back.</summary>
     public int ScreenLookbackSessions => DailyEligibility?.PriorSessionsNeeded ?? Math.Max(LookbackDays, 1);
@@ -228,7 +230,12 @@ public sealed record PortfolioConfig(
     decimal FinraTafPerShare = 0m,
     decimal FinraTafCap = 0m,
     decimal ImpactBpsAtMaxParticipation = 0m,
-    int MaxExecutionOrderHistory = 1_000_000);
+    int MaxExecutionOrderHistory = 1_000_000,
+    // Broker commission in USD per filled share on both sides (the paper's $0.0035); zero charges none.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] decimal CommissionPerShare = 0m,
+    // Gross exposure limit in percent of equity (400 = 4x leverage). When set, untriggered stop orders reserve no capital
+    // and each position is capped at its trigger so total gross exposure stays within it. Null keeps the cash-only limit.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxGrossExposurePct = null);
 
 public sealed record SignalSourceConfig(
     string Type,

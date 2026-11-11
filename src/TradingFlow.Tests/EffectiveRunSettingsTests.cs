@@ -192,6 +192,49 @@ public sealed class EffectiveRunSettingsTests
         Assert.ThrowsAny<Exception>(() => fixture.Reader.ReadBacktestRun(path));
     }
 
+    // A saved plan's per-session stocks-in-play ranking is written with every field and read back exactly; a run without it
+    // has none, and a ranking without daily eligibility rules (whose stocks it ranks) is refused.
+    [Fact]
+    public async Task GeneratedRun_RoundTripsDailyRanking()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var eligibility = new TradingFlow.Domain.Market.DailyScreenRules(5m, TradingFlow.Domain.Market.DailyScreenPriceBasis.SessionOpen, 14,
+            MinAverageShareVolume: 1_000_000m, AtrPeriod: 14, MinAtr: 0.5m, MinHistorySessions: 14);
+        var ranking = new TradingFlow.Domain.Market.DailyRankingRules();
+
+        var path = fixture.Writer.WriteBacktestConfig(fixture.Request with { DailyEligibility = eligibility, DailyRanking = ranking });
+        var read = fixture.Reader.ReadBacktestRun(path);
+
+        Assert.Equal(ranking, read.Universe!.DailyRanking);
+        Assert.Contains("    measure: first_five_minute_relative_volume", File.ReadAllText(path), StringComparison.Ordinal);
+        Assert.Null(fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request with { DailyEligibility = eligibility })).Universe!.DailyRanking);
+        Assert.ThrowsAny<Exception>(() => fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request with { DailyRanking = ranking })));
+    }
+
+    // The published method's per-share commission and gross exposure limit are carried from the profile into the generated
+    // run and read back exactly; a profile without them writes neither key, so other runs keep their settings unchanged.
+    [Fact]
+    public async Task GeneratedRun_RoundTripsCommissionAndGrossExposureLimit()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var plainPath = fixture.Writer.WriteBacktestConfig(fixture.Request);
+        var plain = fixture.Reader.ReadBacktestRun(plainPath);
+        var plainText = File.ReadAllText(plainPath);
+        var profile = await File.ReadAllTextAsync(fixture.ProfilePath);
+        await File.WriteAllTextAsync(fixture.ProfilePath, profile.Replace("  max_execution_order_history: 9876",
+            "  max_execution_order_history: 9876\n  commission_per_share: 0.0035\n  max_gross_exposure_pct: 400", StringComparison.Ordinal));
+
+        var path = fixture.Writer.WriteBacktestConfig(fixture.Request);
+        var read = fixture.Reader.ReadBacktestRun(path);
+
+        Assert.Equal((0m, (decimal?)null), (plain.Portfolio.CommissionPerShare, plain.Portfolio.MaxGrossExposurePct));
+        Assert.DoesNotContain("commission_per_share", plainText, StringComparison.Ordinal);
+        Assert.DoesNotContain("max_gross_exposure_pct", plainText, StringComparison.Ordinal);
+        Assert.Equal((0.0035m, (decimal?)400m), (read.Portfolio.CommissionPerShare, read.Portfolio.MaxGrossExposurePct));
+        Assert.Contains("  commission_per_share: 0.0035", File.ReadAllText(path), StringComparison.Ordinal);
+        Assert.Equal(plain.Portfolio with { CommissionPerShare = 0.0035m, MaxGrossExposurePct = 400m }, read.Portfolio);
+    }
+
     // Reject a typo before writing snapshots, instead of accidentally falling back to native daily execution.
     [Fact]
     public async Task UnknownReplayPolicy_DoesNotCreateRunFiles()

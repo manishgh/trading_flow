@@ -48,7 +48,8 @@ public sealed record BacktestRunRequest(
     EngineConfig? EvidenceBoundEngine = null,
     string? ExecutionReplayPolicyId = null,
     BacktestRunConfig? ResolvedProfile = null,
-    TradingFlow.Domain.Market.DailyScreenRules? DailyEligibility = null);
+    TradingFlow.Domain.Market.DailyScreenRules? DailyEligibility = null,
+    TradingFlow.Domain.Market.DailyRankingRules? DailyRanking = null);
 
 public sealed record StrategyParameterOverride(
     string StrategyPath,

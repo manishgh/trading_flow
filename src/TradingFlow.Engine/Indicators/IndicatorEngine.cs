@@ -300,9 +300,9 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             return;
         }
 
-        var median = Median(lookback);
+        var median = RelativeVolume.Baseline(lookback, VolumeBaselineAverage.Median);
         medianVolume = median;
-        relativeVolume = median <= 0m ? null : currentVolume / median;
+        relativeVolume = RelativeVolume.Ratio(currentVolume, median);
     }
 
     private void EvaluateBaseline(
@@ -332,9 +332,9 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         medianVolume = null;
         if (sampleCount >= marketEvidenceProfile.MinimumValidSamples)
         {
-            var median = Median(lookback);
+            var median = RelativeVolume.Baseline(lookback, VolumeBaselineAverage.Median);
             medianVolume = median;
-            relativeVolume = median <= 0m ? null : currentVolume / median;
+            relativeVolume = RelativeVolume.Ratio(currentVolume, median);
         }
 
         var existingIndex = samples.FindIndex(sample => sample.TradeDate == currentTradeDate);
@@ -510,15 +510,6 @@ public sealed class IndicatorEngine : IIndicatorCalculator
     {
         var local = date.ToDateTime(time, DateTimeKind.Unspecified);
         return new DateTimeOffset(local, exchangeTimeZone.GetUtcOffset(local)).ToUniversalTime();
-    }
-
-    private static decimal Median(IReadOnlyCollection<decimal> values)
-    {
-        var ordered = values.Order().ToArray();
-        var middle = ordered.Length / 2;
-        return ordered.Length % 2 == 0
-            ? (ordered[middle - 1] + ordered[middle]) / 2m
-            : ordered[middle];
     }
 
     private static string NormalizeDataFeed(string? dataFeed) =>

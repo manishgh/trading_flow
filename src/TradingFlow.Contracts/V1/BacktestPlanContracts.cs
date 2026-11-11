@@ -17,10 +17,21 @@ public sealed record SaveBacktestPlanRequest(StartBacktestRequest Run, int? Grou
 
 /// <summary>
 /// Per-day stock eligibility judged only from completed earlier sessions; a stock may trade only on days it passes.
-/// PriceBasis is prior_close or session_open. Null thresholds are not applied.
+/// PriceBasis is prior_close or session_open. Null thresholds are not applied. Ranking, when present, keeps only each
+/// session's highest-ranked eligible stocks.
 /// </summary>
 public sealed record BacktestEligibilityRules(decimal MinPrice, string PriceBasis, int AverageSessions, int MinHistorySessions,
-    decimal? MinAverageVolume = null, decimal? MinAverageDollarVolume = null, int? AtrPeriod = null, decimal? MinAtr = null);
+    decimal? MinAverageVolume = null, decimal? MinAverageDollarVolume = null, int? AtrPeriod = null, decimal? MinAtr = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    BacktestRankingRules? Ranking = null);
+
+/// <summary>
+/// Per-session ranking of the eligible stocks. Measure is first_five_minute_relative_volume (09:30-09:35 New York volume
+/// over the average of the previous BaselineSessions sessions); BaselineAverage is mean or median; stocks below
+/// MinRelativeVolume (1 = 100%) are dropped and the MaxPerSession highest are kept, ties to the lower issuer identifier.
+/// </summary>
+public sealed record BacktestRankingRules(string Measure, int BaselineSessions, string BaselineAverage,
+    decimal MinRelativeVolume, int MaxPerSession);
 
 /// <summary>An immutable saved choice; re-saving edited choices creates another explicit plan.</summary>
 public sealed record BacktestPlanResponse(long PlanId, DateTimeOffset SavedAtUtc,

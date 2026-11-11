@@ -114,3 +114,37 @@ easy-to-borrow flag is current only, so the long-only result is reported as the 
 4. Collect one-minute bars for selected stocks; run the recipe evaluator.
 5. Signal study of gross and net R per trade per year before portfolio changes.
 6. Portfolio changes: leverage cap, per-share commission, then the full replication and test.
+
+## Implementation notes, 10 November 2026
+
+Added after the code review of the uncommitted implementation. Earlier text is unchanged.
+
+- Missing first five-minute bar. It counts as zero volume only when the data proves the stock had
+  no trade in 09:30-09:35 New York. Backtests: the stock has another regular-session five-minute
+  bar that day. Research screen: the opening-bar collection completed a request for exactly that
+  stock, session and interval. Otherwise the stock is left out of that session's ranking with the
+  reason `opening_bar_coverage_missing`, also when the unproven session is one of the 14 baseline
+  sessions (it is never averaged as zero). Each selected stock publishes how many of its baseline
+  sessions were proven zeros (`ProvenZeroBaselineSessions` in the backtest ranking file,
+  `proven_zero_baseline_sessions` in `ranked-daily-list.csv`).
+- Difference in results, leverage sharing: when two or more stop orders first trigger in the same
+  five-minute bar, the 4x gross limit is handed out in the order of each order's first trigger
+  minute from one-minute bars. Without one-minute bars for all of them, or when they triggered in
+  the same minute, admission order (entry time, selection score, ticker) is used. When that assumed
+  order changed an outcome (a later order of the group was cut below its admitted size or canceled),
+  the group's orders carry the event `trigger_order_assumed` with reason
+  `same_bar_trigger_order_unknown_admission_order_used` or
+  `same_minute_trigger_order_unknown_admission_order_used`. Backtests do not load one-minute bars
+  yet (a pending decision), so until then every such case in a backtest carries the first reason.
+- Gross room for triggers inside a bar is frozen when the bar opens (cash, completed-bar marks and
+  reservations at that moment). Each trigger in the bar takes from it in processing order; exits,
+  cancellations and closes in the same bar never add to it, because they may have come after the
+  trigger.
+- The minimum relative volume must be above zero, so a session with no trade in its first five
+  minutes can never be selected.
+- Stop from the fill: measured once, from the first entry fill, and never moved afterwards; later
+  partial fills of the same order keep it.
+- An entry filled at a bar's open has the whole bar after it, so a stop in that bar is an ordinary
+  `stop_loss`, not `stop_loss_entry_bar_order_unknown`.
+- The closing-price exit uses the last five-minute bar's volume less what the same order already
+  filled in that bar; per-share commission of both sides is set aside from the gross headroom.

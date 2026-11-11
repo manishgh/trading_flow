@@ -168,7 +168,8 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
             request.StartingCapital, request.AccountRiskBudgetPct, request.MaxPositionNotionalPct, request.MaxConcurrentPositions,
             request.CachePolicy, [], request.TestWindowStartUtc, request.TestWindowEndUtc, universe.UniverseSnapshotId, universe.ResolvedAtUtc,
             String.Join("+", universe.Members.SelectMany(item => item.Sources).Select(item => item.SourceKind).Distinct().Order()),
-            evidence.Engine, run.Engine.ExecutionReplayPolicyId, run, TradingFlow.Application.Jobs.BacktestEligibility.ToRules(request.Eligibility, run.Engine.ExecutionReplayPolicyId)));
+            evidence.Engine, run.Engine.ExecutionReplayPolicyId, run, TradingFlow.Application.Jobs.BacktestEligibility.ToRules(request.Eligibility, run.Engine.ExecutionReplayPolicyId),
+            TradingFlow.Application.Jobs.BacktestEligibility.ToRanking(request.Eligibility, run.Engine.ExecutionReplayPolicyId)));
         try
         {
             var generated = reader.ReadBacktestRun(path);

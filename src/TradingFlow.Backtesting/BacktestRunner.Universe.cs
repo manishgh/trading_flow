@@ -54,13 +54,18 @@ public sealed partial class BacktestRunner
     /// For a saved plan's fixed stock list with daily eligibility rules: decides, for every session in the window, which
     /// stocks qualified using only completed earlier sessions (and that session's open when the rules use it). The stock
     /// list itself is unchanged; trades on a day a stock did not qualify are refused as universe_membership_missing.
-    /// Publishes each stock's eligible days with the run results so every refusal can be checked.
+    /// Publishes each stock's eligible days with the run results so every refusal can be checked. With a daily ranking the
+    /// eligible days are each session's ranked members, and the ranked list with its values is published as well.
     /// </summary>
     private async Task<UniverseMembership> ResolveDailyEligibilityAsync(BacktestRunConfig run, UniverseConfig universe,
         CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
     {
         var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
-        universe.DailyEligibility!.RequireKnownBeforeEntry(!ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId));
+        var intraday = ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId);
+        universe.DailyEligibility!.RequireKnownBeforeEntry(!intraday);
+        // The ranking is known at 09:35 New York; only the intraday replay checks each entry's time against that.
+        if (universe.DailyRanking is not null && !intraday)
+            throw new InvalidOperationException("universe.daily_ranking is known only at 09:35 New York and needs an intraday candle replay policy.");
         progress?.Report(BacktestProgress.StageOnly("resolving_universe",
             $"Checking each stock's daily eligibility from earlier sessions, {evaluationStart:yyyy-MM-dd} to {windowEnd:yyyy-MM-dd}."));
         var screener = new TradingFlow.Engine.Universe.HistoricalScreenerUniverseProvider(CreateProvider(run));
@@ -68,7 +73,10 @@ public sealed partial class BacktestRunner
             universe with { Candidates = [] }, evaluationStart, ResolveDailyTimeframe(run), windowEnd), cancellationToken);
         var eligibleDays = run.Tickers.ToDictionary(ticker => ticker, ticker => membership.EligibleDays(ticker)
             .Select(day => day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)).ToArray(), StringComparer.OrdinalIgnoreCase);
-        var payload = new { runName = run.RunName, rule = universe.DailyEligibility, eligibleDays };
+        object payload = universe.DailyRanking is { } ranking
+            ? new { runName = run.RunName, rule = universe.DailyEligibility, ranking, issuerIdentityBasis = "symbol",
+                eligibleDays, rankedSessions = membership.SessionRankings.Select(PublishedSessionRanking).ToArray() }
+            : new { runName = run.RunName, rule = universe.DailyEligibility, eligibleDays };
         await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "universe", $"{run.RunName}-daily-eligibility.json"),
             JsonSerializer.Serialize(payload, new JsonSerializerOptions
             {
@@ -80,6 +88,20 @@ public sealed partial class BacktestRunner
             $"Daily eligibility: {membership.Tickers.Count} of {run.Tickers.Count} stock(s) qualified on at least one day."));
         return membership;
     }
+
+    // One session of the published ranked list: members with rank, measured values and how many baseline sessions were
+    // proven zero-volume, the count that met the minimum, and each excluded stock's reason.
+    private static object PublishedSessionRanking(TradingFlow.Engine.Universe.SessionRanking session) => new
+    {
+        session = session.Session.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        qualified = session.QualifiedCount,
+        members = session.Members.Select(member => new
+        {
+            member.Rank, symbol = member.Security.Symbol, issuerId = member.Security.IssuerId,
+            member.OpeningVolume, member.BaselineVolume, member.RelativeVolume, member.ProvenZeroBaselineSessions
+        }).ToArray(),
+        rejections = session.Rejections.Select(rejection => new { symbol = rejection.Symbol, reason = rejection.Reason }).ToArray()
+    };
 
     private async Task PersistUniverseSnapshotAsync(
         BacktestRunConfig run,

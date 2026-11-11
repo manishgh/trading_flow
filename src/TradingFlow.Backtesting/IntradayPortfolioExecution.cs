@@ -12,7 +12,12 @@ public sealed record IntradayPortfolioReplayRequest(PortfolioConfig Portfolio,
     IReadOnlyCollection<OhlcvBar> MarketBars, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Sessions,
     DateTimeOffset StartUtc, DateTimeOffset EndUtc,
     // Per stock (upper case): interval starts with no candle that trade records prove had no price-setting trade.
-    IReadOnlyDictionary<string, IReadOnlySet<DateTimeOffset>>? ConfirmedQuietIntervals = null);
+    IReadOnlyDictionary<string, IReadOnlySet<DateTimeOffset>>? ConfirmedQuietIntervals = null,
+    // Per stock (upper case) and New York session: the official closing price, used only by strategies that exit at the close.
+    IReadOnlyDictionary<(string Ticker, DateOnly Session), decimal>? SessionClosePrices = null,
+    // Optional one-minute bars of selected stocks on selected days; they decide the order of an entry and a stop that fall
+    // in the same five-minute bar. Absent minutes keep the worst-case reading.
+    IReadOnlyCollection<OhlcvBar>? MinuteBars = null);
 public sealed record IntradayReplayEvent(string CandidateId, string Ticker, DateTimeOffset TimestampUtc,
     string State, string Reason, int Quantity = 0, decimal? Price = null,
     decimal? StopPrice = null, decimal? TargetPrice = null, DateTimeOffset? EffectiveAfterUtc = null)
@@ -47,7 +52,26 @@ public static partial class IntradayPortfolioExecution
         public BacktestCandidateTrade Candidate { get; } = candidate;
         public StrategyDefinition Strategy { get; } = strategy;
         public IntradayExecutionEvidence Evidence => Candidate.IntradayExecution!;
-        public int Requested { get; } = requested;
+        // Fixed at admission; only LowerRequestedTo can reduce it (a gross exposure limit capping the parent at its trigger).
+        public int Requested { get; private set; } = requested;
+
+        /// <summary>Lowers the parent's quantity to <paramref name="quantity"/> when that is smaller; it is never raised.</summary>
+        public void LowerRequestedTo(int quantity) => Requested = Math.Min(Requested, quantity);
+
+        // Shares this parent filled (both sides) in the five-minute interval starting at FillIntervalStart, so a later
+        // execution against that interval's volume shares the same participation pool.
+        public DateTimeOffset? FillIntervalStart { get; private set; }
+        public int FilledInInterval { get; private set; }
+
+        /// <summary>Adds a fill to the per-interval participation tally, restarting it when the fill is from a new interval.</summary>
+        public void RecordIntervalFill(DateTimeOffset intervalStart, int quantity)
+        {
+            if (FillIntervalStart != intervalStart) { FillIntervalStart = intervalStart; FilledInInterval = 0; }
+            FilledInInterval += quantity;
+        }
+
+        /// <summary>Shares this parent already filled against the interval starting at <paramref name="intervalStart"/>.</summary>
+        public int FilledIn(DateTimeOffset intervalStart) => FillIntervalStart == intervalStart ? FilledInInterval : 0;
         public decimal MaximumNotional { get; } = maximumNotional;
         public int Entered { get; set; }
         public int Exited { get; set; }
@@ -73,7 +97,10 @@ public static partial class IntradayPortfolioExecution
         public ContinuationProtectionState? Protection { get; set; }
         public bool Long => Candidate.Direction == "long";
         public decimal Entry => Entered == 0 ? Candidate.EntryPrice : EntryNotional / Entered;
-        public decimal Stop => Protection?.StopPrice ?? Candidate.StopLossPrice;
+        public decimal Stop => Protection?.StopPrice ?? InitialStop;
+        // The protective stop re-measured from the actual average fill, when the strategy asks for it.
+        public decimal? FillStop { get; set; }
+        public decimal InitialStop => FillStop ?? Candidate.StopLossPrice;
         public decimal Target => Protection?.TargetPrice ?? (Entered > 0 ? InitialTarget : Candidate.TakeProfitPrice);
         public bool Failed { get; set; }
         public decimal EntryTaf { get; set; }
@@ -144,9 +171,10 @@ public static partial class IntradayPortfolioExecution
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (clock > open) CompleteInterval(clock.AddMinutes(-5), clock);
+                    if (clock == close) LiquidateAtSessionClose(clock);
                     if (clock < close && clock >= request.StartUtc)
                     {
-                        AdmitDue(clock, close.AddMinutes(-5));
+                        AdmitDue(clock, close);
                         if (clock == close.AddMinutes(-5)) LiquidateDeadline(clock);
                     }
                 }
@@ -178,18 +206,21 @@ public static partial class IntradayPortfolioExecution
         }
 
         /// <summary>Dequeue due completed decisions in frozen priority order, reserving capital before inspecting their execution bar.</summary>
-        private void AdmitDue(DateTimeOffset clock, DateTimeOffset deadline)
+        private void AdmitDue(DateTimeOffset clock, DateTimeOffset close)
         {
             while (cursor < candidates.Length && candidates[cursor].EntryTimestamp <= clock)
-                Admit(candidates[cursor++], clock, deadline);
+                Admit(candidates[cursor++], clock, close);
         }
 
-        /// <summary>Keep session/rearm checks, slot admission and shared risk sizing separate from market matching.</summary>
+        /// <summary>
+        /// Keep session/rearm checks, slot admission and shared risk sizing separate from market matching. The order must carry
+        /// the session's deadline for its strategy: the last five-minute opening, or the close for a close exit.
+        /// </summary>
         private void Admit(BacktestCandidateTrade candidate, DateTimeOffset clock, DateTimeOffset deadline)
         {
             var evidence = candidate.IntradayExecution!;
             var marketEntry = evidence.EntryOrderMode is IntradayEntryOrderMode.StopMarket or IntradayEntryOrderMode.NextBarMarket;
-            if (!ValidOrderClock(evidence, clock, deadline, marketEntry))
+            if (!ValidOrderClock(evidence, clock, SessionDeadline(candidate, deadline), marketEntry))
             { Reject(candidate, "invalid_or_stale_intraday_order_clock"); return; }
             if (marketEntry && !CanAdmitMarketParent(candidate, clock)) return;
             if (live.Any(x => x.Candidate.Ticker.Equals(candidate.Ticker, StringComparison.OrdinalIgnoreCase)) ||
@@ -227,8 +258,8 @@ public static partial class IntradayPortfolioExecution
             if (strategy.ExitRules.HasProfitTarget && evidence.LimitPrice + (candidate.Direction == "long" ? 1 : -1) * 3 * plannedRisk <= 0)
             { Reject(candidate, "initial_three_r_target_not_positive"); return null; }
             var equity = Equity();
-            var available = Math.Max(0, equity - live.Sum(ReservedNotional));
-            var notional = Math.Min(equity / request.Portfolio.MaxConcurrentPositions,
+            var available = Math.Max(0, equity - live.Sum(Reserved));
+            var notional = GrossLimited ? GrossCapacity(equity) : Math.Min(equity / request.Portfolio.MaxConcurrentPositions,
                 Math.Max(0, available - request.Portfolio.FixedBuyFee - request.Portfolio.FixedSellFee));
             var side = candidate.Direction == "long" ? PlannedOrderSide.Long : PlannedOrderSide.Short;
             var entryFee = side == PlannedOrderSide.Long ? request.Portfolio.FixedBuyFee : request.Portfolio.FixedSellFee;
@@ -314,17 +345,25 @@ public static partial class IntradayPortfolioExecution
         /// <summary>Use marked equity and gross reserved exposure, so short-sale cash cannot become fresh buying power.</summary>
         private decimal Equity() => cash + live.Sum(x => x.Open * (x.Long ? 1m : -1m) * (x.Mark ?? x.Entry));
 
-        /// <summary>Reserve all admitted parent shares at their fixed reference, including still-unfilled quantities.</summary>
-        private static decimal ReservedNotional(Intent intent) =>
+        /// <summary>Reserve all admitted parent shares at their fixed reference, including still-unfilled quantities; under a gross exposure limit an untriggered stop order reserves nothing until its trigger sizes it.</summary>
+        private decimal Reserved(Intent intent) => GrossLimited && intent.StopMarket && intent.Pending && !intent.EntryTriggered && intent.Entered == 0 ? 0m :
             (intent.Pending ? intent.Requested : intent.Open) * Math.Max(intent.Evidence.LimitPrice, intent.Entry);
 
         /// <summary>
         /// Resolve only active work against its exact interval; missing bars preserve unknown exposure instead of shifting
-        /// fills. A confirmed quiet interval had no price-setting trade, so nothing can fill, trigger or exit in it.
+        /// fills. A confirmed quiet interval had no price-setting trade, so nothing can fill, trigger or exit in it. Under a
+        /// gross exposure limit, stop orders triggering in this interval claim capacity in their trigger order where known,
+        /// from the room frozen at the bar's start.
         /// </summary>
         private void CompleteInterval(DateTimeOffset start, DateTimeOffset end)
         {
-            foreach (var intent in live.Where(x => !x.Failed && x.Evidence.ActiveAtUtc <= start && start < x.Evidence.SessionDeadlineUtc).ToArray())
+            var active = live.Where(x => !x.Failed && x.Evidence.ActiveAtUtc <= start && start < x.Evidence.SessionDeadlineUtc).ToArray();
+            if (GrossLimited)
+            {
+                OpenTriggerBudget(start);
+                active = OrderSameBarTriggers(active, start);
+            }
+            foreach (var intent in active)
             {
                 var symbol = intent.Candidate.Ticker.ToUpperInvariant();
                 if (!bars.TryGetValue((symbol, start), out var bar))
@@ -337,6 +376,7 @@ public static partial class IntradayPortfolioExecution
                 { Fail(intent, start, "execution_bar_invalid_or_unavailable_at_completion"); continue; }
                 ProcessInterval(intent, bar, end);
             }
+            if (GrossLimited) CloseTriggerBudget(start);
             ObserveRangeReturns(start, end);
         }
 
@@ -450,6 +490,9 @@ public static partial class IntradayPortfolioExecution
             if (!intent.EntryTriggered && !(intent.Long ? bar.High >= trigger : bar.Low <= trigger)) return 0;
             if (!intent.EntryTriggered)
             {
+                // Under a gross exposure limit the parent's size is decided now, at its trigger, from what is left.
+                if (GrossLimited && !CapAtTrigger(intent, opening ? bar.Open : trigger, opening ? bar.Timestamp : bar.Timestamp.AddMinutes(5), bar.Timestamp))
+                    return 0;
                 intent.EntryTriggered = true;
                 Emit(intent, opening ? bar.Timestamp : bar.Timestamp.AddMinutes(5), "entry_triggered", "stop_market_trigger_retained_until_fill_or_cancellation");
             }
@@ -469,7 +512,8 @@ public static partial class IntradayPortfolioExecution
         {
             var e = intent.Evidence;
             if (intent.Entered == intent.Requested) intent.Pending = false;
-            var risk = intent.Long ? intent.Entry - intent.Candidate.StopLossPrice : intent.Candidate.StopLossPrice - intent.Entry;
+            RebaseStopOnFill(intent);
+            var risk = intent.Long ? intent.Entry - intent.InitialStop : intent.InitialStop - intent.Entry;
             if (risk <= 0)
             {
                 intent.StopTriggered = true;
@@ -501,7 +545,7 @@ public static partial class IntradayPortfolioExecution
                         ? ContinuationProtectionPolicy.RebaseActualFills(existing, intent.Entry, EstimatedCosts(intent))
                         : ContinuationProtectionPolicy.Create(intent.Candidate.Ticker,
                             intent.Long ? PlannedOrderSide.Long : PlannedOrderSide.Short,
-                            intent.EntryAt!.Value, intent.Entry, intent.Candidate.StopLossPrice,
+                            intent.EntryAt!.Value, intent.Entry, intent.InitialStop,
                             EstimatedCosts(intent), e.TickSize, rules);
                 if (intent.Protection is { TargetPrice: <= 0 })
                 {
@@ -534,6 +578,13 @@ public static partial class IntradayPortfolioExecution
         {
             var (stop, target, price, opening) = ProtectionTrigger(intent, bar, allowTarget, openingOnly);
             if (!stop && !target) return 0;
+            var entryBarStop = stop && !opening && !intent.StopTriggered && StopMayPrecedeEntry(intent, bar);
+            var minuteOrder = entryBarStop ? EntryBarStopOrder(intent, bar) : EntryBarMinuteOrder.Unknown;
+            if (minuteOrder == EntryBarMinuteOrder.NoStopAfterEntry)
+            {
+                Emit(intent, end, "stop_not_reached_after_entry", "one_minute_bars_show_stop_untouched_after_entry_minute", intent.Open);
+                return 0;
+            }
             // A risk reduction first discovered at this interval's completed entry cannot consume its preceding opening.
             var alreadyTriggered = intent.StopTriggered && (intent.StopTriggeredAt ?? intent.EntryAt) <= bar.Timestamp;
             if (stop && !intent.StopTriggered) intent.StopTriggeredAt = opening ? bar.Timestamp : end;
@@ -542,8 +593,16 @@ public static partial class IntradayPortfolioExecution
                 "actual_fill_three_r_target_not_positive" or "actual_fill_management_target_not_positive"))
                 // Without a target the stop is tight (a fraction of ATR); a stop inside the five-minute bar that filled the
                 // entry is counted as hit (worst case) and labelled, because the order of the two within the bar is unknown.
-                intent.ExitReason = !intent.Strategy.ExitRules.HasProfitTarget && intent.EntryBarStart == bar.Timestamp
-                    ? "stop_loss_entry_bar_order_unknown" : "stop_loss";
+                // One-minute bars, when supplied, settle the order except within the entry's own minute. An entry filled at
+                // the bar's open has the whole bar after it, so its stop in that bar is an ordinary stop loss.
+                intent.ExitReason = StopMayPrecedeEntry(intent, bar)
+                    ? minuteOrder switch
+                    {
+                        EntryBarMinuteOrder.StopAfterEntry => "stop_loss",
+                        EntryBarMinuteOrder.SameMinute => "stop_loss_entry_minute_order_unknown",
+                        _ => "stop_loss_entry_bar_order_unknown"
+                    }
+                    : "stop_loss";
             else if (target) intent.ExitReason = "take_profit";
             CancelRemainder(intent, opening ? bar.Timestamp : end,
                 stop ? "protective_stop_cancels_entry_remainder" : "protective_target_cancels_entry_remainder");
@@ -573,8 +632,8 @@ public static partial class IntradayPortfolioExecution
             if (intent.StopTriggered)
             {
                 if ((intent.StopTriggeredAt ?? intent.EntryAt) > bar.Timestamp)
-                    return !openingOnly && (intent.Long ? bar.Low <= intent.Candidate.StopLossPrice : bar.High >= intent.Candidate.StopLossPrice)
-                        ? (true, false, intent.Candidate.StopLossPrice, false) : (false, false, 0, false);
+                    return !openingOnly && (intent.Long ? bar.Low <= intent.InitialStop : bar.High >= intent.InitialStop)
+                        ? (true, false, intent.InitialStop, false) : (false, false, 0, false);
                 return (true, false, intent.Stop, true);
             }
             var boundary = intent.ProtectionEffectiveAfterUtc == bar.Timestamp;
@@ -619,7 +678,7 @@ public static partial class IntradayPortfolioExecution
                 intent.Strategy.Execution.SlippageBps, 0m, request.Portfolio.ImpactBpsAtMaxParticipation,
                 feesCharged ? 0 : request.Portfolio.FixedBuyFee, feesCharged ? 0 : request.Portfolio.FixedSellFee,
                 request.Portfolio.SecFeeRate, request.Portfolio.FinraTafCap > 0 && remainingTaf == 0 ? 0 : request.Portfolio.FinraTafPerShare,
-                remainingTaf);
+                remainingTaf, CommissionPerShare: request.Portfolio.CommissionPerShare);
             return simulator.Simulate(new(buy ? SimulatedOrderSide.Buy : SimulatedOrderSide.Sell, type, quantity,
                 new(bar.Timestamp, bar.Open, bar.High, bar.Low, bar.Close, bar.Volume), policy, limit, stop));
         }
@@ -664,6 +723,7 @@ public static partial class IntradayPortfolioExecution
             }
             fills.Add(new(intent.Candidate.CandidateId, intent.Candidate.StrategyId, intent.Candidate.Ticker,
                 buy, entry, quantity, price, fill.Fees, at, Date(at)));
+            intent.RecordIntervalFill(sourceIntervalStartUtc, quantity);
             var remaining = entry ? intent.Requested - intent.Entered : intent.Open;
             var suffix = entry ? "entry" : reason == "take_profit" ? "target" : reason.Contains("stop", StringComparison.Ordinal) ? "stop" : "session-exit";
             var orderId = intent.Candidate.CandidateId + ":" + suffix;
@@ -688,7 +748,7 @@ public static partial class IntradayPortfolioExecution
         {
             var p = request.Portfolio;
             return intent.Entry * (intent.Strategy.Execution.SlippageBps + p.ImpactBpsAtMaxParticipation) * 2 / 10000m +
-                (p.FixedBuyFee + p.FixedSellFee) / intent.Entered +
+                (p.FixedBuyFee + p.FixedSellFee) / intent.Entered + 2 * p.CommissionPerShare +
                 DeterministicExecutionSimulator.CalculateRegulatoryFees(intent.EntryNotional, intent.Entered,
                     p.SecFeeRate, p.FinraTafPerShare, p.FinraTafCap) / intent.Entered;
         }
@@ -767,7 +827,7 @@ public static partial class IntradayPortfolioExecution
             var fees = Decimal.Round(intent.Fees, 4);
             var trade = new BacktestTrade(intent.Candidate.Ticker, intent.Candidate.StrategyName, intent.Candidate.Direction,
                 intent.EntryAt!.Value, intent.ExitAt!.Value, intent.Entered, entryPrice, exitPrice,
-                intent.Candidate.StopLossPrice, intent.InitialTarget, intent.ExitReason!, gross, fees, Decimal.Round(gross - fees, 4),
+                intent.InitialStop, intent.InitialTarget, intent.ExitReason!, gross, fees, Decimal.Round(gross - fees, 4),
                 intent.Requested, intent.Entered < intent.Requested ? "partial_fill_remainder_canceled" : "filled",
                 StrategyId: intent.Candidate.StrategyId, CandidateId: intent.Candidate.CandidateId);
             trades.Add(trade);
@@ -819,7 +879,7 @@ public static partial class IntradayPortfolioExecution
             live.Where(x => x.Pending).Select(x => new BacktestPendingOrder(x.Candidate.CandidateId, x.Candidate.StrategyId,
                 x.Candidate.Ticker, x.Candidate.CandidateId + ":entry", x.Long ? "buy" : "sell",
                 x.NextBarMarket ? "market" : x.StopMarket ? x.EntryTriggered ? "market" : "stop_market" : "limit",
-                x.Requested - x.Entered, "unresolved", ReservedNotional(x), x.Evidence.ActiveAtUtc)).ToArray(),
+                x.Requested - x.Entered, "unresolved", Reserved(x), x.Evidence.ActiveAtUtc)).ToArray(),
             live.Where(x => x.Open > 0).Select(x => new BacktestPendingExit(x.Candidate.CandidateId, x.Candidate.StrategyId,
                 x.Candidate.Ticker, x.Evidence.SessionDeadlineUtc, x.ExitReason ?? "session_deadline")).ToArray(),
             observations.Select(x => unavailableDate is { } date && x.SessionDate >= date

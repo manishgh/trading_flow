@@ -88,12 +88,40 @@ public sealed class OpeningRangeRecipeEvaluatorTests
         Assert.Equal("opening_range_daily_atr_unavailable", evaluation.RejectionReason);
     }
 
+    // The opt-in close exit keeps the order live to 16:00 New York (20:00 UTC in October) instead of 15:55; the kept 2.0.0
+    // file does not opt in, so its deadline and its canonical rule text are unchanged.
+    [Fact]
+    public void ExitAtSessionClose_MovesTheDeadlineToTheCloseOnlyWhenDeclared()
+    {
+        var bar = Bar(Open, 99m, 100m, 98m, 99.5m, 200_000m);
+        var kept = Assert.IsType<IntradayBreakoutSignal>(Evaluate(bar).Signal);
+        var atClose = Assert.IsType<IntradayBreakoutSignal>(Evaluate(bar, rules: rules => rules with { ExitAtSessionClose = true }).Signal);
+
+        Assert.Equal(new DateTimeOffset(2026, 10, 1, 19, 55, 0, TimeSpan.Zero), kept.SessionDeadlineUtc);
+        Assert.Equal(new DateTimeOffset(2026, 10, 1, 20, 0, 0, TimeSpan.Zero), atClose.SessionDeadlineUtc);
+        Assert.Equal(atClose.SessionDeadlineUtc, atClose.ExpiresAtUtc);
+        var keptRules = System.Text.Json.JsonSerializer.Serialize(KeptStrategy().EntryRules.OpeningRangeBreakout);
+        Assert.DoesNotContain("StopFromFill", keptRules, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExitAtSessionClose", keptRules, StringComparison.Ordinal);
+    }
+
+    // The fill-based stop and the close exit belong to the published recipe only.
+    [Fact]
+    public void FillStopAndCloseExit_AreRefusedOutsideThePublishedRecipe()
+    {
+        var strategy = KeptStrategy();
+        var other = new OpeningRangeBreakoutRules(StopFromFill: true);
+
+        Assert.Throws<InvalidOperationException>(() => other.Validate(strategy));
+    }
+
     // Evaluate the kept ORB 2.0.0 file at the close of the last supplied current-session bar.
     private static IntradayBreakoutEvaluation Evaluate(OhlcvBar first, OhlcvBar? second = null, int dailySessions = 15,
-        Func<int, decimal>? dailyClose = null, bool dailyKnownLate = false)
+        Func<int, decimal>? dailyClose = null, bool dailyKnownLate = false, Func<OpeningRangeBreakoutRules, OpeningRangeBreakoutRules>? rules = null)
     {
-        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest",
-            "strategies", "opening-range-breakout.bt-v4.yaml"));
+        var strategy = KeptStrategy();
+        if (rules is not null)
+            strategy = strategy with { EntryRules = strategy.EntryRules with { OpeningRangeBreakout = rules(strategy.EntryRules.OpeningRangeBreakout!) } };
         var current = second is null ? new[] { first } : new[] { first, second };
         var schedules = new Dictionary<DateOnly, MarketSessionSchedule>();
         var prior = new List<DateOnly>();
@@ -113,6 +141,10 @@ public sealed class OpeningRangeRecipeEvaluatorTests
             { OpeningRangeBaselineBars = baseline, PriorSessionDailyBars = daily };
         return new OpeningRangeBreakoutEvaluator().Evaluate(strategy, current, [], context, asOf);
     }
+
+    // The kept ORB 2.0.0 strategy file, read through the production reader.
+    private static StrategyDefinition KeptStrategy() => new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(),
+        "configs", "backtest", "strategies", "opening-range-breakout.bt-v4.yaml"));
 
     // Five-minute SIP bar known at its own close.
     private static OhlcvBar Bar(DateTimeOffset start, decimal open, decimal high, decimal low, decimal close, decimal volume) =>

@@ -917,6 +917,13 @@ public sealed partial class BacktestRunner(
             ValidateIntradayRun(run, strategies);
         else
             foreach (var strategy in strategies) TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
+        // Per-share commission and the gross exposure limit are applied only by the intraday candle replay; any other
+        // replay would silently ignore them.
+        if ((run.Portfolio.CommissionPerShare != 0m || run.Portfolio.MaxGrossExposurePct is not null) &&
+            !ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
+            throw new InvalidOperationException("portfolio.commission_per_share and portfolio.max_gross_exposure_pct need an intraday candle replay policy.");
+        if (run.Portfolio.CommissionPerShare < 0m || run.Portfolio.MaxGrossExposurePct is <= 0m)
+            throw new InvalidOperationException("portfolio.commission_per_share must be non-negative and portfolio.max_gross_exposure_pct positive.");
         if (run.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
             foreach (var strategy in strategies) ValidateFineExecutionPolicy(run, strategy);
         if (!run.Mode.Equals("backtest", StringComparison.OrdinalIgnoreCase))

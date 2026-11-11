@@ -20,6 +20,9 @@ public static class DailyScreenCommand
     /// Usage: research-daily-screen --catalog path --artifact-root path --bars datasetId --actions datasetId
     /// --from yyyy-MM-dd --to yyyy-MM-dd --out folder [--exclude-symbols file] with the stocks-in-play rules:
     /// --min-price 5 --price-basis session_open --average-sessions 14 --min-average-volume 1000000 --atr-period 14 --min-atr 0.5 --min-history 14.
+    /// Optional ranking of each session's eligible stocks (published five-minute bar dataset with the 09:30 New York bars):
+    /// --opening-bars datasetId --rank-measure first_five_minute_relative_volume --baseline-sessions 14 --baseline-average mean
+    /// --min-relative-volume 1 --max-per-session 20.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
@@ -45,6 +48,7 @@ public static class DailyScreenCommand
             ? File.ReadLines(Path.GetFullPath(excludeFile)).Select(line => line.Trim().ToUpperInvariant()).Where(line => line.Length > 0).ToHashSet(StringComparer.Ordinal)
             : [];
         var splits = Splits(await reader.ReadCorporateActionsAsync(actions, cancellationToken));
+        var ranking = await RankingAsync(options, catalog, reader, cancellationToken);
 
         var folder = Path.GetFullPath(Require(options, "--out"));
         Directory.CreateDirectory(folder);
@@ -58,9 +62,11 @@ public static class DailyScreenCommand
                 {
                     if (excluded.Contains(group.Key)) continue;
                     var series = group.OrderBy(row => row.BarStartUtc).Select(ToBar).ToArray();
+                    var tradedSessions = ranking is null ? [] : series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
                     foreach (var (date, values) in Screen(group.Key, series, splits.GetValueOrDefault(group.Key, []), rules, from, to))
                     {
                         counts[date] = counts.GetValueOrDefault(date) + 1;
+                        ranking?.Add(date, group.First().SecurityId, group.Key, tradedSessions);
                         await eligible.WriteLineAsync(string.Join(',', date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), values.Ticker,
                             Text(values.Price), Text(values.AverageShareVolume), Text(values.AverageDollarVolume), values.Atr is { } atr ? Text(atr) : "",
                             values.HistorySessions.ToString(CultureInfo.InvariantCulture)));
@@ -73,7 +79,33 @@ public static class DailyScreenCommand
             new[] { "session_date,eligible" }.Concat(counts.Select(pair => $"{pair.Key:yyyy-MM-dd},{pair.Value}")), cancellationToken);
         output.WriteLine($"Screened {counts.Count} sessions from {from:yyyy-MM-dd} to {to:yyyy-MM-dd}; excluded {excluded.Count} listed symbols; output {folder}.");
         foreach (var pair in counts.TakeLast(5)) output.WriteLine($"{pair.Key:yyyy-MM-dd}: {pair.Value} eligible");
+        if (ranking is not null)
+        {
+            var ranked = await ranking.WriteAsync(folder, cancellationToken);
+            foreach (var session in ranked.TakeLast(5))
+                output.WriteLine($"{session.Session:yyyy-MM-dd}: {session.QualifiedCount} at or above the minimum relative volume, {session.Members.Count} selected");
+        }
         return 0;
+    }
+
+    /// <summary>
+    /// Builds the optional ranking step from --opening-bars and the ranking options; every ranking option is required so the
+    /// published list never depends on a code default. Null when no opening-bar dataset is given. Also reads which
+    /// stock-sessions that dataset's collection completed, the only ones on which a missing opening bar proves zero volume.
+    /// </summary>
+    private static async Task<DailyRankingOutput?> RankingAsync(IReadOnlyDictionary<string, string> options, SqliteEvidenceCatalog catalog,
+        ParquetEvidencePartitionDataReader reader, CancellationToken cancellationToken)
+    {
+        if (!options.TryGetValue("--opening-bars", out var datasetId)) return null;
+        var rules = new DailyRankingRules(Require(options, "--rank-measure"),
+            Int32.Parse(Require(options, "--baseline-sessions"), CultureInfo.InvariantCulture),
+            DailyRankingRules.ParseAverage(Require(options, "--baseline-average")),
+            Number(Require(options, "--min-relative-volume")),
+            Int32.Parse(Require(options, "--max-per-session"), CultureInfo.InvariantCulture));
+        rules.Validate();
+        var openingBars = await Manifest(catalog, datasetId, cancellationToken);
+        var volumes = await DailyRankingOutput.ReadOpeningVolumesAsync(reader, openingBars, cancellationToken);
+        return new DailyRankingOutput(rules, volumes, await DailyRankingOutput.ReadCollectedSessionsAsync(catalog, openingBars, cancellationToken));
     }
 
     /// <summary>Screens each session in the window on which the stock traded, using only sessions before it.</summary>

@@ -124,6 +124,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  wishlist_name: {RunYamlScalar(request.WishlistName ?? String.Empty, "universe.wishlist_name")}");
         yaml.AppendLine("  resolved_at_utc: " + (request.UniverseResolvedAtUtc ?? DateTimeOffset.UtcNow).ToString("O", CultureInfo.InvariantCulture));
         AppendDailyEligibility(yaml, request.DailyEligibility);
+        AppendDailyRanking(yaml, request.DailyRanking);
         yaml.AppendLine();
         yaml.AppendLine("tickers:");
         foreach (var ticker in request.Tickers.Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -764,6 +765,22 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"    min_history_sessions: {rules.MinHistorySessions.ToString(CultureInfo.InvariantCulture)}");
     }
 
+    /// <summary>
+    /// Writes a saved plan's per-session ranking of the eligible stocks (stocks in play), every field explicit so the frozen
+    /// plan never depends on a code default. Writes nothing when the plan does not rank.
+    /// </summary>
+    private static void AppendDailyRanking(StringBuilder yaml, TradingFlow.Domain.Market.DailyRankingRules? rules)
+    {
+        if (rules is null) return;
+        rules.Validate();
+        yaml.AppendLine("  daily_ranking:");
+        yaml.AppendLine($"    measure: {rules.Measure}");
+        yaml.AppendLine($"    baseline_sessions: {rules.BaselineSessions.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"    baseline_average: {TradingFlow.Domain.Market.DailyRankingRules.AverageName(rules.BaselineAverage)}");
+        yaml.AppendLine($"    min_relative_volume: {rules.MinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
+        yaml.AppendLine($"    max_per_session: {rules.MaxMembersPerSession.ToString(CultureInfo.InvariantCulture)}");
+    }
+
     private static void AppendTickerList(StringBuilder yaml, string key, IEnumerable<string>? tickers)
     {
         var normalized = (tickers ?? [])
@@ -1165,6 +1182,11 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  finra_taf_cap: {portfolio.FinraTafCap.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  impact_bps_at_max_participation: {portfolio.ImpactBpsAtMaxParticipation.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  max_execution_order_history: {portfolio.MaxExecutionOrderHistory}");
+        // Opt-in published-method costs and leverage, written only when the profile sets them so other runs are unchanged.
+        if (portfolio.CommissionPerShare != 0m)
+            yaml.AppendLine($"  commission_per_share: {portfolio.CommissionPerShare.ToString(CultureInfo.InvariantCulture)}");
+        if (portfolio.MaxGrossExposurePct is { } gross)
+            yaml.AppendLine($"  max_gross_exposure_pct: {gross.ToString(CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>Quote a scalar the current reader can round-trip; reject characters it cannot preserve instead of changing them.</summary>

@@ -50,8 +50,10 @@ public sealed partial class BacktestRunner
         using var execution = new ExecutionEventJournal(CreateExecutionJournalPath("portfolio"));
         var (eligible, notEligible) = SplitByDailyEligibility(candidates, membership);
         var quiet = await PublishQuietIntervalsAsync(run, batches, token);
+        var closes = strategy.EntryRules.OpeningRangeBreakout is { ExitAtSessionClose: true }
+            ? await LoadSessionClosePricesAsync(run, preparedMarket.WindowStart, preparedMarket.WindowEnd, token) : null;
         var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], eligible, bars,
-            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet), token);
+            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet, closes), token);
         var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart, notEligible);
         IntradayPortfolioEvidence.Publish(hypotheses, execution, candidates, replay);
         // Warm-up candles remain execution/indicator inputs; reported days and bar counts describe only completed evaluation intervals.
@@ -99,13 +101,28 @@ public sealed partial class BacktestRunner
         };
     }
 
+    /// <summary>
+    /// Each stock's official closing price per session (the daily bar close, keyed by the daily bar's date, which is the New
+    /// York session date for midnight-stamped daily bars) for strategies that exit at the close. Read through the run's own
+    /// provider, so a prepared run reads the frozen daily bars its plan admitted.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<(string Ticker, DateOnly Session), decimal>> LoadSessionClosePricesAsync(
+        BacktestRunConfig run, DateTimeOffset start, DateTimeOffset end, CancellationToken token)
+    {
+        var closes = new Dictionary<(string, DateOnly), decimal>();
+        await foreach (var bar in CreateProvider(run).GetBarsAsync(run.Tickers, ["1d"], start, end, token))
+            if (bar.Timestamp < end) closes[(bar.Ticker.ToUpperInvariant(), DateOnly.FromDateTime(bar.Timestamp.UtcDateTime))] = bar.Close;
+        return closes;
+    }
+
     // Same per-day rule as the daily paths: a candidate whose stock did not qualify on its entry day (UTC date, which equals
     // the New York date during regular hours) never reaches the order replay. No membership means every candidate proceeds.
+    // A ranked membership (known at 09:35) also refuses an entry decided before it was known.
     private static (IReadOnlyList<BacktestCandidateTrade> Eligible, IReadOnlyList<BacktestCandidateTrade> NotEligible) SplitByDailyEligibility(
         IReadOnlyList<BacktestCandidateTrade> candidates, UniverseMembership? membership)
     {
         if (membership is null) return (candidates, []);
-        var lookup = candidates.ToLookup(candidate => membership.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)));
+        var lookup = candidates.ToLookup(candidate => membership.IsMemberAt(candidate.Ticker, candidate.EntryTimestamp));
         return (lookup[true].ToArray(), lookup[false].ToArray());
     }
 

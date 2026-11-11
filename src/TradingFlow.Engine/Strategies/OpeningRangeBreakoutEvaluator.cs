@@ -79,14 +79,16 @@ public sealed class OpeningRangeBreakoutEvaluator
     // Published recipe (Zarattini, Barbon and Aziz): when the opening range completes, trade in the direction of its
     // body with a stop order at the range extreme, provided its volume is at least the configured multiple of the mean
     // of the same opening interval over the preceding sessions. The protective stop sits a fraction of the prior-session
-    // daily ATR beyond the trigger. One order per stock per session, live until the session deadline.
+    // daily ATR beyond the trigger. One order per stock per session, live until the session deadline: the opening of the
+    // last five-minute bar, or the close itself when the recipe exits at the official close.
     private static IntradayBreakoutEvaluation EvaluatePublishedRecipe(StrategyDefinition strategy, OpeningRangeBreakoutRules policy,
         IReadOnlyList<OhlcvBar> completedBars, IntradayBreakoutContext context, DateTimeOffset asOfUtc, DateOnly date,
         MarketSessionSchedule session, TimeZoneInfo zone)
     {
         var open = AtUtc(date, session.RegularOpen, zone);
         var rangeCompletedAt = open.AddMinutes(policy.RangeMinutes!.Value);
-        var deadline = AtUtc(date, session.RegularClose, zone).Subtract(Interval);
+        var close = AtUtc(date, session.RegularClose, zone);
+        var deadline = policy.ExitAtSessionClose ? close : close.Subtract(Interval);
         if (asOfUtc != rangeCompletedAt || asOfUtc >= deadline)
             return Reject(asOfUtc < rangeCompletedAt ? "outside_opening_range_entry_window" : "opening_range_order_placed_at_range_completion");
         var current = completedBars.Where(bar => bar.Timestamp >= open).ToArray();
@@ -132,7 +134,7 @@ public sealed class OpeningRangeBreakoutEvaluator
         var bars = context.OpeningRangeBaselineBars;
         if (bars is null || bars.Count != sessions * policy.RangeBars || !CompletedSeriesIsValid(bars, completedAt)) return false;
         var index = bars.Count - 1;
-        var total = 0m;
+        var totals = new decimal[sessions];
         var used = new List<MarketSessionSchedule>(sessions);
         for (var sample = 0; sample < sessions; sample++)
         {
@@ -144,12 +146,13 @@ public sealed class OpeningRangeBreakoutEvaluator
                 if (bar.Timestamp != open.AddMinutes(slot * 5) || bar.Ticker != currentOpening.Ticker ||
                     bar.DataFeed != currentOpening.DataFeed || bar.AdjustmentPolicy != currentOpening.AdjustmentPolicy)
                     return false;
-                total += bar.Volume;
+                totals[sample] += bar.Volume;
             }
             used.Add(session);
             current = session.TradeDate;
         }
-        mean = total / sessions;
+        // The shared relative-volume baseline, so the recipe and the daily stocks-in-play ranking average identically.
+        mean = RelativeVolume.Baseline(totals, VolumeBaselineAverage.Mean);
         evidenceSha256 = EvidenceCanonicalJson.ComputeSha256(new { sessions = used, openingBars = bars });
         return mean > 0m;
     }

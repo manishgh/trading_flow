@@ -371,7 +371,9 @@ public sealed class SimpleYamlReader
                 OptionalDecimal(runMap, "portfolio.finra_taf_per_share") ?? 0m,
                 OptionalDecimal(runMap, "portfolio.finra_taf_cap") ?? 0m,
                 OptionalDecimal(runMap, "portfolio.impact_bps_at_max_participation") ?? 0m,
-                OptionalInt(runMap, "portfolio.max_execution_order_history", 1_000_000)),
+                OptionalInt(runMap, "portfolio.max_execution_order_history", 1_000_000),
+                OptionalDecimal(runMap, "portfolio.commission_per_share") ?? 0m,
+                OptionalDecimal(runMap, "portfolio.max_gross_exposure_pct")),
             new SignalSourceConfig(
                 OptionalString(runMap, "signal_source.type", "internal_candles"),
                 OptionalBool(runMap, "signal_source.require_signature", false),
@@ -455,9 +457,11 @@ public sealed class SimpleYamlReader
         {
             // Rules on a static list would be dropped silently; ReadDailyEligibility refuses every mode but resolved_snapshot.
             _ = ReadDailyEligibility(runMap, UniverseConfig.StaticMode);
+            _ = ReadDailyRanking(runMap, null);
             return null;
         }
 
+        var dailyEligibility = ReadDailyEligibility(runMap, mode);
         return new UniverseConfig(
             mode,
             OptionalList(runMap, "universe.candidates"),
@@ -478,7 +482,32 @@ public sealed class SimpleYamlReader
                 ? resolvedQuery
                 : null,
             OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"),
-            ReadDailyEligibility(runMap, mode));
+            dailyEligibility,
+            ReadDailyRanking(runMap, dailyEligibility));
+    }
+
+    /// <summary>
+    /// Reads the optional per-session ranking of the daily-eligible stocks. Every field is required so a frozen plan never
+    /// depends on a code default, and the block is refused without daily eligibility rules, whose stocks it ranks.
+    /// </summary>
+    private static DailyRankingRules? ReadDailyRanking(IReadOnlyDictionary<string, List<string>> runMap, DailyScreenRules? eligibility)
+    {
+        const string prefix = "universe.daily_ranking.";
+        if (!runMap.Keys.Any(key => key.StartsWith(prefix, StringComparison.Ordinal))) return null;
+        if (eligibility is null)
+            throw new InvalidDataException("universe.daily_ranking ranks the stocks that pass universe.daily_eligibility and needs that block.");
+        try
+        {
+            var rules = new DailyRankingRules(
+                RequireString(runMap, prefix + "measure"),
+                RequireInt(runMap, prefix + "baseline_sessions"),
+                DailyRankingRules.ParseAverage(RequireString(runMap, prefix + "baseline_average")),
+                RequireDecimal(runMap, prefix + "min_relative_volume"),
+                RequireInt(runMap, prefix + "max_per_session"));
+            rules.Validate();
+            return rules;
+        }
+        catch (ArgumentException exception) { throw new InvalidDataException(exception.Message, exception); }
     }
 
     /// <summary>
@@ -780,7 +809,9 @@ public sealed class SimpleYamlReader
             OptionalNullableInt(map, section + ".range_minutes"),
             OptionalNullableInt(map, section + ".volume_lookback_sessions"),
             OptionalDecimal(map, section + ".min_relative_volume"),
-            OptionalNullableInt(map, section + ".atr_sessions"));
+            OptionalNullableInt(map, section + ".atr_sessions"),
+            OptionalBool(map, section + ".stop_from_fill", false),
+            OptionalBool(map, section + ".exit_at_session_close", false));
     }
 
     // A present mapping opts in; absent mappings leave all existing strategy behavior unchanged.

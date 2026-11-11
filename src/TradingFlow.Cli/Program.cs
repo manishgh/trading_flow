@@ -64,6 +64,20 @@ if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.NewsCollectionPlanCommand.
     return;
 }
 
+// Stocks-in-play study: frozen opening five-minute bar request for daily-eligible stocks and their baseline sessions.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.IntradayBarsCollectionPlanCommand.OpeningBarsName, StringComparison.Ordinal))
+{
+    Environment.ExitCode = await TradingFlow.Cli.IntradayBarsCollectionPlanCommand.RunOpeningBarsAsync(args[1..], Console.Out, CancellationToken.None);
+    return;
+}
+
+// Stocks-in-play study: frozen one-minute bar request for each session's selected stocks only.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.IntradayBarsCollectionPlanCommand.MinuteBarsName, StringComparison.Ordinal))
+{
+    Environment.ExitCode = await TradingFlow.Cli.IntradayBarsCollectionPlanCommand.RunMinuteBarsAsync(args[1..], Console.Out, CancellationToken.None);
+    return;
+}
+
 // Point-in-time daily screen over a published as-traded bar dataset.
 if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyScreenCommand.Name, StringComparison.Ordinal))
 {

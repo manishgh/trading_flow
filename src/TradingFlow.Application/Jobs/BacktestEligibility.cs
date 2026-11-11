@@ -21,11 +21,34 @@ public static class BacktestEligibility
                 requested.MinAtr, requested.MinHistorySessions);
             rules.Validate();
             rules.RequireKnownBeforeEntry(!ExecutionReplayPolicy.IsIntradayCandle(executionReplayPolicyId));
+            _ = ToRanking(requested, executionReplayPolicyId);
             return rules;
         }
         catch (ArgumentException exception)
         {
             throw new InvalidOperationException("Daily eligibility rules are invalid: " + exception.Message, exception);
+        }
+    }
+
+    /// <summary>
+    /// Maps and checks the requested per-session ranking; null when the plan does not rank. A first-five-minute ranking is
+    /// known only at 09:35 New York, so it is refused for replays whose entries are not intraday candles after that time.
+    /// </summary>
+    public static DailyRankingRules? ToRanking(BacktestEligibilityRules? requested, string? executionReplayPolicyId)
+    {
+        if (requested?.Ranking is not { } ranking) return null;
+        try
+        {
+            var rules = new DailyRankingRules(ranking.Measure, ranking.BaselineSessions,
+                DailyRankingRules.ParseAverage(ranking.BaselineAverage), ranking.MinRelativeVolume, ranking.MaxPerSession);
+            rules.Validate();
+            if (!ExecutionReplayPolicy.IsIntradayCandle(executionReplayPolicyId))
+                throw new ArgumentException("a ranking known at 09:35 New York needs an intraday candle replay policy.");
+            return rules;
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidOperationException("Daily ranking rules are invalid: " + exception.Message, exception);
         }
     }
 }

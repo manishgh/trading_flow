@@ -5,13 +5,17 @@ namespace TradingFlow.Engine.Universe;
 /// <summary>
 /// Produces stable ranks after issuer/share-class deduplication. Equal scores are resolved by
 /// ordinal security identity, making the result reproducible across processes and input order.
+/// By default equal scores go to the lower symbol; <paramref name="tiesByIssuer"/> gives them to the lower issuer
+/// identifier instead, which does not change when a company changes its ticker.
 /// </summary>
 public sealed class DeterministicUniverseRanker(
-    IssuerShareClassDeduplicator? deduplicator = null)
+    IssuerShareClassDeduplicator? deduplicator = null,
+    bool tiesByIssuer = false)
 {
     private readonly IssuerShareClassDeduplicator deduplicator =
         deduplicator ?? new IssuerShareClassDeduplicator();
 
+    /// <summary>Deduplicates issuers, orders by score then the configured identity tie-break, and keeps the first members.</summary>
     public DeterministicUniverseRanking Rank(
         IEnumerable<UniverseRankingCandidate> candidates,
         int? maximumMembers = null)
@@ -24,10 +28,12 @@ public sealed class DeterministicUniverseRanker(
         }
 
         var deduplicated = deduplicator.Deduplicate(candidates);
-        var ordered = deduplicated.Retained
-            .OrderByDescending(candidate => candidate.Score)
-            .ThenBy(candidate => candidate.Security.Symbol, StringComparer.Ordinal)
-            .ThenBy(candidate => candidate.Security.IssuerId, StringComparer.Ordinal)
+        var byScore = deduplicated.Retained.OrderByDescending(candidate => candidate.Score);
+        var ordered = (tiesByIssuer
+                ? byScore.ThenBy(candidate => candidate.Security.IssuerId, StringComparer.Ordinal)
+                    .ThenBy(candidate => candidate.Security.Symbol, StringComparer.Ordinal)
+                : byScore.ThenBy(candidate => candidate.Security.Symbol, StringComparer.Ordinal)
+                    .ThenBy(candidate => candidate.Security.IssuerId, StringComparer.Ordinal))
             .ThenBy(candidate => candidate.Security.ShareClassId, StringComparer.Ordinal)
             .ToArray();
 
