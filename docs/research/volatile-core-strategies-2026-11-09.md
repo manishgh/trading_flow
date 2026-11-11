@@ -115,6 +115,38 @@ Group 1 is still withheld:
 Per-run evidence: `data/backtest/results/evidence/*-quiet-intervals.json`; trade archives under
 `data/backtest/raw/sip-interval-trades`.
 
+### Published costs and sizing (11 November 2026, build `0a658e2`)
+
+Saved plan 105 `orb-published-costs-volatile-oct-20261111`. Same volatile stocks without SOXL,
+seed 20261109, groups of 5, 1 Oct - 1 Nov 2026. Each group starts with $10,000. Per-day
+eligibility: open at least $5, 14-session average volume at least 1M shares, ATR(14) above
+0.5 and 14 sessions of history. Profile `orb-published-recipe-profile.yaml`:
+- positions up to 100% of equity, 4x gross exposure, at most 20 open;
+- $0.0035/share commission and no fixed fee.
+
+The earlier tables above used the swing profile, with a 25% position cap. Started
+11 Nov 10:09 UTC (start key `cost-test-rerun-after-close-range-fix-20261111`).
+
+October return, % of month-opening equity (closed trades in brackets):
+
+| Version | G1 | G2 | G3 | G4 | G5 |
+|---|---|---|---|---|---|
+| 2.0.0 | n/a (15) | -12.52% (20) | -18.74% (44) | -7.79% (23) | -18.34% (19) |
+| 2.1.0 | n/a (15) | -12.07% (20) | -16.20% (44) | -8.15% (23) | -17.49% (19) |
+
+- **Drawdown:** 2.0.0 12.52 / 23.93 / 7.79 / 18.34%; 2.1.0 12.07 / 21.80 / 8.15 / 17.49% (G2-G5).
+- **Commission:** $36-$78 per group, under 5% of each group's loss. Costs no longer explain the result.
+- **Bigger positions:** they multiplied the same losing trades, compared with 2.0.0 under the 25% cap (-3.57 / -6.80 / -2.29 / -5.32%).
+- **Same-bar losses, 2.1.0:** 81 of 121 closed trades entered and hit their stop inside the same five-minute bar. The replay cannot tell which came first, so it counts each as a loss (`stop_loss_entry_bar_order_unknown`).
+  - The stop sits 10% of the daily ATR from the entry, which is narrower than a typical five-minute bar on these stocks.
+  - Only 8 trades lasted to the 16:00 close.
+  - One-minute bars (part 2 of `docs/design-review/2026-11-10/orb-stocks-in-play-full-test-design.md`) are needed to settle these 81 trades.
+- **Group 1:** no monthly figure. FPS still has a five-minute gap from 22 Oct 19:15 UTC, and SIVE has no Alpaca data. Realised result: -$1,506.09 on 2.0.0 and -$1,446.92 on 2.1.0.
+- **Repeatability:** 2.0.0 was run three times on the same inputs (09:26, 10:02 and 10:09 UTC). All three gave identical returns, trade counts and fees.
+- **Two defects fixed before 2.1.0 could run:**
+  - `c147041`: the run snapshot dropped `stop_from_fill` and `exit_at_session_close`, so the snapshot no longer matched the catalog identity.
+  - `0a658e2`: the close-price reader asked for daily bars from 1 Oct, but the plan had downloaded them from the warm-up start, so no saved download matched.
+
 ## Snapback (rebuilt news evidence, 9 November 2026)
 
 The original company-news package `historical-news:12629c5c...` cannot be verified: 2,744 of its
