@@ -149,6 +149,19 @@
         "semanticVersion": "1.2.0",
         "contentSha256": "bc73189a1c26ae2741402c2ad84a3a3e88aec709d43253590f7c7fb3c6fdbcc4"
       }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v5.yaml",
+      "strategyId": "technical.opening-range-breakout",
+      "semanticVersion": "2.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "opening-range-breakout-recipe-research-v1",
+      "reason": "Approved 10 November 2026: 2.0.0 trade rules plus two published rules it lacked: stop measured from the actual entry fill (10% of the 14-day ATR) and exit at the session's official close with the order live until 16:00. Run with orb-published-recipe-profile.yaml for the paper's $0.0035/share commission and 4x gross exposure cap. The paper's daily top-20 stock selection is not applied. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.opening-range-breakout",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429"
+      }
     }
   ]
 }

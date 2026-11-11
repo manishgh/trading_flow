@@ -31,6 +31,7 @@ public sealed class ConfigCatalogServiceTests
             "swing.snapback@2.0.0",
             "technical.opening-range-breakout@1.2.0",
             "technical.opening-range-breakout@2.0.0",
+            "technical.opening-range-breakout@2.1.0",
             "technical.recovery-sma5-news-avoidance@1.0.0"
         }, strategies.Select(strategy => $"{strategy.Identity.StrategyId}@{strategy.Identity.SemanticVersion}")
             .Order(StringComparer.Ordinal));
@@ -41,7 +42,7 @@ public sealed class ConfigCatalogServiceTests
         Assert.All(strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing"),
             strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
         var dayStrategies = strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "day").ToArray();
-        Assert.Equal(2, dayStrategies.Length);
+        Assert.Equal(3, dayStrategies.Length);
         Assert.All(dayStrategies, strategy => Assert.Contains(strategy.Definition.Timeframe, new[] { "5m", "15m" }));
         Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
         Assert.DoesNotContain(strategies, strategy =>

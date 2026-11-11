@@ -23,6 +23,7 @@ public sealed class StrategyArtifactCatalogTests
                 "swing.snapback@2.0.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
+                "technical.opening-range-breakout@2.1.0",
                 "technical.recovery-sma5-news-avoidance@1.0.0"
             },
             snapshot.ExecutableArtifacts
