@@ -217,15 +217,20 @@ public static class DailyScreenCommand
         return new DailyRankingOutput(rules, volumes, await DailyRankingOutput.ReadCollectedSessionsAsync(catalog, openingBars, cancellationToken));
     }
 
-    /// <summary>Screens each session in the window on which the stock traded, using only sessions before it.</summary>
+    /// <summary>
+    /// Screens each session in the window on which the stock traded, using only sessions before it. Each day reads as many
+    /// earlier sessions as its rules need (<see cref="DailyScreenRules.PriorSessionsNeeded"/>), so a 200-session history
+    /// minimum can pass; a fixed 100-session window made such a minimum unreachable.
+    /// </summary>
     public static IEnumerable<(DateOnly Date, DailyScreenValues Values)> Screen(string ticker, IReadOnlyList<OhlcvBar> series,
         IReadOnlyList<ShareSplit> splits, DailyScreenRules rules, DateOnly from, DateOnly to)
     {
+        var window = rules.PriorSessionsNeeded;
         for (var index = 1; index < series.Count; index++)
         {
             var date = DateOnly.FromDateTime(series[index].Timestamp.UtcDateTime);
             if (date < from || date > to) continue;
-            var start = Math.Max(0, index - DailyScreenRules.AtrStabilizationSessions);
+            var start = Math.Max(0, index - window);
             var prior = SplitBasis.AsOf(series.Skip(start).Take(index - start).ToArray(), splits, date);
             var result = DailyScreen.Evaluate(ticker, prior, series[index].Open, rules);
             if (result.Eligible) yield return (date, result.Values!);

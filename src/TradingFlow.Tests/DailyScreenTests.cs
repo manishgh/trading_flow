@@ -74,4 +74,21 @@ public sealed class DailyScreenCommandTests
 
         Assert.Equal(new[] { new DateOnly(2026, 5, 6) }, dates);
     }
+
+    // A 200-session history minimum (the Connors screen) passes once 200 earlier sessions exist; the screen once read only
+    // 100 earlier sessions, so such a minimum never passed and the published screen was empty.
+    [Fact]
+    public void Screen_ReadsAsManyEarlierSessionsAsTheHistoryMinimumNeeds()
+    {
+        var rules = new DailyScreenRules(5m, DailyScreenPriceBasis.PriorClose, 20, MinAverageShareVolume: 1_000m, MinHistorySessions: 200);
+        var start = new DateTimeOffset(2026, 1, 1, 5, 0, 0, TimeSpan.Zero);
+        var series = Enumerable.Range(0, 202).Select(index => new OhlcvBar("ABC", start.AddDays(index), "1Day", 10m, 11m, 9m, 10m, 10_000m)).ToArray();
+        var first = DateOnly.FromDateTime(series[0].Timestamp.UtcDateTime);
+
+        var screened = TradingFlow.Cli.DailyScreenCommand.Screen("ABC", series, [], rules, first, first.AddDays(300)).ToArray();
+
+        Assert.Equal(new[] { DateOnly.FromDateTime(series[200].Timestamp.UtcDateTime), DateOnly.FromDateTime(series[201].Timestamp.UtcDateTime) },
+            screened.Select(item => item.Date));
+        Assert.All(screened, item => Assert.Equal(200, item.Values.HistorySessions));
+    }
 }
