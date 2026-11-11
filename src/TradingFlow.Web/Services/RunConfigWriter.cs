@@ -835,6 +835,9 @@ public sealed class RunConfigWriter
             if (openingRange.VolumeLookbackSessions is { } volumeSessions) yaml.AppendLine($"    volume_lookback_sessions: {volumeSessions}");
             AppendOptionalDecimal(yaml, "    min_relative_volume", openingRange.MinRelativeVolume);
             if (openingRange.AtrSessions is { } atrSessions) yaml.AppendLine($"    atr_sessions: {atrSessions}");
+            // Written only when switched on, so snapshots of strategies without them keep their exact identity.
+            if (openingRange.StopFromFill) yaml.AppendLine("    stop_from_fill: true");
+            if (openingRange.ExitAtSessionClose) yaml.AppendLine("    exit_at_session_close: true");
         }
         if (strategy.EntryRules.DrawdownQualification is { } drawdown)
         {

@@ -49,6 +49,28 @@ public sealed class KeptStrategyIdentityTests
             EvidenceCanonicalJson.SerializeToUtf8Bytes(original)), StringComparison.Ordinal);
     }
 
+    // Every run writes a snapshot of each strategy and checks it against the catalog identity before starting, so the
+    // snapshot writer must keep every setting of every catalog strategy (ORB 2.1.0 runs failed at start on 11 November
+    // 2026 because two settings were dropped).
+    [Fact]
+    public void EveryCatalogStrategy_SurvivesTheRunSnapshotRoundTrip()
+    {
+        var reader = new SimpleYamlReader();
+        foreach (var artifact in CreateCatalog().GetSnapshot().ExecutableArtifacts)
+        {
+            var path = Path.Combine(Path.GetTempPath(), "tf-snapshot-roundtrip-" + Guid.NewGuid().ToString("N") + ".yaml");
+            try
+            {
+                File.WriteAllText(path, TradingFlow.Web.Services.RunConfigWriter.SerializeStrategyYaml(artifact.ResolvedStrategy));
+                Assert.Equivalent(artifact.ResolvedStrategy, reader.ReadStrategy(path), strict: true);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
     // Resolve only repository-owned configuration; tests never query providers or start a portfolio run.
     private static StrategyArtifactCatalog CreateCatalog()
     {
