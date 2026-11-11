@@ -98,10 +98,9 @@ public sealed partial class BacktestRunner
     private async Task<UniverseMembership> ResolveRankedMembershipAsync(BacktestRunConfig run, RankedMembershipReference ranked,
         CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
     {
-        if (!ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
-            throw new InvalidOperationException("universe.ranked_membership is known only at 09:35 New York and needs an intraday candle replay policy.");
-        var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
         var screen = TradingFlow.Engine.Universe.PublishedResearchScreen.Read(Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
+        RequireMembershipKnownBeforeEntry(run, screen);
+        var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
         var membership = screen.ToMembership(NewYorkDate(evaluationStart), NewYorkDate(windowEnd.AddTicks(-1)));
         var eligibleDays = run.Tickers.ToDictionary(ticker => ticker, ticker => membership.EligibleDays(ticker)
             .Select(day => day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)).ToArray(), StringComparer.OrdinalIgnoreCase);
@@ -117,6 +116,20 @@ public sealed partial class BacktestRunner
         progress?.Report(BacktestProgress.StageOnly("resolved_universe",
             $"Ranked list {screen.Name}: {eligibleDays.Count(pair => pair.Value.Length > 0)} of {run.Tickers.Count} stock(s) selected on at least one session."));
         return membership;
+    }
+
+    /// <summary>
+    /// A ranked list is known only at 09:35 New York, so it needs the intraday replay. An eligible list is known before the
+    /// open, unless its price rule reads the session's own open, which a daily strategy filling at that open cannot wait for.
+    /// </summary>
+    private static void RequireMembershipKnownBeforeEntry(BacktestRunConfig run, TradingFlow.Engine.Universe.PublishedResearchScreen screen)
+    {
+        var intraday = ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId);
+        if (screen.IsRanked && !intraday)
+            throw new InvalidOperationException("universe.ranked_membership is known only at 09:35 New York and needs an intraday candle replay policy.");
+        if (!screen.IsRanked && !intraday && screen.Manifest.ScreenRules.PriceBasis == "session_open")
+            throw new InvalidOperationException($"Research screen '{screen.Name}' compares each session's own open, which a daily strategy filling at " +
+                "that open cannot know; publish the screen with --price-basis prior_close.");
     }
 
     /// <summary>The New York calendar date of an instant.</summary>

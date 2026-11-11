@@ -492,7 +492,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
 
         if (request.AdmissionProfile.ExecutionTimingPolicy is not
             ("completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2" or
-             "completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
+             "completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or ExecutionRules.KeptGapAsTradedTimingPolicy or
+             "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
              OpeningRangeBreakoutRules.ExecutionTimingPolicy or OpeningRangeBreakoutRules.NextBarMarketTimingPolicy))
         {
             throw new InvalidOperationException(

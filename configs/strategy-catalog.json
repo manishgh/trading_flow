@@ -47,6 +47,28 @@
       "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-v4"
     },
     {
+      "profileId": "published-no-stop-kept-gaps-as-traded-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.1.0",
+      "riskPolicy": "position-notional-no-stop-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
+    },
+    {
+      "profileId": "causal-market-exits-kept-gaps-as-traded-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.1.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
+    },
+    {
       "profileId": "historical-news-presence-no-stop-v1",
       "profileVersion": "1.0.0",
       "parserProfile": "simple-yaml-strict-v2",
@@ -161,6 +183,45 @@
         "strategyId": "technical.opening-range-breakout",
         "semanticVersion": "2.0.0",
         "contentSha256": "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-published-as-traded.bt-v9-1.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "9.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "published-no-stop-kept-gaps-as-traded-v1",
+      "reason": "Approved 11 November 2026 (Connors whole-market design): the 9.0.0 trading rules unchanged, accepting as-traded (unadjusted) Alpaca SIP daily bars so it can run on whole-market research screens that leave out stock-days with a split in the 200-session look-back. Same-day candidates are taken lowest RSI(2) first, ties by symbol. Research only.",
+      "derivedFromIdentity": {
+        "strategyId": "swing.connors-rsi2",
+        "semanticVersion": "9.0.0",
+        "contentSha256": "882e2a32d00ccdcc17737aa05d9ff466ed714b0be86f5da04b9b570aa86884c5"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed-as-traded.bt-v7-1.yaml",
+      "strategyId": "swing.connors-rsi2",
+      "semanticVersion": "7.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "causal-market-exits-kept-gaps-as-traded-v1",
+      "reason": "Approved 11 November 2026 (Connors whole-market design): the 7.0.0 trading rules unchanged (2xATR stop, 2.5R target, 5-bar limit, S&P 500 trend filter), accepting as-traded (unadjusted) Alpaca SIP daily bars for whole-market research screens that leave out stock-days with a split in the 200-session look-back. Comparison for 9.1.0. Research only.",
+      "derivedFromIdentity": {
+        "strategyId": "swing.connors-rsi2",
+        "semanticVersion": "7.0.0",
+        "contentSha256": "a16f4e27ae3e85d19f537d57ac0189a5058d8de0b0cffa39ce993c0220a70e8c"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/swing-connors-rsi2-short-as-traded.bt-v2-1.yaml",
+      "strategyId": "swing.connors-rsi2-short",
+      "semanticVersion": "2.1.0",
+      "lifecycle": "research",
+      "admissionProfileId": "published-no-stop-kept-gaps-as-traded-v1",
+      "reason": "Approved 11 November 2026 (Connors whole-market design): the 2.0.0 short trading rules unchanged, accepting as-traded (unadjusted) Alpaca SIP daily bars for whole-market research screens that leave out stock-days with a split in the 200-session look-back. Same-day candidates are taken most stretched first (highest RSI(2)), ties by symbol. A short with no stop has unbounded loss; borrow is not modelled; research only.",
+      "derivedFromIdentity": {
+        "strategyId": "swing.connors-rsi2-short",
+        "semanticVersion": "2.0.0",
+        "contentSha256": "323989e84141d4338ca45d2acb7fb6f75a236aba4b2c53b94187d1bd27ba85ea"
       }
     }
   ]

@@ -24,12 +24,39 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("technical.opening-range-breakout", "2.1.0", "b71cf7b8a017004937efb28d6d25c57d931061c522a7444067d2463e6ac33750", "technical.opening-range-breakout")]
     [InlineData("swing.connors-rsi2-short", "2.0.0", "323989e84141d4338ca45d2acb7fb6f75a236aba4b2c53b94187d1bd27ba85ea", null)]
     [InlineData("swing.snapback-short", "2.0.0", "7deb6a30ddaaaa1844e0b9b2e2762eef9eadb8e5cf04839e5bd8cd412e11ed8e", null)]
+    // As-traded copies of the Connors rules for whole-market research screens (11 Nov 2026).
+    [InlineData("swing.connors-rsi2", "9.1.0", "0d052799b949ee9c76f0de44b1825087edc4eda4edb288c83ec8a0492674b258", "swing.connors-rsi2")]
+    [InlineData("swing.connors-rsi2", "7.1.0", "f3dc47e30b4eee880b9d615a4c8c02a1db3fecede713912f2d482c3303e6fd11", "swing.connors-rsi2")]
+    [InlineData("swing.connors-rsi2-short", "2.1.0", "f3e7c6c7c4f25e2dec7aa5135b211628dff767b0067d8d49c54dcca4dac51d32", "swing.connors-rsi2-short")]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
         var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,
             artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
         Assert.Equal(new StrategyArtifactIdentity(id, version, hash), artifact.Identity);
         Assert.Equal(parent, artifact.DerivedFromIdentity?.StrategyId);
+    }
+
+    // The as-traded copies keep their parents' trading rules (only the file identity and name differ), accept raw Alpaca SIP
+    // daily bars through their admission profile, and take same-day candidates lowest RSI(2) first (shorts: highest).
+    [Theory]
+    [InlineData("swing.connors-rsi2", "9.1.0", "9.0.0", "rsi2_ascending")]
+    [InlineData("swing.connors-rsi2", "7.1.0", "7.0.0", "rsi2_ascending")]
+    [InlineData("swing.connors-rsi2-short", "2.1.0", "2.0.0", "rsi2_descending")]
+    public void AsTradedCopies_KeepTheRulesAndAcceptRawDailyBars(string id, string version, string parentVersion, string rankMode)
+    {
+        var artifacts = CreateCatalog().GetSnapshot().ExecutableArtifacts;
+        var copy = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
+        var parent = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == parentVersion);
+
+        Assert.Equal(parent.Identity, copy.DerivedFromIdentity);
+        Assert.Equivalent(parent.ResolvedStrategy with { StrategyId = "", StrategyName = "" },
+            copy.ResolvedStrategy with { StrategyId = "", StrategyName = "" }, strict: true);
+        Assert.Equal(rankMode, copy.ResolvedStrategy.EntryRules.PortfolioRankMode);
+        Assert.Equal(ExecutionRules.KeptGapAsTradedTimingPolicy, copy.AdmissionProfile.ExecutionTimingPolicy);
+        Assert.Equal("raw", TradingFlow.Engine.Indicators.MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
+            copy.AdmissionProfile.ExecutionTimingPolicy).RequiredAdjustmentPolicy);
+        Assert.Equal("all", TradingFlow.Engine.Indicators.MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
+            parent.AdmissionProfile.ExecutionTimingPolicy).RequiredAdjustmentPolicy);
     }
 
     // Optional lineage survives ordinary artifact serialization, and further derivation binds to its immediate source.

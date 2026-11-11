@@ -31,6 +31,12 @@ public sealed record ResearchRankingRuleValues(string Measure, int BaselineSessi
         DailyRankingRules.AverageName(rules.BaselineAverage), rules.MinRelativeVolume, rules.MaxMembersPerSession);
 }
 
+/// <summary>
+/// The split rule of a screen: a stock is left out on any day whose <see cref="LookbackSessions"/>-session look-back contains
+/// a split known by that day (reason split_in_lookback); <see cref="ExcludedStockDays"/> counts those eligible days.
+/// </summary>
+public sealed record ResearchScreenSplitRule(int? LookbackSessions, int ExcludedStockDays);
+
 /// <summary>A file named in the manifest with its SHA-256 (lower-case hex of its exact bytes).</summary>
 public sealed record ResearchScreenFile(string FileName, string Sha256);
 
@@ -49,7 +55,10 @@ public sealed record ResearchScreenManifest(
     ResearchRankingRuleValues? RankingRules,
     string IssuerIdentityBasis,
     ResearchScreenFile? FundExclusion,
-    IReadOnlyDictionary<string, string> Outputs)
+    IReadOnlyDictionary<string, string> Outputs,
+    // The split look-back rule and how many eligible stock-days it left out; omitted when the rule was not used.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ResearchScreenSplitRule? SplitRule = null)
 {
     public const int CurrentSchemaVersion = 1;
     public const string CodeVersionName = "research-daily-screen-manifest-v1";
@@ -59,17 +68,18 @@ public sealed record ResearchScreenManifest(
 
     /// <summary>The output files research-daily-screen may write, in publication order.</summary>
     public static readonly IReadOnlyList<string> OutputFileNames =
-        ["eligible.csv", "daily-counts.csv", RankedListFileName, RankedCountsFileName, "ranked-daily-exclusions.csv"];
+        ["eligible.csv", "daily-counts.csv", RankedListFileName, RankedCountsFileName, "ranked-daily-exclusions.csv", "split-exclusions.csv"];
 
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     /// <summary>
     /// Writes the manifest into <paramref name="folder"/> after hashing every output file present there, and returns its
-    /// SHA-256. Called once all outputs are complete, so the fingerprints describe the published bytes.
+    /// SHA-256. Called once all outputs are complete, so the fingerprints describe the published bytes. A split rule is
+    /// recorded only when it was applied.
     /// </summary>
     public static async Task<string> PublishAsync(string folder, ResearchScreenInputs inputs, DailyScreenRules screen,
         DailyRankingRules? ranking, DateOnly from, DateOnly to, string issuerIdentityBasis, string? fundExclusionPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ResearchScreenSplitRule? splitRule = null)
     {
         var outputs = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var name in OutputFileNames.Where(name => File.Exists(Path.Combine(folder, name))))
@@ -77,7 +87,8 @@ public sealed record ResearchScreenManifest(
         var exclusion = fundExclusionPath is null ? null
             : new ResearchScreenFile(Path.GetFileName(fundExclusionPath), await Sha256FileAsync(fundExclusionPath, cancellationToken));
         var manifest = new ResearchScreenManifest(CurrentSchemaVersion, CodeVersionName, from, to, inputs, ResearchScreenRuleValues.From(screen),
-            ranking is null ? null : ResearchRankingRuleValues.From(ranking), issuerIdentityBasis, exclusion, outputs);
+            ranking is null ? null : ResearchRankingRuleValues.From(ranking), issuerIdentityBasis, exclusion, outputs,
+            splitRule is { LookbackSessions: not null } ? splitRule : null);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, Json);
         await File.WriteAllBytesAsync(Path.Combine(folder, FileName), bytes, cancellationToken);
         return Sha256(bytes);
@@ -100,21 +111,34 @@ public sealed record ResearchScreenManifest(
 /// </summary>
 public sealed class PublishedResearchScreen
 {
+    private const string EligibleFileName = "eligible.csv";
+    private readonly IReadOnlyDictionary<string, HashSet<DateOnly>> eligibleDays;
+
     private PublishedResearchScreen(string folder, string manifestSha256, ResearchScreenManifest manifest,
-        IReadOnlyList<RankedSessionMember> members, IReadOnlyDictionary<DateOnly, int> qualified)
+        IReadOnlyList<RankedSessionMember> members, IReadOnlyDictionary<DateOnly, int> qualified,
+        IReadOnlyDictionary<string, HashSet<DateOnly>> eligibleDays)
     {
         Folder = folder;
         ManifestSha256 = manifestSha256;
         Manifest = manifest;
         Members = members;
         QualifiedCounts = qualified;
+        this.eligibleDays = eligibleDays;
     }
 
     public string Folder { get; }
     public string Name => Path.GetFileName(Folder);
     public string ManifestPath => Path.Combine(Folder, ResearchScreenManifest.FileName);
     public string ManifestSha256 { get; }
-    public string RankedListSha256 => Manifest.Outputs[ResearchScreenManifest.RankedListFileName];
+
+    /// <summary>True when the screen ranks each session (stocks in play); otherwise members are each day's eligible stocks.</summary>
+    public bool IsRanked => Manifest.RankingRules is not null;
+
+    /// <summary>The file that decides membership: the ranked list, or eligible.csv for a screen without a ranking.</summary>
+    public string MembershipListFileName => IsRanked ? ResearchScreenManifest.RankedListFileName : EligibleFileName;
+
+    /// <summary>SHA-256 of the membership list (the ranked list, or eligible.csv when the screen does not rank).</summary>
+    public string RankedListSha256 => Manifest.Outputs[MembershipListFileName];
     public ResearchScreenManifest Manifest { get; }
 
     /// <summary>Every row of the ranked list, in file order (session, then rank).</summary>
@@ -140,9 +164,9 @@ public sealed class PublishedResearchScreen
                 $"now has manifest SHA-256 {manifestSha}, the plan recorded {expectedManifestSha256}.");
         var manifest = JsonSerializer.Deserialize<ResearchScreenManifest>(manifestBytes, ResearchScreenManifest.Json)
             ?? throw new InvalidDataException($"{ResearchScreenManifest.FileName} in '{full}' is empty.");
-        if (manifest.SchemaVersion != ResearchScreenManifest.CurrentSchemaVersion || manifest.Outputs is null ||
-            !manifest.Outputs.ContainsKey(ResearchScreenManifest.RankedListFileName) || manifest.RankingRules is null)
-            throw new InvalidDataException($"Research screen '{Path.GetFileName(full)}' has no ranked list or an unsupported manifest schema.");
+        var listFile = manifest.RankingRules is null ? EligibleFileName : ResearchScreenManifest.RankedListFileName;
+        if (manifest.SchemaVersion != ResearchScreenManifest.CurrentSchemaVersion || manifest.Outputs is null || !manifest.Outputs.ContainsKey(listFile))
+            throw new InvalidDataException($"Research screen '{Path.GetFileName(full)}' has no {listFile} or an unsupported manifest schema.");
         foreach (var (name, sha) in manifest.Outputs)
         {
             var actual = ResearchScreenManifest.Sha256(File.ReadAllBytes(Path.Combine(full, name)));
@@ -151,18 +175,23 @@ public sealed class PublishedResearchScreen
                     : "The ranked list changed since the plan was saved: ") + $"'{name}' in research screen " +
                     $"'{Path.GetFileName(full)}' has SHA-256 {actual}, its manifest records {sha}.");
         }
+        if (manifest.RankingRules is null)
+            return new(full, manifestSha, manifest, [], new Dictionary<DateOnly, int>(), ReadEligibleDays(Path.Combine(full, EligibleFileName)));
         // The counts file is read only when the manifest fingerprints it; an unlisted file there is never trusted.
         return new(full, manifestSha, manifest, ReadMembers(Path.Combine(full, ResearchScreenManifest.RankedListFileName)),
             manifest.Outputs.ContainsKey(ResearchScreenManifest.RankedCountsFileName)
-                ? ReadQualified(Path.Combine(full, ResearchScreenManifest.RankedCountsFileName)) : new Dictionary<DateOnly, int>());
+                ? ReadQualified(Path.Combine(full, ResearchScreenManifest.RankedCountsFileName)) : new Dictionary<DateOnly, int>(),
+            new Dictionary<string, HashSet<DateOnly>>());
     }
 
-    /// <summary>Stocks in the ranked list on at least one session from <paramref name="from"/> to <paramref name="to"/> (New York dates), sorted.</summary>
+    /// <summary>Stocks selected (ranked, or eligible when the screen does not rank) on at least one session from <paramref name="from"/> to <paramref name="to"/> (New York dates), sorted.</summary>
     public IReadOnlyList<string> PoolSymbols(DateOnly from, DateOnly to)
     {
         RequireWindow(from, to);
-        return Members.Where(member => member.Session >= from && member.Session <= to)
-            .Select(member => member.Security.Symbol).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var symbols = IsRanked
+            ? Members.Where(member => member.Session >= from && member.Session <= to).Select(member => member.Security.Symbol)
+            : eligibleDays.Where(pair => pair.Value.Any(day => day >= from && day <= to)).Select(pair => pair.Key);
+        return symbols.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>
@@ -184,6 +213,7 @@ public sealed class PublishedResearchScreen
     public UniverseMembership ToMembership(DateOnly from, DateOnly to)
     {
         RequireWindow(from, to);
+        if (!IsRanked) return EligibleMembership(from, to);
         var window = Members.Where(member => member.Session >= from && member.Session <= to).ToArray();
         var days = window.GroupBy(member => member.Security.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Select(member => member.Session).ToHashSet(), StringComparer.OrdinalIgnoreCase);
@@ -197,6 +227,34 @@ public sealed class PublishedResearchScreen
             SessionRankings = rankings,
             KnownFromNewYorkTime = HistoricalScreenerUniverseProvider.OpeningVolumeKnownAt
         };
+    }
+
+    /// <summary>
+    /// Membership of a screen without a ranking: each session's eligible stocks from eligible.csv. It is decided from earlier
+    /// sessions (and the session open when the rules use it), so no 09:35 restriction applies; the runner checks the price
+    /// basis against the strategy's fills.
+    /// </summary>
+    private UniverseMembership EligibleMembership(DateOnly from, DateOnly to) => new(eligibleDays
+        .Select(pair => (pair.Key, Days: pair.Value.Where(day => day >= from && day <= to).ToHashSet())).Where(item => item.Days.Count > 0)
+        .ToDictionary(item => item.Key, item => item.Days, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>Streams eligible.csv (session_date, ticker, ...) into each stock's eligible sessions; a malformed row fails.</summary>
+    private static IReadOnlyDictionary<string, HashSet<DateOnly>> ReadEligibleDays(string path)
+    {
+        using var lines = File.ReadLines(path).GetEnumerator();
+        if (!lines.MoveNext()) throw new InvalidDataException($"{path} is empty.");
+        var header = lines.Current.Split(',');
+        var (dateIndex, tickerIndex) = (Array.IndexOf(header, "session_date"), Array.IndexOf(header, "ticker"));
+        if (dateIndex < 0 || tickerIndex < 0) throw new InvalidDataException($"{path} has no session_date or ticker column.");
+        var days = new Dictionary<string, HashSet<DateOnly>>(StringComparer.OrdinalIgnoreCase);
+        while (lines.MoveNext())
+        {
+            if (lines.Current.Length == 0) continue;
+            var cells = lines.Current.Split(',');
+            if (!days.TryGetValue(cells[tickerIndex], out var set)) days[cells[tickerIndex]] = set = [];
+            set.Add(Date(cells[dateIndex]));
+        }
+        return days;
     }
 
     /// <summary>Parses ranked-daily-list.csv by its header names; a missing column or malformed value fails.</summary>

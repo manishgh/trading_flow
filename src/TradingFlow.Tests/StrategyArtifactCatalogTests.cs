@@ -17,8 +17,11 @@ public sealed class StrategyArtifactCatalogTests
             new[]
             {
                 "swing.connors-rsi2-short@2.0.0",
+                "swing.connors-rsi2-short@2.1.0",
                 "swing.connors-rsi2@7.0.0",
+                "swing.connors-rsi2@7.1.0",
                 "swing.connors-rsi2@9.0.0",
+                "swing.connors-rsi2@9.1.0",
                 "swing.snapback-short@2.0.0",
                 "swing.snapback@2.0.0",
                 "technical.opening-range-breakout@1.2.0",

@@ -1,0 +1,74 @@
+# As-traded copy: identical trading rules, bound to an admission profile that accepts Alpaca SIP as-traded (unadjusted) daily bars
+# for whole-market research screens that leave out stock-days with a split in the 200-session look-back.
+# Connors and Alvarez (2008), Short Term Trading Strategies That Work: RSI(2) strategy, short side as published.
+# Entry: close below SMA200 and RSI(2) above 95. Exit: close below SMA5. No stop, no target, no time limit,
+# no market filter. Mirror of swing.connors-rsi2@9.0.0; the long version is unchanged.
+# 2.0.0 replaces 1.0.0 (never run): the fill day's own close is the first cover check.
+# Only difference from the book: the order fills at the next open, planned from the signal close, instead of at
+# the signal close (never act on a price not yet known). Sized by position notional (equity / max positions)
+# because there is no stop to size from. A short with no stop has no upper bound on its loss; research only,
+# and broker order planning refuses plans without a stop.
+# Candidates on the same day are ranked most overbought first (highest RSI(2)).
+strategy_id: research.swing-connors-rsi2-short-as-traded.bt-v2-1
+strategy_name: RESEARCH Connors RSI2 SMA5 Exit Short V2.1 (published rules, no stop, as-traded bars)
+source: connors_alvarez_2008_short_term_trading_strategies_rsi2
+version: 2
+timeframe: 1d
+direction: short
+entry_rules:
+  setup_type: momentum
+  enable_short: true
+  short_setup_type: rsi2_overbought
+  min_short_reversion_rsi2: 95.0
+  require_price_below_sma200_for_short: true
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: rsi2_descending
+  max_vwap_extension_atr:
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 25
+  require_positive_news: false
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 0
+  target_r_multiple: 0
+  max_hold_hours: 10000.0
+  max_hold_bars:
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  exit_on_close_below_sma5: true
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  check_exits_from_fill_day: true
+  initial_stop_mode: none
+  profit_target_mode: none
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 10.0
+  opening_gap_policy: keep_and_exit_next_open
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

@@ -24,7 +24,9 @@ public static class DailyScreenCommand
     /// --opening-bars datasetId --rank-measure first_five_minute_relative_volume --baseline-sessions 14 --baseline-average mean
     /// --min-relative-volume 1 --max-per-session 20.
     /// Optional --sessions datasetId names the XNYS exchange-session dataset backtests of this screen read; it is recorded in
-    /// screen-manifest.json, which is always written with every input, rule and output fingerprint.
+    /// screen-manifest.json, which is always written with every input, rule and output fingerprint. Optional
+    /// --exclude-split-lookback N leaves a stock out on any day whose N-session look-back contains a split known by that day,
+    /// listing each such day in split-exclusions.csv (reason split_in_lookback) and the count in the manifest.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
@@ -55,18 +57,31 @@ public static class DailyScreenCommand
         var folder = Path.GetFullPath(Require(options, "--out"));
         Directory.CreateDirectory(folder);
         var counts = new SortedDictionary<DateOnly, int>();
+        int? splitLookback = options.TryGetValue("--exclude-split-lookback", out var lookbackText)
+            ? Int32.Parse(lookbackText, CultureInfo.InvariantCulture) : null;
+        var splitExcluded = 0;
         await using (var eligible = new StreamWriter(Path.Combine(folder, "eligible.csv")))
+        await using (var splitDays = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SplitExclusionsFileName)))
         {
             await eligible.WriteLineAsync("session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions");
+            if (splitDays is not null) await splitDays.WriteLineAsync("session_date,ticker,reason");
             await foreach (var partition in reader.ReadMarketBarPartitionsAsync(bars, cancellationToken))
             {
                 foreach (var group in partition.GroupBy(row => row.Symbol, StringComparer.Ordinal))
                 {
                     if (excluded.Contains(group.Key)) continue;
                     var series = group.OrderBy(row => row.BarStartUtc).Select(ToBar).ToArray();
-                    var tradedSessions = ranking is null ? [] : series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
-                    foreach (var (date, values) in Screen(group.Key, series, splits.GetValueOrDefault(group.Key, []), rules, from, to))
+                    var sessions = series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
+                    var tradedSessions = ranking is null ? [] : sessions;
+                    var stockSplits = splits.GetValueOrDefault(group.Key, []);
+                    foreach (var (date, values) in Screen(group.Key, series, stockSplits, rules, from, to))
                     {
+                        if (splitLookback is { } lookback && SplitInLookback(sessions, date, stockSplits, lookback))
+                        {
+                            splitExcluded++;
+                            await splitDays!.WriteLineAsync($"{date:yyyy-MM-dd},{group.Key},{SplitInLookbackReason}");
+                            continue;
+                        }
                         counts[date] = counts.GetValueOrDefault(date) + 1;
                         ranking?.Add(date, group.First().SecurityId, group.Key, tradedSessions);
                         await eligible.WriteLineAsync(string.Join(',', date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), values.Ticker,
@@ -87,7 +102,10 @@ public static class DailyScreenCommand
             foreach (var session in ranked.TakeLast(5))
                 output.WriteLine($"{session.Session:yyyy-MM-dd}: {session.QualifiedCount} at or above the minimum relative volume, {session.Members.Count} selected");
         }
-        var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile, cancellationToken);
+        if (splitLookback is not null)
+            output.WriteLine($"Left out {splitExcluded} eligible stock-days whose {splitLookback}-session look-back contains a split ({SplitInLookbackReason}).");
+        var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile,
+            new ResearchScreenSplitRule(splitLookback, splitExcluded), cancellationToken);
         output.WriteLine($"Manifest {ResearchScreenManifest.FileName} SHA-256 {manifestSha}.");
         return 0;
     }
@@ -99,7 +117,7 @@ public static class DailyScreenCommand
     /// </summary>
     private static async Task<string> PublishManifestAsync(IReadOnlyDictionary<string, string> options, SqliteEvidenceCatalog catalog,
         DailyScreenRules rules, DailyRankingRules? ranking, DateOnly from, DateOnly to, string folder, string? excludeFile,
-        CancellationToken cancellationToken)
+        ResearchScreenSplitRule splitRule, CancellationToken cancellationToken)
     {
         string? sessions = null;
         if (options.TryGetValue("--sessions", out var sessionsId))
@@ -112,7 +130,26 @@ public static class DailyScreenCommand
         var inputs = new ResearchScreenInputs(Require(options, "--bars"), Require(options, "--actions"),
             options.TryGetValue("--opening-bars", out var opening) ? opening : null, sessions);
         return await ResearchScreenManifest.PublishAsync(folder, inputs, rules, ranking, from, to, DailyRankingOutput.IssuerIdentityBasis,
-            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken);
+            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken, splitRule);
+    }
+
+    /// <summary>Reason written for an eligible stock-day left out because a split lies inside its look-back.</summary>
+    public const string SplitInLookbackReason = "split_in_lookback";
+
+    /// <summary>File listing every stock-day left out under --exclude-split-lookback.</summary>
+    public const string SplitExclusionsFileName = "split-exclusions.csv";
+
+    /// <summary>
+    /// True when a split ex-date known by <paramref name="date"/> (on or before it) falls after the first of the
+    /// <paramref name="lookbackSessions"/> sessions before it: those earlier prices and volumes are on another share basis.
+    /// </summary>
+    public static bool SplitInLookback(IReadOnlyList<DateOnly> sessions, DateOnly date, IReadOnlyList<ShareSplit> splits, int lookbackSessions)
+    {
+        if (splits.Count == 0) return false;
+        var index = sessions is DateOnly[] array ? Array.BinarySearch(array, date) : sessions.ToList().BinarySearch(date);
+        if (index < 0) index = ~index;
+        var first = sessions[Math.Max(0, index - lookbackSessions)];
+        return splits.Any(split => split.ExDate > first && split.ExDate <= date);
     }
 
     /// <summary>

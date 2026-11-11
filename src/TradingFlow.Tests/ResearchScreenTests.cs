@@ -98,6 +98,70 @@ public sealed class ResearchScreenTests
         Assert.Throws<InvalidOperationException>(() => ResearchScreenSources.ResolveReference(screen, [five, other]));
     }
 
+    // A day is left out when a split known by that day (ex-date on or before it) falls inside its look-back sessions; a split
+    // after the day, or before the look-back, leaves it in.
+    [Theory]
+    [InlineData("2026-03-10", 3, true)]
+    [InlineData("2026-03-12", 3, true)]
+    [InlineData("2026-03-13", 3, false)]
+    [InlineData("2026-03-09", 3, false)]
+    public void SplitInLookback_LeavesOutDaysWhoseLookbackHoldsAKnownSplit(string exDate, int lookback, bool excluded)
+    {
+        DateOnly[] sessions = [new(2026, 3, 9), new(2026, 3, 10), new(2026, 3, 11), new(2026, 3, 12), new(2026, 3, 13), new(2026, 3, 16)];
+
+        var result = DailyScreenCommand.SplitInLookback(sessions, new DateOnly(2026, 3, 12), [new ShareSplit(DateOnly.Parse(exDate), 2m)], lookback);
+
+        Assert.Equal(excluded, result);
+        Assert.False(DailyScreenCommand.SplitInLookback(sessions, new DateOnly(2026, 3, 12), [], lookback));
+    }
+
+    // A screen without a ranking serves daily strategies: membership is each session's eligible.csv rows, known before the
+    // open, and no five-minute or one-minute dataset is required; the split rule and its count are recorded in the manifest.
+    [Fact]
+    public async Task EligibleListScreen_GivesDailyMembershipWithoutIntradayDatasets()
+    {
+        using var root = new TemporaryFolder();
+        var folder = Path.Combine(root.Path, "daily-screen");
+        Directory.CreateDirectory(folder);
+        await File.WriteAllLinesAsync(Path.Combine(folder, "eligible.csv"), ["session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions",
+            "2026-10-01,ABC,20,2000000,40000000,1,200", "2026-10-02,ABC,20,2000000,40000000,1,200", "2026-10-02,XYZ,30,2000000,60000000,1,200"]);
+        await File.WriteAllLinesAsync(Path.Combine(folder, DailyScreenCommand.SplitExclusionsFileName), ["session_date,ticker,reason", "2026-10-01,XYZ,split_in_lookback"]);
+        await ResearchScreenManifest.PublishAsync(folder, new("daily", "actions", null, "sessions"), Rules with { PriceBasis = DailyScreenPriceBasis.PriorClose },
+            null, new(2026, 10, 1), new(2026, 10, 2), "alpaca_security_id", null, default, new ResearchScreenSplitRule(200, 1));
+
+        var screen = PublishedResearchScreen.Read(folder);
+        var membership = screen.ToMembership(new(2026, 10, 1), new(2026, 10, 2));
+        var reference = ResearchScreenSources.ResolveReference(screen, []);
+
+        Assert.False(screen.IsRanked);
+        Assert.Equal(new ResearchScreenSplitRule(200, 1), screen.Manifest.SplitRule);
+        Assert.Contains("split-exclusions.csv", screen.Manifest.Outputs.Keys);
+        Assert.Equal(["ABC", "XYZ"], screen.PoolSymbols(new(2026, 10, 1), new(2026, 10, 2)));
+        Assert.Equal([new DateOnly(2026, 10, 2)], membership.EligibleDays("XYZ"));
+        Assert.Null(membership.KnownFromNewYorkTime);
+        Assert.Equal((0, 0), (reference.FiveMinuteDatasetIds.Count, reference.OneMinuteDatasetIds.Count));
+        Assert.Equal(screen.Manifest.Outputs["eligible.csv"], reference.RankedListSha256);
+    }
+
+    // The evidence catalog opened read-only answers reads without changing the database file or creating a journal.
+    [Fact]
+    public async Task ReadOnlyCatalog_ReadsWithoutWriting()
+    {
+        using var root = new TemporaryFolder();
+        var path = Path.Combine(root.Path, "catalog.db");
+        var store = new TradingFlow.Data.Evidence.FileSystemImmutableArtifactStore(new TradingFlow.Data.Evidence.ImmutableArtifactStoreOptions(Path.Combine(root.Path, "objects")));
+        var created = new TradingFlow.Data.Evidence.SqliteEvidenceCatalog(new(path, TradingFlow.Data.Evidence.EvidenceCatalogOpenMode.BootstrapNew), store);
+        Assert.Null(await created.GetDatasetAsync("absent"));
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        var before = await ResearchScreenManifest.Sha256FileAsync(path, default);
+
+        var readOnly = new TradingFlow.Data.Evidence.SqliteEvidenceCatalog(new(path, TradingFlow.Data.Evidence.EvidenceCatalogOpenMode.ReadOnly), store);
+        Assert.Null(await readOnly.GetDatasetAsync("absent"));
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        Assert.Equal(before, await ResearchScreenManifest.Sha256FileAsync(path, default));
+    }
+
     // The five-minute variant of the minute planner asks for the full 09:30-16:00 session of each selected stock-session and
     // of the stock's own earlier traded sessions.
     [Fact]

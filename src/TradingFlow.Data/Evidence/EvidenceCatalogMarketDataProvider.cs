@@ -52,8 +52,9 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
         this.getDataset = getDataset ?? throw new ArgumentNullException(nameof(getDataset));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
         this.archive = archive ?? throw new ArgumentNullException(nameof(archive));
-        if (config.RankedListSha256.Length != 64 || config.FiveMinuteDatasetIds.Count == 0)
-            throw new ArgumentException("The evidence catalog provider needs the ranked-list SHA-256 and at least one five-minute dataset.", nameof(config));
+        // Daily research screens need no intraday datasets; a five-minute or one-minute request then simply finds no bars.
+        if (config.RankedListSha256.Length != 64)
+            throw new ArgumentException("The evidence catalog provider needs the SHA-256 of the screen's membership list.", nameof(config));
         calendar = new(() => LoadCalendarAsync(CancellationToken.None));
         CacheSourceDescriptor = new(ProviderIdentity, DataFeed, Adjustment, "datasets-" + ResearchHash(String.Join('\n',
             new[] { config.RankedListSha256, config.DailyDatasetId, config.ExchangeSessionsDatasetId }
@@ -62,13 +63,13 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
 
     /// <summary>
     /// Opens the configured SQLite catalog and artifact store on first use only, so validating a plan touches no file. The
-    /// catalog is opened as an existing database and only read.
+    /// catalog is opened read-only: no migration, no journal change and no full integrity scan of the large file.
     /// </summary>
     public static EvidenceCatalogMarketDataProvider Open(EvidenceCatalogProviderConfig config, IRawArchiveWriter archive)
     {
         var store = new Lazy<FileSystemImmutableArtifactStore>(() => new(new ImmutableArtifactStoreOptions(Path.GetFullPath(config.ArtifactRoot))));
         var catalog = new Lazy<SqliteEvidenceCatalog>(() => new(new EvidenceCatalogOptions(Path.GetFullPath(config.CatalogPath),
-            EvidenceCatalogOpenMode.OpenExisting), store.Value));
+            EvidenceCatalogOpenMode.ReadOnly), store.Value));
         return new(config, (id, token) => catalog.Value.GetDatasetAsync(id, token),
             new LazyPartitionReader(() => new ParquetEvidencePartitionDataReader(new EvidenceParquetCodec(), store.Value)), archive);
     }

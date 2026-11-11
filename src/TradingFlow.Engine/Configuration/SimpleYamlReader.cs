@@ -519,7 +519,7 @@ public sealed class SimpleYamlReader
         const string prefix = "providers.evidence_catalog.";
         if (!runMap.Keys.Any(key => key.StartsWith(prefix, StringComparison.Ordinal))) return null;
         var five = OptionalList(runMap, prefix + "five_minute_datasets");
-        if (five.Count == 0) throw new InvalidDataException("providers.evidence_catalog needs at least one five_minute_datasets entry.");
+        // Daily research screens read daily bars only, so the intraday dataset lists may be empty.
         return new EvidenceCatalogProviderConfig(Path.GetFullPath(RequireString(runMap, prefix + "catalog_path")),
             Path.GetFullPath(RequireString(runMap, prefix + "artifact_root")),
             RequireString(runMap, prefix + "ranked_list_sha256"), RequireString(runMap, prefix + "daily_dataset"),

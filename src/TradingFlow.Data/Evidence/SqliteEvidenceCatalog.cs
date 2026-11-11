@@ -34,13 +34,13 @@ public sealed class SqliteEvidenceCatalog :
         ArgumentNullException.ThrowIfNull(options);
         this.artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
         databasePath = options.DatabasePath;
+        openMode = options.OpenMode;
         var directory = Path.GetDirectoryName(options.DatabasePath);
-        if (!String.IsNullOrWhiteSpace(directory))
+        if (!String.IsNullOrWhiteSpace(directory) && openMode != EvidenceCatalogOpenMode.ReadOnly)
         {
             Directory.CreateDirectory(directory);
         }
 
-        openMode = options.OpenMode;
         if (openMode == EvidenceCatalogOpenMode.BootstrapNew)
         {
             if (File.Exists(options.DatabasePath))
@@ -59,7 +59,7 @@ public sealed class SqliteEvidenceCatalog :
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = options.DatabasePath,
-            Mode = SqliteOpenMode.ReadWrite,
+            Mode = openMode == EvidenceCatalogOpenMode.ReadOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
             Cache = SqliteCacheMode.Shared,
             Pooling = true
         }.ToString();
@@ -2101,6 +2101,13 @@ public sealed class SqliteEvidenceCatalog :
                 return;
             }
 
+            if (openMode == EvidenceCatalogOpenMode.ReadOnly)
+            {
+                await RequireCurrentSchemaReadOnlyAsync(cancellationToken);
+                initialized = true;
+                return;
+            }
+
             if (openMode == EvidenceCatalogOpenMode.BootstrapNew)
             {
                 await BootstrapAsync(cancellationToken);
@@ -2239,6 +2246,25 @@ public sealed class SqliteEvidenceCatalog :
         }
 
         await RequireIntegrityAsync(connection, cancellationToken);
+    }
+
+    /// <summary>
+    /// Read-only open: checks only that the catalog carries the current schema version. Runs no migration and no full
+    /// quick_check, so reading a large catalog is fast and never writes; a catalog needing a migration is refused with the
+    /// step that resolves it. Immutable manifests and artifacts are still verified by their hashes when read.
+    /// </summary>
+    private async Task RequireCurrentSchemaReadOnlyAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Private, Pooling = false
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var version = await ScalarStringAsync(connection, null,
+            "SELECT CAST(schema_version AS TEXT) FROM catalog_metadata WHERE singleton = 1;", cancellationToken);
+        if (version != EvidenceCatalogSchema.Version.ToString(CultureInfo.InvariantCulture))
+            throw new InvalidOperationException($"Evidence catalog '{databasePath}' has schema version '{version ?? "none"}', not " +
+                $"{EvidenceCatalogSchema.Version}. Open it once with the ordinary evidence commands to migrate it before reading it read-only.");
     }
 
     private static async Task MigrateVersion4ToVersion5Async(

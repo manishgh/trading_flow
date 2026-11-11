@@ -273,6 +273,12 @@ public sealed record ExecutionRules(
     /// <summary>Admission timing for daily strategies that keep opening gaps; otherwise identical to the next-slice market-exit timing.</summary>
     public const string KeptGapTimingPolicy = "prior-close-plan-next-open-fill-kept-gap-exits-v4";
 
+    /// <summary>
+    /// The same kept-gap timing on as-traded (unadjusted) Alpaca SIP daily bars, for whole-market research screens whose
+    /// stock-days with a split in the look-back are left out. Accepts raw bars only; adjusted bars stay with the policy above.
+    /// </summary>
+    public const string KeptGapAsTradedTimingPolicy = "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1";
+
     public ExecutionConfirmationRules EffectiveConfirmation =>
         Confirmation ?? ExecutionConfirmationRules.Disabled;
 

@@ -50,13 +50,16 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
     /// <summary>
     /// The datasets a research-screen run reads: daily as-traded bars and XNYS sessions named by the manifest, and every
     /// five-minute and one-minute dataset whose collection attribute ranked_list_sha256 is this screen's ranked list.
-    /// Refuses a manifest without an exchange-session dataset and a ranked list without five-minute bars.
+    /// Refuses a manifest without an exchange-session dataset and a ranked list without five-minute or one-minute bars. A
+    /// screen without a ranking serves daily strategies, which read daily bars only, so it needs no intraday datasets.
     /// </summary>
     public static ResearchScreenReference ResolveReference(PublishedResearchScreen screen, IEnumerable<EvidenceDatasetManifest> asTradedBars)
     {
         var inputs = screen.Manifest.Inputs;
         var sessions = inputs.ExchangeSessionsDatasetId ?? throw new InvalidOperationException(
             $"Research screen '{screen.Name}' names no exchange-session dataset. Publish it again with research-daily-screen --sessions <XNYS dataset ID>.");
+        if (!screen.IsRanked)
+            return new(screen.Name, screen.ManifestSha256, screen.RankedListSha256, inputs.DailyBarsDatasetId, sessions, [], []);
         var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == screen.RankedListSha256).ToArray();
         string[] Of(string timeframe) => collected.Where(dataset => dataset.Partitions.All(partition => partition.Provenance.Timeframe == timeframe))
             .Select(dataset => dataset.DatasetId).Order(StringComparer.Ordinal).ToArray();
@@ -90,14 +93,19 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         return (parts[0][KeyPrefix.Length..], parts[1]["manifest_sha256=".Length..], parts[2]["ranked_list_sha256=".Length..]);
     }
 
-    /// <summary>True when a folder's manifest parses and names a ranked list; fingerprints are checked only when the screen is read.</summary>
+    /// <summary>
+    /// True when a folder's manifest parses and names its membership list (the ranked list, or eligible.csv for a screen
+    /// without a ranking); fingerprints are checked only when the screen is read.
+    /// </summary>
     private static bool HasRankedList(string folder)
     {
         try
         {
             if (!PublishedResearchScreen.IsPublished(folder)) return false;
             using var document = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(folder, ResearchScreenManifest.FileName)));
-            return document.RootElement.TryGetProperty("outputs", out var outputs) && outputs.TryGetProperty(ResearchScreenManifest.RankedListFileName, out _);
+            var ranked = document.RootElement.TryGetProperty("rankingRules", out var rules) && rules.ValueKind == JsonValueKind.Object;
+            return document.RootElement.TryGetProperty("outputs", out var outputs) &&
+                outputs.TryGetProperty(ranked ? ResearchScreenManifest.RankedListFileName : "eligible.csv", out _);
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
         {

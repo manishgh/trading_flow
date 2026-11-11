@@ -82,7 +82,8 @@ public static class MonthlyBacktestPresentation
     {
         if(!strategy.EconomicResultsComplete||runtime.Definition.Execution.Timeframe!="1d"|| runtime.Definition.Session.IsContinuousMarket ||
             runtime.Definition.Session.ExchangeTimezone != "America/New_York" ||
-            runtime.AdmissionProfile.ExecutionTimingPolicy is not ("completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5"))
+            runtime.AdmissionProfile.ExecutionTimingPolicy is not ("completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or
+                ExecutionRules.KeptGapAsTradedTimingPolicy or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5"))
             throw new InvalidOperationException("Verified native-daily completed-slice metadata is required for monthly display.");
         if(strategy.CompletedTrades.Count != strategy.AcceptedTradeCount ||
             Math.Abs(strategy.StartingCapital + strategy.CompletedTrades.Sum(trade => trade.NetProfit) - strategy.EndingCapital) > .01m)

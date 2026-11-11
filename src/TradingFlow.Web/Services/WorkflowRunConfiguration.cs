@@ -196,20 +196,22 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
             throw new InvalidOperationException("The backtest profile changed after this plan was saved. Review the new settings and save a new plan before starting.");
         var options = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest, token);
         var selected = request.Strategies.Select(identity => SelectStrategy(options, identity)).ToArray();
-        var run = await ResolveEffectiveProfileAsync(reader.ReadBacktestRun(config.Path), selected, request, token);
+        var profile = reader.ReadBacktestRun(config.Path);
+        RankedMembershipReference? ranked = null;
+        if (IsResearchScreen(universe))
+        {
+            // A research-screen run reads only the frozen evidence-catalog datasets and the screen's membership list. The
+            // switch happens before the profile is resolved, so even the session calendar comes from the catalog, never Alpaca.
+            var (screen, reference) = await ReadResearchScreenAsync(universe, token);
+            profile = profile with { Provider = TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName,
+                Providers = profile.Providers with { EvidenceCatalog = researchScreens!.ProviderConfig(reference) } };
+            ranked = new RankedMembershipReference(screen.ManifestPath, screen.ManifestSha256);
+        }
+        var run = await ResolveEffectiveProfileAsync(profile, selected, request, token);
         if (universe.Horizon != StrategyHorizonResolver.Resolve(selected[0].Definition))
             throw new InvalidOperationException("The source preview horizon differs from the selected strategy. Preview the stock source again for this strategy.");
         var scope = RequireScope(evidenceScope);
         var evidence = catalog.BindDecisionContextEvidence(request, run.Engine, selected, scope);
-        RankedMembershipReference? ranked = null;
-        if (IsResearchScreen(universe))
-        {
-            // A research-screen run reads only the frozen evidence-catalog datasets and the screen's ranked list.
-            var (screen, reference) = await ReadResearchScreenAsync(universe, token);
-            run = run with { Provider = TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName,
-                Providers = run.Providers with { EvidenceCatalog = researchScreens!.ProviderConfig(reference) } };
-            ranked = new RankedMembershipReference(screen.ManifestPath, screen.ManifestSha256);
-        }
         var path = writer.WriteBacktestConfig(new BacktestRunRequest(config.Path, uniqueName, 0, null, null,
             universe.Members.Select(item => item.Symbol).ToArray(), selected.Select(item => item.Path).ToArray(),
             request.StartingCapital, request.AccountRiskBudgetPct, request.MaxPositionNotionalPct, request.MaxConcurrentPositions,
