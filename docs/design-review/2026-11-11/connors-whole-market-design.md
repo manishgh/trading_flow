@@ -87,6 +87,25 @@ Per strategy version, on development trades, net of costs, returns in % per trad
 - **Otherwise RETAIN_RESEARCH:** no change.
 - **The holdout** must then show a positive average net return per trade. A pass never authorises trading by itself; paper trading needs a separate lifecycle decision.
 
+### Amended 12 November 2026 after the independent reviews (user approved)
+
+These rules replace the matching rules above.
+
+**PASS to holdout** requires all of these:
+- the average **monthly portfolio return** net of costs is above 0, with a t-statistic of at least 3. Months are used instead of trades because Connors trades overlap in time and cluster on sell-off days;
+- the profit factor is at least 1.2;
+- at least 5 of the 7 calendar years are positive;
+- **long versions only:** the trades' net return beats SPY's return over the same holding days, on average and with a t-statistic of at least 2 on monthly differences. This keeps a fully invested long book from passing on the market's own rise;
+- an **equal-weight study of every signal**, ignoring the 10-slot limit, has a positive average net return per trade. This guards against a result that depends on which signals happened to get a free slot.
+
+FAIL and RETAIN_RESEARCH stay as above. A 40% drawdown limit cannot bound a short without a stop, so the short is also reported with its single worst trade.
+
+**Execution amendments:**
+- **Split during a hold:** the position is closed at the last close before the split's ex-date and labelled `split_exit_before_ex_date`. Splits are announced weeks ahead.
+- **Data gap during a hold:** the position is held through the gap and exits at the next real open when bars resume. Only when bars never resume is it closed at the last real close (`data_ended_last_close`), and those trades are also reported under a stress case, longs marked at -50% and -100%.
+- **What gets skipped:** only named data-unavailable reasons. Engine errors and timeouts still stop the run.
+- **Reporting skips:** skipped stocks are counted against the pool and flagged above 5%.
+
 ## Decisions needed from you
 
 1. **2016 download:** run it (about 10 years, roughly 20-30 million bars, an hour or two), or test on the 16 months already held.
