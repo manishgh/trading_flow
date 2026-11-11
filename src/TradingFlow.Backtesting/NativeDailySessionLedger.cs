@@ -7,9 +7,15 @@ namespace TradingFlow.Backtesting;
 public sealed record NativeDailyAccountingContext(DateTimeOffset StartUtc, DateTimeOffset CutoffUtc,
     IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Sessions, bool AllowOpenAtCutoff)
 {
-    /// <summary>Research-screen runs close a holding at its last real close when its daily bars stop, instead of
-    /// leaving later valuation unavailable. Every other run keeps the original behaviour.</summary>
-    public bool CloseHoldingsWithoutBars { get; init; }
+    /// <summary>
+    /// Research-screen daily rules (whole-market runs): a holding is closed at its last real close before a split's ex-date
+    /// or when its bars never resume, and is valued at its last real close through a gap after which bars resume. Every other
+    /// run keeps the original behaviour, where a missing mark makes later valuation unavailable.
+    /// </summary>
+    public bool ResearchScreenHoldingRules { get; init; }
+
+    /// <summary>Split ex-dates by symbol (upper case) for <see cref="ResearchScreenHoldingRules"/>; empty otherwise.</summary>
+    public IReadOnlySet<(string Symbol, DateOnly ExDate)> SplitExDates { get; init; } = new HashSet<(string, DateOnly)>();
 }
 
 /// <summary>Values completed native-daily simulations by their source session, retaining original execution stamps.</summary>
@@ -62,7 +68,8 @@ public static class NativeDailySessionLedger
         if (daily.Any(m => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(m.Value.Timestamp, NewYork).DateTime) != m.Key.Date ||
             MarkKnownAt(m.Value.Timestamp, state.ValuationBasis) > context.CutoffUtc))
             throw new InvalidDataException("Saved native marks have a mismatched source session or exceed the cutoff.");
-        var replayed = AnalyzeMarks(startingCapital, state, daily, context);
+        var replayed = AnalyzeMarks(startingCapital, state, daily,
+            context with { ResearchScreenHoldingRules = context.ResearchScreenHoldingRules || state.CarriesLastCloseThroughGaps });
         if (!replayed.Sessions.SequenceEqual(state.Sessions) || !replayed.OpenPositions.SequenceEqual(state.OpenPositions) ||
             !replayed.SessionMarks.SequenceEqual(state.SessionMarks))
             throw new InvalidDataException("Native recorded session ledger, marks or cutoff positions do not reconcile.");
@@ -82,6 +89,7 @@ public static class NativeDailySessionLedger
         var observations = new List<BacktestSessionObservation>();
         var positionMarks = new List<BacktestSessionPositionMark>();
         var cash = startingCapital; var realized = 0m; var fees = 0m; var next = 0; string? unavailable = null;
+        var lastCloses = new Dictionary<string, decimal>(StringComparer.Ordinal);
         foreach (var date in dates)
         {
             if (state.UnavailableFromSession is { } boundary && date >= boundary)
@@ -94,12 +102,13 @@ public static class NativeDailySessionLedger
                 if (lot.Quantity == 0) lots.Remove(fill.CandidateId);
             }
             CaptureSessionMarks(date, lots, daily, positionMarks);
+            if (context.ResearchScreenHoldingRules) CarryLastCloseThroughGap(date, lots.Values, daily, marks, lastCloses);
             observations.Add(ObserveSession(date, lots.Values, marks, startingCapital, cash, realized, fees, ref unavailable));
         }
         VerifyCloseValuations(startingCapital, fills, marks, observations);
         var positions = ProjectCutoffPositions(state, lots, daily, dates[^1]);
         var firstUnavailable = observations.FirstOrDefault(s => s.UnavailableReason is not null);
-        return state with { StartUtc = context.StartUtc, OpenPositions = positions, Sessions = observations, SessionMarks = positionMarks,
+        return state with { StartUtc = context.StartUtc, CarriesLastCloseThroughGaps = context.ResearchScreenHoldingRules, OpenPositions = positions, Sessions = observations, SessionMarks = positionMarks,
             UnavailableFromSession = firstUnavailable?.SessionDate, UnavailableReason = firstUnavailable?.UnavailableReason };
     }
 
@@ -146,6 +155,20 @@ public static class NativeDailySessionLedger
         {
             var lot = pair.Value; daily.TryGetValue((lot.Ticker, date), out var bar);
             destination.Add(new(date, pair.Key, lot.Ticker, lot.Quantity, lot.Basis, bar?.Close, bar?.Timestamp));
+        }
+    }
+
+    // Research-screen rule: a holding whose stock has no bar this session (a gap after which bars resume; a stock whose bars
+    // end is closed before this) is valued at its last real close. The recorded session mark keeps the missing price, so the
+    // carried value is visible and a replay derives the same value. Updates the last close of every held stock seen today.
+    private static void CarryLastCloseThroughGap(DateOnly date, IEnumerable<Lot> open,
+        IReadOnlyDictionary<(string Ticker, DateOnly Date), DailyClose> daily, Dictionary<(string Ticker, DateOnly Date), decimal> marks,
+        Dictionary<string, decimal> lastCloses)
+    {
+        foreach (var ticker in open.Select(lot => lot.Ticker).Distinct(StringComparer.Ordinal))
+        {
+            if (daily.TryGetValue((ticker, date), out var bar)) lastCloses[ticker] = bar.Close;
+            else if (lastCloses.TryGetValue(ticker, out var close)) marks[(ticker, date)] = close;
         }
     }
 

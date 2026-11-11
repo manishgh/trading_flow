@@ -523,7 +523,8 @@ public sealed class SimpleYamlReader
         return new EvidenceCatalogProviderConfig(Path.GetFullPath(RequireString(runMap, prefix + "catalog_path")),
             Path.GetFullPath(RequireString(runMap, prefix + "artifact_root")),
             RequireString(runMap, prefix + "ranked_list_sha256"), RequireString(runMap, prefix + "daily_dataset"),
-            RequireString(runMap, prefix + "exchange_sessions_dataset"), five, OptionalList(runMap, prefix + "one_minute_datasets"));
+            RequireString(runMap, prefix + "exchange_sessions_dataset"), five, OptionalList(runMap, prefix + "one_minute_datasets"),
+            OptionalNullableString(runMap, prefix + "corporate_actions_dataset"));
     }
 
     /// <summary>

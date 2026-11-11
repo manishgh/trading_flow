@@ -51,7 +51,7 @@ public static class DailyScreenCommand
         var excluded = options.TryGetValue("--exclude-symbols", out var excludeFile)
             ? File.ReadLines(Path.GetFullPath(excludeFile)).Select(line => line.Trim().ToUpperInvariant()).Where(line => line.Length > 0).ToHashSet(StringComparer.Ordinal)
             : [];
-        var splits = Splits(await reader.ReadCorporateActionsAsync(actions, cancellationToken));
+        var splits = ShareSplits.FromCorporateActions(await reader.ReadCorporateActionsAsync(actions, cancellationToken));
         var ranking = await RankingAsync(options, catalog, reader, cancellationToken);
 
         var folder = Path.GetFullPath(Require(options, "--out"));
@@ -60,6 +60,7 @@ public static class DailyScreenCommand
         int? splitLookback = options.TryGetValue("--exclude-split-lookback", out var lookbackText)
             ? Int32.Parse(lookbackText, CultureInfo.InvariantCulture) : null;
         var splitExcluded = 0;
+        var suspectedExcluded = 0;
         await using (var eligible = new StreamWriter(Path.Combine(folder, "eligible.csv")))
         await using (var splitDays = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SplitExclusionsFileName)))
         {
@@ -74,12 +75,19 @@ public static class DailyScreenCommand
                     var sessions = series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
                     var tradedSessions = ranking is null ? [] : sessions;
                     var stockSplits = splits.GetValueOrDefault(group.Key, []);
+                    var suspects = splitLookback is null ? [] : UnrecordedSplitSessions(series, stockSplits);
                     foreach (var (date, values) in Screen(group.Key, series, stockSplits, rules, from, to))
                     {
                         if (splitLookback is { } lookback && SplitInLookback(sessions, date, stockSplits, lookback))
                         {
                             splitExcluded++;
                             await splitDays!.WriteLineAsync($"{date:yyyy-MM-dd},{group.Key},{SplitInLookbackReason}");
+                            continue;
+                        }
+                        if (splitLookback is { } window && SuspectInLookback(sessions, date, suspects, window))
+                        {
+                            suspectedExcluded++;
+                            await splitDays!.WriteLineAsync($"{date:yyyy-MM-dd},{group.Key},{SuspectedUnrecordedSplitReason}");
                             continue;
                         }
                         counts[date] = counts.GetValueOrDefault(date) + 1;
@@ -103,9 +111,10 @@ public static class DailyScreenCommand
                 output.WriteLine($"{session.Session:yyyy-MM-dd}: {session.QualifiedCount} at or above the minimum relative volume, {session.Members.Count} selected");
         }
         if (splitLookback is not null)
-            output.WriteLine($"Left out {splitExcluded} eligible stock-days whose {splitLookback}-session look-back contains a split ({SplitInLookbackReason}).");
+            output.WriteLine($"Left out {splitExcluded} eligible stock-days whose {splitLookback}-session look-back contains a split ({SplitInLookbackReason}) and " +
+                $"{suspectedExcluded} whose look-back holds an overnight jump with no recorded split ({SuspectedUnrecordedSplitReason}).");
         var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile,
-            new ResearchScreenSplitRule(splitLookback, splitExcluded), cancellationToken);
+            new ResearchScreenSplitRule(splitLookback, splitExcluded, suspectedExcluded), cancellationToken);
         output.WriteLine($"Manifest {ResearchScreenManifest.FileName} SHA-256 {manifestSha}.");
         return 0;
     }
@@ -135,6 +144,42 @@ public static class DailyScreenCommand
 
     /// <summary>Reason written for an eligible stock-day left out because a split lies inside its look-back.</summary>
     public const string SplitInLookbackReason = "split_in_lookback";
+
+    /// <summary>Reason written for an eligible stock-day whose look-back holds an overnight jump that looks like an unrecorded split.</summary>
+    public const string SuspectedUnrecordedSplitReason = "suspected_unrecorded_split";
+
+    /// <summary>
+    /// Sessions on which the stock opened 45% or more below, or 90% or more above, the previous session's close while the
+    /// corporate actions record no split with that ex-date. Such a jump looks like a split the dataset does not list, so prices
+    /// before it may be on another share basis. Input bars are one stock's daily bars in session order.
+    /// </summary>
+    public static DateOnly[] UnrecordedSplitSessions(IReadOnlyList<OhlcvBar> series, IReadOnlyList<ShareSplit> splits)
+    {
+        var recorded = splits.Select(split => split.ExDate).ToHashSet();
+        var suspects = new List<DateOnly>();
+        for (var i = 1; i < series.Count; i++)
+        {
+            if (series[i - 1].Close <= 0) continue;
+            var move = series[i].Open / series[i - 1].Close;
+            var session = DateOnly.FromDateTime(series[i].Timestamp.UtcDateTime);
+            if ((move <= 0.55m || move >= 1.90m) && !recorded.Contains(session)) suspects.Add(session);
+        }
+        return suspects.ToArray();
+    }
+
+    /// <summary>
+    /// True when a suspected unrecorded split falls inside the <paramref name="lookbackSessions"/> sessions before
+    /// <paramref name="date"/>. The jump into <paramref name="date"/> itself is not counted: its open is not known before the
+    /// open, when a prior-close screen is decided.
+    /// </summary>
+    public static bool SuspectInLookback(IReadOnlyList<DateOnly> sessions, DateOnly date, IReadOnlyList<DateOnly> suspects, int lookbackSessions)
+    {
+        if (suspects.Count == 0) return false;
+        var index = sessions is DateOnly[] array ? Array.BinarySearch(array, date) : sessions.ToList().BinarySearch(date);
+        if (index < 0) index = ~index;
+        var first = sessions[Math.Max(0, index - lookbackSessions)];
+        return suspects.Any(session => session > first && session < date);
+    }
 
     /// <summary>File listing every stock-day left out under --exclude-split-lookback.</summary>
     public const string SplitExclusionsFileName = "split-exclusions.csv";
@@ -186,20 +231,6 @@ public static class DailyScreenCommand
             if (result.Eligible) yield return (date, result.Values!);
         }
     }
-
-    // Forward and reverse splits keyed by the symbol they applied to, effective from the ex-date.
-    private static Dictionary<string, IReadOnlyList<ShareSplit>> Splits(IEnumerable<CorporateActionEvidenceRow> actions) =>
-        actions.Where(action => action.ActionType is CorporateActionEvidenceType.ForwardSplit or CorporateActionEvidenceType.ReverseSplit &&
-                action.PrimarySymbol is not null &&
-                action.ProviderFields.TryGetValue("old_rate", out var oldRate) && action.ProviderFields.TryGetValue("new_rate", out var newRate) &&
-                decimal.TryParse(oldRate, NumberStyles.Number, CultureInfo.InvariantCulture, out var oldValue) && oldValue > 0m &&
-                decimal.TryParse(newRate, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
-            .GroupBy(action => action.PrimarySymbol!, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => (IReadOnlyList<ShareSplit>)group
-                .Select(action => new ShareSplit(action.ExDate ?? action.EffectiveDate ?? action.ProcessDate,
-                    decimal.Parse(action.ProviderFields["new_rate"], CultureInfo.InvariantCulture) /
-                    decimal.Parse(action.ProviderFields["old_rate"], CultureInfo.InvariantCulture)))
-                .Distinct().ToArray(), StringComparer.Ordinal);
 
     private static OhlcvBar ToBar(MarketBarEvidenceRow row) => new(row.Symbol, row.BarStartUtc, row.Timeframe,
         EvidenceFixedDecimal.FromPriceUnits(row.OpenPriceUnits), EvidenceFixedDecimal.FromPriceUnits(row.HighPriceUnits),

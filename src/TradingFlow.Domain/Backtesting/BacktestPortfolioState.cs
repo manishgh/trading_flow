@@ -50,6 +50,9 @@ public sealed record BacktestPortfolioState(string ValuationBasis, DateTimeOffse
     public IReadOnlyList<BacktestAdmittedOrder> AdmittedOrders { get; init; } = [];
     public DateOnly? UnavailableFromSession { get; init; }
     public string? UnavailableReason { get; init; }
+
+    /// <summary>True when a holding was valued at its last real close through a data gap (research-screen daily rules).</summary>
+    public bool CarriesLastCloseThroughGaps { get; init; }
     public IReadOnlyList<BacktestIntradayDecisionDetail> IntradayDecisions { get; init; } = [];
     public int IntradayDecisionCount { get; init; }
 }

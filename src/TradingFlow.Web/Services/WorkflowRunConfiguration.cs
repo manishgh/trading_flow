@@ -27,7 +27,7 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
         var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
         var from = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.TestWindowStartUtc, zone).DateTime);
         var to = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.TestWindowEndUtc.AddTicks(-1), zone).DateTime);
-        return new(reference, screen.PoolSymbols(from, to));
+        return new(reference, screen.PoolSymbols(from, to), screen.EligibleSpan(from, to).StockSessions);
     }
 
     /// <summary>

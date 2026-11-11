@@ -209,7 +209,7 @@ public sealed class CandlePipelineEngine
                     if (bars[normalized.Bar.Timestamp] != normalized.Bar)
                     {
                         failures[normalized.Ticker] =
-                            $"Conflicting completed {normalized.Timeframe} bars exist at {normalized.Bar.Timestamp:O}.";
+                            $"{MarketDataUnavailable.BarsUnusable}: Conflicting completed {normalized.Timeframe} bars exist at {normalized.Bar.Timestamp:O}.";
                     }
 
                     return;
@@ -300,7 +300,7 @@ public sealed class CandlePipelineEngine
         {
             if (!grouped.ContainsKey(ticker) && !failures.ContainsKey(ticker))
             {
-                failures[ticker] = $"No market data bars were returned for ticker {ticker}.";
+                failures[ticker] = $"{MarketDataUnavailable.BarsMissing}: No market data bars were returned for ticker {ticker}.";
             }
         }
 
@@ -599,7 +599,7 @@ public sealed class CandlePipelineEngine
         if (!CanonicalMarketBarValidator.IsValid(normalized, requireOneMinuteSource: false, out var failure))
         {
             throw new InvalidOperationException(
-                $"Invalid candle for {normalized.Ticker} {normalized.Timeframe} at {normalized.Timestamp:O}: {failure}");
+                $"{MarketDataUnavailable.BarsUnusable}: Invalid candle for {normalized.Ticker} {normalized.Timeframe} at {normalized.Timestamp:O}: {failure}");
         }
 
         return new NormalizedCandleEvent(normalized.Ticker, normalized.Timeframe, normalized);

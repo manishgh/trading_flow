@@ -10,6 +10,7 @@ using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Research;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Engine.Universe;
 
 namespace TradingFlow.Data.Evidence;
 
@@ -22,7 +23,7 @@ namespace TradingFlow.Data.Evidence;
 /// datasets and partitions read, so prepared data records them and a rerun reads identical inputs.
 /// </summary>
 public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMarketSessionScheduleProvider,
-    IMarketDataProvenanceProvider, IMarketDataCacheSourceDescriptorProvider, IHistoricalMarketDataEvidenceProvider
+    IMarketDataProvenanceProvider, IMarketDataCacheSourceDescriptorProvider, IHistoricalMarketDataEvidenceProvider, IShareSplitProvider
 {
     public const string ProviderName = "evidence_catalog";
     private const string Exchange = "XNYS";
@@ -193,6 +194,18 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
     }
 
     /// <summary>
+    /// Every split in the frozen corporate-actions dataset (providers.evidence_catalog.corporate_actions_dataset), by symbol.
+    /// Refuses when no corporate-actions dataset is configured, so a split can never be silently missed.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, IReadOnlyList<ShareSplit>>> LoadShareSplitsAsync(CancellationToken cancellationToken)
+    {
+        var id = config.CorporateActionsDatasetId ?? throw new InvalidOperationException(
+            "providers.evidence_catalog.corporate_actions_dataset is not set; the run cannot see split ex-dates.");
+        var dataset = await RequireDatasetAsync(id, EvidenceDatasetKind.CorporateActions, cancellationToken);
+        return ShareSplits.FromCorporateActions(await reader.ReadCorporateActionsAsync(dataset, cancellationToken));
+    }
+
+    /// <summary>
     /// Reads a frozen dataset's committed manifest and refuses it unless its content fingerprint (the dataset ID computed from
     /// the manifest) equals the frozen ID and it has the expected kind.
     /// </summary>
@@ -345,7 +358,7 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
         public Task<IReadOnlyList<SymbolIntervalEvidenceRow>> ReadSymbolIntervalsAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("The evidence catalog provider reads market bars and exchange sessions only.");
         public Task<IReadOnlyList<CorporateActionEvidenceRow>> ReadCorporateActionsAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException("The evidence catalog provider reads market bars and exchange sessions only.");
+            inner.Value.ReadCorporateActionsAsync(manifest, cancellationToken);
         public Task<IReadOnlyList<UniverseMembershipEvidenceRow>> ReadUniverseMembershipAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("The evidence catalog provider reads market bars and exchange sessions only.");
         public Task<IReadOnlyList<SipQuoteEvidenceRow>> ReadSipQuotesAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>

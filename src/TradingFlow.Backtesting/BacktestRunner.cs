@@ -263,7 +263,7 @@ public sealed partial class BacktestRunner(
         RunUniverseValidator.RequireResolved(run);
         await EnsurePreparedDataAsync(run, strategies, cancellationToken, progress);
         var (resolvedRun, membership, promotionEvidence) =
-            await ResolveUniverseAsync(run, cancellationToken, progress);
+            await ResolveUniverseAsync(run, strategies, cancellationToken, progress);
         run = resolvedRun;
         var preparedMarket = await PrepareMarketAsync(run, strategies, cancellationToken, progress);
         return await RunPreparedAsync(
@@ -288,13 +288,14 @@ public sealed partial class BacktestRunner(
         UniverseMembership? Membership,
         UniversePromotionEvidence? PromotionEvidence)> ResolveUniverseAsync(
         BacktestRunConfig run,
+        IReadOnlyList<StrategyDefinition> strategies,
         CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress)
     {
         RunUniverseValidator.RequireResolved(run);
         if (run.Universe is { IsHistoricalScreener: false, RankedMembership: { } ranked })
         {
-            return (run, await ResolveRankedMembershipAsync(run, ranked, cancellationToken, progress), null);
+            return (run, await ResolveRankedMembershipAsync(run, ranked, strategies, cancellationToken, progress), null);
         }
 
         if (run.Universe is { IsHistoricalScreener: false, DailyEligibility: not null } fixedList)
@@ -410,8 +411,10 @@ public sealed partial class BacktestRunner(
             ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy)).Distinct().ToArray();
         if (evidenceRules.Length != 1)
             throw new InvalidOperationException("Shared market preparation requires strategies with the same admitted price-adjustment basis.");
-        var provider = CompletedBacktestDataProvider.Wrap(CreateProvider(run));
         var (dataStart, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
+        // A daily eligible-list research screen reads each stock only from its first eligible day minus the warm-up.
+        var provider = CompletedBacktestDataProvider.Wrap(ResearchScreenDataWindows.Apply(CreateProvider(run),
+            ResearchScreenDataWindows.Starts(run, dataStart, evaluationStart, windowEnd)));
 
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
@@ -695,7 +698,8 @@ public sealed partial class BacktestRunner(
             ? new NativeDailyAccountingContext(preparedMarket.WindowStart.ToUniversalTime(), preparedMarket.WindowEnd.ToUniversalTime(),
                 candidateSessionSchedules ?? throw new InvalidDataException("Native daily accounting requires authoritative sessions."),
                 run.Engine.PrecommittedLiquidationSourceUtc is null)
-                { CloseHoldingsWithoutBars = run.Universe?.RankedMembership is not null } : null;
+                { ResearchScreenHoldingRules = run.Universe?.RankedMembership is not null,
+                    SplitExDates = await ResearchScreenSplitExDatesAsync(run, strategies, cancellationToken) } : null;
         var eventOutcome = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
             ? await ExecuteEventPortfolioAsync(run, strategies, candidates, allBars,
                 universeMembership, regimeCalendars, portfolioExecutionJournal, cancellationToken)

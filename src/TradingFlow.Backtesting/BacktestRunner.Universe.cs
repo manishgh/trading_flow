@@ -1,5 +1,6 @@
 using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 
 namespace TradingFlow.Backtesting;
@@ -10,32 +11,40 @@ namespace TradingFlow.Backtesting;
 public sealed partial class BacktestRunner
 {
     /// <summary>
-    /// The failed stock work items that withhold a daily run's economics. A research-screen run (whole market) never stops
-    /// because one stock's data is unavailable: its failed items are skipped, published and counted instead, so none stop
-    /// it. Every other run keeps the existing rule that any failed item withholds the results.
+    /// The failed stock work items that withhold a daily run's economics. A research-screen run (whole market) does not stop
+    /// when a stock's data is unavailable for a named reason (<see cref="TradingFlow.Engine.Pipeline.MarketDataUnavailable"/>:
+    /// missing or unusable bars, insufficient history): those items are skipped, published and counted. An engine error or a
+    /// timeout still stops it. Every other run keeps the existing rule that any failed item withholds the results.
     /// </summary>
     internal static IReadOnlyList<StrategyTickerBacktestBatch> StoppingBatches(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches) =>
-        run.Universe?.RankedMembership is not null ? [] : batches.Where(batch => !batch.Succeeded).ToArray();
+        batches.Where(batch => !batch.Succeeded && !(run.Universe?.RankedMembership is not null &&
+            TradingFlow.Engine.Pipeline.MarketDataUnavailable.IsNamedReason(batch.ErrorMessage))).ToArray();
 
     /// <summary>
-    /// Publishes the run's data gaps beside the results: each skipped stock work item (stock, strategy, reason) and each
-    /// holding closed at its last real close because its daily bars stopped, with both counts. Writes nothing when neither
-    /// occurred.
+    /// Publishes the run's data gaps beside the results: each skipped stock work item (stock, strategy, reason) with the
+    /// skipped stocks counted against the pool and flagged above 5%, and each holding closed at its last real close because
+    /// its bars never resumed or a split took effect, with the counts. Writes nothing when none of these occurred.
     /// </summary>
     private async Task PublishDataGapsAsync(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches,
         IReadOnlyList<StrategyTickerBacktestBatch> stopping, IReadOnlyList<BacktestTrade> portfolioTrades,
         CancellationToken cancellationToken)
     {
         var skipped = batches.Where(batch => !batch.Succeeded && !stopping.Contains(batch)).ToArray();
-        var closed = portfolioTrades
-            .Where(trade => trade.ExitReason == ChronologicalBacktestExecutionCoordinator.DataEndedExitReason).ToArray();
+        var closed = portfolioTrades.Where(trade => trade.ExitReason is ChronologicalBacktestExecutionCoordinator.DataEndedExitReason
+            or ChronologicalBacktestExecutionCoordinator.SplitExitReason).ToArray();
         if (skipped.Length == 0 && closed.Length == 0) return;
+        var pool = run.Tickers.Count;
+        var skippedStocks = skipped.Select(batch => batch.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var skippedPct = pool == 0 ? 0m : Decimal.Round(skippedStocks * 100m / pool, 4);
         var payload = new
         {
-            runName = run.RunName, skippedStockWorkItems = skipped.Length, dataEndedLastCloseExits = closed.Length,
+            runName = run.RunName, poolStocks = pool, skippedStocks, skippedStocksPct = skippedPct,
+            skippedAboveFivePercent = skippedPct > 5m, skippedStockWorkItems = skipped.Length,
+            dataEndedLastCloseExits = closed.Count(trade => trade.ExitReason == ChronologicalBacktestExecutionCoordinator.DataEndedExitReason),
+            splitExitsBeforeExDate = closed.Count(trade => trade.ExitReason == ChronologicalBacktestExecutionCoordinator.SplitExitReason),
             items = skipped.OrderBy(batch => batch.Ticker, StringComparer.Ordinal)
                 .Select(batch => new { ticker = batch.Ticker, strategyId = batch.StrategyId, reason = batch.ErrorMessage }).ToArray(),
-            dataEndedExits = closed.Select(trade => new { ticker = trade.Ticker, strategyId = trade.StrategyId,
+            forcedExits = closed.Select(trade => new { ticker = trade.Ticker, strategyId = trade.StrategyId, reason = trade.ExitReason,
                 candidateId = trade.CandidateId, lastCloseUtc = trade.ExitTimestamp, exitPrice = trade.ExitPrice }).ToArray()
         };
         await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-data-gaps.json"),
@@ -129,10 +138,12 @@ public sealed partial class BacktestRunner
     /// each stock's member days with the manifest and ranked-list fingerprints.
     /// </summary>
     private async Task<UniverseMembership> ResolveRankedMembershipAsync(BacktestRunConfig run, RankedMembershipReference ranked,
-        CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
+        IReadOnlyList<StrategyDefinition> strategies, CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
     {
         var screen = TradingFlow.Engine.Universe.PublishedResearchScreen.Read(Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
         RequireMembershipKnownBeforeEntry(run, screen);
+        RequireSplitLookbackCoversStrategies(screen, strategies.Where(strategy =>
+            ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy == ExecutionRules.KeptGapAsTradedTimingPolicy));
         var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
         var membership = screen.ToMembership(NewYorkDate(evaluationStart), NewYorkDate(windowEnd.AddTicks(-1)));
         var eligibleDays = run.Tickers.ToDictionary(ticker => ticker, ticker => membership.EligibleDays(ticker)
@@ -164,6 +175,55 @@ public sealed partial class BacktestRunner
             throw new InvalidOperationException($"Research screen '{screen.Name}' compares each session's own open, which a daily strategy filling at " +
                 "that open cannot know; publish the screen with --price-basis prior_close.");
     }
+
+    /// <summary>
+    /// Split ex-dates a research-screen daily run closes holdings before: read from the frozen corporate-actions dataset
+    /// (providers.evidence_catalog.corporate_actions_dataset) when any strategy reads as-traded prices. A run that is not a
+    /// research screen, or whose strategies read split-adjusted prices, needs none. Refuses an as-traded research-screen run
+    /// whose provider cannot list splits, because a split during a hold would otherwise be booked as a price move.
+    /// </summary>
+    private async Task<IReadOnlySet<(string Symbol, DateOnly ExDate)>> ResearchScreenSplitExDatesAsync(BacktestRunConfig run,
+        IReadOnlyList<StrategyDefinition> strategies, CancellationToken cancellationToken)
+    {
+        if (run.Universe?.RankedMembership is null || !strategies.Any(strategy =>
+                ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy == ExecutionRules.KeptGapAsTradedTimingPolicy))
+            return new HashSet<(string, DateOnly)>();
+        var splits = marketDataProviderFactory?.Invoke(run) as IShareSplitProvider ??
+            (run.Providers.EvidenceCatalog is { } catalog ? TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.Open(catalog,
+                _rawArchiveWriter ?? new TradingFlow.Engine.Storage.FileSystemRawArchiveWriter(new TradingFlow.Engine.Storage.RawArchiveOptions(run.RawRoot))) : null);
+        if (splits is null)
+            throw new InvalidOperationException("An as-traded research-screen run needs a provider that lists splits " +
+                "(providers.evidence_catalog with corporate_actions_dataset).");
+        return (await splits.LoadShareSplitsAsync(cancellationToken))
+            .SelectMany(pair => pair.Value.Select(split => (pair.Key.ToUpperInvariant(), split.ExDate))).ToHashSet();
+    }
+
+    /// <summary>
+    /// An as-traded strategy reads unadjusted prices, so an eligible-list screen must have left out every stock-day whose
+    /// look-back holds a split for at least as many sessions as the strategy's longest indicator reads; otherwise its SMA200
+    /// would mix two share bases. Ranked screens serve intraday versions and are not checked here.
+    /// </summary>
+    internal static void RequireSplitLookbackCoversStrategies(TradingFlow.Engine.Universe.PublishedResearchScreen screen,
+        IEnumerable<StrategyDefinition> asTradedStrategies)
+    {
+        if (screen.IsRanked) return;
+        foreach (var strategy in asTradedStrategies)
+        {
+            var required = LongestIndicatorLookback(strategy);
+            if ((screen.Manifest.SplitRule?.LookbackSessions ?? 0) < required)
+                throw new InvalidOperationException($"Research screen '{screen.Name}' left out split stock-days for a look-back of " +
+                    $"{screen.Manifest.SplitRule?.LookbackSessions?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "no"} sessions; " +
+                    $"{strategy.StrategyName} reads {required} sessions of as-traded prices. Publish the screen with --exclude-split-lookback {required}.");
+        }
+    }
+
+    /// <summary>The longest number of daily sessions a strategy's entry indicators read: SMA200, the confluence EMA, or 20.</summary>
+    internal static int LongestIndicatorLookback(StrategyDefinition strategy) => new[]
+    {
+        strategy.EntryRules.RequirePriceAboveSma200 || strategy.EntryRules.RequirePriceAboveSma200Daily ? 200 : 0,
+        strategy.Confluence.Enabled ? strategy.Confluence.EmaPeriod : 0,
+        20
+    }.Max();
 
     /// <summary>The New York calendar date of an instant.</summary>
     private static DateOnly NewYorkDate(DateTimeOffset instant) =>

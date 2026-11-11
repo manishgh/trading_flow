@@ -60,7 +60,8 @@ public sealed class SqliteEvidenceCatalog :
         {
             DataSource = options.DatabasePath,
             Mode = openMode == EvidenceCatalogOpenMode.ReadOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
-            Cache = SqliteCacheMode.Shared,
+            // A read-only reader keeps a private cache so it never shares a cache (and its locks) with another process's writer.
+            Cache = openMode == EvidenceCatalogOpenMode.ReadOnly ? SqliteCacheMode.Private : SqliteCacheMode.Shared,
             Pooling = true
         }.ToString();
     }

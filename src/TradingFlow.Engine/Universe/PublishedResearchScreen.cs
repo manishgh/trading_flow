@@ -34,8 +34,10 @@ public sealed record ResearchRankingRuleValues(string Measure, int BaselineSessi
 /// <summary>
 /// The split rule of a screen: a stock is left out on any day whose <see cref="LookbackSessions"/>-session look-back contains
 /// a split known by that day (reason split_in_lookback); <see cref="ExcludedStockDays"/> counts those eligible days.
+/// <see cref="SuspectedUnrecordedSplitDays"/> counts eligible days left out because the same look-back holds an overnight
+/// jump (open 45% below or 90% above the previous close) with no recorded split (reason suspected_unrecorded_split).
 /// </summary>
-public sealed record ResearchScreenSplitRule(int? LookbackSessions, int ExcludedStockDays);
+public sealed record ResearchScreenSplitRule(int? LookbackSessions, int ExcludedStockDays, int SuspectedUnrecordedSplitDays = 0);
 
 /// <summary>A file named in the manifest with its SHA-256 (lower-case hex of its exact bytes).</summary>
 public sealed record ResearchScreenFile(string FileName, string Sha256);
@@ -185,6 +187,23 @@ public sealed class PublishedResearchScreen
     }
 
     /// <summary>Stocks selected (ranked, or eligible when the screen does not rank) on at least one session from <paramref name="from"/> to <paramref name="to"/> (New York dates), sorted.</summary>
+    /// <summary>
+    /// For an eligible-list screen: each pool stock's first eligible session in [from, to], and the number of the screen's
+    /// sessions from that day through <paramref name="to"/> summed over the pool (the stock-sessions of daily bars a run
+    /// requests after warm-up, since each stock is requested only from its first eligible day). The screen's sessions are the
+    /// dates on which it lists at least one stock. Empty and zero for a ranked screen.
+    /// </summary>
+    public (IReadOnlyDictionary<string, DateOnly> FirstEligible, long StockSessions) EligibleSpan(DateOnly from, DateOnly to)
+    {
+        RequireWindow(from, to);
+        if (IsRanked) return (new Dictionary<string, DateOnly>(), 0);
+        var sessions = eligibleDays.Values.SelectMany(days => days).Where(day => day >= from && day <= to).Distinct().Order().ToArray();
+        var first = eligibleDays.Select(pair => (pair.Key, Days: pair.Value.Where(day => day >= from && day <= to).ToArray()))
+            .Where(item => item.Days.Length > 0).ToDictionary(item => item.Key, item => item.Days.Min(), StringComparer.Ordinal);
+        var total = first.Values.Sum(day => (long)(sessions.Length - Array.BinarySearch(sessions, day)));
+        return (first, total);
+    }
+
     public IReadOnlyList<string> PoolSymbols(DateOnly from, DateOnly to)
     {
         RequireWindow(from, to);

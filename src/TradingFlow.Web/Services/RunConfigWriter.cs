@@ -1231,6 +1231,8 @@ public sealed class RunConfigWriter
         foreach (var id in catalog.FiveMinuteDatasetIds) yaml.AppendLine($"      - {RunYamlScalar(id, prefix + "five_minute_datasets")}");
         yaml.AppendLine("    one_minute_datasets:");
         foreach (var id in catalog.OneMinuteDatasetIds) yaml.AppendLine($"      - {RunYamlScalar(id, prefix + "one_minute_datasets")}");
+        if (catalog.CorporateActionsDatasetId is { } actions)
+            yaml.AppendLine($"    corporate_actions_dataset: {RunYamlScalar(actions, prefix + "corporate_actions_dataset")}");
     }
 
     /// <summary>Retain the profile's validation assumptions, including its dated universe evidence.</summary>

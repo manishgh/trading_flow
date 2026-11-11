@@ -59,7 +59,8 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         var sessions = inputs.ExchangeSessionsDatasetId ?? throw new InvalidOperationException(
             $"Research screen '{screen.Name}' names no exchange-session dataset. Publish it again with research-daily-screen --sessions <XNYS dataset ID>.");
         if (!screen.IsRanked)
-            return new(screen.Name, screen.ManifestSha256, screen.RankedListSha256, inputs.DailyBarsDatasetId, sessions, [], []);
+            return new(screen.Name, screen.ManifestSha256, screen.RankedListSha256, inputs.DailyBarsDatasetId, sessions, [], [],
+                inputs.CorporateActionsDatasetId);
         var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == screen.RankedListSha256).ToArray();
         string[] Of(string timeframe) => collected.Where(dataset => dataset.Partitions.All(partition => partition.Provenance.Timeframe == timeframe))
             .Select(dataset => dataset.DatasetId).Order(StringComparer.Ordinal).ToArray();
@@ -71,13 +72,14 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         if (minute.Length == 0)
             throw new InvalidOperationException($"No one-minute bar dataset collected for ranked list {screen.RankedListSha256} of research screen " +
                 $"'{screen.Name}' is in the evidence catalog. Plan it with evidence-plan-minute-bars and collect it first.");
-        return new(screen.Name, screen.ManifestSha256, screen.RankedListSha256, inputs.DailyBarsDatasetId, sessions, five, minute);
+        return new(screen.Name, screen.ManifestSha256, screen.RankedListSha256, inputs.DailyBarsDatasetId, sessions, five, minute,
+            inputs.CorporateActionsDatasetId);
     }
 
     /// <summary>The run settings (providers.evidence_catalog) that let a run read exactly the referenced datasets.</summary>
     public EvidenceCatalogProviderConfig ProviderConfig(ResearchScreenReference reference) => new(paths.EvidenceCatalogPath,
         paths.EvidenceObjectRoot, reference.RankedListSha256, reference.DailyBarsDatasetId, reference.ExchangeSessionsDatasetId,
-        reference.FiveMinuteDatasetIds, reference.OneMinuteDatasetIds);
+        reference.FiveMinuteDatasetIds, reference.OneMinuteDatasetIds, reference.CorporateActionsDatasetId);
 
     /// <summary>The provider reference a source preview records: screen name, manifest SHA-256 and ranked-list SHA-256.</summary>
     public static string ProviderReference(PublishedResearchScreen screen) =>

@@ -64,8 +64,10 @@ public sealed partial class PreparedMarketDataService
                 if (TimeframeParser.Parse(interval) <= TimeSpan.Zero)
                     throw new InvalidDataException("Prepared download timeframes must have positive durations.");
             var tickers = run.Tickers.Concat(run.Universe is { IsHistoricalScreener: true } universe ? universe.Candidates : []);
+            // A daily eligible-list research screen requests each stock from its first eligible day minus the warm-up.
+            var stockStarts = ResearchScreenDataWindows.Starts(run, start, run.TimeWindow.Start.Value, end);
             foreach (var ticker in tickers.Distinct(StringComparer.OrdinalIgnoreCase))
-                foreach (var interval in intervals) Add(ticker, interval, start, end);
+                foreach (var interval in intervals) Add(ticker, interval, stockStarts.GetValueOrDefault(ticker, start), end);
             if (run.Validation.Benchmark.Enabled && !String.IsNullOrWhiteSpace(run.Validation.Benchmark.Ticker))
                 foreach (var interval in intervals) Add(run.Validation.Benchmark.Ticker, interval, start, end);
             var reader = new SimpleYamlReader();

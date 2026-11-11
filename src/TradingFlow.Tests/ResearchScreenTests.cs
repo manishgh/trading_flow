@@ -156,6 +156,9 @@ public sealed class ResearchScreenTests
         var before = await ResearchScreenManifest.Sha256FileAsync(path, default);
 
         var readOnly = new TradingFlow.Data.Evidence.SqliteEvidenceCatalog(new(path, TradingFlow.Data.Evidence.EvidenceCatalogOpenMode.ReadOnly), store);
+        var connection = (string)typeof(TradingFlow.Data.Evidence.SqliteEvidenceCatalog).GetField("connectionString",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(readOnly)!;
+        Assert.Equal(Microsoft.Data.Sqlite.SqliteCacheMode.Private, new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connection).Cache);
         Assert.Null(await readOnly.GetDatasetAsync("absent"));
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
@@ -165,18 +168,66 @@ public sealed class ResearchScreenTests
     // A research-screen run never stops because one stock's data is unavailable: its failed work items are skipped (and
     // published); any other run keeps withholding its results for a failed item, exactly as before.
     [Fact]
-    public void FailedStockWorkItems_StopOnlyRunsThatAreNotResearchScreens()
+    public void FailedStockWorkItems_ResearchScreensSkipOnlyNamedDataUnavailableReasons()
     {
         var profile = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
             Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml"));
-        TradingFlow.Backtesting.StrategyTickerBacktestBatch Batch(string ticker, bool succeeded) => new(ticker, "s", "S", succeeded,
-            succeeded ? null : "daily_bars_unavailable", [], [], null, new TradingFlow.Backtesting.StrategyCandidateDiagnostics("s", "S"));
-        TradingFlow.Backtesting.StrategyTickerBacktestBatch[] batches = [Batch("AAA", true), Batch("BBB", false)];
+        TradingFlow.Backtesting.StrategyTickerBacktestBatch Batch(string ticker, string? error) => new(ticker, "s", "S", error is null,
+            error, [], [], null, new TradingFlow.Backtesting.StrategyCandidateDiagnostics("s", "S"));
+        TradingFlow.Backtesting.StrategyTickerBacktestBatch[] batches = [Batch("AAA", null),
+            Batch("BBB", "market_bars_missing: No market data bars were returned for ticker BBB."),
+            Batch("CCC", "insufficient_indicator_warmup: CCC 1d has 12 completed pre-evaluation bars; 260 required."),
+            Batch("DDD", "market_bars_unusable: Invalid candle for DDD 1d at 2026-01-02T05:00:00.0000000+00:00: high below low"),
+            Batch("EEE", "strategy_ticker_timeout_after_1800s"), Batch("FFF", "Object reference not set to an instance of an object.")];
         var screen = profile with { Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,
             RankedMembership = new(Path.Combine(Path.GetTempPath(), "screen-manifest.json"), new string('a', 64)) } };
 
-        Assert.Empty(TradingFlow.Backtesting.BacktestRunner.StoppingBatches(screen, batches));
-        Assert.Equal(["BBB"], TradingFlow.Backtesting.BacktestRunner.StoppingBatches(profile, batches).Select(batch => batch.Ticker));
+        Assert.Equal(["EEE", "FFF"], TradingFlow.Backtesting.BacktestRunner.StoppingBatches(screen, batches).Select(batch => batch.Ticker));
+        Assert.Equal(["BBB", "CCC", "DDD", "EEE", "FFF"],
+            TradingFlow.Backtesting.BacktestRunner.StoppingBatches(profile, batches).Select(batch => batch.Ticker));
+    }
+
+    // An overnight jump of 45% down or 90% up with no recorded split marks a suspected unrecorded split; a recorded split on
+    // that day does not, and a day is left out only when the jump lies inside its look-back (never the day's own open).
+    [Fact]
+    public void SuspectedUnrecordedSplit_FlagsUnexplainedOvernightJumpsInsideTheLookback()
+    {
+        var days = Enumerable.Range(0, 10).Select(i => new DateOnly(2026, 3, 2).AddDays(i)).ToArray();
+        OhlcvBar Bar(int i, decimal open, decimal close) =>
+            new("ABC", new DateTimeOffset(days[i].ToDateTime(TimeOnly.MinValue), TimeSpan.Zero), "1d", open, open, close, close, 1000m);
+        var series = new[] { Bar(0, 100m, 100m), Bar(1, 54m, 54m), Bar(2, 54m, 54m), Bar(3, 103m, 103m), Bar(4, 103m, 103m),
+            Bar(5, 50m, 50m), Bar(6, 50m, 50m) };
+
+        var suspects = DailyScreenCommand.UnrecordedSplitSessions(series, [new ShareSplit(days[5], 0.5m)]);
+
+        Assert.Equal([days[1], days[3]], suspects);
+        Assert.True(DailyScreenCommand.SuspectInLookback(days, days[4], suspects, 3));
+        Assert.False(DailyScreenCommand.SuspectInLookback(days, days[3], [days[3]], 3));
+        Assert.False(DailyScreenCommand.SuspectInLookback(days, days[9], suspects, 3));
+    }
+
+    // An as-traded strategy refuses an eligible-list screen whose split look-back is shorter than its SMA200; 200 passes.
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(150, false)]
+    [InlineData(200, true)]
+    public async Task AsTradedStrategy_NeedsASplitLookbackCoveringItsLongestIndicator(int? lookback, bool accepted)
+    {
+        using var root = new TemporaryFolder();
+        var folder = Path.Combine(root.Path, "daily-screen");
+        Directory.CreateDirectory(folder);
+        await File.WriteAllLinesAsync(Path.Combine(folder, "eligible.csv"), ["session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions",
+            "2026-10-01,ABC,20,2000000,40000000,1,200"]);
+        await ResearchScreenManifest.PublishAsync(folder, new("daily", "actions", null, "sessions"), Rules with { PriceBasis = DailyScreenPriceBasis.PriorClose },
+            null, new(2026, 10, 1), new(2026, 10, 1), "alpaca_security_id", null, default, new ResearchScreenSplitRule(lookback, 0));
+        var screen = PublishedResearchScreen.Read(folder);
+        var strategy = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs",
+            "backtest", "strategies", "swing-connors-rsi2-published-as-traded.bt-v9-1.yaml"));
+
+        var refused = Record.Exception(() => TradingFlow.Backtesting.BacktestRunner.RequireSplitLookbackCoversStrategies(screen, [strategy]));
+
+        Assert.Equal(200, TradingFlow.Backtesting.BacktestRunner.LongestIndicatorLookback(strategy));
+        Assert.Equal(accepted, refused is null);
     }
 
     // The approved whole-market daily set-up reads back exactly: daily bars only, $100,000, 10 positions of 10% each, no
@@ -192,6 +243,39 @@ public sealed class ResearchScreenTests
         Assert.Equal((100_000m, 10, 10m, 0m, 0m), (run.Portfolio.StartingCapital, run.Portfolio.MaxConcurrentPositions,
             run.Portfolio.MaxPositionNotionalPct, run.Portfolio.FixedBuyFee, run.Portfolio.FixedSellFee));
         Assert.Equal(5_200_000, run.Engine.MaxRetainedReplayBars);
+        // Only the as-traded 7.1.0 file; the adjusted 7.0.0 file would refuse as-traded catalog bars.
+        Assert.Equal(["swing-connors-rsi2-sma5-risk-managed-as-traded.bt-v7-1.yaml"], run.Strategies.Select(Path.GetFileName));
+    }
+
+    // An eligible-list screen gives each stock's first eligible session and the pool stock-sessions requested; a daily run
+    // requests each stock from that day minus the warm-up, never before the run's data start.
+    [Fact]
+    public async Task EligibleListScreen_RequestsEachStockFromItsFirstEligibleDayMinusWarmup()
+    {
+        using var root = new TemporaryFolder();
+        var folder = Path.Combine(root.Path, "daily-screen");
+        Directory.CreateDirectory(folder);
+        await File.WriteAllLinesAsync(Path.Combine(folder, "eligible.csv"), ["session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions",
+            "2026-10-01,ABC,20,2000000,40000000,1,200", "2026-10-02,ABC,20,2000000,40000000,1,200", "2026-10-02,XYZ,30,2000000,60000000,1,200"]);
+        await ResearchScreenManifest.PublishAsync(folder, new("daily", "actions", null, "sessions"), Rules with { PriceBasis = DailyScreenPriceBasis.PriorClose },
+            null, new(2026, 10, 1), new(2026, 10, 2), "alpaca_security_id", null, default, new ResearchScreenSplitRule(200, 0));
+        var screen = PublishedResearchScreen.Read(folder);
+        var windowStart = DateTimeOffset.Parse("2026-10-01T04:00:00Z");
+        var windowEnd = DateTimeOffset.Parse("2026-10-03T04:00:00Z");
+        var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
+            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml")) with
+        {
+            TimeWindow = new("fixed", 1, windowStart, windowEnd, 10),
+            Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,
+                RankedMembership = new(screen.ManifestPath, screen.ManifestSha256) }
+        };
+
+        var (first, stockSessions) = screen.EligibleSpan(new(2026, 10, 1), new(2026, 10, 2));
+        var starts = TradingFlow.Backtesting.ResearchScreenDataWindows.Starts(run, windowStart.AddDays(-10), windowStart, windowEnd);
+
+        Assert.Equal((new DateOnly(2026, 10, 1), new DateOnly(2026, 10, 2), 3L), (first["ABC"], first["XYZ"], stockSessions));
+        Assert.Equal(windowStart.AddDays(-10), starts["ABC"]);
+        Assert.Equal(windowStart.AddDays(-9), starts["XYZ"]);
     }
 
     // The five-minute variant of the minute planner asks for the full 09:30-16:00 session of each selected stock-session and

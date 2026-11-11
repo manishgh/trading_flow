@@ -2,7 +2,10 @@
 # approved 11 November 2026): daily bars only, read from the evidence catalog; $100,000, at most 10 positions of 10% each;
 # 10 bps slippage per side comes from the strategy files; no commission (Alpaca), SEC and FINRA sell fees kept.
 # max_retained_replay_bars 5,200,000: about 2,000 stocks x 7.5 years x 252 sessions (3.78M) plus the 400-day warm-up
-# (about 275 sessions x 2,000 = 0.55M), with 20% room for days on which more than 2,000 stocks are eligible.
+# (about 275 sessions x 2,000 = 0.55M), with 20% room for days on which more than 2,000 stocks are eligible. This is an
+# estimate: no Connors screen is published yet. Each stock is now requested only from its first eligible day minus the
+# warm-up, and saving a plan reports the screen's pool stock-sessions; replace this value with that measured count plus
+# about 275 warm-up sessions per pool stock once the screen exists.
 
 run_name: connors-whole-market-daily-profile
 mode: backtest
@@ -111,5 +114,5 @@ universe:
   mode: unresolved_wishlist
 
 strategies:
-  - strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml
+  - strategies/swing-connors-rsi2-sma5-risk-managed-as-traded.bt-v7-1.yaml
 
