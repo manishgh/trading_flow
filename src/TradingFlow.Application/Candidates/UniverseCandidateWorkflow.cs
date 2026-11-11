@@ -229,6 +229,8 @@ public sealed class CandidateWorkflowService(
         var preview = UniverseDiscoveryService.ReadPreview(record, request.UniverseSnapshotId);
         if (preview.Horizon != "swing")
             throw new InvalidOperationException("Day research sources cannot start operational candidate runs.");
+        if (preview.Members.Any(member => member.Sources?.Any(source => source.SourceKind == DiscoverySourceKinds.ResearchScreen) == true))
+            throw new InvalidOperationException("A research screen is backtest-only historical membership and cannot start operational candidate runs.");
         now = timeProvider.GetUtcNow().ToUniversalTime();
         if (preview.ExpiresAtUtc <= now || preview.ResolvedAtUtc > now || preview.DecisionCutoffUtc > asOf ||
             preview.Members.Any(member => member.Sources is null || member.Sources.Count == 0 ||

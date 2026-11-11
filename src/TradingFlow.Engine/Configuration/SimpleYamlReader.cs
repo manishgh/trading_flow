@@ -356,7 +356,8 @@ public sealed class SimpleYamlReader
                     RequireString(runMap, "validation.bias_risk.price_adjustment_policy"))),
             new ProviderConfig(
                 new AlpacaProviderConfig(
-                    OptionalString(runMap, "providers.alpaca.data_feed", "sip"))),
+                    OptionalString(runMap, "providers.alpaca.data_feed", "sip")),
+                ReadEvidenceCatalogProvider(runMap)),
             new PortfolioConfig(
                 RequireDecimal(runMap, "portfolio.starting_capital"),
                 RequireDecimal(runMap, "portfolio.account_risk_budget_pct"),
@@ -458,10 +459,12 @@ public sealed class SimpleYamlReader
             // Rules on a static list would be dropped silently; ReadDailyEligibility refuses every mode but resolved_snapshot.
             _ = ReadDailyEligibility(runMap, UniverseConfig.StaticMode);
             _ = ReadDailyRanking(runMap, null);
+            _ = ReadRankedMembership(runMap, UniverseConfig.StaticMode, null);
             return null;
         }
 
         var dailyEligibility = ReadDailyEligibility(runMap, mode);
+        var rankedMembership = ReadRankedMembership(runMap, mode, dailyEligibility);
         return new UniverseConfig(
             mode,
             OptionalList(runMap, "universe.candidates"),
@@ -483,7 +486,44 @@ public sealed class SimpleYamlReader
                 : null,
             OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"),
             dailyEligibility,
-            ReadDailyRanking(runMap, dailyEligibility));
+            ReadDailyRanking(runMap, dailyEligibility),
+            rankedMembership);
+    }
+
+    /// <summary>
+    /// Reads universe.ranked_membership: the absolute path and SHA-256 of a published research screen's manifest. Only a
+    /// resolved_snapshot list may carry it, and never with the run's own daily rules, because the screen's rules apply.
+    /// </summary>
+    private static RankedMembershipReference? ReadRankedMembership(IReadOnlyDictionary<string, List<string>> runMap, string mode,
+        DailyScreenRules? eligibility)
+    {
+        const string prefix = "universe.ranked_membership.";
+        if (!runMap.Keys.Any(key => key.StartsWith(prefix, StringComparison.Ordinal))) return null;
+        if (!mode.Equals(UniverseConfig.ResolvedSnapshotMode, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("universe.ranked_membership applies only to a resolved_snapshot stock list.");
+        if (eligibility is not null)
+            throw new InvalidDataException("universe.ranked_membership takes its rules from the research screen; remove universe.daily_eligibility.");
+        var path = RequireString(runMap, prefix + "manifest_path");
+        var sha = RequireString(runMap, prefix + "manifest_sha256");
+        if (!Path.IsPathFullyQualified(path) || sha.Length != 64 || !sha.All(Uri.IsHexDigit))
+            throw new InvalidDataException("universe.ranked_membership needs an absolute manifest_path and a 64-character manifest_sha256.");
+        return new RankedMembershipReference(Path.GetFullPath(path), sha.ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Reads providers.evidence_catalog: catalog and artifact-root paths, the ranked-list SHA-256 and every frozen dataset ID.
+    /// A partial block fails instead of defaulting; absent means the run does not read the evidence catalog.
+    /// </summary>
+    private static EvidenceCatalogProviderConfig? ReadEvidenceCatalogProvider(IReadOnlyDictionary<string, List<string>> runMap)
+    {
+        const string prefix = "providers.evidence_catalog.";
+        if (!runMap.Keys.Any(key => key.StartsWith(prefix, StringComparison.Ordinal))) return null;
+        var five = OptionalList(runMap, prefix + "five_minute_datasets");
+        if (five.Count == 0) throw new InvalidDataException("providers.evidence_catalog needs at least one five_minute_datasets entry.");
+        return new EvidenceCatalogProviderConfig(Path.GetFullPath(RequireString(runMap, prefix + "catalog_path")),
+            Path.GetFullPath(RequireString(runMap, prefix + "artifact_root")),
+            RequireString(runMap, prefix + "ranked_list_sha256"), RequireString(runMap, prefix + "daily_dataset"),
+            RequireString(runMap, prefix + "exchange_sessions_dataset"), five, OptionalList(runMap, prefix + "one_minute_datasets"));
     }
 
     /// <summary>

@@ -580,6 +580,7 @@ public static partial class IntradayPortfolioExecution
             if (!stop && !target) return 0;
             var entryBarStop = stop && !opening && !intent.StopTriggered && StopMayPrecedeEntry(intent, bar);
             var minuteOrder = entryBarStop ? EntryBarStopOrder(intent, bar) : EntryBarMinuteOrder.Unknown;
+            if (entryBarStop) EmitEntryBarMinuteOrder(intent, end, minuteOrder);
             if (minuteOrder == EntryBarMinuteOrder.NoStopAfterEntry)
             {
                 Emit(intent, end, "stop_not_reached_after_entry", "one_minute_bars_show_stop_untouched_after_entry_minute", intent.Open);

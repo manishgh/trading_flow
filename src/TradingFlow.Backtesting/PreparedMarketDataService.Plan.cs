@@ -79,6 +79,10 @@ public sealed partial class PreparedMarketDataService
             // A strategy that exits at the official close reads each session's daily close.
             if (strategies.Any(strategy => strategy.EntryRules.OpeningRangeBreakout is { ExitAtSessionClose: true }))
                 foreach (var ticker in run.Tickers.Distinct(StringComparer.OrdinalIgnoreCase)) Add(ticker, "1d", start, end);
+            // A research-screen run reads the one-minute bars collected for its ranked list, which order an entry and a stop
+            // inside one five-minute bar on the stock's selected sessions.
+            if (run.Universe?.RankedMembership is not null)
+                foreach (var ticker in run.Tickers.Distinct(StringComparer.OrdinalIgnoreCase)) Add(ticker, "1m", start, end);
             // Per-day screens (historical screener or a saved plan's daily eligibility) read daily bars from before the window.
             if (run.Universe is { IsHistoricalScreener: true } or { DailyEligibility: not null })
             {

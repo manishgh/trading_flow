@@ -89,6 +89,40 @@ public sealed partial class BacktestRunner
         return membership;
     }
 
+    /// <summary>
+    /// For a research-screen plan: reads each session's members from the screen's published ranked list instead of
+    /// recomputing them, after re-checking the manifest SHA-256 frozen in the run settings and every output fingerprint. Builds
+    /// the same membership as the in-run ranking (members per session, ranked lists, known from 09:35 New York) and publishes
+    /// each stock's member days with the manifest and ranked-list fingerprints.
+    /// </summary>
+    private async Task<UniverseMembership> ResolveRankedMembershipAsync(BacktestRunConfig run, RankedMembershipReference ranked,
+        CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
+    {
+        if (!ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
+            throw new InvalidOperationException("universe.ranked_membership is known only at 09:35 New York and needs an intraday candle replay policy.");
+        var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
+        var screen = TradingFlow.Engine.Universe.PublishedResearchScreen.Read(Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
+        var membership = screen.ToMembership(NewYorkDate(evaluationStart), NewYorkDate(windowEnd.AddTicks(-1)));
+        var eligibleDays = run.Tickers.ToDictionary(ticker => ticker, ticker => membership.EligibleDays(ticker)
+            .Select(day => day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)).ToArray(), StringComparer.OrdinalIgnoreCase);
+        var payload = new
+        {
+            runName = run.RunName, researchScreen = screen.Name, manifestSha256 = screen.ManifestSha256, rankedListSha256 = screen.RankedListSha256,
+            rules = new { screen.Manifest.ScreenRules, screen.Manifest.RankingRules }, issuerIdentityBasis = screen.Manifest.IssuerIdentityBasis,
+            exclusionsFile = "ranked-daily-exclusions.csv (in the research screen, identified by the manifest SHA-256)",
+            eligibleDays, rankedSessions = membership.SessionRankings.Select(PublishedSessionRanking).ToArray()
+        };
+        await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "universe", $"{run.RunName}-daily-eligibility.json"),
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        progress?.Report(BacktestProgress.StageOnly("resolved_universe",
+            $"Ranked list {screen.Name}: {eligibleDays.Count(pair => pair.Value.Length > 0)} of {run.Tickers.Count} stock(s) selected on at least one session."));
+        return membership;
+    }
+
+    /// <summary>The New York calendar date of an instant.</summary>
+    private static DateOnly NewYorkDate(DateTimeOffset instant) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime);
+
     // One session of the published ranked list: members with rank, measured values and how many baseline sessions were
     // proven zero-volume, the count that met the minimum, and each excluded stock's reason.
     private static object PublishedSessionRanking(TradingFlow.Engine.Universe.SessionRanking session) => new

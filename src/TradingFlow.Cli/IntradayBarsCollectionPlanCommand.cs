@@ -15,6 +15,8 @@ namespace TradingFlow.Cli;
 ///   sessions and on the earlier sessions its relative-volume baseline reads (from research-daily-screen eligible.csv).
 /// - evidence-plan-minute-bars: one-minute bars 09:30-16:00 New York for each session's selected stocks only (from
 ///   research-daily-screen ranked-daily-list.csv), so the order of entry and stop inside a five-minute bar becomes known.
+///   With --timeframe 5Min --prior-sessions n: full-session five-minute bars of the selected stock-sessions and of the n
+///   earlier traded sessions their ATR and opening-volume baselines read.
 /// </summary>
 public static class IntradayBarsCollectionPlanCommand
 {
@@ -56,15 +58,50 @@ public static class IntradayBarsCollectionPlanCommand
             cancellationToken);
     }
 
-    /// <summary>Usage: evidence-plan-minute-bars --ranked ranked-daily-list.csv --batch n --out file.</summary>
+    /// <summary>The regular session in five-minute bars, for the selected stock-sessions and the sessions their baselines read.</summary>
+    public static readonly IntradayWindow RegularSessionFiveMinutes = new("selected-session-bars", "5Min", RegularOpen, RegularClose);
+
+    /// <summary>
+    /// Usage: evidence-plan-minute-bars --ranked ranked-daily-list.csv --batch n --out file (one-minute bars of each session's
+    /// selected stocks), or with --timeframe 5Min --prior-sessions 15 --catalog path --artifact-root path --bars dailyDatasetId:
+    /// full-session five-minute bars for each selected stock-session plus its 15 prior traded sessions (from the daily bars).
+    /// Both record ranked_list_sha256, the SHA-256 of the ranked list the requests were made from.
+    /// </summary>
     public static async Task<int> RunMinuteBarsAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
         var options = Parse(args);
         var ranked = Path.GetFullPath(Require(options, "--ranked"));
         var selected = ReadSessionSecurities(ranked);
-        return await WriteAsync(options, output, CreateRequest(selected, RegularSessionMinutes, Batch(options),
-            new Dictionary<string, string> { ["ranked_list_sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(ranked))) }),
-            cancellationToken);
+        var attributes = new Dictionary<string, string> { ["ranked_list_sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(ranked))) };
+        var timeframe = options.TryGetValue("--timeframe", out var value) ? value : RegularSessionMinutes.Timeframe;
+        if (timeframe == RegularSessionMinutes.Timeframe)
+            return await WriteAsync(options, output, CreateRequest(selected, RegularSessionMinutes, Batch(options), attributes), cancellationToken);
+        if (timeframe != RegularSessionFiveMinutes.Timeframe)
+            throw new ArgumentException($"--timeframe must be {RegularSessionMinutes.Timeframe} or {RegularSessionFiveMinutes.Timeframe}.");
+        var needed = await WithPriorTradedSessionsAsync(options, selected, attributes, cancellationToken);
+        return await WriteAsync(options, output, CreateRequest(needed, RegularSessionFiveMinutes, Batch(options), attributes), cancellationToken);
+    }
+
+    /// <summary>
+    /// Adds to every selected stock-session the stock's own --prior-sessions earlier traded sessions, read from the published
+    /// daily bar dataset (--catalog, --artifact-root, --bars), and records the dataset and count in <paramref name="attributes"/>.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<DateOnly, IReadOnlyCollection<EvidenceSecurityIdentity>>> WithPriorTradedSessionsAsync(
+        IReadOnlyDictionary<string, string> options, IReadOnlyDictionary<DateOnly, IReadOnlyCollection<EvidenceSecurityIdentity>> selected,
+        Dictionary<string, string> attributes, CancellationToken cancellationToken)
+    {
+        var priorSessions = Int32.Parse(Require(options, "--prior-sessions"), CultureInfo.InvariantCulture);
+        var store = new FileSystemImmutableArtifactStore(new ImmutableArtifactStoreOptions(Path.GetFullPath(Require(options, "--artifact-root"))));
+        var catalog = new SqliteEvidenceCatalog(new EvidenceCatalogOptions(Path.GetFullPath(Require(options, "--catalog")),
+            EvidenceCatalogOpenMode.OpenExisting), store);
+        var datasetId = Require(options, "--bars");
+        var bars = await catalog.GetDatasetAsync(datasetId, cancellationToken) ?? throw new InvalidDataException($"Dataset '{datasetId}' was not found.");
+        var symbols = selected.ToDictionary(pair => pair.Key, pair => (IReadOnlyCollection<string>)pair.Value.Select(item => item.Symbol).ToArray());
+        var traded = await TradedSessionsAsync(new ParquetEvidencePartitionDataReader(new EvidenceParquetCodec(), store), bars,
+            symbols.Values.SelectMany(list => list).ToHashSet(StringComparer.Ordinal), cancellationToken);
+        attributes["daily_bars_dataset_id"] = datasetId;
+        attributes["prior_sessions"] = priorSessions.ToString(CultureInfo.InvariantCulture);
+        return WithBaselineSessions(symbols, traded, priorSessions);
     }
 
     /// <summary>

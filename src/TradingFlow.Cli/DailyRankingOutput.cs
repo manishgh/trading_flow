@@ -27,22 +27,23 @@ public sealed class DailyRankingOutput(DailyRankingRules rules, IReadOnlyDiction
     private static readonly TimeOnly OpeningEnd = new(9, 30 + DailyRankingRules.OpeningMinutes);
     private readonly SortedDictionary<DateOnly, List<OpeningVolumeObservation>> observations = [];
 
+    /// <summary>The ranking rules this output applies, recorded in the screen manifest.</summary>
+    public DailyRankingRules Rules => rules;
+
     /// <summary>
     /// Reads a published five-minute bar dataset and keeps only each session's 09:30-09:35 New York bar volume, keyed by
-    /// security and New York date, one partition at a time so memory holds one value per stock and session.
+    /// security and New York date. The opening-bar collection stores one partition per session and batch, so one stock
+    /// appears in many partitions; the whole-dataset read checks that every bar is unique across all of them.
     /// </summary>
     public static async Task<Dictionary<(string SecurityId, DateOnly Day), decimal>> ReadOpeningVolumesAsync(
         ParquetEvidencePartitionDataReader reader, EvidenceDatasetManifest bars, CancellationToken cancellationToken)
     {
         var volumes = new Dictionary<(string, DateOnly), decimal>();
-        await foreach (var partition in reader.ReadMarketBarPartitionsAsync(bars, cancellationToken))
+        foreach (var row in await reader.ReadMarketBarsAsync(bars, cancellationToken))
         {
-            foreach (var row in partition)
-            {
-                var local = TimeZoneInfo.ConvertTime(row.BarStartUtc, NewYork);
-                if (row.Timeframe != "5m" || local.TimeOfDay != OpeningStart.ToTimeSpan()) continue;
-                volumes[(row.SecurityId, DateOnly.FromDateTime(local.DateTime))] = row.Volume;
-            }
+            var local = TimeZoneInfo.ConvertTime(row.BarStartUtc, NewYork);
+            if (row.Timeframe != "5m" || local.TimeOfDay != OpeningStart.ToTimeSpan()) continue;
+            volumes[(row.SecurityId, DateOnly.FromDateTime(local.DateTime))] = row.Volume;
         }
 
         return volumes;

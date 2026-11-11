@@ -1,11 +1,38 @@
 namespace TradingFlow.Contracts.V1;
 
-/// <summary>An operator-owned stock source; reading choices never copies its members into another list.</summary>
+/// <summary>An operator-owned stock source or a published research screen; reading choices never copies members into another list.</summary>
 public sealed record BacktestStockSource(string Key, string Name, string Kind, Guid? WishlistId, string? Query)
 {
-    /// <summary>Uses the two familiar source groups in native pickers.</summary>
-    public override string ToString() => $"{(Kind == "wishlist" ? "My wishlists" : "Finviz lists")} · {Name}";
+    /// <summary>The group a source belongs to in pickers: My wishlists, Finviz lists or Research screens.</summary>
+    public static string GroupName(string kind) => kind switch
+    {
+        "wishlist" => "My wishlists",
+        "research_screen" => "Research screens",
+        _ => "Finviz lists"
+    };
+
+    /// <summary>Shows the source with its group in native pickers.</summary>
+    public override string ToString() => $"{GroupName(Kind)} · {Name}";
 }
+
+/// <summary>
+/// The frozen inputs of a research-screen plan: the screen, its manifest and ranked-list SHA-256, and the evidence-catalog
+/// datasets its runs read (daily as-traded bars and XNYS sessions named by the manifest; five-minute and one-minute bars
+/// collected for this ranked list). Starting the plan refuses any difference.
+/// </summary>
+public sealed record ResearchScreenReference(string ScreenName, string ManifestSha256, string RankedListSha256,
+    string DailyBarsDatasetId, string ExchangeSessionsDatasetId, IReadOnlyList<string> FiveMinuteDatasetIds,
+    IReadOnlyList<string> OneMinuteDatasetIds)
+{
+    /// <summary>True when both references name the same screen fingerprints and the same datasets.</summary>
+    public bool SameInputs(ResearchScreenReference other) =>
+        ScreenName == other.ScreenName && ManifestSha256 == other.ManifestSha256 && RankedListSha256 == other.RankedListSha256 &&
+        DailyBarsDatasetId == other.DailyBarsDatasetId && ExchangeSessionsDatasetId == other.ExchangeSessionsDatasetId &&
+        FiveMinuteDatasetIds.SequenceEqual(other.FiveMinuteDatasetIds) && OneMinuteDatasetIds.SequenceEqual(other.OneMinuteDatasetIds);
+}
+
+/// <summary>A research screen's frozen inputs and its pool: the stocks in its ranked list on at least one session of the plan window.</summary>
+public sealed record ResearchScreenPool(ResearchScreenReference Reference, IReadOnlyList<string> Symbols);
 
 /// <summary>A named stock group with its own starting capital for each selected strategy.</summary>
 public sealed record BacktestCohort(string Name, IReadOnlyList<string> Symbols, decimal StartingCapital);
@@ -43,7 +70,10 @@ public sealed record BacktestPlanResponse(long PlanId, DateTimeOffset SavedAtUtc
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     string? GroupOrder = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    int? GroupSeed = null)
+    int? GroupSeed = null,
+    // The frozen ranked list and datasets of a research-screen plan; absent for wishlist and Finviz plans.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ResearchScreenReference? ResearchScreen = null)
 {
     /// <summary>Gives saved-plan pickers a human-readable identity without exposing the serialized record.</summary>
     public override string ToString() => $"{Run.RunName} · {Cohorts.Count} groups · {SavedAtUtc:u}";

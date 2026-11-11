@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using TradingFlow.Application.Candidates;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Backtesting;
@@ -36,6 +37,13 @@ public interface IWorkflowRunConfiguration
         string comparisonId, IReadOnlyList<PersistedJob> books, DateTimeOffset cutoffUtc, CancellationToken token);
     /// <summary>Deletes only an unaccepted attempt's generated configuration and strategy copies; source evidence remains read-only.</summary>
     Task DiscardUnacceptedAsync(string configPath, IReadOnlyList<string> capturedPaths, CancellationToken token);
+    /// <summary>
+    /// For a source preview of a published research screen: re-reads and verifies the screen against the fingerprints the
+    /// preview recorded and returns its frozen inputs and the stocks ranked on at least one session of the request's window.
+    /// Called only for research-screen sources; refuses a changed screen with a plain message.
+    /// </summary>
+    Task<ResearchScreenPool> ResolveResearchScreenPoolAsync(StartBacktestRequest request, UniversePreviewResponse source, CancellationToken token) =>
+        throw new InvalidOperationException("Research screens are not available in this host.");
 }
 
 /// <summary>One durable command boundary for browser and device run requests.</summary>
@@ -138,6 +146,8 @@ public sealed partial class RunWorkflowService(
             throw new InvalidOperationException("Frozen membership is allowed only for its saved historical research plan.");
         if (mode != "backtest" && universe.Horizon != "swing")
             throw new InvalidOperationException("Day research source previews cannot start paper or live trading.");
+        if (mode != "backtest" && universe.Members.Any(member => member.Sources.Any(source => source.SourceKind == DiscoverySourceKinds.ResearchScreen)))
+            throw new InvalidOperationException("A research screen is backtest-only historical membership and cannot start paper or live trading.");
         if (cohort is not null)
         {
             var selected = cohort.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);

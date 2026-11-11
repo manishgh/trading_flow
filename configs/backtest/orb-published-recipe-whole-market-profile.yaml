@@ -1,0 +1,119 @@
+# Run profile for the Zarattini, Barbon and Aziz (SSRN 4729284) opening-range recipe on a whole-market research screen
+# (one portfolio of every stock the screen's ranked list selects). Identical to orb-published-recipe-profile.yaml except
+# max_retained_replay_bars: 4,500,000 instead of 1,000,000, because one portfolio holds up to about 4.2 million bars (the
+# selected sessions' one-minute and full-session five-minute bars plus daily closes). The paper's $0.0035 per-share
+# commission (no fixed fee; SEC and FINRA sell fees kept), 1% account risk, a 400% gross exposure cap (4x leverage)
+# shared in trigger order, positions up to 100% of equity each (the shared risk planner's limit) and up to 20 at once.
+
+run_name: swing-backtest-profile
+mode: backtest
+
+engine:
+  pipeline: tpl
+  worker_count: 0
+  bounded_capacity: 2000
+  indicator_warmup_bars: 260
+  allow_late_warmup: true
+  ticker_timeout_seconds: 1800
+  max_retained_replay_bars: 4500000
+  max_strategy_work_items: 10000
+  max_retained_candidates: 1000000
+  fail_fast: false
+
+time_window:
+  type: rolling
+  # Diagnostic six-month window. Promotion-grade research uses the frozen
+  # point-in-time research datasets and 2016-or-later program boundaries.
+  lookback_days: 180
+  # 260 indicator bars are trading sessions, not calendar days. Four hundred
+  # calendar days supplies the required pre-evaluation history with margin.
+  warmup_lookback_days: 400
+  start:
+  end:
+
+market_data:
+  provider: alpaca
+  download_timeframes:
+    - 1h
+    - 1d
+  derive_from: 1h
+  raw_root: data/backtest/raw
+  normalized_root: data/backtest/normalized
+  results_root: data/backtest/results
+  cache_policy: use_cache
+
+providers:
+  alpaca:
+    data_feed: sip
+
+portfolio:
+  starting_capital: 10000
+  account_risk_budget_pct: 1.0
+  max_position_notional_pct: 100
+  max_concurrent_positions: 20
+  fixed_buy_fee: 0
+  fixed_sell_fee: 0
+  commission_per_share: 0.0035
+  max_gross_exposure_pct: 400
+  max_execution_order_history: 1000000
+  prevent_overlapping_ticker_positions: true
+  max_bar_participation_pct: 5.0
+  sec_fee_rate: 0.0000278
+  finra_taf_per_share: 0.000166
+  finra_taf_cap: 8.30
+
+signal_source:
+  type: internal_candles
+  require_signature: false
+  secret_env:
+  dedupe_window_seconds: 300
+  reject_stale_after_seconds: 0
+
+validation:
+  out_of_sample:
+    enabled: true
+    percent: 30.0
+  walk_forward:
+    enabled: true
+    window_days: 30
+    step_days: 15
+  benchmark:
+    enabled: true
+    ticker: SPY
+  data_quality:
+    enabled: true
+    max_duplicate_bars: 0
+    max_invalid_ohlc_bars: 0
+    max_zero_volume_pct: 15.0
+  bias_risk:
+    universe_source: wishlist
+    universe_as_of_date:
+    price_adjustment_policy: alpaca_sip_cached
+
+execution:
+  router: simulated
+  broker: none
+  dry_run: true
+  allow_live_orders: false
+  order_type: bracket
+  allow_extended_hours_trading: false
+
+news:
+  enabled: true
+  provider:
+    name: alpaca
+  veto:
+    ttl_minutes: 1440
+    negative_threshold: -0.55
+  max_articles_per_ticker: 500
+  sentiment_timeout_seconds: 3
+
+artifacts:
+  retention_mode: full
+
+universe:
+  mode: unresolved_wishlist
+
+strategies:
+  - strategies/opening-range-breakout.bt-v5.yaml
+

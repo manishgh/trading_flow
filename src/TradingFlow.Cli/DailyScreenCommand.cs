@@ -23,6 +23,8 @@ public static class DailyScreenCommand
     /// Optional ranking of each session's eligible stocks (published five-minute bar dataset with the 09:30 New York bars):
     /// --opening-bars datasetId --rank-measure first_five_minute_relative_volume --baseline-sessions 14 --baseline-average mean
     /// --min-relative-volume 1 --max-per-session 20.
+    /// Optional --sessions datasetId names the XNYS exchange-session dataset backtests of this screen read; it is recorded in
+    /// screen-manifest.json, which is always written with every input, rule and output fingerprint.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
@@ -85,7 +87,32 @@ public static class DailyScreenCommand
             foreach (var session in ranked.TakeLast(5))
                 output.WriteLine($"{session.Session:yyyy-MM-dd}: {session.QualifiedCount} at or above the minimum relative volume, {session.Members.Count} selected");
         }
+        var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile, cancellationToken);
+        output.WriteLine($"Manifest {ResearchScreenManifest.FileName} SHA-256 {manifestSha}.");
         return 0;
+    }
+
+    /// <summary>
+    /// Writes screen-manifest.json after every output is complete: input dataset IDs (daily bars, corporate actions, opening
+    /// bars, and the XNYS exchange-session dataset given with --sessions for backtests that read this screen), every rule
+    /// value, the window, the fund-exclusion file's SHA-256 and the SHA-256 of each output file. Returns the manifest SHA-256.
+    /// </summary>
+    private static async Task<string> PublishManifestAsync(IReadOnlyDictionary<string, string> options, SqliteEvidenceCatalog catalog,
+        DailyScreenRules rules, DailyRankingRules? ranking, DateOnly from, DateOnly to, string folder, string? excludeFile,
+        CancellationToken cancellationToken)
+    {
+        string? sessions = null;
+        if (options.TryGetValue("--sessions", out var sessionsId))
+        {
+            var manifest = await Manifest(catalog, sessionsId, cancellationToken);
+            if (manifest.Kind != EvidenceDatasetKind.ExchangeSessions)
+                throw new InvalidDataException($"--sessions dataset '{sessionsId}' is a {manifest.Kind} dataset, not exchange sessions.");
+            sessions = manifest.DatasetId;
+        }
+        var inputs = new ResearchScreenInputs(Require(options, "--bars"), Require(options, "--actions"),
+            options.TryGetValue("--opening-bars", out var opening) ? opening : null, sessions);
+        return await ResearchScreenManifest.PublishAsync(folder, inputs, rules, ranking, from, to, DailyRankingOutput.IssuerIdentityBasis,
+            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken);
     }
 
     /// <summary>

@@ -12,8 +12,9 @@ public sealed partial class BacktestRunner
 
     /// <summary>
     /// The trade-record source used to confirm five-minute intervals without a candle, created once per runner. A caller
-    /// factory wins (tests and research replays); otherwise only Alpaca runs on live provider data get the SIP source,
-    /// archived under the durable raw root so repeat runs re-read it. Other providers get none, so gaps stay gaps.
+    /// factory wins (tests and research replays); otherwise Alpaca runs on live provider data, and research-screen runs on
+    /// the evidence catalog's SIP bars, get the SIP source, archived under the durable raw root so repeat runs re-read it.
+    /// Other providers get none, so gaps stay gaps.
     /// </summary>
     private IIntervalTradePrintSource? CreateIntervalTradePrintSource(BacktestRunConfig run)
     {
@@ -21,7 +22,9 @@ public sealed partial class BacktestRunner
         intervalTradePrintSourceResolved = true;
         if (intervalTradePrintSourceFactory is not null) return intervalTradePrintSource = intervalTradePrintSourceFactory(run);
         // The trade records are consolidated SIP prints, so they can only explain gaps in SIP candles.
-        if (marketDataProviderFactory is not null || !run.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase) ||
+        var sipCandles = run.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase) ||
+            run.Provider.Equals(TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName, StringComparison.OrdinalIgnoreCase);
+        if (marketDataProviderFactory is not null || !sipCandles ||
             !run.Providers.Alpaca.DataFeed.Equals("sip", StringComparison.OrdinalIgnoreCase)) return null;
         var rawRoot = logicalInputRoots?.RawRoot ?? run.RawRoot;
         return intervalTradePrintSource = new AlpacaSipIntervalTradePrintSource(_dataProviders.CreateAlpacaMarketDataClient(run),

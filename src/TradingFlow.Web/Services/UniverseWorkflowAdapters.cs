@@ -15,7 +15,8 @@ namespace TradingFlow.Web.Services;
 public sealed class UniverseSourceResolver(
     IWishlistRepository wishlists,
     IScreenerSnapshotSource screener,
-    TimeProvider timeProvider) : IUniverseSourceResolver
+    TimeProvider timeProvider,
+    ResearchScreenSources? researchScreens = null) : IUniverseSourceResolver
 {
     private static readonly TimeSpan SourceLifetime = TimeSpan.FromMinutes(3);
 
@@ -34,6 +35,7 @@ public sealed class UniverseSourceResolver(
         {
             DiscoverySourceKinds.Wishlist => await ResolveWishlistAsync(source, cancellationToken),
             DiscoverySourceKinds.Finviz => await ResolveFinvizAsync(source, cancellationToken),
+            DiscoverySourceKinds.ResearchScreen => ResolveResearchScreen(source),
             _ => throw new InvalidOperationException(
                 $"Universe source '{source.SourceKind}' is not supported by the operator preview API.")
         };
@@ -68,6 +70,23 @@ public sealed class UniverseSourceResolver(
             symbols,
             ProviderTimestampUtc: wishlist.UpdatedAtUtc.ToUniversalTime(),
             ProviderReference: $"wishlist:{id:D}");
+    }
+
+    /// <summary>
+    /// Reads a published research screen after re-checking every fingerprint, and returns every stock in its ranked list with
+    /// the number of sessions it was selected; the plan narrows this to the stocks selected inside its window. Records the
+    /// manifest and ranked-list SHA-256 as the provider reference. Only reads files.
+    /// </summary>
+    private UniverseSourceCapture ResolveResearchScreen(UniverseSourceSelectionRequest source)
+    {
+        var screens = researchScreens ?? throw new InvalidOperationException("Research screens are not available in this host.");
+        var screen = screens.Read(source.SourceKey);
+        var observed = timeProvider.GetUtcNow().ToUniversalTime();
+        var symbols = screen.Members.GroupBy(member => member.Security.Symbol, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => new DiscoverySymbolObservation(group.Key,
+                JsonSerializer.Serialize(new { researchScreen = screen.Name, rankedSessions = group.Count() }))).ToArray();
+        return new UniverseSourceCapture(DiscoverySourceKinds.ResearchScreen, screen.Name, observed, observed + SourceLifetime, symbols,
+            ProviderReference: ResearchScreenSources.ProviderReference(screen));
     }
 
     private async Task<UniverseSourceCapture> ResolveFinvizAsync(

@@ -125,7 +125,8 @@ builder.Services
 var backupRoot = uiTestMode
     ? Path.Combine(dataRoot, "backups")
     : ResolveRootFromEnvironment("TRADINGFLOW_BACKUP_ROOT", Path.Combine(dataRoot, "backups"));
-builder.Services.AddSingleton(new ProjectPaths(repositoryRoot, dataRoot, cacheRoot));
+var projectPaths = new ProjectPaths(repositoryRoot, dataRoot, cacheRoot);
+builder.Services.AddSingleton(projectPaths);
 builder.Services.AddSingleton<SimpleYamlReader>();
 builder.Services.AddSingleton(serviceProvider => new StrategyArtifactCatalog(
     repositoryRoot,
@@ -137,10 +138,9 @@ builder.Services.AddSingleton(serviceProvider => new StrategyExperimentArtifactS
     serviceProvider.GetRequiredService<StrategyArtifactCatalog>(),
     serviceProvider.GetRequiredService<SimpleYamlReader>(),
     serviceProvider.GetRequiredService<IArtifactWriter>()));
-var evidenceRoot = Path.Combine(dataRoot, "research", "evidence");
-var evidenceCatalogPath = Path.Combine(evidenceRoot, "catalog.db");
-var evidenceObjectRoot = Path.Combine(evidenceRoot, "objects");
-var promotionRegistryPath = Path.Combine(evidenceRoot, "strategy-authorizations.db");
+var evidenceCatalogPath = projectPaths.EvidenceCatalogPath;
+var evidenceObjectRoot = projectPaths.EvidenceObjectRoot;
+var promotionRegistryPath = Path.Combine(projectPaths.EvidenceRoot, "strategy-authorizations.db");
 builder.Services.AddSingleton<IImmutableArtifactStore>(new FileSystemImmutableArtifactStore(
     new ImmutableArtifactStoreOptions(evidenceObjectRoot)));
 builder.Services.AddSingleton(serviceProvider => new SqliteEvidenceCatalog(
@@ -297,6 +297,7 @@ builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredServ
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<DeskUniverseEvidenceService>();
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<ResearchScreenSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, TradingFlow.Web.Services.Desk.DeskAccountReader>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskReadService>();

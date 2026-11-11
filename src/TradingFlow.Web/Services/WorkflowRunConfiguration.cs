@@ -13,8 +13,46 @@ namespace TradingFlow.Web.Services;
 
 public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunConfigWriter writer, SimpleYamlReader reader,
     TradingFlow.Domain.Execution.IOperationalTradingLimitStore tradingLimits,
-    TradingFlow.Backtesting.ConfiguredDataProviders? dataProviders = null) : IWorkflowRunConfiguration
+    TradingFlow.Backtesting.ConfiguredDataProviders? dataProviders = null, ResearchScreenSources? researchScreens = null) : IWorkflowRunConfiguration
 {
+    /// <summary>
+    /// Re-reads the research screen named by the source preview, refusing it when its manifest or ranked list differs from
+    /// the fingerprints the preview recorded ("the ranked list changed since the plan was saved"), and returns its frozen
+    /// inputs with the stocks ranked on at least one New York session of the request's window.
+    /// </summary>
+    public async Task<ResearchScreenPool> ResolveResearchScreenPoolAsync(StartBacktestRequest request, UniversePreviewResponse source,
+        CancellationToken token)
+    {
+        var (screen, reference) = await ReadResearchScreenAsync(source, token);
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var from = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.TestWindowStartUtc, zone).DateTime);
+        var to = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.TestWindowEndUtc.AddTicks(-1), zone).DateTime);
+        return new(reference, screen.PoolSymbols(from, to));
+    }
+
+    /// <summary>
+    /// The one research screen a source preview names, verified against the manifest and ranked-list SHA-256 the preview
+    /// recorded, with its frozen datasets. A research screen must be the plan's only source.
+    /// </summary>
+    private async Task<(TradingFlow.Engine.Universe.PublishedResearchScreen Screen, ResearchScreenReference Reference)> ReadResearchScreenAsync(
+        UniversePreviewResponse source, CancellationToken token)
+    {
+        var screens = researchScreens ?? throw new InvalidOperationException("Research screens are not available in this host.");
+        var evidence = source.Members.SelectMany(member => member.Sources).ToArray();
+        var references = evidence.Select(item => item.ProviderReference).Distinct(StringComparer.Ordinal).ToArray();
+        if (evidence.Any(item => item.SourceKind != TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen) || references.Length != 1)
+            throw new InvalidOperationException("A research screen must be the plan's only stock source.");
+        var (name, manifestSha, rankedSha) = ResearchScreenSources.ParseProviderReference(references[0]);
+        var screen = screens.Read(name, manifestSha);
+        if (!screen.RankedListSha256.Equals(rankedSha, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The ranked list changed since the plan was saved (research screen '{name}').");
+        return (screen, await screens.ResolveReferenceAsync(screen, token));
+    }
+
+    /// <summary>True when the reviewed source is a published research screen.</summary>
+    private static bool IsResearchScreen(UniversePreviewResponse source) => source.Members.Any(member =>
+        member.Sources.Any(item => item.SourceKind == TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen));
+
     /// <summary>Freezes the selected strategy/profile policy in the normal command so retries and saved plans retain it.</summary>
     public async Task<StartBacktestRequest> NormalizeBacktestRequestAsync(StartBacktestRequest request, CancellationToken token)
     {
@@ -163,13 +201,22 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
             throw new InvalidOperationException("The source preview horizon differs from the selected strategy. Preview the stock source again for this strategy.");
         var scope = RequireScope(evidenceScope);
         var evidence = catalog.BindDecisionContextEvidence(request, run.Engine, selected, scope);
+        RankedMembershipReference? ranked = null;
+        if (IsResearchScreen(universe))
+        {
+            // A research-screen run reads only the frozen evidence-catalog datasets and the screen's ranked list.
+            var (screen, reference) = await ReadResearchScreenAsync(universe, token);
+            run = run with { Provider = TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName,
+                Providers = run.Providers with { EvidenceCatalog = researchScreens!.ProviderConfig(reference) } };
+            ranked = new RankedMembershipReference(screen.ManifestPath, screen.ManifestSha256);
+        }
         var path = writer.WriteBacktestConfig(new BacktestRunRequest(config.Path, uniqueName, 0, null, null,
             universe.Members.Select(item => item.Symbol).ToArray(), selected.Select(item => item.Path).ToArray(),
             request.StartingCapital, request.AccountRiskBudgetPct, request.MaxPositionNotionalPct, request.MaxConcurrentPositions,
             request.CachePolicy, [], request.TestWindowStartUtc, request.TestWindowEndUtc, universe.UniverseSnapshotId, universe.ResolvedAtUtc,
             String.Join("+", universe.Members.SelectMany(item => item.Sources).Select(item => item.SourceKind).Distinct().Order()),
             evidence.Engine, run.Engine.ExecutionReplayPolicyId, run, TradingFlow.Application.Jobs.BacktestEligibility.ToRules(request.Eligibility, run.Engine.ExecutionReplayPolicyId),
-            TradingFlow.Application.Jobs.BacktestEligibility.ToRanking(request.Eligibility, run.Engine.ExecutionReplayPolicyId)));
+            TradingFlow.Application.Jobs.BacktestEligibility.ToRanking(request.Eligibility, run.Engine.ExecutionReplayPolicyId), ranked));
         try
         {
             var generated = reader.ReadBacktestRun(path);

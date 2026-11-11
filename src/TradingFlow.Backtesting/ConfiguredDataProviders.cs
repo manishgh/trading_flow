@@ -65,6 +65,10 @@ public sealed class ConfiguredDataProviders
                 adjustmentPolicy: run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.DailyRthFiveMinuteV1 or
                     ExecutionReplayPolicy.DailyRthSipPortfolioV1 ? "raw" : "all"),
             "finviz" => new FinvizMarketDataProvider(new FinvizClient(createHttpClient(), finvizOptions(), rawArchiveWriter)),
+            // Frozen research-screen datasets; read-only and without any network client.
+            TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName => TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.Open(
+                run.Providers.EvidenceCatalog ?? throw new InvalidDataException("market_data.provider evidence_catalog needs the providers.evidence_catalog settings."),
+                rawArchiveWriter),
             _ => throw new NotSupportedException($"Unsupported market data provider: {run.Provider}")
         };
 

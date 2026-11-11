@@ -20,6 +20,31 @@ public static partial class IntradayPortfolioExecution
     /// <summary>Two or more stop orders first reached their triggers in the same minute (or at the same opening): admission order.</summary>
     public const string SameMinuteTriggerOrderUnknown = "same_minute_trigger_order_unknown_admission_order_used";
 
+    /// <summary>
+    /// Event state recorded once for every entry five-minute bar that also touched the stop, with what one-minute bars said:
+    /// one of the <see cref="EntryBarMinuteOrderReasons"/>. Results count these per reason.
+    /// </summary>
+    public const string EntryBarMinuteOrderState = "entry_bar_minute_order";
+
+    /// <summary>Minutes show the stop touched after the entry minute: a known loss.</summary>
+    public const string MinutesSettledStopAfterEntry = "settled_by_minutes_stop_after_entry";
+
+    /// <summary>Minutes show no touch of the stop after the entry minute: the position stays open.</summary>
+    public const string MinutesSettledNoStopAfterEntry = "settled_by_minutes_no_stop_after_entry";
+
+    /// <summary>Entry and stop in the same minute: still unknown inside it, counted as a loss.</summary>
+    public const string SameMinuteLoss = "same_minute_loss";
+
+    /// <summary>No one-minute bars inside the entry bar: the worst case (a loss) stands.</summary>
+    public const string UnknownNoMinuteBars = "unknown_no_minute_bars";
+
+    /// <summary>One-minute bars exist but do not reproduce the five-minute high and low: the worst case (a loss) stands.</summary>
+    public const string UnknownMinutesDoNotMatch = "unknown_minutes_do_not_match";
+
+    /// <summary>Every reason an <see cref="EntryBarMinuteOrderState"/> event can carry, in reporting order.</summary>
+    public static readonly IReadOnlyList<string> EntryBarMinuteOrderReasons =
+        [MinutesSettledStopAfterEntry, MinutesSettledNoStopAfterEntry, SameMinuteLoss, UnknownNoMinuteBars, UnknownMinutesDoNotMatch];
+
     private sealed partial class Book
     {
         /// <summary>True when the run limits gross exposure (portfolio.max_gross_exposure_pct) instead of cash only.</summary>
@@ -195,8 +220,14 @@ public static partial class IntradayPortfolioExecution
         /// <summary>What one-minute bars say about an entry and a stop that fall in the same five-minute bar.</summary>
         private enum EntryBarMinuteOrder
         {
-            /// <summary>No usable one-minute bars: the worst case (stop counted) stands.</summary>
+            /// <summary>Not an entry bar with a stop touch, so nothing was asked of the minutes.</summary>
             Unknown,
+
+            /// <summary>No one-minute bars inside the bar: the worst case (stop counted) stands.</summary>
+            NoMinuteBars,
+
+            /// <summary>One-minute bars that do not reproduce the bar's high and low: the worst case stands.</summary>
+            MinutesDoNotMatch,
 
             /// <summary>The stop was touched in a minute after the entry's minute: a known stop-out.</summary>
             StopAfterEntry,
@@ -224,30 +255,49 @@ public static partial class IntradayPortfolioExecution
         /// </summary>
         private OhlcvBar[]? CompleteMinutes(Intent intent, OhlcvBar bar)
         {
-            if (MinuteBarIndex is not { } index) return null;
-            var symbol = Symbol(intent);
-            var minutes = Enumerable.Range(0, 5)
-                .Select(minute => index.GetValueOrDefault((symbol, bar.Timestamp.AddMinutes(minute))))
-                .OfType<OhlcvBar>().Where(ValidBar).ToArray();
+            var minutes = MinutesInside(intent, bar);
             return minutes.Length == 0 || minutes.Max(minute => minute.High) != bar.High || minutes.Min(minute => minute.Low) != bar.Low
                 ? null : minutes;
         }
 
+        /// <summary>The valid one-minute bars of the stock inside <paramref name="bar"/>, in time order; empty when there are none.</summary>
+        private OhlcvBar[] MinutesInside(Intent intent, OhlcvBar bar)
+        {
+            if (MinuteBarIndex is not { } index) return [];
+            var symbol = Symbol(intent);
+            return Enumerable.Range(0, 5)
+                .Select(minute => index.GetValueOrDefault((symbol, bar.Timestamp.AddMinutes(minute))))
+                .OfType<OhlcvBar>().Where(ValidBar).ToArray();
+        }
+
         /// <summary>
         /// Orders an entry and a stop inside one five-minute bar from its one-minute bars. The entry minute is the first that
-        /// reaches the trigger; the stop counts only from that minute on.
+        /// reaches the trigger; the stop counts only from that minute on. Without minutes, or with minutes that do not reproduce
+        /// the bar's high and low, the order stays unknown and the reason says which.
         /// </summary>
         private EntryBarMinuteOrder EntryBarStopOrder(Intent intent, OhlcvBar bar)
         {
-            if (CompleteMinutes(intent, bar) is not { } minutes) return EntryBarMinuteOrder.Unknown;
+            if (CompleteMinutes(intent, bar) is not { } minutes)
+                return MinutesInside(intent, bar).Length == 0 ? EntryBarMinuteOrder.NoMinuteBars : EntryBarMinuteOrder.MinutesDoNotMatch;
             var trigger = intent.Evidence.LimitPrice;
             var entry = Array.FindIndex(minutes, minute => intent.Long ? minute.High >= trigger : minute.Low <= trigger);
-            if (entry < 0) return EntryBarMinuteOrder.Unknown;
+            if (entry < 0) return EntryBarMinuteOrder.MinutesDoNotMatch;
             var stop = intent.Stop;
             bool Touches(OhlcvBar minute) => intent.Long ? minute.Low <= stop : minute.High >= stop;
             if (Touches(minutes[entry])) return EntryBarMinuteOrder.SameMinute;
             return minutes.Skip(entry + 1).Any(Touches) ? EntryBarMinuteOrder.StopAfterEntry : EntryBarMinuteOrder.NoStopAfterEntry;
         }
+
+        /// <summary>Records what the minutes said about one entry bar with a stop touch (<see cref="EntryBarMinuteOrderState"/>).</summary>
+        private void EmitEntryBarMinuteOrder(Intent intent, DateTimeOffset at, EntryBarMinuteOrder order) =>
+            Emit(intent, at, EntryBarMinuteOrderState, order switch
+            {
+                EntryBarMinuteOrder.StopAfterEntry => MinutesSettledStopAfterEntry,
+                EntryBarMinuteOrder.NoStopAfterEntry => MinutesSettledNoStopAfterEntry,
+                EntryBarMinuteOrder.SameMinute => SameMinuteLoss,
+                EntryBarMinuteOrder.MinutesDoNotMatch => UnknownMinutesDoNotMatch,
+                _ => UnknownNoMinuteBars
+            }, intent.Open);
 
         /// <summary>
         /// At 16:00, after the last five-minute bar has completed, cancels unfilled entry shares of orders that run until the

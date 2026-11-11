@@ -29,6 +29,13 @@ public static class BacktestRunInputFiles
             var calendar = FrozenExchangeCalendar.Read(manifest.CalendarReceiptPath, manifest.CalendarReceiptSha256);
             files.AddRange([path, manifest.CalendarReceiptPath, calendar.PayloadPath]);
         }
+        // A research-screen run's frozen ranked list: the verified manifest and every output file it fingerprints.
+        if (run.Universe?.RankedMembership is { } ranked)
+        {
+            var screen = TradingFlow.Engine.Universe.PublishedResearchScreen.Read(Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
+            files.Add(screen.ManifestPath);
+            files.AddRange(screen.Manifest.Outputs.Keys.Select(name => Path.Combine(screen.Folder, name)));
+        }
         return files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 }

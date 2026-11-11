@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
@@ -40,7 +41,9 @@ public sealed partial class BacktestRunner
         progress?.Report(BacktestProgress.StageOnly("intraday_candidates", "Evaluating completed intraday entry evidence."));
         await BuildRegimeCalendarsAsync(run, [strategy], preparedMarket.DataStart, preparedMarket.WindowEnd, token);
         var sessions = candidateSessionSchedules ?? throw new InvalidDataException("Intraday execution requires the archived exchange calendar.");
-        var batches = await BuildIntradayCandidatesAsync(run, strategy, preparedMarket, token);
+        // A frozen ranked list limits evaluation, coverage checks and one-minute bars to each stock's member sessions.
+        var rankedMembers = run.Universe?.RankedMembership is not null ? membership : null;
+        var batches = await BuildIntradayCandidatesAsync(run, strategy, preparedMarket, token, rankedMembers);
         var candidates = batches.SelectMany(batch => batch.CandidateTrades)
             .OrderBy(candidate => candidate.EntryTimestamp).ThenBy(candidate => candidate.Ticker, StringComparer.Ordinal).ToArray();
         var bars = preparedMarket.MarketState.TickerStates.Values
@@ -52,8 +55,11 @@ public sealed partial class BacktestRunner
         var quiet = await PublishQuietIntervalsAsync(run, batches, token);
         var closes = strategy.EntryRules.OpeningRangeBreakout is { ExitAtSessionClose: true }
             ? await LoadSessionClosePricesAsync(run, preparedMarket.DataStart, preparedMarket.WindowEnd, token) : null;
+        var minutes = rankedMembers is null ? null
+            : await LoadMemberMinuteBarsAsync(run, rankedMembers, preparedMarket.DataStart, preparedMarket.WindowEnd, token);
         var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], eligible, bars,
-            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet, closes), token);
+            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet, closes, minutes), token);
+        if (minutes is not null) await PublishEntryBarMinuteOrderAsync(run, replay, minutes.Count, token);
         var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart, notEligible);
         IntradayPortfolioEvidence.Publish(hypotheses, execution, candidates, replay);
         // Warm-up candles remain execution/indicator inputs; reported days and bar counts describe only completed evaluation intervals.
@@ -114,6 +120,46 @@ public sealed partial class BacktestRunner
         await foreach (var bar in CreateProvider(run).GetBarsAsync(run.Tickers, ["1d"], start, end, token))
             if (bar.Timestamp < end) closes[(bar.Ticker.ToUpperInvariant(), DateOnly.FromDateTime(bar.Timestamp.UtcDateTime))] = bar.Close;
         return closes;
+    }
+
+    /// <summary>
+    /// The one-minute bars of each stock on its member sessions (New York dates), read through the run's own provider with the
+    /// exact range the prepared plan admitted (the run's data start to its end). Minutes on other sessions are dropped.
+    /// </summary>
+    private async Task<IReadOnlyCollection<OhlcvBar>> LoadMemberMinuteBarsAsync(BacktestRunConfig run, UniverseMembership members,
+        DateTimeOffset start, DateTimeOffset end, CancellationToken token)
+    {
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var minutes = new List<OhlcvBar>();
+        await foreach (var bar in CreateProvider(run).GetBarsAsync(run.Tickers, ["1m"], start, end, token))
+            if (members.IsMember(bar.Ticker, DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bar.Timestamp, zone).DateTime))) minutes.Add(bar);
+        return minutes;
+    }
+
+    /// <summary>
+    /// Publishes, beside the results, how the entry five-minute bars that also touched the stop were settled: by one-minute
+    /// bars (stop after the entry minute, or no stop after it), as same-minute losses, or left unknown with no minute bars or
+    /// with minutes that do not match the five-minute high and low (both counted as losses). Each order is counted once.
+    /// </summary>
+    private async Task PublishEntryBarMinuteOrderAsync(BacktestRunConfig run, IntradayPortfolioReplayOutcome replay, int minuteBars,
+        CancellationToken token)
+    {
+        var decided = replay.Events.Where(item => item.State == IntradayPortfolioExecution.EntryBarMinuteOrderState)
+            .GroupBy(item => item.CandidateId, StringComparer.Ordinal).Select(group => group.First()).ToArray();
+        var counts = IntradayPortfolioExecution.EntryBarMinuteOrderReasons.ToDictionary(reason => reason,
+            reason => decided.Count(item => item.Reason == reason), StringComparer.Ordinal);
+        var payload = new
+        {
+            runName = run.RunName, minuteBarsLoaded = minuteBars,
+            entryBarsSettledByMinutes = counts[IntradayPortfolioExecution.MinutesSettledStopAfterEntry] + counts[IntradayPortfolioExecution.MinutesSettledNoStopAfterEntry],
+            sameMinuteLosses = counts[IntradayPortfolioExecution.SameMinuteLoss],
+            unknownNoMinuteBars = counts[IntradayPortfolioExecution.UnknownNoMinuteBars],
+            unknownMinutesDoNotMatch = counts[IntradayPortfolioExecution.UnknownMinutesDoNotMatch],
+            byReason = counts,
+            orders = decided.Select(item => new { item.CandidateId, item.Ticker, entryBarEndUtc = item.TimestampUtc, item.Reason }).ToArray()
+        };
+        await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-entry-bar-minute-order.json"),
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), token);
     }
 
     // Same per-day rule as the daily paths: a candidate whose stock did not qualify on its entry day (UTC date, which equals

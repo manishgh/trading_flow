@@ -125,6 +125,7 @@ public sealed class RunConfigWriter
         yaml.AppendLine("  resolved_at_utc: " + (request.UniverseResolvedAtUtc ?? DateTimeOffset.UtcNow).ToString("O", CultureInfo.InvariantCulture));
         AppendDailyEligibility(yaml, request.DailyEligibility);
         AppendDailyRanking(yaml, request.DailyRanking);
+        AppendRankedMembership(yaml, request.RankedMembership);
         yaml.AppendLine();
         yaml.AppendLine("tickers:");
         foreach (var ticker in request.Tickers.Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -781,6 +782,18 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"    max_per_session: {rules.MaxMembersPerSession.ToString(CultureInfo.InvariantCulture)}");
     }
 
+    /// <summary>
+    /// Writes a research-screen plan's frozen ranked list (manifest path and SHA-256) under the resolved stock list; the run
+    /// reads each session's members from it. Writes nothing for other plans.
+    /// </summary>
+    private static void AppendRankedMembership(StringBuilder yaml, RankedMembershipReference? ranked)
+    {
+        if (ranked is null) return;
+        yaml.AppendLine("  ranked_membership:");
+        yaml.AppendLine($"    manifest_path: {RunYamlScalar(NormalizePath(ranked.ManifestPath), "universe.ranked_membership.manifest_path")}");
+        yaml.AppendLine($"    manifest_sha256: {RunYamlScalar(ranked.ManifestSha256, "universe.ranked_membership.manifest_sha256")}");
+    }
+
     private static void AppendTickerList(StringBuilder yaml, string key, IEnumerable<string>? tickers)
     {
         var normalized = (tickers ?? [])
@@ -1200,11 +1213,24 @@ public sealed class RunConfigWriter
         return $"\"{value}\"";
     }
 
+    /// <summary>Writes the Alpaca feed and, for a research-screen run, every frozen evidence-catalog dataset it may read.</summary>
     private static void AppendProviders(StringBuilder yaml, TradingFlow.Domain.Backtesting.BacktestRunConfig baseConfig)
     {
         yaml.AppendLine("providers:");
         yaml.AppendLine("  alpaca:");
         yaml.AppendLine($"    data_feed: {baseConfig.Providers.Alpaca.DataFeed}");
+        if (baseConfig.Providers.EvidenceCatalog is not { } catalog) return;
+        const string prefix = "providers.evidence_catalog.";
+        yaml.AppendLine("  evidence_catalog:");
+        yaml.AppendLine($"    catalog_path: {RunYamlScalar(NormalizePath(catalog.CatalogPath), prefix + "catalog_path")}");
+        yaml.AppendLine($"    artifact_root: {RunYamlScalar(NormalizePath(catalog.ArtifactRoot), prefix + "artifact_root")}");
+        yaml.AppendLine($"    ranked_list_sha256: {RunYamlScalar(catalog.RankedListSha256, prefix + "ranked_list_sha256")}");
+        yaml.AppendLine($"    daily_dataset: {RunYamlScalar(catalog.DailyDatasetId, prefix + "daily_dataset")}");
+        yaml.AppendLine($"    exchange_sessions_dataset: {RunYamlScalar(catalog.ExchangeSessionsDatasetId, prefix + "exchange_sessions_dataset")}");
+        yaml.AppendLine("    five_minute_datasets:");
+        foreach (var id in catalog.FiveMinuteDatasetIds) yaml.AppendLine($"      - {RunYamlScalar(id, prefix + "five_minute_datasets")}");
+        yaml.AppendLine("    one_minute_datasets:");
+        foreach (var id in catalog.OneMinuteDatasetIds) yaml.AppendLine($"      - {RunYamlScalar(id, prefix + "one_minute_datasets")}");
     }
 
     /// <summary>Retain the profile's validation assumptions, including its dated universe evidence.</summary>

@@ -292,6 +292,11 @@ public sealed partial class BacktestRunner(
         IProgress<BacktestProgress>? progress)
     {
         RunUniverseValidator.RequireResolved(run);
+        if (run.Universe is { IsHistoricalScreener: false, RankedMembership: { } ranked })
+        {
+            return (run, await ResolveRankedMembershipAsync(run, ranked, cancellationToken, progress), null);
+        }
+
         if (run.Universe is { IsHistoricalScreener: false, DailyEligibility: not null } fixedList)
         {
             return (run, await ResolveDailyEligibilityAsync(run, fixedList, cancellationToken, progress), null);

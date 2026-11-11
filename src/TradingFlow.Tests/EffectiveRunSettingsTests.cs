@@ -211,6 +211,29 @@ public sealed class EffectiveRunSettingsTests
         Assert.ThrowsAny<Exception>(() => fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request with { DailyRanking = ranking })));
     }
 
+    // A research-screen run's frozen ranked list (universe.ranked_membership) and evidence-catalog datasets
+    // (providers.evidence_catalog) are written and read back exactly; other runs write neither block.
+    [Fact]
+    public async Task GeneratedRun_RoundTripsRankedMembershipAndEvidenceCatalogDatasets()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var ranked = new RankedMembershipReference(Path.Combine(Path.GetTempPath(), "screens", "screen-a", "screen-manifest.json"), new string('a', 64));
+        var catalog = new EvidenceCatalogProviderConfig(Path.Combine(Path.GetTempPath(), "evidence", "catalog.db"), Path.Combine(Path.GetTempPath(), "evidence", "objects"),
+            new string('b', 64), new string('1', 64), new string('2', 64), [new string('3', 64), new string('4', 64)], [new string('5', 64)]);
+        var profile = fixture.Reader.ReadBacktestRun(fixture.ProfilePath);
+        var profileWithCatalog = profile with { Provider = "evidence_catalog", Providers = profile.Providers with { EvidenceCatalog = catalog } };
+
+        var read = fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request with { RankedMembership = ranked, ResolvedProfile = profileWithCatalog }));
+        var plain = fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request));
+
+        Assert.Equal(ranked, read.Universe!.RankedMembership);
+        Assert.Equal("evidence_catalog", read.Provider);
+        Assert.Equivalent(catalog with { CatalogPath = Path.GetFullPath(catalog.CatalogPath), ArtifactRoot = Path.GetFullPath(catalog.ArtifactRoot) },
+            read.Providers.EvidenceCatalog, strict: true);
+        Assert.Null(plain.Universe!.RankedMembership);
+        Assert.Null(plain.Providers.EvidenceCatalog);
+    }
+
     // The published method's per-share commission and gross exposure limit are carried from the profile into the generated
     // run and read back exactly; a profile without them writes neither key, so other runs keep their settings unchanged.
     [Fact]

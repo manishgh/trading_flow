@@ -13,6 +13,11 @@ public sealed record ProjectPaths(string RepositoryRoot, string DataRoot, string
     public string StrategiesRoot => Path.Combine(ConfigsRoot, "strategies");
     public string GeneratedBacktestConfigsRoot => Path.Combine(DataRoot, "runtime", "configs", "backtest");
     public string GeneratedPaperConfigsRoot => Path.Combine(DataRoot, "runtime", "configs", "paper");
+    public string EvidenceRoot => Path.Combine(DataRoot, "research", "evidence");
+    public string EvidenceCatalogPath => Path.Combine(EvidenceRoot, "catalog.db");
+    public string EvidenceObjectRoot => Path.Combine(EvidenceRoot, "objects");
+    // Published research screens (research-daily-screen output folders holding screen-manifest.json).
+    public string ResearchScreensRoot => Path.Combine(DataRoot, "research", "screens");
 
     public string ResolveRepositoryPath(string path)
     {

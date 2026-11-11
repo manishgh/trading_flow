@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using TradingFlow.Application.Candidates;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Persistence;
 
@@ -29,7 +30,8 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         if (source.ExpiresAtUtc <= clock.GetUtcNow())
             throw new InvalidOperationException("The stock source preview expired. Preview it again and review the groups before saving.");
         request = request with { ExcludedSymbols = NormalizeExclusions(request.ExcludedSymbols) };
-        var cohorts = BuildCohorts(request, source.Members.Select(item => item.Symbol).ToArray());
+        var screen = await ResolveResearchScreenAsync(request.Run, source, token);
+        var cohorts = BuildCohorts(request, screen?.Symbols ?? source.Members.Select(item => item.Symbol).ToArray(), singlePortfolio: screen is not null);
         var count = checked(cohorts.Count * request.Run.Strategies.Count);
         if (count > limits.Backtest)
             throw new InvalidOperationException($"This plan needs {count} executions; the configured backtest queue budget is {limits.Backtest}. Change the resource budget or reduce this plan.");
@@ -45,7 +47,37 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
             throw new InvalidOperationException("The backtest profile changed since this preview. Preview the groups again before saving.");
         return new(0, clock.GetUtcNow(), request.Run with { ConfigurationSha256 = configurationHash }, cohorts, count, limits.Backtest,
             "Cohorts use the source stocks after explicit exclusions. The original source snapshot is retained; current wishlist/Finviz membership does not establish historical membership.", source,
-            configurationHash, request.ExcludedSymbols, evidence, settings, groupOrder, groupOrder is null ? null : request.GroupSeed);
+            configurationHash, request.ExcludedSymbols, evidence, settings, groupOrder, groupOrder is null ? null : request.GroupSeed, screen?.Reference);
+    }
+
+    /// <summary>
+    /// For a published research screen source: its verified frozen inputs and its pool for the plan window (stocks ranked on at
+    /// least one session of it). The plan's own eligibility and ranking fields must be empty, because the screen's rules apply.
+    /// Null for wishlist and Finviz sources, which never reach the research-screen reader.
+    /// </summary>
+    private async Task<ResearchScreenPool?> ResolveResearchScreenAsync(StartBacktestRequest run, UniversePreviewResponse source, CancellationToken token)
+    {
+        if (!source.Members.Any(member => member.Sources.Any(item => item.SourceKind == DiscoverySourceKinds.ResearchScreen))) return null;
+        if (run.Eligibility is not null)
+            throw new InvalidOperationException("A research-screen plan takes its daily eligibility and ranking rules from the screen manifest; leave the plan's own eligibility and ranking empty.");
+        var screen = await configuration.ResolveResearchScreenPoolAsync(run, source, token);
+        if (screen.Symbols.Count == 0)
+            throw new InvalidOperationException($"Research screen '{screen.Reference.ScreenName}' selects no stock on any session of the plan window.");
+        return screen;
+    }
+
+    /// <summary>
+    /// Before a research-screen plan starts: re-reads the screen and the evidence catalog and refuses when the ranked list or
+    /// the datasets its runs read differ from those saved with the plan.
+    /// </summary>
+    private async Task RequireUnchangedResearchScreenAsync(BacktestPlanResponse plan, CancellationToken token)
+    {
+        if (plan.ResearchScreen is not { } saved) return;
+        var current = (await configuration.ResolveResearchScreenPoolAsync(plan.Run, plan.Source, token)).Reference;
+        if (current.ManifestSha256 != saved.ManifestSha256 || current.RankedListSha256 != saved.RankedListSha256)
+            throw new InvalidOperationException($"The ranked list changed since the plan was saved (research screen '{saved.ScreenName}'). Save a new plan before starting.");
+        if (!current.SameInputs(saved))
+            throw new InvalidOperationException($"The evidence datasets for research screen '{saved.ScreenName}' changed since the plan was saved. Save a new plan before starting.");
     }
 
     /// <summary>Appends one immutable plan; the event sequence is its stable database identity.</summary>
@@ -92,6 +124,7 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         var plan = await GetAsync(id, token) ?? throw new InvalidOperationException("Saved backtest plan not found.");
         if (plan.ExecutionCount > limits.Backtest)
             throw new InvalidOperationException("The complete plan exceeds the current backtest queue budget.");
+        await RequireUnchangedResearchScreenAsync(plan, token);
         using var scope = await configuration.OpenEvidenceVerificationScopeAsync(plan.Run, token);
         var evidence = await configuration.GetDecisionContextEvidenceAsync(plan.Run, token, scope);
         if (plan.EvidenceSummary?.DependencyGraphSha256 != evidence?.DependencyGraphSha256)
@@ -146,8 +179,13 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         return prepared;
     }
 
-    /// <summary>Applies plan-only exclusions, then partitions selected symbols or validates explicit groups with independent capital.</summary>
-    internal static IReadOnlyList<BacktestCohort> BuildCohorts(SaveBacktestPlanRequest request, IReadOnlyList<string> members)
+    /// <summary>
+    /// Applies plan-only exclusions, then partitions selected symbols or validates explicit groups with independent capital.
+    /// A single-portfolio source (a research screen) must stay one group: manual groups, a group order or a group size below
+    /// the pool size are refused, so one capital pool trades every stock in trigger order.
+    /// </summary>
+    internal static IReadOnlyList<BacktestCohort> BuildCohorts(SaveBacktestPlanRequest request, IReadOnlyList<string> members,
+        bool singlePortfolio = false)
     {
         var source = members.Select(item => item.Trim().ToUpperInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         if (source.Length == 0) throw new InvalidOperationException("The selected stock source is empty.");
@@ -159,6 +197,7 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         source = source.Where(symbol => !excludedSet.Contains(symbol)).ToArray();
         if (source.Length == 0) throw new InvalidOperationException("The exclusions leave no stocks to run.");
         var groupOrder = NormalizeGroupOrder(request);
+        if (singlePortfolio) RequireSingleGroup(request, groupOrder, source.Length);
         if (request.Cohorts is { Count: > 0 } manual)
         {
             if (request.GroupSize is not null || groupOrder is not null || manual.Any(group => String.IsNullOrWhiteSpace(group.Name) || group.Name.Length > 100 ||
@@ -183,6 +222,17 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         var ordered = groupOrder == RandomGroupOrder ? SeededOrder(source, request.GroupSeed!.Value) : source;
         return ordered.Chunk(request.GroupSize.Value).Select((symbols, index) =>
             new BacktestCohort($"Group {index + 1}", symbols.Order(StringComparer.Ordinal).ToArray(), request.Run.StartingCapital)).ToArray();
+    }
+
+    /// <summary>Refuses anything that would split a research-screen pool into more than one capital pool.</summary>
+    private static void RequireSingleGroup(SaveBacktestPlanRequest request, string? groupOrder, int poolSize)
+    {
+        if (request.Cohorts is { Count: > 0 })
+            throw new InvalidOperationException("A research-screen plan is one portfolio with one capital pool; manual groups are refused.");
+        if (groupOrder is not null)
+            throw new InvalidOperationException("A research-screen plan is one portfolio; a group order does not apply.");
+        if (request.GroupSize is not { } size || size < poolSize)
+            throw new InvalidOperationException($"A research-screen plan is one portfolio of all {poolSize} stocks; enter a group size of at least {poolSize}.");
     }
 
     private const string RandomGroupOrder = "random";

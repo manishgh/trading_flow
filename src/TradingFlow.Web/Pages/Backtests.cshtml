@@ -81,7 +81,7 @@
                 <select class="input" id="StockSource" name="StockSource">
                     @foreach (var group in Model.StockSources.GroupBy(source => source.Kind))
                     {
-                        <optgroup label="@(group.Key == "wishlist" ? "My wishlists" : "Finviz lists")">
+                        <optgroup label="@(TradingFlow.Contracts.V1.BacktestStockSource.GroupName(group.Key))">
                             @foreach (var source in group)
                             {
                                 <option value="@source.Key" data-source-kind="@source.Kind" data-source-key="@source.Key"

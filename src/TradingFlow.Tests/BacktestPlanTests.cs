@@ -380,6 +380,43 @@ public sealed class BacktestPlanTests
         Assert.NotNull(await fixture.Service.PreviewAsync(request with { Run = fixture.Request with { Eligibility = rules with { PriceBasis = "prior_close" } } }));
     }
 
+    /// <summary>
+    /// A research-screen plan is one portfolio: a group size below the pool, manual groups and the plan's own eligibility rules
+    /// are refused, the plan keeps the screen's fingerprints, starting refuses a changed ranked list, and the screen can never
+    /// start a paper run.
+    /// </summary>
+    [Fact]
+    public async Task ResearchScreen_IsOnePortfolioAndRefusesAChangedRankedList()
+    {
+        await using var fixture = await Fixture.CreateAsync(5, 1, sourceKind: DiscoverySourceKinds.ResearchScreen);
+        var pool = fixture.Source.Members.Select(member => member.Symbol).Order().Take(3).ToArray();
+        fixture.ScreenPool = new(ScreenReference('a'), pool);
+        var rules = new BacktestEligibilityRules(5m, "session_open", 14, 14, MinAverageVolume: 1_000_000m);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SaveAsync(new(fixture.Request, 2)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SaveAsync(new(fixture.Request, null, [new("All", pool, 10000m)])));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SaveAsync(new(fixture.Request with { Eligibility = rules }, 3)));
+        var saved = await fixture.Service.SaveAsync(new(fixture.Request, 3));
+        var reopened = (await fixture.Service.GetAsync(saved.PlanId))!;
+
+        Assert.Equal(pool, Assert.Single(reopened.Cohorts).Symbols);
+        Assert.True(reopened.ResearchScreen!.SameInputs(ScreenReference('a')));
+        fixture.ScreenPool = new(ScreenReference('b'), pool);
+        var changed = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.StartAsync(saved.PlanId, new("1.0", "changed-list")));
+        Assert.Contains("ranked list changed since the plan was saved", changed.Message, StringComparison.Ordinal);
+        Assert.Empty(fixture.Written);
+        fixture.ScreenPool = new(ScreenReference('a'), pool);
+        var started = await fixture.Service.StartAsync(saved.PlanId, new("1.0", "unchanged-list"));
+        Assert.Equal(pool, Assert.Single(started.Jobs).Cohort!.Symbols);
+        var paper = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Workflow.StartAsync(new StartPaperRunRequest("1.0", "paper",
+            fixture.Source.UniverseSnapshotId, fixture.Request.Strategies[0], false, false, "limit", "day", "strategy_validated", "paper-key", "paper_shadow")));
+        Assert.Contains("research screen", paper.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Synthetic research-screen fingerprints and dataset IDs, one character repeated, so a change is a different character.</summary>
+    private static ResearchScreenReference ScreenReference(char fingerprint) => new("screen-a", new string(fingerprint, 64), new string(fingerprint, 64),
+        "daily", "sessions", ["five"], ["one"]);
+
     /// <summary>Provides explicitly synthetic transport facts without representing a real classifier evaluation or provider observation.</summary>
     private static DecisionContextEvidenceSummary SyntheticEvidence() => new(new("synthetic/profile.yaml", new('d', 64)),
         "synthetic-test", "1", ["synthetic-taxonomy"], ["synthetic-classifier"], [new string('e', 64)],
@@ -401,23 +438,26 @@ public sealed class BacktestPlanTests
         public string[] ExistingInputs => Directory.GetFiles(root);
         public SqliteJobRepository Jobs { get; private set; } = null!;
         public BacktestPlanService Service { get; private set; } = null!;
+        public RunWorkflowService Workflow { get; private set; } = null!;
+        public ResearchScreenPool? ScreenPool { get; set; }
         public StartBacktestRequest Request { get; private set; } = null!;
         public UniversePreviewResponse Source { get; private set; } = null!;
         private readonly string root = Path.Combine(Path.GetTempPath(), "tradingflow-plan-test-" + Guid.NewGuid().ToString("N"));
 
         /// <summary>Creates isolated persistence and immutable configuration/comparison evidence without provider collection.</summary>
-        public static async Task<Fixture> CreateAsync(int symbols, int strategies, int maximum = 32, IReadOnlyList<string>? sourceSymbols = null)
+        public static async Task<Fixture> CreateAsync(int symbols, int strategies, int maximum = 32, IReadOnlyList<string>? sourceSymbols = null,
+            string sourceKind = "wishlist")
         {
             var fixture = new Fixture();
             Directory.CreateDirectory(fixture.root);
             await fixture.Database.InitializeAsync();
             var source = new Mock<IUniverseSourceResolver>();
             source.Setup(item => item.ResolveAsync(It.IsAny<UniverseSourceSelectionRequest>(), "swing", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new UniverseSourceCapture("wishlist", "fixture", fixture.Clock.Now, fixture.Clock.Now.AddMinutes(3),
+                .ReturnsAsync(new UniverseSourceCapture(sourceKind, "fixture", fixture.Clock.Now, fixture.Clock.Now.AddMinutes(3),
                     (sourceSymbols ?? Enumerable.Range(0, symbols).Select(index => "S" + index.ToString("D3")).ToArray())
                         .Select(symbol => new DiscoverySymbolObservation(symbol)).ToArray()));
             var discovery = new UniverseDiscoveryService(source.Object, fixture.Database.Discovery, fixture.Database.Workflows, fixture.Database.Workflows, fixture.Clock);
-            fixture.Source = await discovery.PreviewAsync(new("1.0", "swing", null, [new("wishlist", "fixture")]));
+            fixture.Source = await discovery.PreviewAsync(new("1.0", "swing", null, [new(sourceKind, "fixture")]));
             fixture.Request = new("1.0", "cohorts", fixture.Source.UniverseSnapshotId,
                 Enumerable.Range(0, strategies).Select(index => new StrategyReference("strategy-" + index, "1.0.0", new string('b', 64))).ToArray(),
                 fixture.Clock.Now.AddMonths(-6), fixture.Clock.Now.AddDays(-1), 10000, 1, 25, 5, "use_cache", "full", "saved", "fixture.yaml");
@@ -470,9 +510,13 @@ public sealed class BacktestPlanTests
                     fixture.PreparedRequests.Add(reference!);
                     return reference;
                 });
+            // Research-screen sources resolve to the fixture's frozen pool; other sources never reach this call.
+            configuration.Setup(item => item.ResolveResearchScreenPoolAsync(It.IsAny<StartBacktestRequest>(), It.IsAny<UniversePreviewResponse>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => fixture.ScreenPool ?? throw new InvalidOperationException("No research screen in this fixture."));
             fixture.Jobs = new(fixture.Database);
             var limits = new RunQueueLimits(maximum, 16);
             var workflow = new RunWorkflowService(fixture.Jobs, fixture.Database.Workflows, fixture.Identities.Object, configuration.Object, fixture.Clock, limits);
+            fixture.Workflow = workflow;
             fixture.Service = new(fixture.Database.Workflows, fixture.Database.Workflows, fixture.Jobs, workflow, configuration.Object, limits, fixture.Clock);
             return fixture;
         }

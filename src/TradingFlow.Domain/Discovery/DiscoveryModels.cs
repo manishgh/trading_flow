@@ -13,6 +13,12 @@ public static class DiscoverySourceKinds
     public const string Operator = "operator";
     public const string Alert = "alert";
 
+    /// <summary>
+    /// A published, fingerprinted research screen (data/research/screens/*): read-only backtest research membership.
+    /// It is never an operational discovery source; paper and candidate runs refuse it.
+    /// </summary>
+    public const string ResearchScreen = "research_screen";
+
     public static IReadOnlySet<string> All { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         Wishlist,
@@ -20,7 +26,8 @@ public static class DiscoverySourceKinds
         News,
         Earnings,
         Operator,
-        Alert
+        Alert,
+        ResearchScreen
     };
 }
 

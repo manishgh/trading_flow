@@ -93,7 +93,9 @@ public sealed record UniverseConfig(
     DateTimeOffset? ResolvedAtUtc = null,
     DailyScreenRules? DailyEligibility = null,
     // Optional per-session ranking of the daily-eligible stocks (stocks in play); omitted from settings when unset.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DailyRankingRules? DailyRanking = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DailyRankingRules? DailyRanking = null,
+    // Per-session members read from a published research screen's ranked list instead of being recomputed in the run.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] RankedMembershipReference? RankedMembership = null)
 {
     /// <summary>Completed daily sessions the screen reads before a decision day: the eligibility rules' needs, or the legacy look-back.</summary>
     public int ScreenLookbackSessions => DailyEligibility?.PriorSessionsNeeded ?? Math.Max(LookbackDays, 1);
@@ -138,6 +140,12 @@ public sealed record UniverseConfig(
     public static UniverseConfig StaticUniverse { get; } =
         new(StaticMode, Array.Empty<string>(), 0m, 0m, 20, null, null);
 }
+
+/// <summary>
+/// universe.ranked_membership: the screen-manifest.json of a published research screen and its SHA-256. The run reads each
+/// session's members from the screen's ranked list (known at 09:35 New York) and refuses a manifest whose bytes changed.
+/// </summary>
+public sealed record RankedMembershipReference(string ManifestPath, string ManifestSha256);
 
 public sealed record TimeWindowConfig(
     string Type,
@@ -210,7 +218,24 @@ public sealed record ExecutionConfig(
     bool AllowExtendedHoursTrading = false);
 
 public sealed record ProviderConfig(
-    AlpacaProviderConfig Alpaca);
+    AlpacaProviderConfig Alpaca,
+    // Frozen evidence-catalog datasets read by market_data.provider evidence_catalog; omitted from settings when unused.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    EvidenceCatalogProviderConfig? EvidenceCatalog = null);
+
+/// <summary>
+/// providers.evidence_catalog: the immutable evidence catalog and the exact dataset IDs a research-screen run reads. Daily
+/// as-traded bars and XNYS exchange sessions come from the screen manifest; the five-minute and one-minute datasets are the
+/// ones whose collection attribute ranked_list_sha256 equals <see cref="RankedListSha256"/>. Nothing else is ever read.
+/// </summary>
+public sealed record EvidenceCatalogProviderConfig(
+    string CatalogPath,
+    string ArtifactRoot,
+    string RankedListSha256,
+    string DailyDatasetId,
+    string ExchangeSessionsDatasetId,
+    IReadOnlyList<string> FiveMinuteDatasetIds,
+    IReadOnlyList<string> OneMinuteDatasetIds);
 
 public sealed record AlpacaProviderConfig(
     string DataFeed);

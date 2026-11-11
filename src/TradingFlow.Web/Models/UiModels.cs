@@ -49,7 +49,9 @@ public sealed record BacktestRunRequest(
     string? ExecutionReplayPolicyId = null,
     BacktestRunConfig? ResolvedProfile = null,
     TradingFlow.Domain.Market.DailyScreenRules? DailyEligibility = null,
-    TradingFlow.Domain.Market.DailyRankingRules? DailyRanking = null);
+    TradingFlow.Domain.Market.DailyRankingRules? DailyRanking = null,
+    // A research-screen plan's frozen ranked list; the run reads each session's members from it.
+    RankedMembershipReference? RankedMembership = null);
 
 public sealed record StrategyParameterOverride(
     string StrategyPath,

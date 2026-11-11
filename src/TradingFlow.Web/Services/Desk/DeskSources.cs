@@ -23,7 +23,7 @@ public sealed record DeskSelection(DeskSource Source, IReadOnlyList<DeskMembersh
 /// <summary>Resolves observational membership without creating universes, candidates or orders.</summary>
 public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactory,
     IWishlistRepository wishlists, ScreenerPresetService presets, IScreenerSnapshotSource screener,
-    IMemoryCache cache, EarningsMonitor? earnings = null)
+    IMemoryCache cache, EarningsMonitor? earnings = null, ResearchScreenSources? researchScreens = null)
 {
     // Earnings groups come from the live earnings monitor. Membership is advisory: reporting is not an entry signal.
     public static readonly IReadOnlyList<DeskSource> EarningsSources = [
@@ -63,13 +63,19 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
             .ToArray();
     }
 
-    /// <summary>Offers real operator wishlists and saved Finviz filters to both research clients, excluding diagnostic and built-in screens.</summary>
+    /// <summary>
+    /// Offers real operator wishlists and saved Finviz filters to both research clients, excluding diagnostic and built-in
+    /// screens, plus published research screens as a third group. Research screens are offered here only, never on the desk.
+    /// </summary>
     public async Task<IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource>> BacktestChoicesAsync(CancellationToken token) =>
         (await CatalogAsync(token)).Where(source => source.Key.StartsWith("wishlist:", StringComparison.Ordinal) ||
                 source.Key.StartsWith("saved:", StringComparison.Ordinal))
             .Select(source => source.Key.StartsWith("wishlist:", StringComparison.Ordinal)
                 ? new TradingFlow.Contracts.V1.BacktestStockSource(source.Key, source.Name, "wishlist", Guid.Parse(source.Key[9..]), null)
-                : new TradingFlow.Contracts.V1.BacktestStockSource(source.Key, source.Name, "finviz", null, source.Query)).ToArray();
+                : new TradingFlow.Contracts.V1.BacktestStockSource(source.Key, source.Name, "finviz", null, source.Query))
+            .Concat((researchScreens?.List() ?? []).Select(name => new TradingFlow.Contracts.V1.BacktestStockSource(
+                ResearchScreenSources.KeyPrefix + name, name, TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen, null, null)))
+            .ToArray();
 
     public static IReadOnlyList<DeskMembership> Merge(IEnumerable<Wishlist> lists) => lists
         .SelectMany(list => list.Items.Where(item => item.Active && !String.IsNullOrWhiteSpace(item.Ticker))

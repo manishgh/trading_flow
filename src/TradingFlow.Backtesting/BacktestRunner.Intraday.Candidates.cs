@@ -2,6 +2,7 @@ using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Strategies;
 
@@ -10,9 +11,11 @@ namespace TradingFlow.Backtesting;
 public sealed partial class BacktestRunner
 {
     // Build ordinary persisted candidates with bounded previous/current session slices; execution alone observes future prices.
+    // With a frozen ranked list (memberSessions) a stock is evaluated only on its member sessions, and its bars are checked
+    // only on those sessions plus the earlier sessions their ATR and opening-volume baselines read.
     private async Task<IReadOnlyList<StrategyTickerBacktestBatch>> BuildIntradayCandidatesAsync(
         BacktestRunConfig run, StrategyDefinition strategy, PreparedBacktestMarket preparedMarket,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, UniverseMembership? memberSessions = null)
     {
         var schedules = candidateSessionSchedules ?? throw new InvalidDataException("Intraday candidates require authoritative exchange sessions.");
         var runtime = ResolveRuntimeStrategy(strategy);
@@ -22,15 +25,17 @@ public sealed partial class BacktestRunner
         var batches = new List<StrategyTickerBacktestBatch>();
         var zone = TimeZoneInfo.FindSystemTimeZoneById(strategy.Session.ExchangeTimezone);
         var priorDates = IntradayPreviousSessionDates(schedules);
+        var ranks = PublishedRanks(memberSessions);
         foreach (var ticker in run.Tickers)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var memberDays = memberSessions?.EligibleDays(ticker).ToHashSet();
             if (!preparedMarket.MarketState.TickerStates.TryGetValue(ticker, out var state) ||
                 !state.BarsByTimeframe.TryGetValue("5m", out var bars) ||
                 !state.SnapshotsByTimeframe.TryGetValue("5m", out var snapshots))
             {
                 batches.Add(StrategyTickerBacktestBatch.Failed(ticker, strategy, "five_minute_market_evidence_unavailable"));
-                batches[^1] = batches[^1] with { IntradayUnavailableFromUtc = preparedMarket.WindowStart };
+                batches[^1] = batches[^1] with { IntradayUnavailableFromUtc = FirstRequiredOpen(memberDays, schedules, zone, preparedMarket.WindowStart) };
                 continue;
             }
             var sessionBars = bars.Where(bar => IsIntradayRegularBar(bar, schedules, zone))
@@ -39,12 +44,15 @@ public sealed partial class BacktestRunner
             var snapshotMap = snapshots.ToDictionary(snapshot => snapshot.Timestamp);
             var candidates = new List<BacktestCandidateTrade>();
             var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
-            var quiet = await IntradayQuietIntervals.ResolveAsync(ticker, IntradayQuietIntervals.ListGaps(sessionBars, schedules, zone),
+            var checkedBars = memberDays is null ? sessionBars : RequiredSessionBars(sessionBars,
+                IntradayRequiredSessions(memberDays, schedules, priorDates, recipe is null ? 20 : RecipeBaselineSessions(recipe)));
+            var quiet = await IntradayQuietIntervals.ResolveAsync(ticker, IntradayQuietIntervals.ListGaps(checkedBars, schedules, zone),
                 zone, CreateIntervalTradePrintSource(run), MaximumQuietIntervalGapsPerStock, cancellationToken);
             var quietIntervals = quiet.QuietIntervals.Count > 0 ? quiet.QuietIntervals : null;
             DateTimeOffset? unavailableFrom = FindIntradaySourceGap(sessionBars, schedules, priorDates, zone,
-                preparedMarket.WindowStart, preparedMarket.WindowEnd, quietIntervals);
-            if (!sessionBars.Values.SelectMany(value => value).Any(bar => bar.Timestamp >= preparedMarket.WindowStart &&
+                preparedMarket.WindowStart, preparedMarket.WindowEnd, quietIntervals, memberDays);
+            // With member sessions the coverage check above already stops results at the first member session lacking bars.
+            if (memberDays is null && !sessionBars.Values.SelectMany(value => value).Any(bar => bar.Timestamp >= preparedMarket.WindowStart &&
                 bar.Timestamp.AddMinutes(5) <= preparedMarket.WindowEnd)) unavailableFrom = preparedMarket.WindowStart;
             if (unavailableFrom is not null) diagnostics.IncrementRejection("required_five_minute_setup_source_incomplete");
             using var journal = new BacktestCandidateJournal(CreateCandidateAuditJournalPath(strategy, ticker));
@@ -54,6 +62,7 @@ public sealed partial class BacktestRunner
                 $"{run.RunName}:{runtime.Identity.StrategyId}:{ticker}", preparedMarket.EvaluationStart);
             foreach (var day in sessionBars.OrderBy(pair => pair.Key))
             {
+                if (memberDays is not null && !memberDays.Contains(day.Key)) continue;
                 if (!priorDates.TryGetValue(day.Key, out var priorDate) ||
                     !sessionBars.TryGetValue(priorDate, out var priorBars))
                 {
@@ -63,7 +72,7 @@ public sealed partial class BacktestRunner
                 // The published recipe declares its own volume look-back and ATR history; the earlier policies keep twenty sessions.
                 var baselineSessions = schedules.Values.Where(session => session.IsTradingDay && session.TradeDate < day.Key)
                     .OrderBy(session => session.TradeDate)
-                    .TakeLast(recipe is null ? 20 : Math.Max(recipe.VolumeLookbackSessions!.Value, recipe.AtrSessions!.Value + 1)).ToArray();
+                    .TakeLast(recipe is null ? 20 : RecipeBaselineSessions(recipe)).ToArray();
                 var baselineBars = recipe is null
                     ? OpeningRangeBaselineBars(sessionBars, baselineSessions, zone, 15)
                     : OpeningRangeBaselineBars(sessionBars, baselineSessions.TakeLast(recipe.VolumeLookbackSessions!.Value).ToList(),
@@ -146,7 +155,8 @@ public sealed partial class BacktestRunner
                     }
                     budget.Reserve();
                     candidates.Add(CreateIntradayPendingCandidate(strategy, ticker,
-                        persisted.Candidate.CandidateId.ToString("D"), pending, confirmation.Volume));
+                        persisted.Candidate.CandidateId.ToString("D"), pending, confirmation.Volume) with
+                        { SelectionScore = RankSelectionScore(ranks, ticker, day.Key) });
                     diagnostics.CandidateTradeCount++;
                 }
             }
@@ -216,13 +226,16 @@ public sealed partial class BacktestRunner
         return Enumerable.Range(0, rangeBars).Any(slot => quietIntervals.Contains(open.AddMinutes(slot * 5)));
     }
 
-    // Confirmed quiet intervals (no price-setting trade, proven by trade records) count as covered.
+    // Confirmed quiet intervals (no price-setting trade, proven by trade records) count as covered. With memberSessions only
+    // those sessions (and each one's previous session) must be complete; other sessions are never checked.
     internal static DateTimeOffset? FindIntradaySourceGap(IReadOnlyDictionary<DateOnly, OhlcvBar[]> sessionBars,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules, IReadOnlyDictionary<DateOnly, DateOnly> priorDates,
-        TimeZoneInfo zone, DateTimeOffset start, DateTimeOffset end, IReadOnlySet<DateTimeOffset>? quietIntervals = null)
+        TimeZoneInfo zone, DateTimeOffset start, DateTimeOffset end, IReadOnlySet<DateTimeOffset>? quietIntervals = null,
+        IReadOnlySet<DateOnly>? memberSessions = null)
     {
         foreach (var session in schedules.Values.Where(value => value.IsTradingDay).OrderBy(value => value.TradeDate))
         {
+            if (memberSessions is not null && !memberSessions.Contains(session.TradeDate)) continue;
             var open = IntradayCalendarAtUtc(session.TradeDate, session.RegularOpen, zone);
             var close = IntradayCalendarAtUtc(session.TradeDate, session.RegularClose, zone);
             if (close <= start || open >= end) continue;
@@ -242,6 +255,53 @@ public sealed partial class BacktestRunner
         }
         return null;
     }
+
+    // Earlier exchange sessions the published recipe reads before a decision day: its opening-volume look-back or its ATR
+    // sessions plus the one before the first (the true range needs a previous close), whichever is longer.
+    private static int RecipeBaselineSessions(OpeningRangeBreakoutRules recipe) =>
+        Math.Max(recipe.VolumeLookbackSessions!.Value, recipe.AtrSessions!.Value + 1);
+
+    // A stock's member sessions plus, for each, its previous exchange session and the baseline sessions before it: the only
+    // sessions whose five-minute bars a frozen ranked list makes the run read.
+    internal static IReadOnlySet<DateOnly> IntradayRequiredSessions(IReadOnlySet<DateOnly> memberSessions,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules, IReadOnlyDictionary<DateOnly, DateOnly> priorDates, int baselineSessions)
+    {
+        var trading = schedules.Values.Where(session => session.IsTradingDay).Select(session => session.TradeDate).Order().ToArray();
+        var required = new HashSet<DateOnly>(memberSessions);
+        foreach (var member in memberSessions)
+        {
+            if (priorDates.TryGetValue(member, out var previous)) required.Add(previous);
+            var index = Array.BinarySearch(trading, member);
+            if (index < 0) continue;
+            for (var earlier = Math.Max(0, index - baselineSessions); earlier < index; earlier++) required.Add(trading[earlier]);
+        }
+        return required;
+    }
+
+    // Each member's published rank by upper-case symbol and session; empty without a frozen ranked list.
+    private static IReadOnlyDictionary<(string Symbol, DateOnly Session), int> PublishedRanks(UniverseMembership? members) =>
+        (members?.SessionRankings ?? []).SelectMany(session => session.Members)
+            .ToDictionary(member => (member.Security.Symbol.ToUpperInvariant(), member.Session), member => member.Rank);
+
+    // The admission priority of a ranked candidate: 1/rank, so rank 1 is admitted first among orders triggering at the same
+    // time under the gross exposure limit (higher scores go first). Zero, as before, without a published rank.
+    internal static decimal RankSelectionScore(IReadOnlyDictionary<(string Symbol, DateOnly Session), int> ranks, string ticker, DateOnly session) =>
+        ranks.TryGetValue((ticker.ToUpperInvariant(), session), out var rank) && rank > 0 ? 1m / rank : 0m;
+
+    // Where a stock without any five-minute bars stops results: the open of its first member session inside the window
+    // (that session cannot be evaluated), or the window start when the run has no member sessions.
+    private static DateTimeOffset FirstRequiredOpen(IReadOnlySet<DateOnly>? memberDays,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules, TimeZoneInfo zone, DateTimeOffset windowStart)
+    {
+        var opens = (memberDays ?? new HashSet<DateOnly>()).Where(day => schedules.TryGetValue(day, out var session) && session.IsTradingDay)
+            .Select(day => IntradayCalendarAtUtc(day, schedules[day].RegularOpen, zone)).Where(open => open >= windowStart).ToArray();
+        return memberDays is null || opens.Length == 0 ? windowStart : opens.Min();
+    }
+
+    // The session bars of the required sessions only, so gaps elsewhere are neither listed nor sent to the trade-record check.
+    private static IReadOnlyDictionary<DateOnly, OhlcvBar[]> RequiredSessionBars(IReadOnlyDictionary<DateOnly, OhlcvBar[]> sessionBars,
+        IReadOnlySet<DateOnly> required) =>
+        sessionBars.Where(pair => required.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
 
     // Convert calendar wall-clock bounds for explicit interval coverage checks.
     private static DateTimeOffset IntradayCalendarAtUtc(DateOnly date, TimeOnly time, TimeZoneInfo zone) =>
