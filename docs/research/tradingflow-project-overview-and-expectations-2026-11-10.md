@@ -245,6 +245,13 @@ eligibility rules.
 - **No-trade openings:** a confirmed no-trade opening counts as zero volume.
 - **No comparison run:** 2.0.0 and 2.1.0 need adjusted prices, so they cannot run beside 2.2.0 on these bars.
 
+**User decisions, later on 11 November** (these replace earlier points where they conflict):
+- **Delisted stocks:** ignored. The survivor bias is disclosed and not stress-tested.
+- **Splits:** a stock is excluded on any day whose 15-session look-back contains a split ex-date known by that day. No split correction is built, so Q1 and the split part of 2.2.0 are dropped.
+- **Missing data never stops the backtest:** a selected stock-day without the candles it needs is excluded with a named reason, and the run continues. This replaces "keep the existing missing-candle rule", and E2 becomes moot.
+- **Open position when candles run out:** it is closed at the last available price and labelled.
+- **Reporting exclusions:** every exclusion is counted; escalate only above 5% of selected stock-days.
+
 **Review findings still open** (independent engineering and quant reviews, 11 November). Fixing them stopped when the weekly usage limit was reached:
 - **ORB 2.2.0 is not built yet.** It needs:
   - a new strategy file and catalog entry;
