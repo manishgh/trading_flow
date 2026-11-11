@@ -5,7 +5,12 @@ using TradingFlow.Engine.Indicators;
 namespace TradingFlow.Backtesting;
 
 public sealed record NativeDailyAccountingContext(DateTimeOffset StartUtc, DateTimeOffset CutoffUtc,
-    IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Sessions, bool AllowOpenAtCutoff);
+    IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Sessions, bool AllowOpenAtCutoff)
+{
+    /// <summary>Research-screen runs close a holding at its last real close when its daily bars stop, instead of
+    /// leaving later valuation unavailable. Every other run keeps the original behaviour.</summary>
+    public bool CloseHoldingsWithoutBars { get; init; }
+}
 
 /// <summary>Values completed native-daily simulations by their source session, retaining original execution stamps.</summary>
 public static class NativeDailySessionLedger
@@ -99,7 +104,7 @@ public static class NativeDailySessionLedger
     }
 
     // The saved calendar must explicitly cover every date; absence never means a holiday.
-    private static DateOnly[] ResolveSessions(NativeDailyAccountingContext context)
+    internal static DateOnly[] ResolveSessions(NativeDailyAccountingContext context)
     {
         if (context.CutoffUtc <= context.StartUtc) throw new InvalidDataException("Native valuation needs a later fixed cutoff.");
         var first = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(context.StartUtc, NewYork).DateTime);

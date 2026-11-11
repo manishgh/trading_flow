@@ -18,21 +18,27 @@ public sealed partial class BacktestRunner
         run.Universe?.RankedMembership is not null ? [] : batches.Where(batch => !batch.Succeeded).ToArray();
 
     /// <summary>
-    /// Publishes each skipped stock work item (stock, strategy, reason) and their count beside the results when failed items
-    /// were skipped rather than stopping the run; writes nothing otherwise.
+    /// Publishes the run's data gaps beside the results: each skipped stock work item (stock, strategy, reason) and each
+    /// holding closed at its last real close because its daily bars stopped, with both counts. Writes nothing when neither
+    /// occurred.
     /// </summary>
-    private async Task PublishSkippedStocksAsync(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches,
-        IReadOnlyList<StrategyTickerBacktestBatch> stopping, CancellationToken cancellationToken)
+    private async Task PublishDataGapsAsync(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches,
+        IReadOnlyList<StrategyTickerBacktestBatch> stopping, IReadOnlyList<BacktestTrade> portfolioTrades,
+        CancellationToken cancellationToken)
     {
         var skipped = batches.Where(batch => !batch.Succeeded && !stopping.Contains(batch)).ToArray();
-        if (skipped.Length == 0) return;
+        var closed = portfolioTrades
+            .Where(trade => trade.ExitReason == ChronologicalBacktestExecutionCoordinator.DataEndedExitReason).ToArray();
+        if (skipped.Length == 0 && closed.Length == 0) return;
         var payload = new
         {
-            runName = run.RunName, skippedStockWorkItems = skipped.Length,
+            runName = run.RunName, skippedStockWorkItems = skipped.Length, dataEndedLastCloseExits = closed.Length,
             items = skipped.OrderBy(batch => batch.Ticker, StringComparer.Ordinal)
-                .Select(batch => new { ticker = batch.Ticker, strategyId = batch.StrategyId, reason = batch.ErrorMessage }).ToArray()
+                .Select(batch => new { ticker = batch.Ticker, strategyId = batch.StrategyId, reason = batch.ErrorMessage }).ToArray(),
+            dataEndedExits = closed.Select(trade => new { ticker = trade.Ticker, strategyId = trade.StrategyId,
+                candidateId = trade.CandidateId, lastCloseUtc = trade.ExitTimestamp, exitPrice = trade.ExitPrice }).ToArray()
         };
-        await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-skipped-stocks.json"),
+        await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-data-gaps.json"),
             JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 

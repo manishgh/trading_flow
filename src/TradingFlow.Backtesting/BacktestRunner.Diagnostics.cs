@@ -599,7 +599,9 @@ public sealed partial class BacktestRunner
     {
         var admissionAudit = new PortfolioAdmissionAudit();
         var execution = new ChronologicalBacktestExecutionCoordinator(
-            portfolio, marketBars, executionEvidence: executionEvidence);
+            portfolio, marketBars, executionEvidence: executionEvidence,
+            closeHoldingsWithoutBarsSessions: accounting is { CloseHoldingsWithoutBars: true }
+                ? NativeDailySessionLedger.ResolveSessions(accounting) : null);
 
         foreach (var entryGroup in candidates
                      .OrderBy(candidate => candidate.EntryTimestamp.ToUniversalTime())

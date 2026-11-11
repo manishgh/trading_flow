@@ -32,16 +32,30 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     private readonly Dictionary<string, long> _sourceSequences = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownIdentities = new(StringComparer.Ordinal);
     private readonly IExecutionEventSink? _executionEvidence;
+    private readonly DateOnly[] _closeHoldingsSessions;
+    private readonly HashSet<(string Symbol, DateOnly Session)> _dailyBarSessions;
+    private int _nextHoldingSession;
+    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
 
+    /// <summary>Exit reason of a holding closed at its last real close because its daily bars stopped.</summary>
+    public const string DataEndedExitReason = "data_ended_last_close";
+
+    // closeHoldingsWithoutBarsSessions: the ordered trading sessions on which a held stock without a daily bar is
+    // closed at its last real close (research-screen runs only); null keeps the original behaviour exactly.
     public ChronologicalBacktestExecutionCoordinator(
         PortfolioConfig portfolio,
         IReadOnlyCollection<OhlcvBar> marketBars,
         IDeterministicExecutionSimulator? simulator = null,
-        IExecutionEventSink? executionEvidence = null)
+        IExecutionEventSink? executionEvidence = null,
+        IReadOnlyList<DateOnly>? closeHoldingsWithoutBarsSessions = null)
     {
         _portfolio = portfolio;
         _simulator = simulator ?? new DeterministicExecutionSimulator();
         _executionEvidence = executionEvidence;
+        _closeHoldingsSessions = closeHoldingsWithoutBarsSessions?.ToArray() ?? [];
+        _dailyBarSessions = _closeHoldingsSessions.Length == 0 ? [] : marketBars
+            .Where(bar => bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase))
+            .Select(bar => (NormalizeSymbol(bar.Ticker), SessionOf(bar.Timestamp))).ToHashSet();
         _duplicateBarIdentities = marketBars.GroupBy(bar => new MarketBarIdentity(
             NormalizeSymbol(bar.Ticker), bar.Timeframe.Trim().ToLowerInvariant(), bar.Timestamp.ToUniversalTime()))
             .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
@@ -81,6 +95,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         while (_nextTimelineIndex < _timeline.Length && _timeline[_nextTimelineIndex].AvailableAtUtc <= cutoff)
         {
             if (_failures.Count > 0) return;
+            CloseHoldingsWithoutBarsThrough(_timeline[_nextTimelineIndex]);
             AdvanceBar(_timeline[_nextTimelineIndex++]);
         }
     }
@@ -175,8 +190,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         {
             if (cutoffUtc is { } cutoff && _timeline[_nextTimelineIndex].AvailableAtUtc > cutoff) break;
             if (_failures.Count > 0) return;
+            CloseHoldingsWithoutBarsThrough(_timeline[_nextTimelineIndex]);
             AdvanceBar(_timeline[_nextTimelineIndex++]);
         }
+        if (_closeHoldingsSessions.Length > 0 && _failures.Count == 0)
+            CloseHoldingsWithoutBarsThrough(_closeHoldingsSessions[^1]);
 
         foreach (var tracker in _active.Where(item => !item.IsTerminal).ToArray())
         {
@@ -331,29 +349,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             : 0;
         _sourceSequences[symbol] = sequence;
 
-            var executionSlippagePolicies = trackers
-                .Select(tracker => Math.Max(0m, tracker.Plan.Strategy.Execution.SlippageBps))
-                .Distinct()
-                .ToArray();
-            if (executionSlippagePolicies.Length != 1)
-            {
-                throw new InvalidOperationException(
-                    $"Symbol '{symbol}' has mixed execution slippage policies in one market slice.");
-            }
-
-            var baseSlippageBps = executionSlippagePolicies[0];
-            var policy = new ExecutionSimulationPolicy(
-                _portfolio.MaxBarParticipationPct,
-                baseSlippageBps,
-                SyntheticSpreadBps: 0m,
-                _portfolio.ImpactBpsAtMaxParticipation,
-                _portfolio.FixedBuyFee,
-                _portfolio.FixedSellFee,
-                _portfolio.SecFeeRate,
-                _portfolio.FinraTafPerShare,
-                _portfolio.FinraTafCap,
-                InputPriceIncludesExecutionFriction: baseSlippageBps == 0m,
-                MaximumTrackedOrderContracts: _portfolio.MaxExecutionOrderHistory);
+            var policy = SlicePolicy(symbol, trackers);
             var step = _simulator.Advance(new ExecutionStepRequest(
                 _state,
                 new ExecutionMarketSlice(
@@ -383,6 +379,108 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             }
         _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
+
+    // Build the shared cost policy for one symbol slice; every tracker on a symbol must carry one slippage setting.
+    private ExecutionSimulationPolicy SlicePolicy(string symbol, IReadOnlyCollection<ExecutionTracker> trackers)
+    {
+        var executionSlippagePolicies = trackers
+            .Select(tracker => Math.Max(0m, tracker.Plan.Strategy.Execution.SlippageBps))
+            .Distinct()
+            .ToArray();
+        if (executionSlippagePolicies.Length != 1)
+            throw new InvalidOperationException($"Symbol '{symbol}' has mixed execution slippage policies in one market slice.");
+        var baseSlippageBps = executionSlippagePolicies[0];
+        return new ExecutionSimulationPolicy(
+            _portfolio.MaxBarParticipationPct,
+            baseSlippageBps,
+            SyntheticSpreadBps: 0m,
+            _portfolio.ImpactBpsAtMaxParticipation,
+            _portfolio.FixedBuyFee,
+            _portfolio.FixedSellFee,
+            _portfolio.SecFeeRate,
+            _portfolio.FinraTafPerShare,
+            _portfolio.FinraTafCap,
+            InputPriceIncludesExecutionFriction: baseSlippageBps == 0m,
+            MaximumTrackedOrderContracts: _portfolio.MaxExecutionOrderHistory);
+    }
+
+    // A daily bar completes its own session; any other bar only proves the sessions before it are complete.
+    private void CloseHoldingsWithoutBarsThrough(TimelineBar bar)
+    {
+        if (_closeHoldingsSessions.Length == 0) return;
+        var session = SessionOf(bar.StartUtc);
+        CloseHoldingsWithoutBarsThrough(bar.Bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase)
+            ? session : session.AddDays(-1));
+    }
+
+    // Walk each newly reached trading session once and close every holding whose stock has no daily bar on it.
+    private void CloseHoldingsWithoutBarsThrough(DateOnly reached)
+    {
+        while (_nextHoldingSession < _closeHoldingsSessions.Length && _closeHoldingsSessions[_nextHoldingSession] <= reached)
+        {
+            var session = _closeHoldingsSessions[_nextHoldingSession++];
+            foreach (var group in HoldingsWithoutBar(session).GroupBy(t => NormalizeSymbol(t.Plan.Candidate.Ticker)))
+                CloseAtLastClose(group.Key, group.ToArray());
+            if (_failures.Count > 0) return;
+        }
+    }
+
+    // Held positions whose stock printed no daily bar on this session although it has an earlier real bar.
+    private ExecutionTracker[] HoldingsWithoutBar(DateOnly session) => _active
+        .Where(t => !t.IsTerminal && t.EntryFilledQuantity > t.ExitFilledQuantity)
+        .Where(t => !_dailyBarSessions.Contains((NormalizeSymbol(t.Plan.Candidate.Ticker), session)))
+        .Where(t => _lastBarsBySymbol.TryGetValue(NormalizeSymbol(t.Plan.Candidate.Ticker), out var last) &&
+            SessionOf(last.StartUtc) < session)
+        .OrderBy(t => t.Identity, StringComparer.Ordinal).ToArray();
+
+    // Sell (or cover) each holding at its last real close through the shared simulator. The slice reuses that bar's
+    // close and volume and ends at the bar's own completion time, so the fill belongs to the last real session and no
+    // bar enters the bar stream. Working entry, exit and protective orders are cancelled first.
+    private void CloseAtLastClose(string symbol, IReadOnlyList<ExecutionTracker> trackers)
+    {
+        var last = _lastBarsBySymbol[symbol];
+        var start = last.EndUtc.AddTicks(-1);
+        var commands = new List<SimulatedOrderCommand>();
+        foreach (var tracker in trackers) AddDataEndedExit(tracker, start, commands);
+        var sequence = _sourceSequences.TryGetValue(symbol, out var prior) ? prior + 1 : 0;
+        _sourceSequences[symbol] = sequence;
+        var close = last.Bar.Close;
+        var step = _simulator.Advance(new ExecutionStepRequest(_state,
+            new ExecutionMarketSlice(symbol, start, last.EndUtc, last.AvailableAtUtc, sequence, IsCompleted: true,
+                close, close, close, close, last.Bar.Volume),
+            commands, SlicePolicy(symbol, trackers)));
+        _state = step.State;
+        AppendExecutionEvidence(step.Events);
+        ApplyEvents(step.Events, last.Bar);
+        FinalizeTerminalTrackers();
+        foreach (var tracker in trackers.Where(t => !t.IsTerminal)) Fail(tracker, "data_ended_last_close_not_filled");
+        _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
+    }
+
+    // Queue the cancellations and the risk-reducing market exit for one holding whose bars stopped.
+    private void AddDataEndedExit(ExecutionTracker tracker, DateTimeOffset knownAt, ICollection<SimulatedOrderCommand> commands)
+    {
+        CancelProtectiveOrders(knownAt, tracker, commands);
+        foreach (var orderId in new[] { tracker.EntryClientOrderId, tracker.ExitClientOrderId }
+                     .Where(id => _state.WorkingOrders.ContainsKey(id)))
+        {
+            var order = _state.WorkingOrders[orderId];
+            commands.Add(new SimulatedOrderCommand(ExecutionCommandKind.Cancel, $"cancel-{orderId}-{_nextCommandSequence}",
+                tracker.Plan.Candidate.Ticker, order.Command.Side, order.Command.OrderType, 0, knownAt, _nextCommandSequence++,
+                order.Command.IsRiskReducing, TargetClientOrderId: orderId));
+        }
+        tracker.ExitSubmitted = true;
+        tracker.MarketExitSubmitted = true;
+        commands.Add(new SimulatedOrderCommand(ExecutionCommandKind.Submit, tracker.DataEndedClientOrderId,
+            tracker.Plan.Candidate.Ticker, tracker.IsShort ? SimulatedOrderSide.Buy : SimulatedOrderSide.Sell,
+            SimulatedOrderType.Market, tracker.EntryFilledQuantity - tracker.ExitFilledQuantity, knownAt, _nextCommandSequence++,
+            IsRiskReducing: true, SimulatedTimeInForce.Day,
+            FixedFeeGroupId: $"exit-fee-{tracker.Identity}", OcoGroupId: tracker.Identity));
+    }
+
+    // New York trading date of a bar opening or execution stamp.
+    private static DateOnly SessionOf(DateTimeOffset timestamp) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, NewYork).DateTime);
 
     private void AppendExecutionEvidence(IReadOnlyCollection<SimulatedExecutionEvent> events)
     {
@@ -897,6 +995,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public ChronologicalExecutionPlan Plan { get; } = plan;
         public string EntryClientOrderId { get; } = entryClientOrderId;
         public string ExitClientOrderId { get; } = exitClientOrderId;
+        public string DataEndedClientOrderId => $"data-ended-{Identity}";
         public string? StopClientOrderId { get; private set; }
         public string? TargetClientOrderId { get; private set; }
         public int StopOrderVersion { get; private set; }
@@ -939,7 +1038,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public bool OwnsOrder(string clientOrderId)
         {
             if (EntryClientOrderId.Equals(clientOrderId, StringComparison.Ordinal) ||
-                ExitClientOrderId.Equals(clientOrderId, StringComparison.Ordinal))
+                ExitClientOrderId.Equals(clientOrderId, StringComparison.Ordinal) ||
+                DataEndedClientOrderId.Equals(clientOrderId, StringComparison.Ordinal))
             {
                 return true;
             }
@@ -988,6 +1088,10 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             else if (TargetOrderIds.Contains(clientOrderId))
             {
                 FilledExitReason = "take_profit";
+            }
+            else if (DataEndedClientOrderId.Equals(clientOrderId, StringComparison.Ordinal))
+            {
+                FilledExitReason = DataEndedExitReason;
             }
         }
     }

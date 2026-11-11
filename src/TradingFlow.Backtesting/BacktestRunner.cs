@@ -694,14 +694,15 @@ public sealed partial class BacktestRunner(
             s.Session.ExchangeTimezone == "America/New_York" && !s.Session.IsContinuousMarket)
             ? new NativeDailyAccountingContext(preparedMarket.WindowStart.ToUniversalTime(), preparedMarket.WindowEnd.ToUniversalTime(),
                 candidateSessionSchedules ?? throw new InvalidDataException("Native daily accounting requires authoritative sessions."),
-                run.Engine.PrecommittedLiquidationSourceUtc is null) : null;
+                run.Engine.PrecommittedLiquidationSourceUtc is null)
+                { CloseHoldingsWithoutBars = run.Universe?.RankedMembership is not null } : null;
         var eventOutcome = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
             ? await ExecuteEventPortfolioAsync(run, strategies, candidates, allBars,
                 universeMembership, regimeCalendars, portfolioExecutionJournal, cancellationToken)
             : accounting is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
                 universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting) : null;
         var stoppingBatches = StoppingBatches(run, batches);
-        await PublishSkippedStocksAsync(run, batches, stoppingBatches, cancellationToken);
+        await PublishDataGapsAsync(run, batches, stoppingBatches, eventOutcome?.Trades ?? [], cancellationToken);
         if (eventOutcome?.State is { } nativeState && stoppingBatches.Count > 0)
             eventOutcome = eventOutcome with { State = NativeDailySessionLedger.MarkUnavailableFrom(nativeState,
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(preparedMarket.WindowStart,
