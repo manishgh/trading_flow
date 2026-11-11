@@ -1,4 +1,4 @@
-# TradingFlow: project overview, strategies, results and expectations (10 November 2026)
+# TradingFlow: project overview, strategies, results and expectations (10 November 2026, updated 11 November)
 
 This document explains the whole project in one place: what TradingFlow is, how a backtest flows
 through the system, every strategy we keep, what the tests have shown so far, what we should expect
@@ -29,11 +29,49 @@ What it may do today (from `docs/operating-boundaries.md`):
   paper-shadow trading, execution checks and an explicit human decision.
 - The current overall decision is `RETAIN_RESEARCH`: no strategy is eligible for paper trading.
 
+### 1.1 The platform underneath
+
+- **Web app** (ASP.NET Core, `127.0.0.1:5088`):
+  - **Desk:** the paper-trading view. It shows discovered stocks, warming, signals, open trades and rejections.
+  - **Strategy Lab:** the Backtests page.
+  - **News:** a rolling feed from Finviz, Alpaca and UN news, with sentiment from a local FinBERT model.
+  - **Earnings:** each company's release with live prices around it and the move from the close before release.
+  - Wishlists and the Finviz screener.
+- **Market data:**
+  - **History:** Alpaca SIP, the consolidated feed of all US exchanges, through a bounded candle pipeline. Candles are stored as files under `data/candles`.
+  - **Paper trading:** one live Alpaca SIP websocket feeds warm per-stock market state. When that state is missing, the system falls back to the historical pipeline.
+- **Evidence catalog:** `data/research/evidence`. Immutable Parquet files with a SQLite index, holding:
+  - as-traded daily bars, opening five-minute bars, news and corporate actions;
+  - a security master that includes inactive stocks;
+  - the exchange calendar.
+
+  Every download keeps the provider's raw response and a completion record per request, so a missing bar can be told apart from a failed download.
+- **Paper broker:** Alpaca paper. Only swing (daily) strategies may paper trade. Same-day strategies stay backtest-only until a paper driver for them is designed and approved. No catalog strategy currently holds a paper authorization.
+- **Known operational issue (11 November):** the Earnings page's history refresh fails because some Finviz earnings items arrive without a company name. Current-day earnings tracking keeps working.
+
+### 1.2 How same-day (intraday) trading is simulated
+
+- Signals use completed five-minute candles only. Entries are stop orders that rest from 09:35 New York and fill inside a later candle.
+- **Same-candle entry and stop:** when one five-minute candle reaches both the entry and the stop, the order of the two is unknown.
+  - The replay counts it as a loss (`stop_loss_entry_bar_order_unknown`).
+  - One-minute candles can settle the order, but only when they reproduce that five-minute candle's high and low exactly.
+  - If entry and stop fall in the same minute, it is still a loss.
+- **Missing candles:** Alpaca leaves out a five-minute candle when no trade in it set a price. The replay then checks Alpaca's SIP trade records for that interval.
+  - If only odd-lot or average-price trades occurred, the interval counts as quiet.
+  - Any other gap stops the portfolio's results from that point.
+- **Costs and limits:**
+  - $0.0035 per share commission and 10 basis points slippage per side;
+  - fills capped at 5% of the candle's volume;
+  - a 4x gross exposure limit, whose room is fixed when each candle opens and claimed in trigger order.
+- **Not modelled:** quote-based spreads, short-borrow availability and borrow cost. Long-only results are the executable ones.
+
 ## 2. How a backtest flows through the system
 
 1. **Stock source.** A saved wishlist (for example `volatile`, 25 high-volatility stocks) or a saved
    Finviz screen supplies the candidate stocks. These are today's lists, so a test on them carries
-   hindsight: the list already reflects which stocks became interesting.
+   hindsight: the list already reflects which stocks became interesting. Since 11 November a third
+   source exists for backtests only: a published **research screen**. It is a fingerprinted daily list,
+   computed from frozen as-traded data, that names which stocks qualified on each past day.
 2. **Saved plan.** On the Backtests page (or its API) the operator picks strategies, a test window,
    starting capital, risk limits and the stock source, previews, then saves an immutable plan.
    - Stocks can be split into groups, alphabetically or in a seeded random order (built 9 November);
@@ -62,7 +100,7 @@ deleted.
 
 ## 3. The strategies we keep
 
-The catalog (`configs/strategy-catalog.json`) holds eight research artifacts. A strategy version
+The catalog (`configs/strategy-catalog.json`) holds nine research artifacts, with ORB 2.2.0 approved but not yet built. A strategy version
 that fails its frozen pass/fail rules is retired and recorded in
 `docs/research/retired-strategy-artifacts-2026-11-07.md`.
 
@@ -99,7 +137,14 @@ stocks by past return, while ours uses a stretch threshold from the user's saved
 | Version | Rules | Status |
 |---|---|---|
 | `technical.opening-range-breakout@1.2.0` | 15-minute opening range; after a completed five-minute close beyond the range, enter at the next open in that direction; stop at the breakout candle; 3R target; exit before the close. | Our own baseline (approved 27 October). |
-| `technical.opening-range-breakout@2.0.0` | Zarattini, Barbon and Aziz (2024, SSRN 4729284) trade rules: 5-minute range, trade in the direction of its body, stop order at the range, stop 10% of the 14-day ATR, no target, one entry per stock per day. | The paper's daily selection of the 20 "stocks in play" is **not** applied yet. |
+| `technical.opening-range-breakout@2.0.0` | Zarattini, Barbon and Aziz (2024, SSRN 4729284) trade rules: 5-minute range, trade in the direction of its body, stop order at the range, stop 10% of the 14-day ATR, no target, one entry per stock per day. | Rules check on a given stock list; needs Alpaca's adjusted prices. |
+| `technical.opening-range-breakout@2.1.0` | 2.0.0 plus two published rules: stop measured from the actual fill, exit at the official 16:00 close. Hash `b71cf7b8…`. | Approved 10 November; needs adjusted prices. |
+| `technical.opening-range-breakout@2.2.0` (approved 11 November, **not built**) | 2.1.0 on as-traded prices. The 14-day ATR and the 14-session opening-volume baseline are corrected for splits known by the decision day. A confirmed no-trade 09:30-09:35 interval counts as zero volume. | For the whole-market stocks-in-play test. |
+
+On 11 November the user chose as-traded prices over Alpaca's adjusted bars. Adjusted bars rescale the
+past for splits and dividends paid after the trade day, which moves a stop that is only 0.3-0.6% wide
+by about one unit of risk. Fills, the $5 floor, per-share commission and share counts are only real in
+as-traded prices.
 
 ### 3.4 Recovery with news avoidance (swing, daily)
 
@@ -127,6 +172,12 @@ eligibility rules.
     as losses because the order inside the candle is unknown.
   - The stocks moved a lot but in both directions; breakouts need follow-through in one direction.
   - The paper's edge is attributed to its daily stock selection, which we have not applied.
+- **ORB with the paper's costs and sizing, October 2026** (plan 105, 11 November).
+  - **Set-up:** positions up to 100% of equity, 4x gross, $0.0035/share, same groups.
+  - **Results:** 2.0.0 lost -7.79% to -18.74% and 2.1.0 lost -8.15% to -17.49% in groups 2-5. All three runs of 2.0.0 matched exactly.
+  - **Costs:** commission was under 5% of each loss, so costs no longer explain the result. Larger positions multiplied the same losing trades.
+  - **Same-candle losses:** 81 of 2.1.0's 121 trades entered and hit the stop inside one five-minute candle and were counted as losses. Only 8 trades lasted to the close.
+  - **Next:** these 81 can only be settled with one-minute candles.
 - **Snapback, 21 Apr - 20 Oct 2026** (rebuilt news evidence, package `7360e18a`). About 2 long and
   16 short trades in total; most stock-days failed the $20 / 2M-share eligibility rule or were not
   stretched enough; recent company news vetoed 6 long and 86 short setups. Too few trades to judge.
@@ -162,72 +213,71 @@ eligibility rules.
 
 ## 6. Work in progress and open decisions
 
-### 6.1 ORB stocks-in-play build (uncommitted, review in progress)
+### 6.1 ORB stocks-in-play, whole market (status 11 November)
 
-Implemented in `C:\project\trading_flow_swing` (branch `approved-execution-and-signal-study`), not
-committed, independent code review running:
+**Pushed to main.**
+- `de25b77`, `33269e4`, `c147041`, `0a658e2`:
+  - the daily opening-volume ranking;
+  - the paper's costs (commission, 4x gross);
+  - stop from the fill and exit at the close;
+  - ORB 2.1.0;
+  - two fixes so 2.1.0 runs.
+- `6ddd22a`: the approved whole-market design (`docs/design-review/2026-11-10/orb-stocks-in-play-full-test-design.md`):
+  - a `research_screen` stock source;
+  - a read-only reader that serves bars from the evidence catalog;
+  - one-minute candles loaded in real backtests;
+  - the profile `orb-published-recipe-whole-market-profile.yaml`.
+- 524 focused tests pass.
 
-- Daily ranking of each day's eligible stocks by first-five-minute relative volume (mean of the
-  previous 14 sessions), at least 100%, top 20, ties by issuer; membership only from 09:35 New York.
-- Per-share commission and a 4x gross exposure cap in the five-minute replay; stop measured from the
-  actual fill; exit at the session close.
-- One-minute candles settle whether entry or stop came first inside a five-minute candle; same-minute
-  cases still count as losses.
-- Download planners for opening five-minute candles and for one-minute candles of selected stocks.
+**Data collected.** Opening five-minute bars, dataset `a1fcdf53…7859`:
+- 2,502 requests, all completed;
+- 240,532 bars for 241,891 requested stock-days, 12 Mar - 30 Oct 2026;
+- the other 1,359 stock-days have a confirmed no-trade opening.
 
-Decisions needed from the user:
+**First ranking: superseded, kept as a record.** `data/research/screens/orb-stocks-in-play-ranked-20260401-20261030`.
+- **Selection:** 20 stocks every day, 127 sessions from 1 May, 1,216 different stocks.
+- **Daily screen:** 1,259 stocks passed it on 30 October; Finviz showed about 1,262.
+- **Why it is superseded:** its opening-volume baseline ignores splits (finding Q1 below), so it must be redone.
 
-1. A new ORB version and run profile to switch these on (4x, $0.0035/share, top 20, 1% risk) needs a
-   new catalog entry.
-2. The paper lets one position exceed account equity under 4x leverage; our shared risk planner
-   (also used by paper and live trading) caps a position at 100% of equity. Change it or not.
-3. Alpaca publishes no issuer identifiers; two share classes of one company are not merged.
-4. One-minute candles: read a collected dataset, or prepare data in two stages (rank first, then
-   download minutes for the selected stocks).
-5. Ranking inside a backtest downloads five-minute candles for every candidate (about 1,500 stocks
-   over six months); the research command route is practical for now.
+**User decisions (11 November).**
+- **Basic set-up:** one portfolio per test; the existing missing-candle rule; a 4.5 million bar limit; positions up to 100% of equity.
+- **Prices:** as-traded, in a new ORB 2.2.0.
+- **No-trade openings:** a confirmed no-trade opening counts as zero volume.
+- **No comparison run:** 2.0.0 and 2.1.0 need adjusted prices, so they cannot run beside 2.2.0 on these bars.
 
-Status, 10 November: all findings below are fixed and re-reviewed except loading one-minute candles in
-real backtests (decision 4) and per-session 09:30 download windows (the data cache and prepared runs
-serve exact ranges only). Further fixes from the re-review: missing opening candles are unproven
-(`opening_bar_coverage_missing`) unless trade-free is proven; room under the 4x cap is frozen at the
-start of each five-minute candle so later events in that candle cannot affect sizing; the minimum
-relative volume must be above 0.
+**Review findings still open** (independent engineering and quant reviews, 11 November). Fixing them stopped when the weekly usage limit was reached:
+- **ORB 2.2.0 is not built yet.** It needs:
+  - a new strategy file and catalog entry;
+  - an admission profile that accepts as-traded bars;
+  - split-corrected 14-day ATR and opening-volume look-backs, using the frozen corporate-actions dataset `864016f2…`.
+- **Zero volume:** a proven no-trade opening must count as zero in the strategy's baseline. Today it hides the whole run's results; 80 of 2,540 selected stock-days are affected.
+- **Q1:** the ranking's 14-day opening-volume baseline is not split-corrected. After a 10-for-1 split a stock looks about 10 times busier for up to 14 days.
+- **Q3:** a plan must be refused when no one-minute dataset exists.
+- **E1:** a plan whose dates fall outside the screen's dates must be refused.
+- **E2:** a stock without five-minute candles must stop results from its first selected day, not from the window start.
+- **E3:** switch to the catalog before the profile reads Alpaca's calendar.
+- **E6:** open the catalog read-only, so no integrity scan or schema upgrade runs on the real file.
+- **Tests:** the real catalog reader through the prepared runner; the real plan path; replay identity in two folders; a gap 10 sessions back.
 
-Independent code review (10 November), checked against the code (original findings):
+**Next steps, in order.**
+1. Finish the open items, then have them reviewed.
+2. Re-run the ranking into a new folder.
+3. Plan and collect the full-session five-minute bars, about 450 requests:
+   `evidence-plan-minute-bars --timeframe 5Min --prior-sessions 15`.
+4. Plan and collect the one-minute bars, about 130 requests.
+5. Save a one-group plan with ORB 2.2.0, 1 May - 30 Oct.
+6. Report monthly results, gross and net R per trade, and how many entry candles the one-minute candles settled.
 
-- **High:** a missing 09:30-09:35 candle counts as zero volume
-  (`HistoricalScreenerUniverseProvider.cs:148,150`, `DailyRankingOutput.cs:53`). Missing candles in
-  the 14 earlier sessions lower the baseline and push a stock into the top 20. Fix: count zero only
-  when the session has other candles or a successful collection receipt; otherwise reject it as
-  `opening_bar_coverage_missing`.
-- **High for reading results:** real backtests never load one-minute candles, so every stop inside
-  the entry's five-minute candle still counts as a loss. No ORB result is meaningful until this is
-  wired in (decision 4 above).
-- **Medium:** within one five-minute candle the 4x cap is handed out by ranking score and ticker,
-  not by which order triggered first; one-minute candles could order it.
-- **Lower:** the stop is re-measured on every partial fill; a gap entry is mislabelled as unknown
-  order; the close exit double-counts that candle's volume; the commission is left out of the cap
-  headroom; a time-zone lookup on every membership check; the opening-volume fetch reads every
-  five-minute candle (about 16 million for 1,500 stocks over six months) instead of only 09:30.
-- **Missing tests:** ties at the top-20 boundary, cap freed after exits, shorts under the cap,
-  stop-from-fill for shorts on a gap, commission on partial fills, half-day close exits, two
-  triggers in one candle, missing baseline candles, and the round trip of the new portfolio settings.
-- Checked and fine: no look-ahead found in the ranking, eligibility or close exit; runs that do not
-  opt in keep their behaviour and strategy fingerprints.
-
-Not designed or approved: a rule for ORB 1.2.0 that skips trades whose costs exceed a set share of
-the planned risk.
+The download tool runs through `.tmp/run-cli.ps1`, which loads the Alpaca keys into its own process only.
 
 ### 6.2 Other open items
 
-- Pass/fail rules for the swing strategies are not yet frozen, so no version can be retired or
-  advanced from the current results.
-- Five commits since the last push to main (`0c7db16`, `209a75c`, `11a25b1` and the two before) are
-  local only.
-- Requested for later: real-time candles on the Earnings and Desk pages.
-- Requested for later: tidy the extra working folders around `C:\project\trading_flow` (needs an
-  exact list and your confirmation; GPT's UI work there must not be touched).
+- Pass/fail rules for the swing strategies are not yet frozen, so no version can be retired or advanced from the current results.
+- Everything up to `6ddd22a` is pushed to main.
+- **Requested for later:**
+  - real-time candles on the Earnings and Desk pages;
+  - fixing the Earnings history refresh (Finviz items without a company name);
+  - tidying the extra working folders around `C:\project\trading_flow`. This needs an exact list and your confirmation, and GPT's UI work there must not be touched.
 
 ## 7. Research questions for an independent review
 
@@ -255,6 +305,18 @@ the planned risk.
 8. **Pitfalls.** The most common implementation mistakes that make a sound strategy look bad or a
    broken one look good (look-ahead, survivorship, adjusted versus as-traded prices, fill
    assumptions, costs, intrabar ordering).
+9. **Intraday simulation.** Is settling entry-versus-stop order with one-minute candles (only when
+   they reproduce the five-minute high and low) sound? How often does it leave the order unknown on
+   volatile stocks? Would trade-level (tick) data be needed for a stop only 0.3-0.6% from the entry?
+10. **Price basis.** For a same-day strategy with a 14-day look-back, is as-traded pricing with
+    split-corrected look-backs the accepted practice, and which dividend or special-distribution
+    cases still need handling?
+11. **Spreads and fills.** What spread and slippage should be assumed for stop-market entries in the
+    first hour on $5+ stocks with relative volume above 1, and how much does it change ORB's
+    expectancy?
+12. **Platform.** What controls should a same-day paper driver have before ORB may paper trade:
+    order types, the 16:00 close exit (market-on-close order or a market order shortly before),
+    halts, the stream falling behind, and limits on gross exposure?
 
 ## 8. Glossary
 
