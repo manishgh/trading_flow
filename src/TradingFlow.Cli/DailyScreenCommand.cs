@@ -223,7 +223,8 @@ public static class DailyScreenCommand
         var sessions = await Manifest(catalog, Require(options, "--sessions"), cancellationToken);
         var days = (await reader.ReadExchangeSessionsAsync(sessions, cancellationToken))
             .Select(row => row.TradeDate).Where(day => day >= from && day <= to).ToArray();
-        if (days.Length == 0 || days.Max() < to.AddDays(-7))
+        // Both ends must be covered; a calendar starting late would silently shorten the span every stock must cover.
+        if (days.Length == 0 || days.Max() < to.AddDays(-7) || days.Min() > from.AddDays(7))
             throw new InvalidDataException($"Exchange sessions dataset '{sessions.DatasetId}' does not cover {from:yyyy-MM-dd} to {to:yyyy-MM-dd}.");
         return new SortedSet<DateOnly>(days);
     }
