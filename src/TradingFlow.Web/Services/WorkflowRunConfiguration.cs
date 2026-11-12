@@ -49,6 +49,18 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
         return (screen, await screens.ResolveReferenceAsync(screen, token));
     }
 
+    /// <summary>
+    /// A strategy bound to the decision-hour timing reads hourly bars, so a research-screen plan for it needs hourly datasets
+    /// collected for the screen's list (evidence-plan-minute-bars --eligible ... --timeframe 1Hour); refuses the plan otherwise.
+    /// </summary>
+    internal static void RequireHourlyBarsForDecisionHourStrategies(ResearchScreenReference reference, IEnumerable<string> timingPolicies)
+    {
+        if (timingPolicies.Contains(TradingFlow.Domain.Strategies.ExecutionRules.DecisionHourAsTradedTimingPolicy) &&
+            reference.HourlyDatasetIds is not { Count: > 0 })
+            throw new InvalidOperationException($"Research screen '{reference.ScreenName}' has no hourly bar dataset collected for its list, " +
+                "which the decision-hour strategy needs. Plan it with evidence-plan-minute-bars --eligible eligible.csv --timeframe 1Hour and collect it first.");
+    }
+
     /// <summary>True when the reviewed source is a published research screen.</summary>
     private static bool IsResearchScreen(UniversePreviewResponse source) => source.Members.Any(member =>
         member.Sources.Any(item => item.SourceKind == TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen));
@@ -203,6 +215,7 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
             // A research-screen run reads only the frozen evidence-catalog datasets and the screen's membership list. The
             // switch happens before the profile is resolved, so even the session calendar comes from the catalog, never Alpaca.
             var (screen, reference) = await ReadResearchScreenAsync(universe, token);
+            RequireHourlyBarsForDecisionHourStrategies(reference, selected.Select(option => option.Artifact.AdmissionProfile.ExecutionTimingPolicy));
             profile = profile with { Provider = TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName,
                 Providers = profile.Providers with { EvidenceCatalog = researchScreens!.ProviderConfig(reference) } };
             ranked = new RankedMembershipReference(screen.ManifestPath, screen.ManifestSha256);

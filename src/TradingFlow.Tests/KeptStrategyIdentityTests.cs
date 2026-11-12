@@ -28,6 +28,10 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2", "9.1.0", "0d052799b949ee9c76f0de44b1825087edc4eda4edb288c83ec8a0492674b258", "swing.connors-rsi2")]
     [InlineData("swing.connors-rsi2", "7.1.0", "f3dc47e30b4eee880b9d615a4c8c02a1db3fecede713912f2d482c3303e6fd11", "swing.connors-rsi2")]
     [InlineData("swing.connors-rsi2-short", "2.1.0", "f3e7c6c7c4f25e2dec7aa5135b211628dff767b0067d8d49c54dcca4dac51d32", "swing.connors-rsi2-short")]
+    // Decision-hour copies for the one-year hourly-entry test (12 Nov 2026).
+    [InlineData("swing.connors-rsi2", "9.2.0", "5938933c5800110d3574b4d5d0a067e70ba0ede4e86cb620d09ccb64c4568534", "swing.connors-rsi2")]
+    [InlineData("swing.connors-rsi2", "7.2.0", "87bfbc48a88cf563b04c22300a4f9283b5635daac3e16979d7414243505cb067", "swing.connors-rsi2")]
+    [InlineData("swing.connors-rsi2-short", "2.2.0", "34a4438d39a56020ba11ac08b6364cd003885ca681888025c1f4cbc26aa27a3e", "swing.connors-rsi2-short")]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
         var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,
@@ -57,6 +61,26 @@ public sealed class KeptStrategyIdentityTests
             copy.AdmissionProfile.ExecutionTimingPolicy).RequiredAdjustmentPolicy);
         Assert.Equal("all", TradingFlow.Engine.Indicators.MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
             parent.AdmissionProfile.ExecutionTimingPolicy).RequiredAdjustmentPolicy);
+    }
+
+    // The decision-hour copies keep their as-traded parents' trading rules, bind the decision-hour timing policy (raw bars),
+    // and the decision engine refuses that policy until it is implemented, so they cannot run with daily timing by mistake.
+    [Theory]
+    [InlineData("swing.connors-rsi2", "9.2.0", "9.1.0")]
+    [InlineData("swing.connors-rsi2", "7.2.0", "7.1.0")]
+    [InlineData("swing.connors-rsi2-short", "2.2.0", "2.1.0")]
+    public void DecisionHourCopies_KeepTheRulesAndBindTheDecisionHourPolicy(string id, string version, string parentVersion)
+    {
+        var artifacts = CreateCatalog().GetSnapshot().ExecutableArtifacts;
+        var copy = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
+        var parent = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == parentVersion);
+
+        Assert.Equal(parent.Identity, copy.DerivedFromIdentity);
+        Assert.Equivalent(parent.ResolvedStrategy with { StrategyId = "", StrategyName = "" },
+            copy.ResolvedStrategy with { StrategyId = "", StrategyName = "" }, strict: true);
+        Assert.Equal(ExecutionRules.DecisionHourAsTradedTimingPolicy, copy.AdmissionProfile.ExecutionTimingPolicy);
+        Assert.Throws<InvalidOperationException>(() => TradingFlow.Engine.Indicators.MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
+            copy.AdmissionProfile.ExecutionTimingPolicy));
     }
 
     // Optional lineage survives ordinary artifact serialization, and further derivation binds to its immediate source.

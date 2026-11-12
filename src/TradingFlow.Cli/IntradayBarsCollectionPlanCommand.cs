@@ -62,14 +62,24 @@ public static class IntradayBarsCollectionPlanCommand
     public static readonly IntradayWindow RegularSessionFiveMinutes = new("selected-session-bars", "5Min", RegularOpen, RegularClose);
 
     /// <summary>
+    /// The regular session in clock-aligned hourly bars (Alpaca 1Hour). Requested from 09:30, so the first bar returned is the
+    /// 10:00 bar; the 14:00 bar's close is the 15:00 decision price and the 15:00 bar is the last hour. An early close returns
+    /// fewer bars.
+    /// </summary>
+    public static readonly IntradayWindow RegularSessionHours = new("hourly-bars", "1Hour", RegularOpen, RegularClose);
+
+    /// <summary>
     /// Usage: evidence-plan-minute-bars --ranked ranked-daily-list.csv --batch n --out file (one-minute bars of each session's
-    /// selected stocks), or with --timeframe 5Min --prior-sessions 15 --catalog path --artifact-root path --bars dailyDatasetId:
+    /// selected stocks), or --eligible eligible.csv --timeframe 1Hour --catalog path --artifact-root path --bars dailyDatasetId
+    /// [--from yyyy-MM-dd --to yyyy-MM-dd] --batch n --out file (hourly bars of every eligible stock-session of an eligible-list
+    /// research screen; see <see cref="RunHourlyBarsAsync"/>), or with --timeframe 5Min --prior-sessions 15 --catalog path --artifact-root path --bars dailyDatasetId:
     /// full-session five-minute bars for each selected stock-session plus its 15 prior traded sessions (from the daily bars).
     /// Both record ranked_list_sha256, the SHA-256 of the ranked list the requests were made from.
     /// </summary>
     public static async Task<int> RunMinuteBarsAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
         var options = Parse(args);
+        if (options.ContainsKey("--eligible")) return await RunHourlyBarsAsync(options, output, cancellationToken);
         var ranked = Path.GetFullPath(Require(options, "--ranked"));
         var selected = ReadSessionSecurities(ranked);
         var attributes = new Dictionary<string, string> { ["ranked_list_sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(ranked))) };
@@ -80,6 +90,53 @@ public static class IntradayBarsCollectionPlanCommand
             throw new ArgumentException($"--timeframe must be {RegularSessionMinutes.Timeframe} or {RegularSessionFiveMinutes.Timeframe}.");
         var needed = await WithPriorTradedSessionsAsync(options, selected, attributes, cancellationToken);
         return await WriteAsync(options, output, CreateRequest(needed, RegularSessionFiveMinutes, Batch(options), attributes), cancellationToken);
+    }
+
+    /// <summary>
+    /// Hourly bars 09:30-16:00 New York for every stock-session of an eligible-list screen (eligible.csv) inside the optional
+    /// --from/--to window, batched per session. Security identifiers come from the published daily bar dataset (--bars). Records
+    /// ranked_list_sha256 and eligible_list_sha256 (the SHA-256 of eligible.csv, the list identity research-screen runs match
+    /// datasets on) and, when screen-manifest.json lies beside it, screen_manifest_sha256.
+    /// </summary>
+    private static async Task<int> RunHourlyBarsAsync(IReadOnlyDictionary<string, string> options, TextWriter output, CancellationToken cancellationToken)
+    {
+        if (!String.Equals(Require(options, "--timeframe"), RegularSessionHours.Timeframe, StringComparison.Ordinal))
+            throw new ArgumentException($"--eligible plans {RegularSessionHours.Timeframe} bars; pass --timeframe {RegularSessionHours.Timeframe}.");
+        var eligiblePath = Path.GetFullPath(Require(options, "--eligible"));
+        var from = options.TryGetValue("--from", out var fromText) ? Date(fromText) : DateOnly.MinValue;
+        var to = options.TryGetValue("--to", out var toText) ? Date(toText) : DateOnly.MaxValue;
+        var eligible = ReadSessionSymbols(eligiblePath, "ticker").Where(pair => pair.Key >= from && pair.Key <= to)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var store = new FileSystemImmutableArtifactStore(new ImmutableArtifactStoreOptions(Path.GetFullPath(Require(options, "--artifact-root"))));
+        var catalog = new SqliteEvidenceCatalog(new EvidenceCatalogOptions(Path.GetFullPath(Require(options, "--catalog")),
+            EvidenceCatalogOpenMode.ReadOnly), store);
+        var datasetId = Require(options, "--bars");
+        var bars = await catalog.GetDatasetAsync(datasetId, cancellationToken) ?? throw new InvalidDataException($"Dataset '{datasetId}' was not found.");
+        var traded = await TradedSessionsAsync(new ParquetEvidencePartitionDataReader(new EvidenceParquetCodec(), store), bars,
+            eligible.Values.SelectMany(symbols => symbols).ToHashSet(StringComparer.Ordinal), cancellationToken);
+        return await WriteAsync(options, output, CreateRequest(EligibleSecurities(eligible, traded), RegularSessionHours, Batch(options),
+            HourlyAttributes(eligiblePath, datasetId)), cancellationToken);
+    }
+
+    /// <summary>Each eligible stock-session with the stock's security identifier; a stock missing from the daily dataset fails.</summary>
+    public static IReadOnlyDictionary<DateOnly, IReadOnlyCollection<EvidenceSecurityIdentity>> EligibleSecurities(
+        IReadOnlyDictionary<DateOnly, IReadOnlyCollection<string>> eligible, IReadOnlyDictionary<string, (string SecurityId, DateOnly[] Sessions)> traded) =>
+        eligible.ToDictionary(pair => pair.Key, pair => (IReadOnlyCollection<EvidenceSecurityIdentity>)pair.Value.Select(symbol =>
+            traded.TryGetValue(symbol, out var history) ? new EvidenceSecurityIdentity(history.SecurityId, symbol)
+                : throw new InvalidDataException($"{symbol} has no daily bars in the dataset.")).ToArray());
+
+    /// <summary>The list fingerprints an hourly request records: eligible.csv's SHA-256 and, when present, its screen manifest's.</summary>
+    public static Dictionary<string, string> HourlyAttributes(string eligiblePath, string dailyDatasetId)
+    {
+        var listSha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(eligiblePath)));
+        var attributes = new Dictionary<string, string>
+        {
+            ["ranked_list_sha256"] = listSha, ["eligible_list_sha256"] = listSha, ["daily_bars_dataset_id"] = dailyDatasetId
+        };
+        var manifest = Path.Combine(Path.GetDirectoryName(eligiblePath)!, "screen-manifest.json");
+        if (File.Exists(manifest))
+            attributes["screen_manifest_sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(manifest)));
+        return attributes;
     }
 
     /// <summary>

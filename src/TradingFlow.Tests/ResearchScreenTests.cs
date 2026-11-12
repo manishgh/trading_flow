@@ -247,6 +247,63 @@ public sealed class ResearchScreenTests
         Assert.Equal(["swing-connors-rsi2-sma5-risk-managed-as-traded.bt-v7-1.yaml"], run.Strategies.Select(Path.GetFileName));
     }
 
+    // The hourly planner asks for 09:30-16:00 New York 1Hour bars of every eligible stock-session, batched per session, and
+    // records the eligible list's SHA-256 (as ranked_list_sha256, which research-screen runs match datasets on) and the
+    // manifest's; a stock missing from the daily dataset fails.
+    [Fact]
+    public async Task HourlyPlanner_RequestsEveryEligibleStockSessionAndRecordsTheListFingerprints()
+    {
+        using var root = new TemporaryFolder();
+        var eligible = Path.Combine(root.Path, "eligible.csv");
+        await File.WriteAllLinesAsync(eligible, ["session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions",
+            "2026-10-01,ABC,20,2000000,40000000,1,200", "2026-10-01,XYZ,30,2000000,60000000,1,200", "2026-10-02,ABC,20,2000000,40000000,1,200"]);
+        await File.WriteAllTextAsync(Path.Combine(root.Path, "screen-manifest.json"), "{}");
+        var sessions = new Dictionary<DateOnly, IReadOnlyCollection<string>> { [new(2026, 10, 1)] = ["ABC", "XYZ"], [new(2026, 10, 2)] = ["ABC"] };
+        var traded = new Dictionary<string, (string, DateOnly[])> { ["ABC"] = ("sec-abc", []), ["XYZ"] = ("sec-xyz", []) };
+
+        var request = IntradayBarsCollectionPlanCommand.CreateRequest(IntradayBarsCollectionPlanCommand.EligibleSecurities(sessions, traded),
+            IntradayBarsCollectionPlanCommand.RegularSessionHours, 1, IntradayBarsCollectionPlanCommand.HourlyAttributes(eligible, "daily"));
+
+        Assert.Equal(3, request.Requests.Count);
+        Assert.All(request.Requests, item => Assert.Equal("1Hour", item.Parameters["timeframe"]));
+        Assert.Equal((DateTimeOffset.Parse("2026-10-01T13:30:00Z"), DateTimeOffset.Parse("2026-10-01T20:00:00Z")),
+            (request.Requests[0].RequestedStartUtc, request.Requests[0].RequestedEndUtc));
+        var listSha = await ResearchScreenManifest.Sha256FileAsync(eligible, default);
+        Assert.Equal((listSha, listSha, "3"), (request.Attributes["ranked_list_sha256"], request.Attributes["eligible_list_sha256"],
+            request.Attributes["stock_sessions"]));
+        Assert.Equal(64, request.Attributes["screen_manifest_sha256"].Length);
+        Assert.Throws<InvalidDataException>(() => IntradayBarsCollectionPlanCommand.EligibleSecurities(
+            new Dictionary<DateOnly, IReadOnlyCollection<string>> { [new(2026, 10, 1)] = ["QQQ"] }, traded));
+    }
+
+    // A decision-hour strategy's research-screen plan needs an hourly dataset for the screen's list; others do not.
+    [Fact]
+    public void DecisionHourPlan_NeedsAnHourlyDatasetForTheScreensList()
+    {
+        var without = new ResearchScreenReference("s", new string('a', 64), new string('b', 64), "daily", "sessions", [], []);
+        var with = without with { HourlyDatasetIds = ["hourly"] };
+        string[] decisionHour = [TradingFlow.Domain.Strategies.ExecutionRules.DecisionHourAsTradedTimingPolicy];
+
+        Assert.Throws<InvalidOperationException>(() => WorkflowRunConfiguration.RequireHourlyBarsForDecisionHourStrategies(without, decisionHour));
+        WorkflowRunConfiguration.RequireHourlyBarsForDecisionHourStrategies(with, decisionHour);
+        WorkflowRunConfiguration.RequireHourlyBarsForDecisionHourStrategies(without, [TradingFlow.Domain.Strategies.ExecutionRules.KeptGapAsTradedTimingPolicy]);
+    }
+
+    // The one-year hourly profile reads daily and hourly bars, keeps the daily profile's money values, names the 9.2.0 file,
+    // and sizes the replay allowance for about 1,500 stocks.
+    [Fact]
+    public void ConnorsHourlyProfile_ReadsBackTheApprovedRunValues()
+    {
+        var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
+            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-hourly-profile.yaml"));
+
+        Assert.Equal(["1d", "1h"], run.Intervals);
+        Assert.Equal((100_000m, 10, 10m, 0m, 0m), (run.Portfolio.StartingCapital, run.Portfolio.MaxConcurrentPositions,
+            run.Portfolio.MaxPositionNotionalPct, run.Portfolio.FixedBuyFee, run.Portfolio.FixedSellFee));
+        Assert.Equal(4_100_000, run.Engine.MaxRetainedReplayBars);
+        Assert.Equal(["swing-connors-rsi2-published-decision-hour.bt-v9-2.yaml"], run.Strategies.Select(Path.GetFileName));
+    }
+
     // An eligible-list screen gives each stock's first eligible session and the pool stock-sessions requested; a daily run
     // requests each stock from that day minus the warm-up, never before the run's data start.
     [Fact]

@@ -59,7 +59,8 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
         calendar = new(() => LoadCalendarAsync(CancellationToken.None));
         CacheSourceDescriptor = new(ProviderIdentity, DataFeed, Adjustment, "datasets-" + ResearchHash(String.Join('\n',
             new[] { config.RankedListSha256, config.DailyDatasetId, config.ExchangeSessionsDatasetId }
-                .Concat(config.FiveMinuteDatasetIds.Order(StringComparer.Ordinal)).Concat(config.OneMinuteDatasetIds.Order(StringComparer.Ordinal))))[..40]);
+                .Concat(config.FiveMinuteDatasetIds.Order(StringComparer.Ordinal)).Concat(config.OneMinuteDatasetIds.Order(StringComparer.Ordinal))
+                .Concat((config.HourlyDatasetIds ?? []).Order(StringComparer.Ordinal).Select(id => "1h:" + id))))[..40]);
     }
 
     /// <summary>
@@ -169,7 +170,7 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
         CancellationToken cancellationToken) =>
         partitions.GetOrAdd(frame, key => new(() => LoadPartitionsAsync(key, CancellationToken.None))).Value.WaitAsync(cancellationToken);
 
-    /// <summary>Loads and checks the frozen datasets of one timeframe; the five-minute and one-minute ones must belong to the ranked list.</summary>
+    /// <summary>Loads and checks the frozen datasets of one timeframe; the hourly, five-minute and one-minute ones must belong to the screen's list.</summary>
     private async Task<IReadOnlyList<(EvidenceDatasetManifest Dataset, EvidenceDatasetPartitionManifest Partition)>> LoadPartitionsAsync(string frame,
         CancellationToken cancellationToken)
     {
@@ -178,7 +179,8 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
             "1d" => [config.DailyDatasetId],
             "5m" => config.FiveMinuteDatasetIds,
             "1m" => config.OneMinuteDatasetIds,
-            _ => throw new NotSupportedException($"The evidence catalog provider serves 1d, 5m and 1m bars, not {frame}.")
+            "1h" => config.HourlyDatasetIds ?? [],
+            _ => throw new NotSupportedException($"The evidence catalog provider serves 1d, 1h, 5m and 1m bars, not {frame}.")
         };
         var result = new List<(EvidenceDatasetManifest, EvidenceDatasetPartitionManifest)>();
         foreach (var id in ids)

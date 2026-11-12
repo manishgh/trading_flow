@@ -524,7 +524,7 @@ public sealed class SimpleYamlReader
             Path.GetFullPath(RequireString(runMap, prefix + "artifact_root")),
             RequireString(runMap, prefix + "ranked_list_sha256"), RequireString(runMap, prefix + "daily_dataset"),
             RequireString(runMap, prefix + "exchange_sessions_dataset"), five, OptionalList(runMap, prefix + "one_minute_datasets"),
-            OptionalNullableString(runMap, prefix + "corporate_actions_dataset"));
+            OptionalNullableString(runMap, prefix + "corporate_actions_dataset"), OptionalList(runMap, prefix + "hourly_datasets") is { Count: > 0 } hourly ? hourly : null);
     }
 
     /// <summary>

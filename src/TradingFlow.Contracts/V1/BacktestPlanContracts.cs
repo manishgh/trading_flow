@@ -18,19 +18,21 @@ public sealed record BacktestStockSource(string Key, string Name, string Kind, G
 /// <summary>
 /// The frozen inputs of a research-screen plan: the screen, its manifest and ranked-list SHA-256, and the evidence-catalog
 /// datasets its runs read (daily as-traded bars and XNYS sessions named by the manifest; five-minute and one-minute bars
-/// collected for this ranked list; the corporate-actions dataset the screen read, from which runs take split ex-dates).
+/// collected for this ranked list; the corporate-actions dataset the screen read, from which runs take split ex-dates; for an
+/// eligible-list screen, the hourly bars collected for its eligible list).
 /// Starting the plan refuses any difference.
 /// </summary>
 public sealed record ResearchScreenReference(string ScreenName, string ManifestSha256, string RankedListSha256,
     string DailyBarsDatasetId, string ExchangeSessionsDatasetId, IReadOnlyList<string> FiveMinuteDatasetIds,
-    IReadOnlyList<string> OneMinuteDatasetIds, string? CorporateActionsDatasetId = null)
+    IReadOnlyList<string> OneMinuteDatasetIds, string? CorporateActionsDatasetId = null, IReadOnlyList<string>? HourlyDatasetIds = null)
 {
     /// <summary>True when both references name the same screen fingerprints and the same datasets.</summary>
     public bool SameInputs(ResearchScreenReference other) =>
         ScreenName == other.ScreenName && ManifestSha256 == other.ManifestSha256 && RankedListSha256 == other.RankedListSha256 &&
         DailyBarsDatasetId == other.DailyBarsDatasetId && ExchangeSessionsDatasetId == other.ExchangeSessionsDatasetId &&
         FiveMinuteDatasetIds.SequenceEqual(other.FiveMinuteDatasetIds) && OneMinuteDatasetIds.SequenceEqual(other.OneMinuteDatasetIds) &&
-        CorporateActionsDatasetId == other.CorporateActionsDatasetId;
+        CorporateActionsDatasetId == other.CorporateActionsDatasetId &&
+        (HourlyDatasetIds ?? []).SequenceEqual(other.HourlyDatasetIds ?? []);
 }
 
 /// <summary>

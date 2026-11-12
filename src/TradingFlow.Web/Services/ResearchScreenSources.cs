@@ -58,12 +58,11 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         var inputs = screen.Manifest.Inputs;
         var sessions = inputs.ExchangeSessionsDatasetId ?? throw new InvalidOperationException(
             $"Research screen '{screen.Name}' names no exchange-session dataset. Publish it again with research-daily-screen --sessions <XNYS dataset ID>.");
+        var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == screen.RankedListSha256).ToArray();
         if (!screen.IsRanked)
             return new(screen.Name, screen.ManifestSha256, screen.RankedListSha256, inputs.DailyBarsDatasetId, sessions, [], [],
-                inputs.CorporateActionsDatasetId);
-        var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == screen.RankedListSha256).ToArray();
-        string[] Of(string timeframe) => collected.Where(dataset => dataset.Partitions.All(partition => partition.Provenance.Timeframe == timeframe))
-            .Select(dataset => dataset.DatasetId).Order(StringComparer.Ordinal).ToArray();
+                inputs.CorporateActionsDatasetId, DatasetsOf(collected, "1h"));
+        string[] Of(string timeframe) => DatasetsOf(collected, timeframe);
         var five = Of("5m");
         if (five.Length == 0)
             throw new InvalidOperationException($"No five-minute bar dataset collected for ranked list {screen.RankedListSha256} of research screen " +
@@ -77,9 +76,15 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
     }
 
     /// <summary>The run settings (providers.evidence_catalog) that let a run read exactly the referenced datasets.</summary>
+    /// <summary>IDs of the collected datasets that hold only bars of one timeframe, in ordinal order.</summary>
+    private static string[] DatasetsOf(IEnumerable<EvidenceDatasetManifest> collected, string timeframe) =>
+        collected.Where(dataset => dataset.Partitions.All(partition => partition.Provenance.Timeframe == timeframe))
+            .Select(dataset => dataset.DatasetId).Order(StringComparer.Ordinal).ToArray();
+
     public EvidenceCatalogProviderConfig ProviderConfig(ResearchScreenReference reference) => new(paths.EvidenceCatalogPath,
         paths.EvidenceObjectRoot, reference.RankedListSha256, reference.DailyBarsDatasetId, reference.ExchangeSessionsDatasetId,
-        reference.FiveMinuteDatasetIds, reference.OneMinuteDatasetIds, reference.CorporateActionsDatasetId);
+        reference.FiveMinuteDatasetIds, reference.OneMinuteDatasetIds, reference.CorporateActionsDatasetId,
+        reference.HourlyDatasetIds);
 
     /// <summary>The provider reference a source preview records: screen name, manifest SHA-256 and ranked-list SHA-256.</summary>
     public static string ProviderReference(PublishedResearchScreen screen) =>

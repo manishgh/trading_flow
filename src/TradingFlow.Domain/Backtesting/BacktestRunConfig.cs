@@ -236,7 +236,8 @@ public sealed record EvidenceCatalogProviderConfig(
     string ExchangeSessionsDatasetId,
     IReadOnlyList<string> FiveMinuteDatasetIds,
     IReadOnlyList<string> OneMinuteDatasetIds,
-    string? CorporateActionsDatasetId = null);
+    string? CorporateActionsDatasetId = null,
+    IReadOnlyList<string>? HourlyDatasetIds = null);
 
 public sealed record AlpacaProviderConfig(
     string DataFeed);

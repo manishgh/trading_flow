@@ -279,6 +279,14 @@ public sealed record ExecutionRules(
     /// </summary>
     public const string KeptGapAsTradedTimingPolicy = "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1";
 
+    /// <summary>
+    /// Decision-hour timing on as-traded bars (approved 12 November 2026): each session's daily rules are evaluated on the
+    /// prior completed daily closes plus the 15:00 New York hourly close standing in for that day's close, and entries and
+    /// exits fill in the 15:00-16:00 hourly bar (on a half day, the last hourly bar before the early close). Not yet
+    /// implemented by the decision engine, which refuses it, so a strategy bound to it cannot run with the wrong timing.
+    /// </summary>
+    public const string DecisionHourAsTradedTimingPolicy = "decision-hour-close-last-hour-fill-as-traded-v1";
+
     public ExecutionConfirmationRules EffectiveConfirmation =>
         Confirmation ?? ExecutionConfirmationRules.Disabled;
 

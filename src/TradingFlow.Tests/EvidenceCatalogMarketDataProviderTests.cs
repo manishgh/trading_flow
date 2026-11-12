@@ -42,6 +42,34 @@ public sealed class EvidenceCatalogMarketDataProviderTests
         Assert.Equal(3, daily.Bars.Count);
     }
 
+    // Hourly bars frozen in providers.evidence_catalog.hourly_datasets are served like five-minute ones, in time order, and an
+    // hourly dataset collected for another list is refused; without hourly datasets an hourly request finds no bars.
+    [Fact]
+    public async Task ServesFrozenHourlyBarsOfTheScreensListOnly()
+    {
+        using var catalog = new SyntheticEvidenceCatalog();
+        var list = new string('a', 64);
+        var (_, config) = await catalog.ProviderAsync(list);
+        var fourteen = new DateTimeOffset(2026, 10, 1, 18, 0, 0, TimeSpan.Zero);
+        var hourly = await catalog.BarsAsync("1h", list, [SyntheticEvidenceCatalog.Row("ABC", "1h", fourteen.AddHours(1), 101m),
+            SyntheticEvidenceCatalog.Row("ABC", "1h", fourteen, 100m)]);
+        var other = await catalog.BarsAsync("1h", new string('b', 64), [SyntheticEvidenceCatalog.Row("ABC", "1h", fourteen, 100m)]);
+        var provider = catalog.Provider(config with { HourlyDatasetIds = [hourly.DatasetId] });
+
+        var bars = new List<OhlcvBar>();
+        await foreach (var bar in provider.GetBarsAsync(["ABC"], ["1h"], fourteen, fourteen.AddHours(2), default)) bars.Add(bar);
+        var none = new List<OhlcvBar>();
+        await foreach (var bar in catalog.Provider(config).GetBarsAsync(["ABC"], ["1h"], fourteen, fourteen.AddHours(2), default)) none.Add(bar);
+
+        Assert.Equal([(fourteen, "1h", 100m), (fourteen.AddHours(1), "1h", 101m)], bars.Select(bar => (bar.Timestamp, bar.Timeframe, bar.Open)));
+        Assert.Empty(none);
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+        {
+            await foreach (var _ in catalog.Provider(config with { HourlyDatasetIds = [other.DatasetId] })
+                               .GetBarsAsync(["ABC"], ["1h"], fourteen, fourteen.AddHours(2), default)) { }
+        });
+    }
+
     // A dataset whose manifest no longer produces its frozen ID, or a five-minute dataset not collected for the run's ranked
     // list, is refused; the calendar is refused past its recorded coverage instead of reading those days as closed.
     [Fact]
@@ -179,7 +207,7 @@ internal sealed class SyntheticEvidenceCatalog : IDisposable
     public static MarketBarEvidenceRow Row(string symbol, string timeframe, DateTimeOffset start, decimal price, decimal? high = null,
         decimal? low = null, decimal? close = null, long volume = 1000)
     {
-        var length = timeframe switch { "1d" => TimeSpan.FromDays(1), "1m" => TimeSpan.FromMinutes(1), _ => TimeSpan.FromMinutes(5) };
+        var length = timeframe switch { "1d" => TimeSpan.FromDays(1), "1h" => TimeSpan.FromHours(1), "1m" => TimeSpan.FromMinutes(1), _ => TimeSpan.FromMinutes(5) };
         return new(1, RunId, ConfigHash, CodeVersion, "sip", "sec-" + symbol.ToLowerInvariant(), symbol, start, start + length, timeframe,
             EvidenceFixedDecimal.ToPriceUnits(price), EvidenceFixedDecimal.ToPriceUnits(high ?? price + 1m), EvidenceFixedDecimal.ToPriceUnits(low ?? price - 1m),
             EvidenceFixedDecimal.ToPriceUnits(close ?? price + 0.5m), null, volume, null, "raw", "USD", start + length, start + length,
@@ -234,6 +262,10 @@ internal sealed class SyntheticEvidenceCatalog : IDisposable
     /// An adapter over a small market: ABC daily bars for three sessions, three ABC and one XYZ five-minute bars from 1 October
     /// 2026 13:30 UTC, two ABC one-minute bars, and an XNYS calendar for 21 September to 10 October 2026.
     /// </summary>
+    /// <summary>A provider over this catalog with the given configuration.</summary>
+    public EvidenceCatalogMarketDataProvider Provider(EvidenceCatalogProviderConfig config) =>
+        new(config, GetAsync, Reader, new FileSystemRawArchiveWriter(new RawArchiveOptions(RawRoot)));
+
     public async Task<(EvidenceCatalogMarketDataProvider Provider, EvidenceCatalogProviderConfig Config)> ProviderAsync(string rankedListSha256)
     {
         var open = new DateTimeOffset(2026, 10, 1, 13, 30, 0, TimeSpan.Zero);
