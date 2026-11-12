@@ -52,6 +52,14 @@ public sealed record AlpacaLatestQuote(
 /// <param name="SessionDate">The New York date of that session.</param>
 public sealed record AlpacaPreviousClose(string Ticker, decimal Close, DateOnly SessionDate);
 
+/// <summary>Provider daily-bar volume, including eligible extended-hours trades. The bar boundary identifies its New York date;
+/// AsOfUtc is local receipt time, not a provider update timestamp. An older daily bar retains its actual date.</summary>
+public sealed record AlpacaSessionVolume(string Ticker, decimal Volume, DateTimeOffset BarTimestamp,
+    DateOnly SessionDate, DateTimeOffset AsOfUtc, string Feed);
+
+/// <summary>Display facts read together from one provider snapshot; either fact may be unavailable.</summary>
+public sealed record AlpacaDisplaySnapshot(AlpacaPreviousClose? PreviousClose, AlpacaSessionVolume? SessionVolume);
+
 /// <summary>
 /// Reads Alpaca's latest stock quotes for the selected wishlist. This is kept
 /// separate from the paper runner because watchlist display needs bid/ask now,
@@ -66,10 +74,16 @@ public sealed class AlpacaQuoteService
     private readonly ILogger<AlpacaQuoteService> logger;
 
     /// <summary>
-    /// Previous closes by symbol and New York date. A close only changes once a
+    /// Previous closes by feed, symbol and New York date. A close only changes once a
     /// day, so a symbol is read from Alpaca once per day; failures are not cached.
     /// </summary>
-    private readonly ConcurrentDictionary<(string Symbol, DateOnly Date), AlpacaPreviousClose> previousCloses = new();
+    private readonly ConcurrentDictionary<(string Feed, string Symbol, DateOnly Date), AlpacaPreviousClose> previousCloses = new();
+    private readonly SemaphoreSlim snapshotGate = new(1, 1);
+    private readonly Dictionary<(string Feed, string Symbol, DateOnly Date), CachedDisplaySnapshot> displaySnapshots = new();
+    private sealed record CachedDisplaySnapshot(AlpacaDisplaySnapshot Value, DateTimeOffset ExpiresAtUtc);
+    private static readonly TimeSpan DisplaySnapshotLifetime = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MissingSnapshotLifetime = TimeSpan.FromSeconds(10);
+    private const int MaximumDisplaySnapshots = 4096;
 
     private const int SnapshotBatchSize = 100;
 
@@ -316,6 +330,7 @@ public sealed class AlpacaQuoteService
         CancellationToken cancellationToken)
     {
         var today = NewYorkDate(now);
+        var normalizedFeed = NormalizeFeed(feed);
         var symbols = tickers
             .Select(ticker => ticker.Trim().ToUpperInvariant())
             .Where(ticker => ticker.Length > 0)
@@ -324,7 +339,7 @@ public sealed class AlpacaQuoteService
         var results = new Dictionary<string, AlpacaPreviousClose>(StringComparer.OrdinalIgnoreCase);
         foreach (var symbol in symbols)
         {
-            if (previousCloses.TryGetValue((symbol, today), out var cached))
+            if (previousCloses.TryGetValue((normalizedFeed, symbol, today), out var cached))
             {
                 results[symbol] = cached;
             }
@@ -336,27 +351,79 @@ public sealed class AlpacaQuoteService
             return results;
         }
 
-        try
+        foreach (var (symbol, snapshot) in await GetDisplaySnapshotsAsync(missing, normalizedFeed, now, cancellationToken))
         {
-            var client = httpClientFactory.CreateClient(HttpClientName);
-            foreach (var batch in missing.Chunk(SnapshotBatchSize))
-            {
-                foreach (var (symbol, close) in await GetSnapshotBatchAsync(client, batch, NormalizeFeed(feed), today, cancellationToken))
-                {
-                    results[symbol] = close;
-                    previousCloses[(symbol, today)] = close;
-                }
-            }
+            if (snapshot.PreviousClose is { } close) results[symbol] = close;
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            logger.LogWarning(exception, "Alpaca snapshots request failed; previous closes stay unknown.");
-        }
-
         return results;
     }
 
-    private async Task<IReadOnlyDictionary<string, AlpacaPreviousClose>> GetSnapshotBatchAsync(
+    /// <summary>Read bounded batches for display, sharing a 30-second feed/symbol/date cache. Missing volume is retried after
+    /// ten seconds; concurrent readers reuse the same fetch. Previous-close callers keep their separate all-day cache.</summary>
+    public async Task<IReadOnlyDictionary<string, AlpacaDisplaySnapshot>> GetDisplaySnapshotsAsync(
+        IReadOnlyCollection<string> tickers, string feed, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var today = NewYorkDate(now);
+        var normalizedFeed = NormalizeFeed(feed);
+        var symbols = tickers.Select(symbol => symbol.Trim().ToUpperInvariant()).Where(symbol => symbol.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await snapshotGate.WaitAsync(cancellationToken);
+        try
+        {
+            TrimDisplaySnapshots(clock.GetUtcNow());
+            var missing = symbols.Where(symbol => !displaySnapshots.ContainsKey((normalizedFeed, symbol, today))).ToArray();
+            if (credentials.IsConfigured && missing.Length > 0)
+            {
+                var client = httpClientFactory.CreateClient(HttpClientName);
+                foreach (var batch in missing.Chunk(SnapshotBatchSize))
+                    await RefreshDisplayBatchAsync(client, batch, normalizedFeed, today, cancellationToken);
+            }
+            var results = new Dictionary<string, AlpacaDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
+            foreach (var symbol in symbols)
+            {
+                var key = (normalizedFeed, symbol, today);
+                results[symbol] = displaySnapshots.TryGetValue(key, out var cached) ? cached.Value
+                    : new(previousCloses.GetValueOrDefault(key), null);
+            }
+            TrimDisplaySnapshots(clock.GetUtcNow());
+            return results;
+        }
+        finally { snapshotGate.Release(); }
+    }
+
+    // Refresh one batch from one response body; provider failures never make an older volume appear freshly received.
+    private async Task RefreshDisplayBatchAsync(HttpClient client, string[] symbols, string feed, DateOnly today,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyDictionary<string, AlpacaDisplaySnapshot> fetched = new Dictionary<string, AlpacaDisplaySnapshot>();
+        try { fetched = await GetSnapshotBatchAsync(client, symbols, feed, today, cancellationToken); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        { logger.LogWarning(exception, "Alpaca snapshots request failed; session volume stays unavailable."); }
+        var receivedAt = clock.GetUtcNow();
+        foreach (var symbol in symbols)
+        {
+            var key = (feed, symbol, today);
+            var value = fetched.GetValueOrDefault(symbol) ?? new AlpacaDisplaySnapshot(null, null);
+            if (value.PreviousClose is { } close) previousCloses[key] = close;
+            else value = value with { PreviousClose = previousCloses.GetValueOrDefault(key) };
+            var lifetime = value.SessionVolume is null ? MissingSnapshotLifetime : DisplaySnapshotLifetime;
+            displaySnapshots[key] = new(value, receivedAt + lifetime);
+        }
+    }
+
+    // Expire obsolete dates and cap retained display entries; all access is protected by snapshotGate.
+    private void TrimDisplaySnapshots(DateTimeOffset now)
+    {
+        foreach (var key in displaySnapshots.Where(pair => pair.Value.ExpiresAtUtc <= now).Select(pair => pair.Key).ToArray())
+            displaySnapshots.Remove(key);
+        if (displaySnapshots.Count > MaximumDisplaySnapshots)
+            foreach (var key in displaySnapshots.OrderBy(pair => pair.Value.ExpiresAtUtc)
+                .Take(displaySnapshots.Count - MaximumDisplaySnapshots).Select(pair => pair.Key).ToArray())
+                displaySnapshots.Remove(key);
+    }
+
+    // Reuse the snapshot endpoint and invalid-symbol isolation for both close and volume display facts.
+    private async Task<IReadOnlyDictionary<string, AlpacaDisplaySnapshot>> GetSnapshotBatchAsync(
         HttpClient client,
         IReadOnlyList<string> symbols,
         string feed,
@@ -373,7 +440,7 @@ public sealed class AlpacaQuoteService
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (response.IsSuccessStatusCode)
         {
-            return ParsePreviousCloses(body, today);
+            return ParseDisplaySnapshots(body, today, clock.GetUtcNow(), feed);
         }
 
         // One invalid symbol rejects the whole request; drop it and read the rest.
@@ -389,7 +456,7 @@ public sealed class AlpacaQuoteService
             symbols.Count,
             response.StatusCode,
             body);
-        return new Dictionary<string, AlpacaPreviousClose>(StringComparer.OrdinalIgnoreCase);
+        return new Dictionary<string, AlpacaDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -397,36 +464,41 @@ public sealed class AlpacaQuoteService
     /// is keyed by symbol; a <c>snapshots</c> wrapper is accepted too. Either bar
     /// may be null. Pure, so the selection rule is testable against fixtures.
     /// </summary>
-    internal static IReadOnlyDictionary<string, AlpacaPreviousClose> ParsePreviousCloses(string body, DateOnly today)
-    {
-        var results = new Dictionary<string, AlpacaPreviousClose>(StringComparer.OrdinalIgnoreCase);
-        using var document = JsonDocument.Parse(body);
-        var root = document.RootElement.TryGetProperty("snapshots", out var wrapped) ? wrapped : document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object)
-        {
-            return results;
-        }
+    internal static IReadOnlyDictionary<string, AlpacaPreviousClose> ParsePreviousCloses(string body, DateOnly today) =>
+        ParseDisplaySnapshots(body, today, null, "sip").Where(pair => pair.Value.PreviousClose is not null)
+            .ToDictionary(pair => pair.Key, pair => pair.Value.PreviousClose!, StringComparer.OrdinalIgnoreCase);
 
+    // Parse both facts once. A null receipt time supports the existing pure close parser without consulting a live clock.
+    // Volume is only dailyBar.v: retain its actual date, reject invalid/future timestamps, and never substitute prevDailyBar.
+    internal static IReadOnlyDictionary<string, AlpacaDisplaySnapshot> ParseDisplaySnapshots(
+        string body, DateOnly today, DateTimeOffset? asOfUtc, string feed)
+    {
+        var results = new Dictionary<string, AlpacaDisplaySnapshot>(StringComparer.OrdinalIgnoreCase);
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) return results;
+        if (root.TryGetProperty("snapshots", out var wrapped)) root = wrapped;
+        if (root.ValueKind != JsonValueKind.Object) return results;
         foreach (var entry in root.EnumerateObject())
         {
-            if (entry.Value.ValueKind != JsonValueKind.Object)
-            {
-                continue;
-            }
-
+            if (entry.Value.ValueKind != JsonValueKind.Object) continue;
+            var symbol = entry.Name.ToUpperInvariant();
             var bars = new[] { "dailyBar", "prevDailyBar" }
                 .Select(name => entry.Value.TryGetProperty(name, out var bar) && bar.ValueKind == JsonValueKind.Object
                     ? (Timestamp: ReadTimestamp(bar, "t"), Close: ReadDecimal(bar, "c"))
                     : (Timestamp: (DateTimeOffset?)null, Close: (decimal?)null))
                 .Where(bar => bar.Timestamp is not null && bar.Close is > 0m)
                 .Select(bar => (bar.Timestamp!.Value, bar.Close!.Value));
-            if (SelectPreviousClose(bars, today) is { } selected)
-            {
-                var symbol = entry.Name.ToUpperInvariant();
-                results[symbol] = new AlpacaPreviousClose(symbol, selected.Close, selected.Date);
-            }
+            var previous = SelectPreviousClose(bars, today) is { } selected
+                ? new AlpacaPreviousClose(symbol, selected.Close, selected.Date) : null;
+            AlpacaSessionVolume? volume = null;
+            if (asOfUtc is { } receivedAt && entry.Value.TryGetProperty("dailyBar", out var daily) &&
+                daily.ValueKind == JsonValueKind.Object && ReadTimestamp(daily, "t") is { } timestamp &&
+                timestamp <= receivedAt && ReadDecimal(daily, "v") is { } shares && shares >= 0m)
+                volume = new(symbol, shares, timestamp.ToUniversalTime(), NewYorkDate(timestamp),
+                    receivedAt.ToUniversalTime(), NormalizeFeed(feed));
+            results[symbol] = new(previous, volume);
         }
-
         return results;
     }
 

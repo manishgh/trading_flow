@@ -64,13 +64,14 @@
         el('revision').textContent=definition?'Saved revision '+definition.revision+' · '+definition.contentSha256:'';
         el('save').textContent=definition?'Save settings':'Save paused workflow';el('draft-note').textContent=definition?'Editing saved workflow. Save changes before collecting.':'Unsaved workflow · choose at least one source, then save paused to review its schedule.';syncControls();
     }
+    // Display selected discovery sources using stock group labels while preserving their saved source identities.
     function renderSources() {
         el('sources').replaceChildren(); settings.sources.forEach((source,index)=>{
             const card=document.createElement('div');card.className='prep-card prep-source';const title=source.kind==='wishlist'?[...el('wishlist').options].find(x=>x.value===(source.wishlistId||source.key))?.textContent:source.query;
-            const name=document.createElement('strong');name.textContent=(source.kind==='wishlist'?'Wishlist: ':'Finviz: ')+(title||source.key);
+            const name=document.createElement('strong');name.textContent=(source.kind==='wishlist'?'Stock group: ':'Finviz: ')+(title||source.key);
             const label=document.createElement('label');label.className='checkbox-field';const required=document.createElement('input');required.type='checkbox';required.checked=source.required;
             required.onchange=()=>{source.required=required.checked;retain();};label.append(required,'Required');const remove=button('Remove',()=>{settings.sources.splice(index,1);renderSources();retain();});remove.className='button secondary';remove.setAttribute('aria-label','Remove source '+(title||source.key));card.append(name,label,remove);el('sources').append(card);
-        });el('source-status').textContent=settings.sources.length?'':'Add at least one wishlist or Finviz filter before saving.';
+        });el('source-status').textContent=settings.sources.length?'':'Add at least one stock group or Finviz filter before saving.';
     }
     function syncControls(){
         el('new').disabled=el('setup-new').disabled=!initialized;el('list').disabled=el('open').disabled=!initialized||!available.length;el('refresh').disabled=!initialized||!definition;
@@ -156,9 +157,11 @@
     function newWorkflow(){if(!initialized)return;requestVersion++;clearReview();detail=null;definition=null;settings=structuredClone(metadata.defaults);showView('settings');renderEditor();retain();status('New workflow: choose a source, save paused, then review the schedule.');el('name').focus();}
     el('new').onclick=el('setup-new').onclick=newWorkflow;
     el('open').onclick=()=>action(async()=>{await load(el('list').value);showView('daily');});el('refresh').onclick=()=>action(()=>definition?load(definition.workflowId,false):Promise.resolve(status('Open a workflow first.')));
-    el('add-wishlist').onclick=()=>{const id=el('wishlist').value;if(id){if(settings.sources.some(x=>x.kind==='wishlist'&&(x.wishlistId||x.key)===id)){status('That wishlist is already selected.');return;}if(settings.sources.length>=20){status('Select at most 20 sources.');return;}settings.sources.push({kind:'wishlist',key:id,wishlistId:id,required:true});renderSources();retain();}};
+    // Add a selected stock group once and retain the existing saved source contract.
+    el('add-wishlist').onclick=()=>{const id=el('wishlist').value;if(id){if(settings.sources.some(x=>x.kind==='wishlist'&&(x.wishlistId||x.key)===id)){status('That stock group is already selected.');return;}if(settings.sources.length>=20){status('Select at most 20 sources.');return;}settings.sources.push({kind:'wishlist',key:id,wishlistId:id,required:true});renderSources();retain();}};
     el('add-query').onclick=()=>{const query=el('query').value.trim();if(query){if(settings.sources.some(x=>x.kind==='finviz'&&x.key===query)){status('That Finviz filter is already selected.');return;}if(settings.sources.length>=20){status('Select at most 20 sources.');return;}settings.sources.push({kind:'finviz',key:query,query,required:false});renderSources();retain();}};
-    el('editor').onsubmit=e=>{e.preventDefault();action(async()=>{if(!settings.sources.length){status('Add at least one wishlist or Finviz filter before saving.');el('wishlist').focus();return;}definition=await api('preparation',{workflowId:definition?.workflowId||'00000000-0000-0000-0000-000000000000',expectedRevision:definition?.revision||0,settings:definition?settings:{...settings,enabled:false}});await list();await load(definition.workflowId);showView('daily');el('schedule').open=true;});};
+    // Require a discovery source before saving the workflow and opening its schedule.
+    el('editor').onsubmit=e=>{e.preventDefault();action(async()=>{if(!settings.sources.length){status('Add at least one stock group or Finviz filter before saving.');el('wishlist').focus();return;}definition=await api('preparation',{workflowId:definition?.workflowId||'00000000-0000-0000-0000-000000000000',expectedRevision:definition?.revision||0,settings:definition?settings:{...settings,enabled:false}});await list();await load(definition.workflowId);showView('daily');el('schedule').open=true;});};
     el('toggle').onclick=()=>action(async()=>{definition=await api('preparation',{workflowId:definition.workflowId,expectedRevision:definition.revision,settings:{...settings,enabled:!settings.enabled}});await list();await load(definition.workflowId);});
     for(const phase of ['nightly','morning'])el(phase).onclick=()=>action(async()=>{if(!definition||el(phase).disabled)return;pendingRun??={phase,idempotencyKey:crypto.randomUUID()};if(pendingRun.phase!==phase)pendingRun={phase,idempotencyKey:crypto.randomUUID()};await api(`preparation/${definition.workflowId}/run`,pendingRun);pendingRun=null;await load(definition.workflowId,false);});
     el('latest').onclick=()=>{const latest=detail?.history.find(x=>x.snapshot);if(latest)review(latest,true,false);};

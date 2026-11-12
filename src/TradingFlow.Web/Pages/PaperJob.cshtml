@@ -2,7 +2,7 @@
 @using TradingFlow.Web.Models
 @model TradingFlow.Web.Pages.PaperJobModel
 @{
-    ViewData["Title"] = "Paper Job";
+    ViewData["Title"] = "Strategy run";
 }
 
 @if (Model.Job is { } candidateJob)
@@ -260,7 +260,7 @@
 
 <div class="section-title">
     <div>
-        <h1>Paper Run: @Model.Job?.RunName</h1>
+        <h1>Strategy run: @Model.Job?.RunName</h1>
         <div class="muted">Live execution metrics and signals</div>
     </div>
     <div class="inline-row">

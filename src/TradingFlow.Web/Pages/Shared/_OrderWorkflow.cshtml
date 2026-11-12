@@ -1,24 +1,36 @@
-    <p data-order-status role="status">Loading order context…</p>
-    <form id="OrderWorkflowForm" class="candidate-controls">
+<p data-order-status role="status">Loading order context…</p>
+<form id="OrderWorkflowForm" class="candidate-controls" inert>
+    <div class="order-primary-fields">
         <label>Symbol <input class="input" name="symbol" required /></label>
-        <label data-order-source>Discovery wishlist <select class="input" name="wishlist"><option value="">Choose a wishlist</option></select></label>
-        <label data-order-strategy>Exact strategy <select class="input" name="strategy" required></select></label>
+        <label>Side <input class="input" name="side" value="Buy" readonly /></label>
         <label>Quantity <input class="input" name="quantity" type="number" min="1" step="1" value="1" required /></label>
         <label>Order type <select class="input" name="orderType"><option value="limit">Limit</option></select></label>
-        <label>Time in force <select class="input" name="timeInForce"><option value="day">Day</option></select></label>
         <label data-exit-trigger hidden>Trigger price <input class="input" name="trigger" type="number" min="0.01" step="0.01" /></label>
         <label>Limit price <input class="input" name="limit" type="number" min="0.01" step="0.01" required /></label>
-        <label data-entry-only>Stop price <input class="input" name="stop" type="number" min="0.01" step="0.01" /><span data-order-stop-note>No strategy prices loaded.</span></label>
-        <label data-entry-only>Target price <input class="input" name="target" type="number" min="0.01" step="0.01" /><span data-order-target-note>No strategy prices loaded.</span></label>
-        <label>Extended hours <input class="input" name="extended" type="checkbox" /></label>
-        <button class="btn btn-secondary" type="button" data-entry-only data-order-plan>Use strategy prices</button>
-        <button class="btn btn-secondary" type="button" data-entry-only data-order-risk disabled>Size to 1R</button>
-        <button class="btn btn-primary" type="submit">Review order</button>
-    </form>
-    <section data-order-review hidden>
-        <h2>Review</h2><pre class="order-review-summary" data-order-summary></pre>
-        <button class="btn btn-secondary" type="button" data-order-confirm>Confirm paper order</button>
-        <button class="btn btn-secondary" type="button" data-order-edit>Edit</button>
-    </section>
-    <p data-order-help>Prices are advisory. Server review rechecks authorization, quote, risk and expiry.</p>
-    <a href="/Desk" data-order-candidates target="_top">Open the Desk</a>
+    </div>
+    <details class="order-options" data-entry-only>
+        <summary>Strategy &amp; protection</summary>
+        <div class="order-option-fields">
+            <label data-order-source>Discovery stock group <select class="input" name="wishlist"><option value="">Choose a stock group</option></select></label>
+            <label data-order-strategy>Exact strategy <select class="input" name="strategy" required></select></label>
+            <label>Stop price <input class="input" name="stop" type="number" min="0.01" step="0.01" /><span data-order-stop-note>No strategy prices loaded.</span></label>
+            <label>Target price <input class="input" name="target" type="number" min="0.01" step="0.01" /><span data-order-target-note>No strategy prices loaded.</span></label>
+        </div>
+        <div class="order-option-actions"><button class="btn btn-secondary" type="button" data-order-plan>Use strategy prices</button><button class="btn btn-secondary" type="button" data-order-risk disabled>Size to 1R</button></div>
+    </details>
+    <details class="order-options">
+        <summary>More order options</summary>
+        <div class="order-option-fields">
+            <label>Time in force <select class="input" name="timeInForce"><option value="day">Day</option></select></label>
+            <label>Extended hours <input class="input" name="extended" type="checkbox" /></label>
+        </div>
+    </details>
+    <button class="btn btn-primary" type="submit">Review order</button>
+</form>
+<section data-order-review hidden>
+    <h2>Review</h2><pre class="order-review-summary" data-order-summary></pre>
+    <details class="order-options"><summary>Strategy identity &amp; review details</summary><pre data-order-technical-summary></pre></details>
+    <div class="order-option-actions"><button class="btn btn-primary" type="button" data-order-confirm>Confirm paper order</button><button class="btn btn-secondary" type="button" data-order-edit>Edit</button></div>
+</section>
+<p data-order-help>Server review rechecks authorization, quote, risk and expiry before confirmation.</p>
+<a href="/Desk" data-order-candidates target="_top">Open the Desk</a>

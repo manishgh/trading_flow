@@ -50,12 +50,13 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         return (await wishlists.ListAsync(ct)).Where(x => !revisions.Contains(x.Id)).ToArray();
     }
 
+    // Publish operator labels while retaining persisted wishlist source keys and identities.
     public async Task<IReadOnlyList<DeskSource>> CatalogAsync(CancellationToken ct)
     {
         var lists = await FollowedListsAsync(ct);
         var saved = await presets.ListAsync(ScreenerScope.Swing, ct);
-        return new[] { new DeskSource("all", "All wishlist stocks", "", "All active stocks across your wishlists, without duplicates.") }
-            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My wishlists", "Wishlist stocks. Select a strategy to collect and evaluate its conditions.")))
+        return new[] { new DeskSource("all", "All followed stocks", "", "All active stocks across your stock groups, without duplicates.") }
+            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My stock groups", "Stock group stocks. Select a strategy to collect and evaluate its conditions.")))
             .Concat(earnings is null ? [] : EarningsSources)
             .Concat(BuiltIns)
             .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz lists", "Finviz discovery only; normal strategy admission is still required.", x.Query)))

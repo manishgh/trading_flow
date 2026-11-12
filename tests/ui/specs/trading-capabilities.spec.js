@@ -132,10 +132,17 @@ test.describe("earnings calendar", () => {
     await signIn(page);
   });
 
-  test("exposes date range, result, and refinement controls", async ({ page }) => {
+  // Secondary filters start collapsed while result assessment remains directly available.
+  test("exposes date presets, result, and essential refinement controls", async ({ page }) => {
     await page.goto("/Earnings");
-    await expect(page.locator("#earnings-from")).toBeVisible();
-    await expect(page.locator("#earnings-to")).toBeVisible();
+    await expect(page.locator("#earnings-assessment-filters")).toBeVisible();
+    await expect(page.locator("#earnings-date-scope button")).toHaveText(["Today", "Next reporting day", "This week · NY"]);
+    await expect(page.locator("#earnings-from, #earnings-to, #earnings-advanced")).toHaveCount(0);
+    await page.locator(".market-more-filters > summary").click();
+    await expect(page.locator("#earnings-from, #earnings-to, #earnings-advanced")).toHaveCount(0);
+    await expect(page.locator("#earnings-session-filters")).toBeVisible();
+    await expect(page.locator("#earnings-cap-filters")).toBeVisible();
+    await expect(page.locator("#earnings-sector")).toBeVisible();
     await expect(page.locator("#earnings-assessment-filters button")).not.toHaveCount(0);
     await expect(page.locator("#earnings-has-news")).toBeVisible();
     await expect(page.locator("#earnings-min-surprise")).toBeVisible();
@@ -201,6 +208,7 @@ test.describe("order ticket breadth", () => {
 
   test("an entry stays a protected limit while an exit offers the wider set", async ({ page }) => {
     await page.goto("/OrderTicket?ticker=AAPL&side=buy");
+    await page.getByText("Strategy & protection",{exact:true}).click();
     // A bracketed entry must not offer market or stop: that would drop the protection.
     await expect(page.locator("[name=orderType] option")).toHaveCount(1);
     await expect(page.locator("[name=stop]")).toBeVisible();

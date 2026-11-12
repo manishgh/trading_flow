@@ -72,7 +72,7 @@ public partial class BacktestsPage : ContentPage
         previewedRevision = null; SavePlanButton.IsEnabled = false;
         selectedStrategyPaths.Clear();
         jobs.Clear(); selectedJob = null; RenderSelectedJob();
-        SavedPlanPicker.ItemsSource = null; StartPlanButton.IsEnabled = false; PlanPreviewLabel.Text = String.Empty; planStartKeys.Clear();
+        SavedPlanPicker.ItemsSource = null; StartPlanButton.IsEnabled = false; PlanPreviewLabel.Text = String.Empty; PlanSummaryLabel.Text = String.Empty; PlanDetailsButton.IsVisible = false; PlanDetailsPanel.IsVisible = false; planStartKeys.Clear();
         StatusLabel.Text = "Connection changed. Reopen this page after signing in.";
     }
 
@@ -278,10 +278,24 @@ public partial class BacktestsPage : ContentPage
         lifetime is not null && ReferenceEquals(lifetime, pageLifetime) && !lifetime.IsCancellationRequested &&
         revision == formRevision && lastSeenSessionVersion == api.SessionVersion;
 
+    // Reveal optional research settings without changing the saved draft or requesting data.
     private void OnToggleAdvanced(object? sender, EventArgs e)
     {
         AdvancedPanel.IsVisible = !AdvancedPanel.IsVisible;
-        AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Hide advanced parameters" : "Show advanced parameters";
+        AdvancedToggle.Text = AdvancedPanel.IsVisible ? "Plan settings −" : "Plan settings +";
+    }
+
+    // Keep executable paper strategy controls distinct from the research plan builder.
+    private async void OnOpenPaperClicked(object? sender, EventArgs e) => await Shell.Current.GoToAsync(nameof(PaperPage));
+
+    // Open existing strategy holdings without starting a run or changing account state.
+    private async void OnOpenPositionsClicked(object? sender, EventArgs e) => await Shell.Current.GoToAsync(nameof(RunningTradesPage));
+
+    // Keep frozen identities and resolved execution assumptions available on demand.
+    private void OnPlanDetailsClicked(object? sender, EventArgs e)
+    {
+        PlanDetailsPanel.IsVisible = !PlanDetailsPanel.IsVisible;
+        PlanDetailsButton.Text = PlanDetailsPanel.IsVisible ? "Frozen plan details −" : "Frozen plan details +";
     }
 
     /// <summary>Persists the explicitly selected source and invalidates the next plan without changing any source list.</summary>
@@ -378,7 +392,7 @@ public partial class BacktestsPage : ContentPage
         }
     }
 
-    /// <summary>Offers each exact catalog strategy independently, matching Web's multi-select comparison.</summary>
+    /// <summary>Keeps exact strategy selection compact; full identity and policy remain available in Details.</summary>
     private void RenderStrategyChoices()
     {
         StrategyChoices.Children.Clear();
@@ -394,10 +408,13 @@ public partial class BacktestsPage : ContentPage
                 SaveFormState();
             };
             var row = new Grid { ColumnDefinitions = new ColumnDefinitionCollection {
-                new() { Width = GridLength.Auto }, new() { Width = GridLength.Star } }, ColumnSpacing = 8 };
+                new() { Width = GridLength.Auto }, new() { Width = GridLength.Star }, new() { Width = GridLength.Auto } }, ColumnSpacing = 8 };
             row.Add(check);
-            row.Add(new Label { Text = StrategyDescription(strategy),
-                FontSize = 12, VerticalTextAlignment = TextAlignment.Center }, 1);
+            row.Add(new Label { Text = $"{strategy.StrategyName} {strategy.SemanticVersion}\n{strategy.Lifecycle} · {strategy.Horizon}",
+                FontSize = 13, VerticalTextAlignment = TextAlignment.Center, LineBreakMode = LineBreakMode.WordWrap }, 1);
+            var details = new Button { Text = "Details", Style = (Style)Application.Current!.Resources["QuietButton"], Padding = new Thickness(10, 6) };
+            details.Clicked += async (_, _) => await DisplayAlertAsync("Strategy details", StrategyDescription(strategy), "Close");
+            row.Add(details, 2);
             StrategyChoices.Children.Add(row);
         }
     }
@@ -681,6 +698,8 @@ public partial class BacktestsPage : ContentPage
     /// <summary>Displays frozen membership, recipe lineage, resolved costs and evidence before save and after reopen.</summary>
     private void ShowPlan(BacktestPlanResponse plan)
     {
+        PlanSummaryLabel.Text = $"{plan.Run.RunName} · {plan.Cohorts.Count} groups · {plan.Run.Strategies.Count} strategies\n{plan.ExecutionCount} independent research portfolios";
+        PlanDetailsButton.IsVisible = true;
         PlanPreviewLabel.Text = $"{plan.Run.RunName}: {plan.ExecutionCount} independent portfolios.\n" +
             "Excluded stocks: " + (plan.ExcludedSymbols is { Count: > 0 } ? String.Join(", ", plan.ExcludedSymbols) : "None") + "\n" +
             String.Join("\n", plan.Cohorts.Select(group => $"{group.Name}: {String.Join(", ", group.Symbols)} · capital {group.StartingCapital:N2} per strategy")) +

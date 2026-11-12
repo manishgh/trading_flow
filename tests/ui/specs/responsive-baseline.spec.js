@@ -43,19 +43,18 @@ test.describe("approved UI baseline", () => {
   test("shell exposes skip navigation and the current destination", async ({ page }) => {
     await page.goto("/Desk");
     await expect(page.locator('a[href="#main-content"]')).toHaveCount(1);
-    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Trading Desk");
-    await expect(page.locator('.section-nav [aria-current="page"]')).toHaveText("Desk");
+    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Desk");
+    await expect(page.locator(".section-nav")).toHaveCount(0);
     await expect(page.locator('a[href="#"]')).toHaveCount(0);
 
     const primaryLabels = await page.locator(".primary-nav a").evaluateAll(nodes =>
       nodes.map(node => node.textContent.trim()));
-    // Three tabs: two public market screens and the signed-in Trading Desk.
-    expect(primaryLabels).toEqual(["News", "Earnings", "Trading Desk"]);
+    // The same six destinations stay visible across the signed-in workspace.
+    expect(primaryLabels).toEqual(["Desk", "Trading", "Strategies", "Earnings", "News", "Stock groups"]);
 
     await page.goto("/RunningTrades");
-    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Trading Desk");
-    await expect(page.locator('.section-nav:not(.section-nav-secondary) [aria-current="page"]')).toHaveText("Orders");
-    await expect(page.locator('.section-nav-secondary [aria-current="page"]')).toHaveText("Positions");
+    await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Trading");
+    await expect(page.locator(".section-nav")).toHaveCount(0);
   });
 
   test("positions use reviewed exits and never auto-reload the document", async ({ page }) => {
@@ -89,9 +88,7 @@ test.describe("approved UI baseline", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/Desk");
 
-    // Only what a thumb can actually reach counts. On a phone the desktop
-    // primary nav is replaced by the fixed tab bar, so its links are display:none
-    // and measure zero - a hidden control has no tap target to be too small.
+    // The compact phone navigation and visible actions retain full touch targets.
     const undersized = await page.locator(
       '.primary-nav a, .desk-mobile-tabbar a, .desk-mobile-tabs a, button, a.btn, input:not([type="hidden"]):not([type="checkbox"]), select'
     ).evaluateAll(elements => elements

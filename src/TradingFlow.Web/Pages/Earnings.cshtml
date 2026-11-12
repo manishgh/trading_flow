@@ -3,20 +3,39 @@
 @model TradingFlow.Web.Pages.EarningsModel
 @{
     ViewData["Title"] = "Earnings";
-    ViewData["MainClass"] = "shell-flush earnings-page";
+    ViewData["MainClass"] = "earnings-page market-workspace";
     // Three clocks on this screen: the print is scheduled in New York, the
     // operator reads it locally, and everything is stored in UTC.
     ViewData["ShowOperatorClock"] = true;
+    // Reopen only the refinements still available on this screen.
+    var secondaryDefaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["sector"] = "",
+        ["session"] = "all",
+        ["marketCap"] = "all",
+        ["onlyHeld"] = "false",
+        ["hasNews"] = "false",
+        ["minSurprise"] = "",
+        ["sort"] = "breakout"
+    };
+    var hasSecondaryFilters = Request.Query.Any(pair =>
+        secondaryDefaults.TryGetValue(pair.Key, out var defaultValue) &&
+        !String.IsNullOrWhiteSpace(pair.Value.ToString()) &&
+        !String.Equals(pair.Value.ToString(), defaultValue, StringComparison.OrdinalIgnoreCase));
 }
 
-<h1 class="visually-hidden">Earnings monitor</h1>
+<link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
 
-@* ===========================================================================
-   Monitor strip - 5 cells
-   The Authority cell is not decoration. The monitor is advisory and cannot
-   place an order; the screen says so rather than leaving it to be inferred.
-   =========================================================================== *@
+<header class="page-header market-page-header">
+    <div>
+        <h1>Earnings monitor</h1>
+        <p>Reporting calendar, results and breakout evidence.</p>
+    </div>
+</header>
+
+@* The compact monitor keeps freshness and advisory authority visible. *@
 <section class="metric-strip earnings-monitor" aria-live="polite" aria-atomic="true">
+    <div class="market-authority"><span class="micro-label">Authority</span><span class="metric-value">Advisory only · cannot route orders</span></div>
     <div>
         <span class="micro-label">Monitor</span>
         <span class="metric-value" id="earnings-status">Loading…</span>
@@ -33,10 +52,6 @@
         <span class="micro-label">Next reporting day</span>
         <span class="metric-value" id="earnings-next-day">—</span>
     </div>
-    <div>
-        <span class="micro-label">Authority</span>
-        <span class="metric-value accent-note">Advisory only · cannot route</span>
-    </div>
 </section>
 
 @* ===========================================================================
@@ -51,10 +66,10 @@
         <span class="earnings-lane-head">
             <partial name="_Icon" model='new IconModel("trending-up", 19)' />
             <span class="earnings-lane-count" data-lane-count>0</span>
-            <span class="earnings-lane-label">Beat + breakout confirmed</span>
+            <span class="earnings-lane-label">Beat + confirmed breakout</span>
         </span>
         <span class="earnings-lane-rule">
-            Result beat and a completed bar closed above the pre-release reference high on elevated slot volume.
+            Beat result · completed close above the pre-release reference high · elevated slot volume.
         </span>
         <span class="earnings-lane-tickers" data-lane-tickers>None</span>
     </button>
@@ -62,10 +77,10 @@
         <span class="earnings-lane-head">
             <partial name="_Icon" model='new IconModel("clock", 19)' />
             <span class="earnings-lane-count" data-lane-count>0</span>
-            <span class="earnings-lane-label">Reporting within 30 minutes</span>
+            <span class="earnings-lane-label">Reporting in 30 min</span>
         </span>
         <span class="earnings-lane-rule">
-            Confirmed or estimated slot inside the next half hour. No result evidence exists yet.
+            Within the next half hour · confirmed or estimated slot · no result evidence yet.
         </span>
         <span class="earnings-lane-tickers" data-lane-tickers>None</span>
     </button>
@@ -73,47 +88,53 @@
         <span class="earnings-lane-head">
             <partial name="_Icon" model='new IconModel("briefcase", 19)' />
             <span class="earnings-lane-count" data-lane-count>0</span>
-            <span class="earnings-lane-label">Symbols you hold reporting</span>
+            <span class="earnings-lane-label">Held stocks reporting</span>
         </span>
         <span class="earnings-lane-rule">
-            Open positions in the trading group with a print today or on the next reporting day.
+            Open positions · reporting today or the next reporting day.
         </span>
         <span class="earnings-lane-tickers" data-lane-tickers>None</span>
     </button>
 </div>
 
-@* ===========================================================================
-   Filter bar - four rows
-   =========================================================================== *@
-<section class="earnings-filters" aria-label="Earnings filters">
-    <div class="earnings-filter-row">
-        <span class="micro-label">Dates</span>
+@* Keep date, search and result assessment visible; essential refinements stay in the disclosure. *@
+<section class="earnings-filters market-filter-panel" aria-label="Earnings filters">
+    <div class="market-primary-toolbar">
         <div class="tab-strip" id="earnings-date-scope" role="group" aria-label="Earnings date scope">
             <button type="button" data-scope-value="today" aria-current="page">Today</button>
             <button type="button" data-scope-value="nextBusinessDay">Next reporting day</button>
-            <button type="button" id="earnings-this-week">This week (New York)</button>
+            <button type="button" id="earnings-this-week" data-scope-value="week">This week · NY</button>
         </div>
-    </div>
-
-    <div class="earnings-filter-row">
-        <span class="micro-label">Custom dates</span>
-        <div class="earnings-range">
-            <label class="visually-hidden" for="earnings-from">From date</label>
-            <input class="input earnings-date" id="earnings-from" type="date" aria-label="From date" />
-            <span aria-hidden="true">to</span>
-            <label class="visually-hidden" for="earnings-to">To date</label>
-            <input class="input earnings-date" id="earnings-to" type="date" aria-label="To date" />
-            <button type="button" class="btn btn-secondary btn-md" id="earnings-range-apply">Apply</button>
-            <button type="button" class="btn btn-secondary btn-md" id="earnings-range-clear">Clear range</button>
+            <label class="earnings-inline-field">
+                <span>Ticker</span>
+                <input class="input" type="search" id="earnings-search" name="search" maxlength="200" placeholder="Ticker or company" autocomplete="off" />
+            </label>
+            <button type="button" class="btn btn-secondary btn-md" id="earnings-refresh">
+                <partial name="_Icon" model='new IconModel("refresh-cw", 14)' />Refresh
+            </button>
             <div id="earnings-spinner" class="earnings-spinner" hidden>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="earnings-loading-icon">
                     <line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
                 </svg>
                 <span class="earnings-loading-label" role="status">Updating…</span>
             </div>
-                    </div>
     </div>
+    <div class="market-assessment-toolbar">
+        <div class="tab-strip" id="earnings-assessment-filters" role="group" aria-label="Result assessment">
+            <button type="button" data-assessment-value="all" aria-current="page">All results</button>
+            <button type="button" data-assessment-value="beat">Beat</button>
+            <button type="button" data-assessment-value="miss">Miss</button>
+            <button type="button" data-assessment-value="inline">In line</button>
+            <button type="button" data-assessment-value="pending">Pending</button>
+        </div>
 
+            <span class="note earnings-count" id="earnings-count">—</span>
+    </div>
+</section>
+
+<details class="panel market-more-filters" open="@hasSecondaryFilters">
+    <summary>More earnings filters</summary>
+    <div class="market-secondary-filters">
     <div class="earnings-filter-row">
         <span class="micro-label">Session</span>
         <div class="tab-strip" id="earnings-session-filters" role="group" aria-label="Release session">
@@ -137,34 +158,18 @@
         </div>
     </div>
 
-    @* Ticker and sector live in the main rail but submit with the advanced form's fields. *@
+    @* Sector choices come from the current response. *@
     <div class="earnings-filter-row">
-        <span class="micro-label">Find</span>
+        <span class="micro-label">Sector</span>
         <div class="earnings-refine">
             <label class="earnings-inline-field">
-                <span>Ticker</span>
-                <input class="input" type="search" id="earnings-search" name="search" form="earnings-advanced" maxlength="200" placeholder="Ticker or company" autocomplete="off" />
-            </label>
-            <label class="earnings-inline-field">
                 <span>Sector</span>
-                <select class="input" id="earnings-sector" name="sector" form="earnings-advanced">
+                <select class="input" id="earnings-sector" name="sector">
                     <option value="">All sectors</option>
                 </select>
             </label>
         </div>
     </div>
-
-    <div class="earnings-filter-row">
-        <span class="micro-label">Result</span>
-        <div class="tab-strip" id="earnings-assessment-filters" role="group" aria-label="Result assessment">
-            <button type="button" data-assessment-value="all" aria-current="page">All results</button>
-            <button type="button" data-assessment-value="beat">Beat</button>
-            <button type="button" data-assessment-value="miss">Miss</button>
-            <button type="button" data-assessment-value="inline">In line</button>
-            <button type="button" data-assessment-value="pending">Pending</button>
-        </div>
-    </div>
-
     <div class="earnings-filter-row">
         <span class="micro-label">Refine</span>
         <div class="earnings-refine">
@@ -192,50 +197,9 @@
                     <option value="revenue">Revenue surprise</option>
                 </select>
             </label>
-            <span class="note earnings-count" id="earnings-count">—</span>
-            <button type="button" class="btn btn-secondary btn-md" id="earnings-refresh">
-                <partial name="_Icon" model='new IconModel("refresh-cw", 14)' />Refresh
-            </button>
         </div>
     </div>
-</section>
-
-<details class="panel">
-    <summary>More earnings filters and views</summary>
-    <form id="earnings-advanced" class="news-filter-bar">
-        <div><label for="earnings-view">View</label><select id="earnings-view" name="view"><option value="timeline">Timeline</option><option value="week">Calendar by New York date</option></select></div>
-        <div><label for="earnings-schedule">Schedule certainty</label><select id="earnings-schedule" name="schedule"><option value="">All schedules</option><option value="estimated">Estimated schedule</option><option value="reported">Provider-reported schedule</option></select></div>
-        <div><label for="earnings-result">Observed result data</label><select id="earnings-result" name="result"><option value="">All results</option><option value="observed">Actuals or first-seen result</option><option value="pending">No observed result</option></select></div>
-        <div><label for="earnings-minMarketCap">Minimum cap · USD millions</label><input id="earnings-minMarketCap" name="minMarketCap" type="number" step="any" min="0" /></div>
-        <div><label for="earnings-maxMarketCap">Maximum cap · USD millions</label><input id="earnings-maxMarketCap" name="maxMarketCap" type="number" step="any" min="0" /></div>
-        <div><label for="earnings-minEventReturn">Minimum event return %</label><input id="earnings-minEventReturn" name="minEventReturn" type="number" step="any" /></div>
-        <div><label for="earnings-maxEventReturn">Maximum event return %</label><input id="earnings-maxEventReturn" name="maxEventReturn" type="number" step="any" /></div>
-        <div><label for="earnings-minPriceReaction">Minimum provider one-day reaction %</label><input id="earnings-minPriceReaction" name="minPriceReaction" type="number" step="any" /></div>
-        <div><label for="earnings-maxPriceReaction">Maximum provider one-day reaction %</label><input id="earnings-maxPriceReaction" name="maxPriceReaction" type="number" step="any" /></div>
-        <div><label for="earnings-minEpsEstimate">Minimum EPS estimate · USD/share</label><input id="earnings-minEpsEstimate" name="minEpsEstimate" type="number" step="any" /></div>
-        <div><label for="earnings-maxEpsEstimate">Maximum EPS estimate · USD/share</label><input id="earnings-maxEpsEstimate" name="maxEpsEstimate" type="number" step="any" /></div>
-        <div><label for="earnings-minEpsActual">Minimum EPS actual · USD/share</label><input id="earnings-minEpsActual" name="minEpsActual" type="number" step="any" /></div>
-        <div><label for="earnings-maxEpsActual">Maximum EPS actual · USD/share</label><input id="earnings-maxEpsActual" name="maxEpsActual" type="number" step="any" /></div>
-        <div><label for="earnings-minRevenueEstimate">Minimum revenue estimate · USD millions</label><input id="earnings-minRevenueEstimate" name="minRevenueEstimate" type="number" step="any" min="0" /></div>
-        <div><label for="earnings-maxRevenueEstimate">Maximum revenue estimate · USD millions</label><input id="earnings-maxRevenueEstimate" name="maxRevenueEstimate" type="number" step="any" min="0" /></div>
-        <div><label for="earnings-minRevenueActual">Minimum revenue actual · USD millions</label><input id="earnings-minRevenueActual" name="minRevenueActual" type="number" step="any" min="0" /></div>
-        <div><label for="earnings-maxRevenueActual">Maximum revenue actual · USD millions</label><input id="earnings-maxRevenueActual" name="maxRevenueActual" type="number" step="any" min="0" /></div>
-        <div><label for="earnings-provider">Earnings provider</label><input id="earnings-provider" name="provider" /></div>
-        <div><label for="earnings-news-provider">News provider</label><input id="earnings-news-provider" name="newsProvider" /></div>
-        <div><label for="earnings-day">Reporting bucket (operator date)</label><select id="earnings-day" name="day"><option value="">All days</option><option value="today">Today</option><option value="nextBusinessDay">Next reporting day</option><option value="other">Other days</option></select></div>
-        <div><label for="earnings-breakout">Breakout evidence</label><select id="earnings-breakout" name="breakout"><option value="">All evidence states</option><option value="AwaitingEarningsRelease">Awaiting release</option><option value="BreakoutDataInsufficient">Insufficient data</option><option value="PossibleBreakout">Possible breakout</option><option value="BreakoutNotConfirmed">Not confirmed</option></select></div>
-        <div><label for="earnings-minEpsSurprise">Minimum EPS surprise %</label><input id="earnings-minEpsSurprise" name="minEpsSurprise" type="number" step="any" /></div>
-        <div><label for="earnings-maxEpsSurprise">Maximum EPS surprise %</label><input id="earnings-maxEpsSurprise" name="maxEpsSurprise" type="number" step="any" /></div>
-        <div><label for="earnings-minRevenueSurprise">Minimum revenue surprise %</label><input id="earnings-minRevenueSurprise" name="minRevenueSurprise" type="number" step="any" /></div>
-        <div><label for="earnings-maxRevenueSurprise">Maximum revenue surprise %</label><input id="earnings-maxRevenueSurprise" name="maxRevenueSurprise" type="number" step="any" /></div>
-        <div><label for="earnings-minSentiment">Minimum news sentiment (−1 to 1)</label><input id="earnings-minSentiment" name="minSentiment" type="number" step="any" /></div>
-        <div><label for="earnings-maxSentiment">Maximum news sentiment (−1 to 1)</label><input id="earnings-maxSentiment" name="maxSentiment" type="number" step="any" /></div>
-        @if (User.Identity?.IsAuthenticated == true) {
-            <label class="checkbox-field"><input name="onlyGroups" type="checkbox" value="true" />Only my groups</label>
-            <div><label for="earnings-group">Group</label><select id="earnings-group" name="groupId"><option value="">Any group</option></select></div>
-        }
-        <button type="submit" class="button secondary">Apply filters and view</button>
-    </form>
+    </div>
 </details>
 
 @* ===========================================================================
@@ -250,7 +214,7 @@
                 <h2 id="earnings-news-title" class="section-heading">
                     <partial name="_Icon" model='new IconModel("newspaper", 16)' />News &amp; evidence
                 </h2>
-                <p class="note" id="earnings-news-caption">Loading the current evidence window…</p>
+                <p class="note" id="earnings-news-caption">Loading evidence…</p>
             </div>
             <span class="tag tag-neutral" id="earnings-news-count">0</span>
         </header>

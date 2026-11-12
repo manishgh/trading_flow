@@ -1,0 +1,147 @@
+/* Research and execution workspaces share the shell's neutral surface tokens. */
+.execution-workspace { --workspace-border: var(--color-border, #dde3e7); --workspace-muted: var(--color-neutral-700, #67717f); }
+.execution-workspace .standfirst { max-width: 68ch; font-size: 14px; line-height: 1.5; }
+.execution-workspace .execution-section-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 0 12px; }
+.execution-workspace .execution-section-head h2 { margin: 3px 0 0; font-size: 19px; letter-spacing: -.025em; }
+.execution-workspace .execution-section-head .note { margin: 0; max-width: 60ch; text-align: right; }
+.execution-count { font-size: 12px; font-weight: 600; color: var(--workspace-muted); vertical-align: middle; margin-left: 7px; }
+.execution-help { border-top: 1px solid var(--workspace-border); padding-top: 12px; margin-top: 12px; }
+.execution-help > summary, .lab-optional > summary, .lab-strategy-details > summary, .orders-rail-history > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--workspace-muted); }
+.execution-help p { line-height: 1.6; }
+
+/* Configuration occupies the canvas instead of a nested scrolling rail. */
+.lab-page .lab-workspace { display: flex; flex-direction: column; gap: 20px; padding: 0 24px 24px; }
+.lab-page .lab-workspace > * { width: 100%; }
+.lab-page .lab-rail { position: static; max-height: none; overflow: visible; border: 1px solid var(--workspace-border); border-radius: 10px; background: var(--color-surface, var(--panel, #fff)); }
+.lab-page .research-configuration > summary { padding: 18px 20px; font-size: 15px; }
+.lab-page .research-configuration[open] > summary { border-bottom: 1px solid var(--workspace-border); }
+.lab-page .lab-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; padding: 4px 20px 18px; align-items: start; }
+.lab-page .lab-config-grid > * { min-width: 0; }
+.lab-page .lab-config-grid > [data-run-validation] { grid-column: 1 / -1; margin: 12px 0; }
+.lab-page .lab-profile-block, .lab-page .lab-config-grid > .lab-block { padding: 18px 0; border: 0; border-bottom: 1px solid var(--workspace-border); }
+.lab-page .lab-profile-block .section-heading { margin-bottom: 14px; }
+.lab-page .lab-profile-block label { display: block; margin: 12px 0 6px; }
+.lab-page .lab-config-grid > .lab-block:has(.lab-strategy-list) { grid-column: 1 / -1; }
+.lab-page .lab-config-grid .lab-block .section-heading { margin-bottom: 12px; }
+.lab-page .lab-strategy-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 0; gap: 10px; }
+.lab-page .lab-strategy-option { min-width: 0; border: 1px solid var(--workspace-border); border-radius: 8px; overflow: hidden; }
+.lab-page .lab-strategy-option:has(input:checked) { border-color: var(--color-accent, #3d6feb); background: var(--color-accent-100, #edf3ff); }
+.lab-page .lab-strategy { padding: 13px 14px 9px; gap: 10px; margin: 0; background: transparent; }
+.lab-page .lab-strategy:has(input:checked) { background: transparent; }
+.lab-page .lab-strategy input { margin-top: 3px; }
+.lab-page .lab-strategy-body { gap: 6px; }
+.lab-page .lab-strategy-name { font-size: 13px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lab-page .lab-strategy-heading { display: flex; align-items: baseline; gap: 7px; width: 100%; min-width: 0; }
+.lab-page .lab-strategy-heading .lab-strategy-name { flex: 1; min-width: 0; }
+.lab-page .lab-strategy-heading small { font: inherit; font-weight: 500; color: var(--workspace-muted); white-space: nowrap; margin-left: 5px; }
+.lab-page .lab-strategy-meta, .lab-page .lab-strategy-audit { font-size: 11px; line-height: 1.5; }
+.lab-page .lab-strategy .tag { font-size: 9px; padding: 3px 6px; }
+.lab-page .lab-strategy-details { margin: 0 14px 12px 42px; }
+.lab-page .lab-strategy-details > summary { font-size: 11px; font-weight: 500; }
+.lab-page .lab-strategy-exact { display: grid; gap: 7px; padding-top: 12px; overflow-wrap: anywhere; font-size: 12px; }
+.lab-page .lab-strategy-exact strong { font-size: 12px; font-weight: 600; }
+.lab-page .lab-optional { border-bottom: 1px solid var(--workspace-border); padding: 15px 0; }
+.lab-page .lab-optional > summary { display: list-item; font-size: 13px; color: inherit; }
+.lab-page .lab-optional > summary span { color: var(--workspace-muted); font-size: 11px; font-weight: 400; margin-left: 7px; }
+.lab-page .lab-optional .lab-block { padding: 18px 0 0; border: 0; }
+.lab-page .lab-optional .lab-block legend { display: none; }
+.lab-page .lab-parameters { gap: 12px; }
+.lab-page .lab-config-grid .note { font-size: 11px; line-height: 1.55; margin: 8px 0 0; }
+.lab-page .lab-run { padding: 16px 20px; border-top: 1px solid var(--workspace-border); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; align-items: center; }
+.lab-page .lab-run > .btn-block { width: 100%; margin: 0; min-height: 40px; }
+.lab-page .lab-run > label { margin: 0; }
+.lab-page .lab-run > .note, .lab-page .lab-run > [data-backtest-plan-preview] { grid-column: 1 / -1; margin: 0; }
+.lab-page .lab-main { padding: 0; display: grid; gap: 16px; }
+.lab-page .lab-panel { border: 1px solid var(--workspace-border); border-radius: 10px; padding: 18px 20px; background: var(--color-surface, var(--panel, #fff)); }
+.lab-page .lab-panel .table-scroll { margin: 0; }
+
+/* Account context stays small; the tables and ticket carry the main hierarchy. */
+.orders-page .orders-account { margin: 0 24px 18px; border: 1px solid var(--workspace-border); border-radius: 10px; overflow: hidden; }
+.orders-page .orders-account > div { padding: 12px 16px; }
+.orders-page .orders-account .metric-value { font-size: 17px; line-height: 1.4; letter-spacing: -.025em; }
+.orders-page .orders-account .metric-detail { font-size: 11px; }
+.orders-page .orders-shell { grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 0 24px 24px; }
+.orders-page .orders-body { padding: 0; min-width: 0; }
+.orders-page .trading-positions, .orders-page .orders-rail { background: var(--color-surface, var(--panel, #fff)); border: 1px solid var(--workspace-border); border-radius: 10px; overflow: hidden; }
+.orders-page .trading-positions { padding: 0 16px 10px; margin-bottom: 16px; scroll-margin-top: 20px; }
+.orders-page .trading-positions .table-scroll { margin: 0 -16px; }
+.orders-page .trading-positions .execution-section-head { align-items: start; }
+.orders-page .trading-positions .execution-section-head .note { max-width: 36ch; font-size: 10px; line-height: 1.5; }
+.orders-page .trading-position-table { min-width: 650px; }
+.orders-page .trading-position-table td { font-size: 12px; padding-top: 12px; padding-bottom: 12px; }
+.orders-page .trading-positions[data-state="stale"] .trading-position-table { opacity: .65; }
+.orders-page [data-position-status][data-state="stale"] { color: var(--color-accent-700, #a33d27); }
+.orders-page .orders-journal-head { padding: 4px 0 12px; }
+.orders-page .orders-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 12px 16px; border: 1px solid var(--workspace-border); border-radius: 8px; margin-bottom: 14px; }
+.orders-page .orders-summary > div { display: flex; align-items: baseline; gap: 6px; padding: 0; border: 0; min-width: auto; }
+.orders-page .orders-summary .micro-label { font-size: 10px; letter-spacing: .03em; }
+.orders-page .orders-summary .metric-value { font-size: 14px; font-weight: 600; letter-spacing: 0; line-height: 1.5; }
+.orders-page .orders-new-order { margin: 0 0 14px; padding: 14px 16px; border: 1px solid var(--workspace-border); border-radius: 8px; background: var(--color-surface, var(--panel, #fff)); }
+.orders-page .orders-new-order label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.orders-page .orders-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; margin-bottom: 10px; }
+.orders-page .orders-controls .tab-strip { flex: 1 1 100%; }
+.orders-page .orders-controls .note { margin: 0; font-size: 10px; }
+.orders-page .orders-controls #OrdersConnection[data-state="stale"] { padding: 8px 10px; font-size: 12px; flex-basis: 100%; }
+.orders-page .orders-body > .table-scroll { border: 1px solid var(--workspace-border); border-radius: 8px; background: var(--color-surface, var(--panel, #fff)); }
+.orders-page .orders-table { min-width: 1040px; }
+.orders-page .orders-table th { font-size: 10px; }
+.orders-page .orders-table td { font-size: 11px; padding-top: 12px; padding-bottom: 12px; }
+.orders-page .orders-table .order-identity { max-width: 150px; overflow-wrap: anywhere; font-size: 10px; }
+/* The reviewed ticket uses document scrolling; the inherited desk rail height would clip its lower fields. */
+.orders-page .orders-rail { border-left: 1px solid var(--workspace-border); position: static; max-height: none; overflow: visible; }
+.orders-page .orders-rail .desk-rail-block { padding: 16px; }
+.orders-page .orders-rail .desk-rail-ticker { font-size: 25px; }
+.orders-page .orders-rail .desk-rail-membership { font-size: 11px; }
+.orders-page .orders-rail-history > summary { color: inherit; }
+.orders-page .orders-rail-history[open] > summary { margin-bottom: 12px; }
+
+/* Strategy-run setup has one compact group per decision. */
+.paper-page.execution-workspace .paper-head { margin-bottom: 20px; }
+.paper-page.execution-workspace .paper-head h1 { margin-top: 5px; }
+.paper-page.execution-workspace .paper-head p { font-size: 14px; }
+.paper-page.execution-workspace .paper-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.paper-page.execution-workspace .paper-card, .paper-page.execution-workspace .paper-limits { border-color: var(--workspace-border); border-radius: 10px; }
+.paper-page.execution-workspace .paper-start { padding: 0; }
+.paper-page.execution-workspace .paper-start > h2 { padding: 18px 20px; font-size: 16px; }
+.paper-page.execution-workspace .paper-steps { grid-template-columns: 90px minmax(0, 1fr); }
+.paper-page.execution-workspace .paper-step-label { font-size: 11px; padding: 20px 12px 18px 20px; }
+.paper-page.execution-workspace .paper-step-fields { padding: 16px 20px 16px 8px; gap: 6px; }
+.paper-page.execution-workspace .paper-note { font-size: 11px; line-height: 1.5; }
+.paper-page.execution-workspace .paper-segmented span { min-height: 36px; font-size: 12px; padding: 0 12px; }
+.paper-page.execution-workspace .paper-segmented input:focus-visible + span { outline: 2px solid var(--color-accent, #3d6feb); outline-offset: 3px; }
+.paper-page.execution-workspace .paper-strategy-identity { margin: 4px 0; padding: 10px 0; overflow-wrap: anywhere; }
+.paper-page.execution-workspace .paper-start-bar { padding: 16px 20px; gap: 12px; }
+.paper-page.execution-workspace .paper-start-bar p { font-size: 12px; line-height: 1.5; }
+.paper-page.execution-workspace .paper-card h2 { font-size: 16px; }
+.paper-page.execution-workspace .paper-side { gap: 16px; }
+.paper-page.execution-workspace .paper-side > .paper-card > .muted { font-size: 12px; line-height: 1.5; }
+
+@media (max-width: 1200px) {
+  .orders-page .orders-shell { grid-template-columns: minmax(0, 1fr) 310px; gap: 14px; }
+  .paper-page.execution-workspace .paper-layout { grid-template-columns: minmax(0, 1fr); }
+  .paper-page.execution-workspace .paper-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 980px) {
+  .orders-page .orders-shell { grid-template-columns: minmax(0, 1fr); }
+  .orders-page .orders-rail { position: static; }
+  .orders-page .orders-shell:has([data-selected-symbol]) .orders-rail { order: -1; border: 1px solid var(--workspace-border); }
+}
+@media (max-width: 700px) {
+  .lab-page .lab-workspace, .orders-page .orders-shell { padding-left: 12px; padding-right: 12px; }
+  .lab-page .lab-config-grid { grid-template-columns: minmax(0, 1fr); padding: 0 16px 16px; }
+  .lab-page .lab-strategy-list, .lab-page .lab-run, .lab-page .lab-parameters { grid-template-columns: minmax(0, 1fr); }
+  .lab-page .lab-config-grid > .lab-block:has(.lab-strategy-list) { grid-column: auto; }
+  .lab-page .lab-run > * { grid-column: 1; }
+  .orders-page .orders-account { margin-left: 12px; margin-right: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .orders-page .execution-section-head { flex-wrap: wrap; }
+  .orders-page .execution-section-head .note { text-align: left; max-width: 100%; }
+  .orders-page .orders-new-order .input { flex: 1 1 140px; }
+  .paper-page.execution-workspace .paper-side { display: flex; }
+  .paper-page.execution-workspace .paper-steps { grid-template-columns: minmax(0, 1fr); }
+  .paper-page.execution-workspace .paper-step-label { border-bottom: 0; padding: 16px 16px 0; }
+  .paper-page.execution-workspace .paper-step-fields { padding: 10px 16px 16px; }
+  .paper-page.execution-workspace .paper-pair { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Optional research settings follow the paired core inputs across the whole configuration canvas. */
+.lab-page .lab-config-grid > .lab-optional { grid-column: 1 / -1; }

@@ -3,7 +3,7 @@
 @{
     ViewData["Title"] = "Review order";
     var environment = Environments.GetState(Environments.Parse(Request.Query["env"]));
-    // Embedded inside the Desk's detail panel: the same reviewed workflow without the site chrome.
+    // Embedded inside the shared order popup: the same reviewed workflow without the site chrome.
     var embedded = Request.Query["embedded"] == "1";
     if (embedded) Layout = "_EmbeddedLayout";
 }

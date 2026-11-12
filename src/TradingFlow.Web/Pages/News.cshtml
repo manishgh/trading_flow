@@ -2,6 +2,7 @@
 @model TradingFlow.Web.Pages.NewsModel
 @{
     ViewData["Title"] = "News";
+    ViewData["MainClass"] = "news-page market-workspace";
     string PageUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
         provider = Model.Provider, source = Model.Source, classification = Model.Classification, category = Model.Category, sector = Model.Sector,
         sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly, stockLinkedOnly = Model.StockLinkedOnly,
@@ -16,24 +17,26 @@
         stockSource = Model.StockSource, view = Model.View, pageNumber = 1, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
 }
 
-<header class="page-header compact-page-header">
+<link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+
+<header class="page-header compact-page-header market-page-header">
     <div>
         <h1>News</h1>
-        <p>Market news timeline across companies, sectors, finance, policy, and global events.</p>
+        <p>Company news, sector stories and market events.</p>
     </div>
     <div class="actions">
         <a class="button secondary" asp-page="/Desk">Open Desk</a>
     </div>
 </header>
 
-<section class="panel">
+<section class="panel market-filter-panel">
     <nav class="tab-strip news-category-nav" aria-label="News categories">
         @foreach (var category in TradingFlow.Domain.News.NewsDisplayTaxonomy.Categories)
         {
             <a href="@CategoryUrl(category.Key)" aria-current="@(Model.Category == category.Key ? "page" : null)">@category.Label</a>
         }
     </nav>
-    <p class="muted news-topic-note">Browse by topic. Sector labels describe the story; stock impact is not confirmed.</p>
+    <p class="muted news-topic-note">Topic labels describe the story; stock impact is unconfirmed.</p>
     <form method="get" class="news-filter-bar">
         <input type="hidden" name="category" value="@Model.Category" />
         <input type="hidden" name="pageNumber" value="1" />
@@ -56,7 +59,7 @@
                     </optgroup>
                 }
             </select>
-            <small class="muted">Choose a stock list. Broader topics can also include general market stories.</small>
+            <small class="muted">General market stories may also appear.</small>
         </div>
         }
         <div>
@@ -133,7 +136,7 @@
     </form>
 </section>
 
-<p id="news-live-status" class="muted" role="status">Updates every 30 seconds · rolling news window</p>
+<p id="news-live-status" class="muted" role="status">Live · refreshes every 30 seconds</p>
 <div id="news-live-body" class="news-body @(Model.StockList is not null ? "has-stocks" : "")">
 <div class="news-feed-column">
 <section class="panel" aria-labelledby="news-results-heading">
@@ -143,10 +146,10 @@
             <p>@Model.FeedDescription</p>
             @if (!String.IsNullOrWhiteSpace(Model.Ticker) || Model.StockLinkedOnly)
             {
-                <p class="muted">Ticker and directly linked stock filters remain active across categories. These filters restrict results to provider symbols and exclude general market stories.</p>
+                <p class="muted">Ticker and directly linked stock filters apply across topics: provider symbols only, excluding general market stories.</p>
             }
         </div>
-        <span class="count-label">@Model.Items.Count articles on this page · @Model.TotalBeforeFilters matching records</span>
+        <span class="count-label">@Model.Items.Count shown · @Model.TotalBeforeFilters matching</span>
     </div>
 
     @if (!Model.FeedEnabled)
@@ -185,7 +188,7 @@
 @if (Model.StockList is { } stocks) {
     <aside class="panel news-stock-sidebar" aria-labelledby="source-stock-heading">
         <h2 id="source-stock-heading">Stocks in this source</h2>
-        <p>@stocks.Total stocks · wishlist names show overlap with the selected Finviz list. This is membership, not a trading signal.</p>
+        <p>@stocks.Total stocks · wishlist overlap shown. Source membership is not a trading signal.</p>
         <ul class="source-stock-list">
             @foreach (var stock in stocks.Items) {
                 <li><strong>@stock.Symbol</strong>
@@ -213,7 +216,7 @@
 {
     <details class="panel" data-company-assessment-panel>
         <summary>Review archived company news assessments</summary>
-        <p>Separate from the live feed. These samples show how archived text was assessed today; they do not start a backtest.</p>
+        <p>Archived text assessed today · separate from live news. Loading samples does not start a backtest.</p>
         <button type="button" class="button secondary" data-load-company-assessments>Load assessment samples</button>
         <p data-company-assessment-status role="status"></p>
         <div data-company-assessment-summary></div>

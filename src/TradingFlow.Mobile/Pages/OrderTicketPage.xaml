@@ -3,71 +3,89 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
              x:Class="TradingFlow.Mobile.Pages.OrderTicketPage"
-             Title="Review Order">
-    <ScrollView>
-        <VerticalStackLayout Padding="16" Spacing="14">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                <VerticalStackLayout Spacing="2">
-                    <Label Text="Protected Buy" Style="{StaticResource Headline}" />
-                    <Label x:Name="TickerLabel" Text="Paper order" Style="{StaticResource SubHeadline}" />
-                </VerticalStackLayout>
-                <controls:EnvironmentBadgeView Grid.Column="1" />
+             Title="Buy order"
+             Shell.PresentationMode="ModalAnimated"
+             Shell.NavBarIsVisible="False">
+    <Grid Padding="12,0,12,12">
+        <Border Padding="16" MaximumWidthRequest="560" MaximumHeightRequest="720"
+                HorizontalOptions="Fill" VerticalOptions="End"
+                Stroke="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}"
+                BackgroundColor="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}">
+            <Border.StrokeShape><RoundRectangle CornerRadius="20" /></Border.StrokeShape>
+            <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <VerticalStackLayout Spacing="2">
+                        <Label Text="Protected buy" Style="{StaticResource Headline}" />
+                        <Label x:Name="TickerLabel" Text="Paper order" Style="{StaticResource SubHeadline}" />
+                    </VerticalStackLayout>
+                    <Button x:Name="CloseButton" Grid.Column="1" Text="Close" Style="{StaticResource QuietButton}" Clicked="OnCloseClicked"
+                            SemanticProperties.Description="Close buy order and return to the previous screen" />
+                </Grid>
+                <Label x:Name="ErrorLabel" Grid.Row="1" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
+                <ScrollView Grid.Row="2">
+                    <VerticalStackLayout Spacing="10">
+                        <VerticalStackLayout x:Name="DraftSection" Spacing="10">
+                            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="8">
+                                <VerticalStackLayout>
+                                    <Label Text="Quantity" Style="{StaticResource SubHeadline}" />
+                                    <Entry x:Name="QuantityEntry" Text="1" Keyboard="Numeric" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Column="1">
+                                    <Label Text="Limit price" Style="{StaticResource SubHeadline}" />
+                                    <Entry x:Name="LimitEntry" Keyboard="Numeric" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Row="1">
+                                    <Label Text="Stop price" Style="{StaticResource SubHeadline}" />
+                                    <Entry x:Name="StopEntry" Keyboard="Numeric" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Row="1" Grid.Column="1">
+                                    <Label Text="Take-profit price" Style="{StaticResource SubHeadline}" />
+                                    <Entry x:Name="TargetEntry" Keyboard="Numeric" />
+                                </VerticalStackLayout>
+                            </Grid>
+                            <Button x:Name="AdvancedButton" Text="Strategy sizing and options +" Style="{StaticResource QuietButton}" Clicked="OnAdvancedClicked" />
+                            <VerticalStackLayout x:Name="AdvancedSection" IsVisible="False" Spacing="8">
+                                <Label Text="Horizon: Swing" Style="{StaticResource SubHeadline}" />
+                                <Label x:Name="PlanNotesLabel" Text="Strategy prices remain empty when completed evidence is unavailable." LineBreakMode="WordWrap" />
+                                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                                    <Button Text="Strategy prices" Clicked="OnPlanClicked" />
+                                    <Button x:Name="RiskSizeButton" Grid.Column="1" Text="Size to 1R" IsEnabled="False" Clicked="OnRiskSizeClicked" />
+                                </Grid>
+                                <HorizontalStackLayout Spacing="8">
+                                    <CheckBox x:Name="ExtendedHoursCheckBox" />
+                                    <Label Text="Extended hours" VerticalTextAlignment="Center" />
+                                </HorizontalStackLayout>
+                                <Label Text="Extended hours require an eligible session, asset, order type, and broker protection."
+                                       Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                            </VerticalStackLayout>
+                            <Button Text="Review order" Clicked="OnPreviewClicked" />
+                        </VerticalStackLayout>
+                        <VerticalStackLayout x:Name="ReviewSection" IsVisible="False" Spacing="10">
+                            <Label x:Name="ReviewStatusLabel" FontAttributes="Bold" FontSize="18" />
+                            <Label x:Name="ReviewSummaryLabel" LineBreakMode="WordWrap" />
+                            <Label x:Name="ExpiryLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                            <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
+                            <Button x:Name="EvidenceButton" Text="Review evidence +" Style="{StaticResource QuietButton}" Clicked="OnEvidenceClicked" />
+                            <VerticalStackLayout x:Name="EvidenceSection" IsVisible="False" Spacing="8">
+                                <Label x:Name="MarketEvidenceLabel" FontFamily="monospace" LineBreakMode="WordWrap" />
+                                <Label x:Name="PolicyLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
+                            </VerticalStackLayout>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                                <Button x:Name="EditButton" Text="Edit" Clicked="OnEditClicked" />
+                                <Button x:Name="ConfirmButton" Grid.Column="1" Text="Confirm paper order" Clicked="OnConfirmClicked" />
+                            </Grid>
+                        </VerticalStackLayout>
+                        <VerticalStackLayout x:Name="ConfirmationSection" IsVisible="False" Spacing="8">
+                            <Label Text="Order outcome" FontAttributes="Bold" FontSize="20" />
+                            <Label x:Name="ConfirmationLabel" LineBreakMode="WordWrap" />
+                        </VerticalStackLayout>
+                    </VerticalStackLayout>
+                </ScrollView>
+                <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <controls:EnvironmentBadgeView HorizontalOptions="Start" />
+                    <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsVisible="False" IsRunning="False" Color="{StaticResource Primary}" />
+                </Grid>
             </Grid>
-
-            <Label x:Name="ErrorLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
-            <ActivityIndicator x:Name="BusyIndicator" IsVisible="False" IsRunning="False" Color="{StaticResource Primary}" />
-
-            <VerticalStackLayout x:Name="DraftSection" Spacing="10">
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="10">
-                    <VerticalStackLayout>
-                        <Label Text="Quantity" Style="{StaticResource SubHeadline}" />
-                        <Entry x:Name="QuantityEntry" Text="1" Keyboard="Numeric" />
-                    </VerticalStackLayout>
-                    <VerticalStackLayout Grid.Column="1">
-                        <Label Text="Limit price" Style="{StaticResource SubHeadline}" />
-                        <Entry x:Name="LimitEntry" Keyboard="Numeric" />
-                    </VerticalStackLayout>
-                    <VerticalStackLayout Grid.Row="1">
-                        <Label Text="Stop price" Style="{StaticResource SubHeadline}" />
-                        <Entry x:Name="StopEntry" Keyboard="Numeric" />
-                    </VerticalStackLayout>
-                    <VerticalStackLayout Grid.Row="1" Grid.Column="1">
-                        <Label Text="Take-profit price" Style="{StaticResource SubHeadline}" />
-                        <Entry x:Name="TargetEntry" Keyboard="Numeric" />
-                    </VerticalStackLayout>
-                    <VerticalStackLayout Grid.Row="2">
-                        <Label Text="Horizon" Style="{StaticResource SubHeadline}" />
-                        <Label Text="Swing" FontAttributes="Bold" SemanticProperties.Description="Trading horizon: Swing" />
-                    </VerticalStackLayout>
-                    <HorizontalStackLayout Grid.Row="2" Grid.Column="1" VerticalOptions="Center" Spacing="8">
-                        <CheckBox x:Name="ExtendedHoursCheckBox" />
-                        <Label Text="Extended hours" VerticalTextAlignment="Center" />
-                    </HorizontalStackLayout>
-                </Grid>
-                <Label Text="Extended-hours requests fail closed unless the session, asset, order type, and broker protection are eligible."
-                       Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
-                <Label x:Name="PlanNotesLabel" Text="Strategy prices remain empty when completed evidence is unavailable." LineBreakMode="WordWrap" />
-                <Button Text="Use strategy prices" Clicked="OnPlanClicked" />
-                <Button x:Name="RiskSizeButton" Text="Size to 1R" IsEnabled="False" Clicked="OnRiskSizeClicked" />
-                <Button Text="Review order" Clicked="OnPreviewClicked" />
-            </VerticalStackLayout>
-
-            <VerticalStackLayout x:Name="ReviewSection" IsVisible="False" Spacing="10">
-                <Label x:Name="ReviewStatusLabel" FontAttributes="Bold" FontSize="18" />
-                <Label x:Name="ReviewSummaryLabel" LineBreakMode="WordWrap" />
-                <Label x:Name="MarketEvidenceLabel" FontFamily="monospace" LineBreakMode="WordWrap" />
-                <Label x:Name="PolicyLabel" Style="{StaticResource SubHeadline}" LineBreakMode="WordWrap" />
-                <Label x:Name="RejectionsLabel" IsVisible="False" TextColor="{AppThemeBinding Light={StaticResource StateNegativeLight}, Dark={StaticResource StateNegativeDark}}" LineBreakMode="WordWrap" />
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-                    <Button x:Name="EditButton" Text="Edit" Clicked="OnEditClicked" />
-                    <Button x:Name="ConfirmButton" Grid.Column="1" Text="Confirm paper order" Clicked="OnConfirmClicked" />
-                </Grid>
-            </VerticalStackLayout>
-
-            <VerticalStackLayout x:Name="ConfirmationSection" IsVisible="False" Spacing="8">
-                <Label Text="Order outcome" FontAttributes="Bold" FontSize="20" TextColor="{AppThemeBinding Light={StaticResource StatePositiveLight}, Dark={StaticResource StatePositiveDark}}" />
-                <Label x:Name="ConfirmationLabel" LineBreakMode="WordWrap" />
-            </VerticalStackLayout>
-        </VerticalStackLayout>
-    </ScrollView>
+        </Border>
+    </Grid>
 </ContentPage>

@@ -5,6 +5,9 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
     xmlns:pages="clr-namespace:TradingFlow.Mobile.Pages"
     Title="TradingFlow"
+    Shell.BackgroundColor="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}"
+    Shell.TitleColor="{AppThemeBinding Light={StaticResource TextPrimaryLight}, Dark={StaticResource TextPrimaryDark}}"
+    Shell.ForegroundColor="{AppThemeBinding Light={StaticResource TextPrimaryLight}, Dark={StaticResource TextPrimaryDark}}"
     Shell.TabBarBackgroundColor="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}"
     Shell.TabBarForegroundColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
     Shell.TabBarTitleColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
@@ -13,22 +16,27 @@
 
     <TabBar>
         <ShellContent
-            Title="Workspace"
-            ContentTemplate="{DataTemplate pages:WorkspacePage}"
+            Title="Stocks" Icon="nav_stocks.png"
+            ContentTemplate="{DataTemplate pages:WishlistsPage}"
             Route="PreparationRoot" />
 
         <ShellContent
-            Title="Trading"
+            Title="Trading" Icon="nav_trading.png"
             ContentTemplate="{DataTemplate pages:OrdersPage}"
             Route="TradingRoot" />
 
         <ShellContent
-            Title="Research"
+            Title="Strategies" Icon="nav_strategies.png"
             ContentTemplate="{DataTemplate pages:BacktestsPage}"
             Route="ResearchRoot" />
 
         <ShellContent
-            Title="System"
+            Title="News" Icon="nav_news.png"
+            ContentTemplate="{DataTemplate pages:NewsPage}"
+            Route="NewsRoot" />
+
+        <ShellContent
+            Title="More" Icon="nav_more.png"
             ContentTemplate="{DataTemplate pages:MorePage}"
             Route="MorePage" />
     </TabBar>

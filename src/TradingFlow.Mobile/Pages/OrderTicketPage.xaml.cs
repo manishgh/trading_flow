@@ -15,24 +15,29 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
     private string commandKey = Guid.NewGuid().ToString("N");
     private bool isBusy;
     private bool confirmationStarted;
+    private bool confirmationUnresolved;
     private long sessionVersion = -1;
     private StrategyReference? plannedStrategy;
     private OrderTicketPlanResponse? pricePlan;
     private CancellationTokenSource? lifetime;
 
+    // Connect draft edits to command invalidation without changing a request already in flight.
     public OrderTicketPage()
     {
         InitializeComponent();
+        // Keep retries bound to the same draft until the operator edits an idle ticket.
         void Changed() { if (!isBusy) { pending = null; pricePlan = null; RiskSizeButton.IsEnabled = false; commandKey = Guid.NewGuid().ToString("N"); } }
         foreach (var entry in new[] { QuantityEntry, LimitEntry, StopEntry, TargetEntry })
             entry.TextChanged += (_, _) => Changed();
         ExtendedHoursCheckBox.CheckedChanged += (_, _) => Changed();
     }
 
+    // Resume the same ticket after a system interruption and invalidate reviews only on a real session change.
     protected override void OnAppearing()
     {
         base.OnAppearing();
-        if (sessionVersion != AppServices.Api.SessionVersion) { OnSessionChanged(null, EventArgs.Empty); sessionVersion = AppServices.Api.SessionVersion; }
+        if (sessionVersion >= 0 && sessionVersion != AppServices.Api.SessionVersion) { OnSessionChanged(null, EventArgs.Empty); sessionVersion = AppServices.Api.SessionVersion; }
+        sessionVersion = AppServices.Api.SessionVersion;
         lifetime?.Dispose(); lifetime = new();
         AppServices.Api.SessionChanged += OnSessionChanged;
     }
@@ -41,13 +46,48 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         lifetime?.Cancel(); AppServices.Api.SessionChanged -= OnSessionChanged;
         base.OnDisappearing();
     }
+    // Discard account-bound commands when authentication or the backend changes.
     private void OnSessionChanged(object? sender, EventArgs e)
     {
-        lifetime?.Cancel(); pending = null; reviewed = null; plannedStrategy = null; pricePlan = null; confirmationStarted = false; EditButton.IsEnabled = true;
+        lifetime?.Cancel(); pending = null; reviewed = null; plannedStrategy = null; pricePlan = null; confirmationStarted = false; confirmationUnresolved = false; EditButton.IsEnabled = true;
         DraftSection.IsVisible = true; ReviewSection.IsVisible = false; ConfirmationSection.IsVisible = false;
         commandKey = Guid.NewGuid().ToString("N");
+        CloseButton.IsEnabled = !isBusy;
         ConfirmButton.IsEnabled = false; ShowError("Connection changed. Reopen and review this order.");
     }
+    // Expand optional planning and session controls without loading more data.
+    private void OnAdvancedClicked(object? sender, EventArgs e)
+    {
+        AdvancedSection.IsVisible = !AdvancedSection.IsVisible;
+        AdvancedButton.Text = AdvancedSection.IsVisible ? "Strategy sizing and options −" : "Strategy sizing and options +";
+    }
+
+    // Keep detailed provenance available while leaving risk, warnings and review expiry visible.
+    private void OnEvidenceClicked(object? sender, EventArgs e)
+    {
+        EvidenceSection.IsVisible = !EvidenceSection.IsVisible;
+        EvidenceButton.Text = EvidenceSection.IsVisible ? "Review evidence −" : "Review evidence +";
+    }
+
+    // Return to the invoking screen only when no request or uncertain confirmation can be lost.
+    private async void OnCloseClicked(object? sender, EventArgs e)
+    {
+        if (CanDismiss()) await Shell.Current.GoToAsync("..");
+    }
+
+    // Apply the same dismissal rule to Android hardware and gesture Back navigation.
+    protected override bool OnBackButtonPressed() => !CanDismiss() || base.OnBackButtonPressed();
+
+    // Preserve the preview token and idempotency key until the existing command has a known outcome.
+    private bool CanDismiss()
+    {
+        if (!isBusy && !confirmationUnresolved) return true;
+        ShowError(confirmationUnresolved
+            ? "The order outcome is unknown. Use Check same command before closing."
+            : "Wait for the current request before closing.");
+        return false;
+    }
+
     public void ApplyQueryAttributes(IDictionary<string, object> query)
     {
         if (query.TryGetValue("wishlistId", out var wishlistValue))
@@ -177,6 +217,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         });
     }
 
+    // Confirm or recheck the reviewed command; transport errors retain its original token and key.
     private async void OnConfirmClicked(object? sender, EventArgs e)
     {
         if (reviewed is null)
@@ -185,7 +226,9 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
             return;
         }
 
-        confirmationStarted = true; EditButton.IsEnabled = false;
+        if (isBusy) return;
+        confirmationStarted = true; confirmationUnresolved = true; EditButton.IsEnabled = false;
+        ConfirmButton.Text = "Check same command";
         ConfirmButton.IsEnabled = false;
         await RunAsync(async token =>
         {
@@ -195,6 +238,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
                 throw new InvalidOperationException("The order confirmation response was empty.");
             }
             token.ThrowIfCancellationRequested();
+            confirmationUnresolved = confirmation.State == "confirmation_pending";
             DraftSection.IsVisible = false;
             ReviewSection.IsVisible = false;
             ConfirmationSection.IsVisible = true;
@@ -222,6 +266,7 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         ErrorLabel.IsVisible = false;
     }
 
+    // Show essential price and risk review with expiry; provenance stays behind the evidence toggle.
     private void RenderPreview(OrderPreviewResponse preview)
     {
         reviewed = preview;
@@ -229,7 +274,11 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         ReviewSection.IsVisible = true;
         ReviewStatusLabel.Text = "Ready to confirm";
         ReviewSummaryLabel.Text = $"{preview.Quantity} {preview.Symbol} · {preview.OrderType}/{preview.TimeInForce} at {preview.LimitPrice:C2}\nStop {preview.StopLossPrice:C2} · target {preview.TakeProfitPrice:C2}\nExtended hours {pending?.AllowExtendedHoursTrading}\nNotional {preview.EstimatedNotional:C2} · maximum loss {preview.MaximumLoss:C2}";
-        MarketEvidenceLabel.Text = $"Quote {preview.QuoteTimestampUtc:O}\nExpires {preview.ExpiresAtUtc:O}";
+        ExpiryLabel.Text = $"Review expires {preview.ExpiresAtUtc:O}";
+        MarketEvidenceLabel.Text = $"Quote {preview.QuoteTimestampUtc:O}";
+        EvidenceSection.IsVisible = false;
+        EvidenceButton.Text = "Review evidence +";
+        ConfirmButton.Text = "Confirm paper order";
         PolicyLabel.Text = $"Policy {preview.ExecutionPolicy} · {preview.Strategy.StrategyId} · {preview.Strategy.SemanticVersion}\n{preview.Strategy.ContentSha256}";
         RejectionsLabel.Text = String.Join(Environment.NewLine, preview.Warnings);
         RejectionsLabel.IsVisible = preview.Warnings.Count > 0;
@@ -237,20 +286,30 @@ public partial class OrderTicketPage : ContentPage, IQueryAttributable
         ConfirmButton.IsEnabled = true;
         _ = AppServices.Haptics.SignalAsync(HapticSignal.ReviewReady);
     }
+    // Serialize UI requests and keep dismissal disabled until pending confirmation is reconciled.
     private async Task RunAsync(Func<CancellationToken, Task> action)
     {
         if (isBusy) return;
         isBusy = true;
+        CloseButton.IsEnabled = false;
         DraftSection.IsEnabled = false;
         BusyIndicator.IsVisible = true;
         BusyIndicator.IsRunning = true;
         ErrorLabel.IsVisible = false;
         try { await action(lifetime?.Token ?? new CancellationToken(true)); }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            if (confirmationUnresolved && reviewed is not null)
+            {
+                ConfirmButton.IsEnabled = true;
+                ShowError("The order outcome is unknown. Use Check same command when connected.");
+            }
+        }
         catch (Exception exception) { ShowError(exception.Message); if (reviewed is not null) ConfirmButton.IsEnabled = true; }
         finally
         {
             isBusy = false;
+            CloseButton.IsEnabled = !confirmationUnresolved;
             DraftSection.IsEnabled = true;
             BusyIndicator.IsRunning = false;
             BusyIndicator.IsVisible = false;

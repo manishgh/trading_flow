@@ -31,7 +31,7 @@
         <Setter Property="BackgroundColor" Value="{StaticResource Gray950}" />
     </Style>
 
-    <Style TargetType="Button">
+    <Style TargetType="Button" x:Key="ActionButton">
         <Setter Property="TextColor" Value="{StaticResource White}" />
         <Setter Property="BackgroundColor" Value="{StaticResource Primary}" />
         <Setter Property="FontFamily" Value="OpenSansRegular"/>
@@ -56,6 +56,16 @@
                 </VisualStateGroup>
             </VisualStateGroupList>
         </Setter>
+    </Style>
+
+    <Style TargetType="Button" BasedOn="{StaticResource ActionButton}" />
+
+    <!-- Secondary actions stay quiet so each screen can reserve the accent for its main action. -->
+    <Style TargetType="Button" x:Key="QuietButton" BasedOn="{StaticResource ActionButton}">
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource TextPrimaryLight}, Dark={StaticResource TextPrimaryDark}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
+        <Setter Property="BorderWidth" Value="1" />
     </Style>
 
     <Style TargetType="CheckBox">
@@ -190,6 +200,10 @@
         <Setter Property="FontAttributes" Value="Bold" />
         <Setter Property="HorizontalOptions" Value="Start" />
         <Setter Property="HorizontalTextAlignment" Value="Start" />
+    </Style>
+
+    <Style TargetType="Label" x:Key="PageTitle" BasedOn="{StaticResource Headline}">
+        <Setter Property="FontSize" Value="20" />
     </Style>
 
     <Style TargetType="Label" x:Key="SubHeadline">
@@ -428,9 +442,9 @@
         <Setter Property="Shell.DisabledColor" Value="{StaticResource Gray200}" />
         <Setter Property="Shell.UnselectedColor" Value="{StaticResource Gray500}" />
         <Setter Property="Shell.NavBarHasShadow" Value="False" />
-        <Setter Property="Shell.TabBarBackgroundColor" Value="{StaticResource White}" />
-        <Setter Property="Shell.TabBarForegroundColor" Value="{StaticResource Primary}" />
-        <Setter Property="Shell.TabBarTitleColor" Value="{StaticResource Primary}" />
+        <Setter Property="Shell.TabBarBackgroundColor" Value="{AppThemeBinding Light={StaticResource SurfacePanelLight}, Dark={StaticResource SurfacePanelDark}}" />
+        <Setter Property="Shell.TabBarForegroundColor" Value="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+        <Setter Property="Shell.TabBarTitleColor" Value="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
         <Setter Property="Shell.TabBarUnselectedColor" Value="{StaticResource Gray500}" />
     </Style>
 

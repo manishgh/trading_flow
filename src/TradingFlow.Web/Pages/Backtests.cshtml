@@ -5,7 +5,7 @@
 @model TradingFlow.Web.Pages.BacktestsModel
 @{
     ViewData["Title"] = "Strategy Lab";
-    ViewData["MainClass"] = "shell-flush lab-page";
+    ViewData["MainClass"] = "shell-flush lab-page execution-workspace";
     var job = Model.SelectedJob;
     var result = job?.Result;
     var drilled = Model.DrilledStrategy;
@@ -14,6 +14,11 @@
 }
 
 @functions {
+    // Shorten the display label only; exact immutable names remain in each identity disclosure.
+    static string StrategyLabel(string name) => System.Text.RegularExpressions.Regex.Replace(
+        System.Text.RegularExpressions.Regex.Replace(name, @"^RESEARCH\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+        @"\s+V\d+.*$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     static string Signed(decimal value, string suffix = "%", string format = "0.00") =>
         (value > 0 ? "+" : value < 0 ? "−" : String.Empty) + Math.Abs(value).ToString(format) + suffix;
 
@@ -26,8 +31,7 @@
         <span class="eyebrow">Backtesting research</span>
         <h1>Strategy Lab</h1>
         <p class="standfirst">
-            Select strategies and stocks from a wishlist or saved Finviz list, then compare independent portfolio
-            results. A profitable run is not a promotion — the preregistered gates below decide that.
+            Configure a research plan, preview its stock groups, then compare monthly results.
         </p>
     </div>
     <div class="lab-head-tail">
@@ -42,12 +46,15 @@
     </div>
 </div>
 
-<div class="lab-shell">
+<div class="lab-shell lab-workspace" data-lab-phase="@Model.Phase">
     @* =======================================================================
        Left rail - configuration
        ======================================================================= *@
     <form class="lab-rail" novalidate method="post" asp-page-handler="RunBacktest">
         <details class="research-configuration" open="@(Model.Phase == "configure")"><summary>@(Model.Phase == "configure" ? "Configure backtest" : "Configure another run")</summary>
+        <div class="lab-config-grid">
+        <section class="lab-profile-block">
+        <h2 class="section-heading">Run profile</h2>
         <label for="SelectedConfigPath">Backtest profile</label>
         <select class="input" id="SelectedConfigPath" name="SelectedConfigPath">
             @foreach (var config in Model.Configs)
@@ -69,7 +76,8 @@
                 <option value="@choice.PolicyId">@choice.Name</option>
             }
         </select>
-        <p class="note">The strategy supplies its horizon. Day and swing strategies use separate saved plans; the preview freezes the selected fill assumptions.</p>
+        <p class="note">Preview freezes these fill assumptions; the strategy supplies its horizon.</p>
+        </section>
 
         <div data-run-validation hidden role="alert" tabindex="-1"></div>
         <fieldset class="lab-block">
@@ -105,15 +113,24 @@
             <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
+                    <article class="lab-strategy-option">
                     <label class="lab-strategy">
                         @* Square, because these are independent multi-select. *@
                         <input type="checkbox" name="StrategyPaths" value="@strategy.Path"
                                checked="@(Model.SelectedStrategyPath == strategy.Path)" />
                         <span class="lab-strategy-body">
-                            <span class="lab-strategy-name">@strategy.Definition.StrategyName · @strategy.Identity.SemanticVersion</span>
+                            <span class="lab-strategy-heading"><span class="lab-strategy-name">@StrategyLabel(strategy.Definition.StrategyName)</span><small>v@(strategy.Identity.SemanticVersion)</small></span>
                             <span class="lab-strategy-meta">
                                 @StrategyHorizonResolver.Resolve(strategy.Definition) · @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
                             </span>
+                            <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
+                        </span>
+                    </label>
+                    <details class="lab-strategy-details">
+                        <summary>Identity &amp; assumptions</summary>
+                        <div class="lab-strategy-exact">
+                            <strong>@strategy.Definition.StrategyName</strong>
+                            <span class="lab-strategy-meta">Strategy: @strategy.Definition.StrategyId · @strategy.Identity.SemanticVersion</span>
                             @if (strategy.Audit is { } audit)
                             {
                                 <span class="lab-strategy-audit">
@@ -123,7 +140,6 @@
                             }
                             @* Research-only strategies must never reach paper or live.
                                Labelling the distinction here is how the operator learns it. *@
-                            <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
                             <span class="lab-strategy-meta" style="overflow-wrap:anywhere">SHA-256 @strategy.Identity.ContentSha256</span>
                             @if (strategy.Artifact.DerivedFromIdentity is { } parent)
                             {
@@ -131,23 +147,14 @@
                             }
                             <span class="lab-strategy-meta">Admission: @strategy.Artifact.AdmissionProfile.ProfileId @strategy.Artifact.AdmissionProfile.ProfileVersion</span>
                             <span class="lab-strategy-meta">Execution: @strategy.Artifact.AdmissionProfile.ExecutionTimingPolicy</span>
-                        </span>
-                    </label>
+                        </div>
+                    </details>
+                    </article>
                 }
             </div>
             <p class="note">
                 Select at least one strategy. A run with no strategy produces no evidence.
             </p>
-        </fieldset>
-
-        <fieldset class="lab-block">
-            <legend class="section-heading">Decision-context evidence</legend>
-            <label for="DecisionContextEvidence">Optional approved evidence</label>
-            <select class="input" id="DecisionContextEvidence" name="DecisionContextEvidence" data-evidence-picker>
-                <option value="">No evidence selected</option>
-            </select>
-            <p class="note" data-evidence-availability aria-live="polite"></p>
-            <div class="note" data-evidence-summary style="overflow-wrap:anywhere"></div>
         </fieldset>
 
         <fieldset class="lab-block">
@@ -239,7 +246,7 @@
             </div>
             <p class="note" id="EligibilityHelp">Optional. Enter a minimum price to switch it on. Each stock may then trade only on days it passes these rules, judged from completed earlier sessions (and that day's open when chosen). Blank thresholds are not applied. Every stock's eligible days are saved with the results.</p>
         </fieldset>
-        <fieldset class="lab-block">
+        <fieldset class="lab-block lab-portfolio-settings">
             <legend class="section-heading">Portfolio limits</legend>
             <div class="lab-parameters">
                 <div class="field">
@@ -270,6 +277,34 @@
             <p class="note">Risk and notional limits must be greater than zero and at most 100% of equity. Completed-bar features, later-bar confirmation and next-bar execution are mandatory.</p>
         </fieldset>
 
+        <details class="lab-optional lab-evidence-settings">
+            <summary>Decision-context evidence <span>Optional</span></summary>
+        <fieldset class="lab-block">
+            <legend class="section-heading">Decision-context evidence</legend>
+            <label for="DecisionContextEvidence">Optional approved evidence</label>
+            <select class="input" id="DecisionContextEvidence" name="DecisionContextEvidence" data-evidence-picker>
+                <option value="">No evidence selected</option>
+            </select>
+            <p class="note" data-evidence-availability aria-live="polite"></p>
+            <div class="note" data-evidence-summary style="overflow-wrap:anywhere"></div>
+        </fieldset>
+        </details>
+
+        <details class="lab-optional lab-group-settings">
+            <summary>Stock groups &amp; exclusions <span>Optional</span></summary>
+        <fieldset class="lab-block">
+            <legend class="section-heading">Stock groups</legend>
+            <label for="ExcludedSymbols">Exclude stocks</label>
+            <input class="input" id="ExcludedSymbols" name="ExcludedSymbols" aria-describedby="ExcludedSymbolsHelp" />
+            <p class="note" id="ExcludedSymbolsHelp">Optional comma-separated stock symbols to exclude from this plan. The original wishlist or saved Finviz list stays unchanged.</p>
+            <label for="GroupSize">Stocks per group</label>
+            <input class="input" id="GroupSize" name="GroupSize" type="number" min="1" step="1" />
+            <label for="ManualCohorts">Or enter your own groups</label>
+            <textarea class="input" id="ManualCohorts" name="ManualCohorts" rows="4" aria-describedby="ManualCohortsHelp"></textarea>
+            <p class="note" id="ManualCohortsHelp">One group per line: name | starting capital | stock symbols separated by commas. Leave stocks per group blank when entering your own groups. Automatic groups use symbols in alphabetical order and keep the final smaller group. Each strategy and group has separate capital.</p>
+        </fieldset>
+        </details>
+        </div>
         </details>
         <section class="lab-block lab-run">
             @if (Model.Phase == "running" && job is not null)
@@ -391,6 +426,8 @@
         }
     </div>
 </div>
+
+<link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
 
 @section Scripts {
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>

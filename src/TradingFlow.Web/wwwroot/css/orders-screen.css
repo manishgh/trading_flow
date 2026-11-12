@@ -1,9 +1,4 @@
-/* ---------------------------------------------------------------------------
-   Orders screen - a subset of the desk
-   The journal takes the grid's place and the desk's rail sits beside it with
-   the symbol's quote, position, recent orders and the reviewed ticket.
-   Token-based only; the rail reuses the desk's .desk-rail rules.
-   --------------------------------------------------------------------------- */
+/* The Trading journal uses the full workspace; order entry lives in the shared popup. */
 
 .orders-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -13,7 +8,7 @@
 .orders-shell {
   display: grid;
   align-items: start;
-  grid-template-columns: minmax(0, 1fr) 384px;
+  grid-template-columns: minmax(0, 1fr);
 }
 .orders-shell > * { min-width: 0; }
 

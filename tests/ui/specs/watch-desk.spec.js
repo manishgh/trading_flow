@@ -3,8 +3,9 @@ import {signIn,signInAsAdmin} from './sign-in.js';
 import http from 'node:http';
 import {randomUUID} from 'node:crypto';
 const id='11111111-1111-1111-1111-111111111111';
-const sources=[{key:'all',name:'All wishlist stocks',group:'',description:'Across your wishlists'},{key:'wishlist:'+id,name:'Core',group:'My wishlists',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'Finviz lists',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Finviz lists',description:'Locally imported'}];
-function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',previousClose:{close:198,sessionDate:'2026-09-24'},technical:{rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
+const sources=[{key:'all',name:'All followed stocks',group:'',description:'Across your stock groups'},{key:'wishlist:'+id,name:'Core',group:'My stock groups',description:'Observed'},{key:'swing:trend',name:'Established trends',group:'Finviz lists',description:'Discovery only'},{key:'saved:one',name:'My Elite momentum',group:'Finviz lists',description:'Locally imported'}];
+// Feed the UI explicit completed daily SMA fixture values through its ordinary snapshot shape.
+function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',previousClose:{close:198,sessionDate:'2026-09-24'},technical:{sma10:197.25,sma20:195.50,sma50:190.25,sma200:180.75,rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,sessionVolume:{ticker:symbol,volume:1250000,barTimestamp:new Date(Date.now()-60000).toISOString(),sessionDate:new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),asOfUtc:new Date().toISOString(),feed:'sip'},newsSentiment:{positive:2,negative:2,neutral:1,unscored:3,available:true,windowStartUtc:new Date(Date.now()-3600000).toISOString(),asOfUtc:new Date().toISOString()},news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
 function snapshot(source){const rows=source==='all'?[row('AAPL',{held:true}),row('MSFT',{stale:true}),row('NVDA')]:[row('TSLA',{followed:false})];return {selection:{source:sources.find(x=>x.key===source)||sources[0],totalCount:rows.length,screenedAtUtc:source==='all'?null:new Date().toISOString(),error:null},rows,account:{available:true,detail:'Alpaca paper account · broker unrealized P&L',readAtUtc:new Date().toISOString()},news:rows.flatMap(x=>x.news),newsCoverage:'Matched stored news · historical coverage may be incomplete.',session:'Regular',readAtUtc:new Date().toISOString(),feed:'SIP'};}
 let fixtureServer,fixtureUrl,paused=false;const connections=new Set();
 test.beforeAll(async()=>{
@@ -15,15 +16,90 @@ test.beforeAll(async()=>{
 test.afterAll(async()=>{for(const res of connections)res.end();fixtureServer.closeAllConnections();await new Promise(resolve=>fixtureServer.close(resolve));});
 async function fixture(page){paused=false;await page.route('**/api/desk/sources',r=>r.fulfill({json:sources}));await page.addInitScript(url=>{const Native=window.EventSource;window.EventSource=class extends Native{constructor(path,options){super(path.startsWith('/api/desk/stream?')?url+path:path,options);}};},fixtureUrl);}
 
-for(const width of [412,1280,1600])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
+// Measure rendered glyphs rather than full-width block boxes when checking content spacing.
+async function textBounds(locator){return locator.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const rect=range.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};});}
+
+// Check equal column surplus and genuine centered data glyphs/groups across viewport and strategy states.
+async function assertColumnDistribution(page,withStrategy=false){
+ const table=await page.locator('.watch-table').boundingBox(),base=withStrategy?1026:948;
+ const cells=await page.locator('#watch-rows tr[data-symbol=AAPL] td').evaluateAll(nodes=>nodes.filter(node=>getComputedStyle(node).display!=='none').map(node=>node.getBoundingClientRect().width));
+ const bases=withStrategy?[76,72,200,78,92,140,200,74,94]:[76,72,200,92,140,200,74,94];
+ const surplus=Math.max(0,(table.width-base)/bases.length);
+ expect(table.width).toBeGreaterThanOrEqual(base-1);expect(cells).toHaveLength(bases.length);
+ cells.forEach((width,index)=>expect(Math.abs(width-bases[index]-surplus)).toBeLessThanOrEqual(1));
+ const scroll=await page.locator('.watch-table-scroll').evaluate(node=>({width:node.clientWidth,overflow:node.scrollWidth-node.clientWidth}));
+ expect(Math.abs(table.width-Math.max(base,scroll.width))).toBeLessThanOrEqual(1);
+ if(scroll.width>=base-1)expect(scroll.overflow).toBeLessThanOrEqual(1);else expect(scroll.overflow).toBeGreaterThan(0);
+ const row=page.locator('#watch-rows tr[data-symbol=AAPL]');
+ for(const header of await page.locator('.watch-table thead th').all())if(await header.textContent()!=='Stock')await expect(header).toHaveCSS('text-align','center');
+ for(const [index,selectors]of [[1,['.watch-quote-line strong']],[2,['.watch-trade-line>small']],[4,['.watch-holding-line strong','.watch-holding-line small']],[5,['.watch-news-positive','.watch-news-negative','.watch-news-window']],[6,['div:nth-child(1)','div:nth-child(2)','div:nth-child(3)']],[7,['strong','small']],[8,['strong','small']]]){
+  const cell=row.locator('td').nth(index),box=await cell.boundingBox();
+  for(const selector of selectors){const glyph=await textBounds(cell.locator(selector));expect(Math.abs(glyph.x+glyph.width/2-(box.x+box.width/2))).toBeLessThanOrEqual(1);expect(glyph.x).toBeGreaterThanOrEqual(box.x);expect(glyph.x+glyph.width).toBeLessThanOrEqual(box.x+box.width);}
+ }
+ const trade=await row.locator('.watch-trade').boundingBox(),buttons=await row.locator('.watch-trade-buttons').boundingBox();expect(Math.abs(buttons.x+buttons.width/2-(trade.x+trade.width/2))).toBeLessThanOrEqual(1);
+ if(withStrategy){const cell=await row.locator('td').nth(3).boundingBox(),glyph=await textBounds(row.locator('td').nth(3).locator('strong'));expect(Math.abs(glyph.x+glyph.width/2-(cell.x+cell.width/2))).toBeLessThanOrEqual(1);}
+ const stock=await row.locator('td').first().boundingBox(),symbol=await textBounds(row.locator('.watch-symbol-name'));expect(symbol.x-stock.x).toBeLessThanOrEqual(10);
+ return {table,surplus};
+}
+
+for(const width of [412,680,1000,1024,1200,1265,1280,1600,2560])test('stock desk is readable and focused at '+width,async({page},testInfo)=>{
  await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);await expect(page.getByRole('heading',{level:1})).toHaveText('Desk');
- await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['News','Earnings','Trading Desk']);
- await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('$200.05');await expect(page.locator('#watch-rows tr[data-symbol=AAPL]')).toContainText('$199.95');
+ await expect(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link')).toHaveText(['Desk','Trading','Strategies','Earnings','News','Stock groups']);
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-buy')).toHaveAccessibleName('Buy $200.05');await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-sell')).toHaveAccessibleName('Sell $199.95');
+ // Keep actual touch controls while removing the previous multi-line row whitespace.
+ const firstRow=page.locator('#watch-rows tr[data-symbol=AAPL]');
+ expect((await firstRow.boundingBox()).height).toBeLessThanOrEqual(64);
+ for(const side of ['buy','sell']){const box=await firstRow.locator('.watch-'+side).boundingBox();expect(box.height).toBeGreaterThanOrEqual(44);expect(box.width).toBeGreaterThanOrEqual(88);}
+ await expect(firstRow.locator('[data-daily-sma="10"]')).toHaveText('$197.25');
+ await expect(firstRow.locator('[data-daily-sma="20"]')).toHaveText('$195.50');
+ await expect(firstRow.locator('[data-daily-sma="10"]')).toHaveAttribute('title',/Completed 1d bar.*2026-09-25T20:00:00.000Z.*sip/);
+ await expect(firstRow.locator('.watch-quote-line')).toHaveText('+1.01%');
+ for(const [selector,size]of [['.watch-quote-line strong','14px'],['.watch-order-price','14px'],['.watch-news-positive','12px'],['.watch-news-negative','12px'],['.watch-news-window','12px'],['.watch-technical','12px'],['.watch-rvol','12px'],['.watch-volume','12px']])await expect(firstRow.locator(selector).first()).toHaveCSS('font-size',size);
+ await expect(firstRow.locator('[data-technical=sma50]')).toHaveText('$190.25');await expect(firstRow.locator('[data-technical=sma200]')).toHaveText('$180.75');
+ await expect(firstRow.locator('[data-technical=rsi]')).toHaveText('58.2');
+ await expect(firstRow.locator('.watch-buy>span')).toHaveText(['Buy','$200.05']);await expect(firstRow.locator('.watch-sell>span')).toHaveText(['Sell','$199.95']);
+ await expect(firstRow.locator('.watch-rvol strong')).toHaveText('1.30×');await expect(firstRow.locator('.watch-rvol small')).toHaveText('Daily');
+ await expect(firstRow.locator('.watch-volume strong')).toHaveText('1.25M');await expect(firstRow.locator('.watch-volume small')).toHaveText('Today');
+ await expect(firstRow.locator('.watch-news-positive')).toHaveText('2 positive');await expect(firstRow.locator('.watch-news-negative')).toHaveText('2 negative');
+ await expect(firstRow.locator('.watch-news-window')).toHaveText('Last 1h · partial');
+ // News occupies its own bounded column; the symbol cell contains only the stock control.
+ await expect(page.locator('.watch-table thead th')).toHaveText(['Stock','Change','Trade · freshness','Signal','Holding · P&L','News','Technical','RVOL','Volume']);
+ await expect(firstRow.locator('td').first().locator('.watch-news-counts,.watch-news-window')).toHaveCount(0);
+ const stockCell=await firstRow.locator('td').first().boundingBox(),newsCell=await firstRow.locator('.watch-news-summary').boundingBox();
+ const symbolLine=await textBounds(firstRow.locator('.watch-symbol-name')),countLine=await textBounds(firstRow.locator('.watch-news-positive')),negativeLine=await textBounds(firstRow.locator('.watch-news-negative')),windowLine=await textBounds(firstRow.locator('.watch-news-window'));
+ expect(symbolLine.width).toBeGreaterThan(0);expect(symbolLine.x).toBeGreaterThanOrEqual(stockCell.x);expect(symbolLine.x+symbolLine.width).toBeLessThanOrEqual(stockCell.x+stockCell.width);
+ for(const line of [countLine,negativeLine,windowLine]){expect(line.width).toBeGreaterThan(0);expect(line.x).toBeGreaterThanOrEqual(newsCell.x);expect(line.x+line.width).toBeLessThanOrEqual(newsCell.x+newsCell.width);}
+ expect(negativeLine.y).toBeGreaterThanOrEqual(countLine.y+countLine.height-1);expect(windowLine.y).toBeGreaterThanOrEqual(negativeLine.y+negativeLine.height-1);
+ await expect(firstRow.locator('.watch-news-summary')).toHaveAttribute('title',/1 neutral · 3 unscored.*partial coverage/);
+ const {surplus}=await assertColumnDistribution(page);
+ const holdingText=await textBounds(firstRow.locator('.watch-holding-line strong')),technicalText=await textBounds(firstRow.locator('.watch-technical>div').first());
+ expect(countLine.x-(holdingText.x+holdingText.width)).toBeLessThan(150+surplus);
+ expect(technicalText.x-(countLine.x+countLine.width)).toBeLessThan(170+surplus);
+ expect(technicalText.x-(holdingText.x+holdingText.width)).toBeLessThan(325+surplus*2);
+ const technicalCell=await firstRow.locator('.watch-technical').boundingBox();
+ for(const line of await firstRow.locator('.watch-technical>div').all()){
+  const glyph=await textBounds(line);expect(Math.abs(glyph.x+glyph.width/2-(technicalCell.x+technicalCell.width/2))).toBeLessThanOrEqual(1);expect(glyph.x+glyph.width).toBeLessThanOrEqual(technicalCell.x+technicalCell.width);
+ }
+ const stocks=await page.locator('.watch-stocks').boundingBox(),toolbar=await page.locator('.watch-toolbar').boundingBox(),workspace=await page.locator('.watch-grid').boundingBox();
+ expect(workspace.x).toBeCloseTo(toolbar.x,0);expect(workspace.x+workspace.width).toBeCloseTo(toolbar.x+toolbar.width,0);
+ const holdingCell=await firstRow.locator('td').nth(4).boundingBox();expect(Math.abs(holdingText.x+holdingText.width/2-(holdingCell.x+holdingCell.width/2))).toBeLessThanOrEqual(1);
+ if(width===2560){expect((await page.locator('.watch-desk-shell').boundingBox()).width).toBeGreaterThan(2000);expect(width-(workspace.x+workspace.width)).toBeLessThan(40);}
+
+ if(width>1150){
+  const news=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox();
+  expect(stocks.width/news.width).toBeCloseTo(7/3,1);
+  expect(news.x-(stocks.x+stocks.width)).toBeLessThanOrEqual(18);
+  expect(news.x+news.width).toBeCloseTo(grid.x+grid.width,0);
+  const trade=await firstRow.locator('.watch-trade').boundingBox(),holding=await firstRow.locator('td').nth(4).boundingBox();
+  expect(holding.x-(trade.x+trade.width)).toBeLessThanOrEqual(2);
+  const buttons=await firstRow.locator('.watch-trade-buttons').boundingBox();expect(holding.x-(buttons.x+buttons.width)).toBeLessThan(25+surplus/2);
+ }
+
  // Any cell selects its row, not only the symbol button.
  await page.locator('#watch-rows tr[data-symbol=NVDA] td').nth(4).click();await expect(page.locator('#watch-symbol')).toHaveText('NVDA');
- expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Finviz lists']);
- await expect(page.locator('#watch-rows tr[data-symbol=MSFT]')).toContainText('Delayed · 1h ago');
+ expect(await page.locator('#watch-source optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My stock groups','Finviz lists']);
+ await expect(page.locator('#watch-rows tr[data-symbol=MSFT]')).toContainText('Delayed 1h');
  await page.locator('#watch-rows button').filter({hasText:'AAPL'}).click();await expect(page.locator('#watch-symbol')).toHaveText('AAPL');
  // With no strategy chosen the strategy block stays hidden instead of repeating "select a strategy".
  await expect(page.locator('#watch-strategy-block')).toBeHidden();await expect(page.locator('#watch-strategy-checks')).toBeEmpty();
@@ -34,7 +110,14 @@ for(const width of [412,1280,1600])test('stock desk is readable and focused at '
  expect((await page.locator('#watch-sell').boundingBox()).height).toBeLessThan(80);
  await expect(page.locator('#watch-news-title')).toHaveText('AAPL news');await expect(page.locator('#watch-preparation')).not.toHaveAttribute('open','');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
+ // Capture the workspace from its top after the row-selection assertions have scrolled it.
+ await page.locator('h1').click();await page.evaluate(()=>window.scrollTo(0,0));
  await page.screenshot({path:testInfo.outputPath('stock-desk-'+width+'.png'),fullPage:true});
+ if(width===1280){
+  await page.setViewportSize({width:1265,height:1000});
+  expect(await page.locator('.watch-table-scroll').evaluate(node=>node.scrollWidth>=node.clientWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('stock-desk-1265.png'),fullPage:true});
+ }
 });
 test('source switch discards old rows and screener-only stocks require following',async({page})=>{
  await fixture(page);await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
@@ -73,13 +156,17 @@ test('uncertain strategy response retries the original key before an explicit co
  await expect.poll(()=>keys.length).toBe(3);expect(keys[2]).not.toBe(keys[0]);expect(accepted.size).toBe(2);
 });
 test('real source API accepts sanitized Elite filters and rejects missing CSRF',async({page})=>{
- await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All wishlist stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
+ await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-source')).toContainText('All followed stocks');await expect(page.locator('#watch-connection')).toContainText(/current quotes|no stocks in this view/);
  const result=await page.evaluate(async()=>{const csrf=await fetch('/api/auth/csrf').then(r=>r.json());const name='UI saved '+crypto.randomUUID();const payload={name,url:'https://elite.finviz.com/screener.ashx?f=ta_sma50_pa&auth=not-a-real-secret'};const rejected=await fetch('/api/desk/screens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const saved=await fetch('/api/desk/screens',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf.requestToken},body:JSON.stringify(payload)});const entry=await saved.json();const sources=await fetch('/api/desk/sources').then(r=>r.json());return {rejected:rejected.status,saved:saved.status,screen:sources.find(x=>x.key===entry.key)};});
  expect(result.rejected).toBe(400);expect(result.saved).toBe(200);expect(result.screen.query).toBe('ta_sma50_pa');expect(result.screen.group).toBe('Finviz lists');
 });
+// An empty catalog exposes first-time setup and the real unsaved editor without creating a workflow.
 test('preparation opens within desk and retains its real controls',async({page})=>{
- await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#watch-preparation>summary').click();
- await expect(page.locator('#prep-status')).not.toHaveText('Loading workflowsâ€¦');await expect(page.locator('#prep-new')).toBeVisible();await expect(page).toHaveURL(/Desk/);
+ await fixture(page);await page.route('**/api/v1/preparation',route=>route.fulfill({json:[]}));
+ await signIn(page);await page.goto('/Desk');await page.locator('#watch-preparation>summary').click();
+ await expect(page.locator('#prep-setup-new')).toBeVisible();await expect(page.locator('#prep-setup-new')).toBeEnabled();
+ await page.locator('#prep-setup-new').click();await expect(page.locator('#prep-name')).toBeVisible();
+ await expect(page.locator('#prep-name')).toBeFocused();await expect(page).toHaveURL(/Desk/);
 });
 
 test('disconnect marks account observations stale and disables sell',async({page})=>{
@@ -94,8 +181,8 @@ test('catalog startup failure offers working retry',async({page})=>{
  await page.locator('#watch-retry').click();await expect(page.locator('#watch-rows tr')).toHaveCount(3);
 });
 test('dark theme and keyboard source selection remain readable',async({page},testInfo)=>{
- await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.locator('#ThemeSelect').selectOption('dark');await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
- await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All wishlist stocks');
+ await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');await page.getByLabel('System menu',{exact:true}).click();await page.locator('#ThemeSelect').selectOption('dark');await page.getByLabel('System menu',{exact:true}).click();await page.getByRole('button',{name:'AAPL',exact:true}).click();await expect(page.locator('#watch-quantity')).toHaveText('10');await page.screenshot({path:testInfo.outputPath('stock-desk-dark.png'),fullPage:true});
+ await page.locator('#watch-source').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');await expect(page.locator('#watch-title')).not.toHaveText('All followed stocks');
 });
 
 test('open stream without updates expires holdings and sell availability',async({page})=>{
@@ -126,32 +213,33 @@ test('news stays alongside a long wishlist and unavailable quotes are explicit',
  };});
  await page.setViewportSize({width:1600,height:1000});await page.goto('/Desk');
  await expect(page.locator('#watch-rows tr')).toHaveCount(32);await expect(page.locator('#watch-connection')).toContainText('0/32 current quotes · 32 unavailable');
- await expect(page.locator('#watch-rows tr').first()).toContainText('Choose a strategy at the top');
+ await expect(page.locator('.watch-table')).toHaveClass(/watch-no-strategy/);
  const news=await page.locator('.watch-news').boundingBox(),stocks=await page.locator('.watch-stocks').boundingBox();
  expect(Math.abs(news.y-stocks.y)).toBeLessThan(5);expect(news.y).toBeLessThan(850);
  expect(await page.locator('.watch-table-scroll').evaluate(x=>x.scrollHeight>x.clientHeight)).toBe(true);
 });
 
-// An administrator reviews buy and sell orders inside the Desk's detail panel; the page never changes.
-test('administrator buy and sell open the reviewed order inside the Desk',async({page})=>{
+// An administrator reviews buy and sell through the shared popup; the page never changes.
+test('administrator buy and sell open the shared order popup',async({page})=>{
  await page.setViewportSize({width:1440,height:1000});await fixture(page);await signInAsAdmin(page);await page.goto('/Desk');
  await expect(page.locator('.watch-desk')).toHaveAttribute('data-administrator','true');
  await expect(page.locator('#watch-rows tr')).toHaveCount(3);
  const aapl=page.locator('#watch-rows tr[data-symbol=AAPL]');
- await expect(aapl.locator('.watch-buy')).toHaveText('Buy $200.05');await expect(aapl.locator('.watch-sell')).toHaveText('Sell $199.95');
+ await expect(aapl.locator('.watch-buy')).toHaveAccessibleName('Buy $200.05');await expect(aapl.locator('.watch-sell')).toHaveAccessibleName('Sell $199.95');
  await aapl.locator('.watch-buy').click();
- await expect(page).toHaveURL(/\/Desk/);await expect(page.locator('#watch-order')).toBeVisible();
- await expect(page.locator('#watch-order-title')).toHaveText('Buy AAPL');
- const frame=page.locator('#watch-order-frame');
+ await expect(page).toHaveURL(/\/Desk/);await expect(page.locator('#OrderPopup')).toBeVisible();
+ await expect(page.locator('#OrderPopupTitle')).toHaveText('Buy AAPL');
+ const frame=page.locator('#OrderPopupFrame');
  await expect(frame).toHaveAttribute('src',/\/OrderTicket\?.*embedded=1/);await expect(frame).toHaveAttribute('src',/side=buy/);await expect(frame).toHaveAttribute('src',/ticker=AAPL/);
- const ticket=page.frameLocator('#watch-order-frame');
+ const ticket=page.frameLocator('#OrderPopupFrame');
  await expect(ticket.locator('#OrderWorkflowForm')).toBeVisible();await expect(ticket.locator('.topbar')).toHaveCount(0);
  await expect(ticket.locator('[name=symbol]')).toHaveValue('AAPL');await expect(ticket.locator('[name=limit]')).toHaveValue('200.05');
- // The held position can be sold from the same panel; selling uses the bid.
+ // The held position can be sold from the same popup; selling uses the bid.
+ await page.locator('#OrderPopupClose').click();
  await aapl.locator('.watch-sell').click();
- await expect(page.locator('#watch-order-title')).toHaveText('Sell AAPL');await expect(frame).toHaveAttribute('src',/side=sell/);
+ await expect(page.locator('#OrderPopupTitle')).toHaveText('Sell AAPL');await expect(frame).toHaveAttribute('src',/side=sell/);
  await expect(ticket.locator('[name=limit]')).toHaveValue('199.95');
- await page.locator('#watch-order-close').click();await expect(page.locator('#watch-order')).toBeHidden();
+ await page.locator('#OrderPopupClose').click();await expect(page.locator('#OrderPopup')).toBeHidden();
  await expect(page).toHaveURL(/\/Desk/);
 });
 
@@ -180,7 +268,8 @@ test('signals view lists passed stocks and a signal buys through its exact candi
  await page.locator('[data-view=signals]').click();await page.locator('#watch-rows .watch-symbol-button').click();
  await expect(page.locator('#watch-buy')).toHaveText('Buy signal $200.05');
  await expect(page.locator('#watch-buy')).toHaveAttribute('href',/candidateId=44444444-4444-4444-4444-444444444444/);await expect(page.locator('#watch-buy')).toHaveAttribute('href',/runId=33333333/);
- await page.locator('#watch-buy').click();await expect(page).toHaveURL(/\/Desk/);await expect(page.locator('#watch-order-frame')).toHaveAttribute('src',/candidateId=44444444/);
+ await page.locator('#watch-buy').click();await expect(page).toHaveURL(/\/Desk/);await expect(page.locator('#OrderPopupFrame')).toHaveAttribute('src',/candidateId=44444444/);
+ await page.locator('#OrderPopupClose').click();
  // A stock without a signal offers a non-administrator no buy, and says how to get one.
  await page.locator('[data-view=all]').click();await page.locator('#watch-rows .watch-symbol-button').filter({hasText:'NVDA'}).click();
  await expect(page.locator('#watch-buy')).toBeHidden();await expect(page.locator('#watch-order-help')).toContainText('Start a paper strategy run');
@@ -189,4 +278,264 @@ test('signals view lists passed stocks and a signal buys through its exact candi
 test('a locked live environment shows the lock and no order controls on the Desk',async({page})=>{
  await signIn(page);await page.goto('/Desk?env=live');
  await expect(page.locator('.environment-lock')).toBeVisible();await expect(page.locator('#watch-rows')).toHaveCount(0);await expect(page.locator('.watch-buy, #watch-buy')).toHaveCount(0);
+});
+
+// Daily indicators are historical completed-bar evidence, independent of live-quote age and market closure.
+test('daily SMA values stay dated and never substitute missing or future observations',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.session='ClosedWeekend';
+   for(const row of value.rows){
+    if(row.membership.symbol==='AAPL')row.quote.timestamp=new Date(Date.now()-3*86400000).toISOString();
+    if(row.membership.symbol==='MSFT'){row.technical=null;row.observation={state:'unavailable',detail:'Fixture completed daily history unavailable'};}
+    if(row.membership.symbol==='NVDA')row.technical={...row.technical,timestamp:'2099-01-01T00:00:00Z'};
+   }
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');
+ const aapl=page.locator('#watch-rows tr[data-symbol=AAPL]');
+ await expect(aapl).toContainText('Market closed');
+ await expect(aapl.locator('[data-daily-sma="10"]')).toHaveText('$197.25');
+ await expect(aapl.locator('.watch-rvol strong')).toHaveText('1.30×');
+ await expect(page.locator('#watch-rows tr[data-symbol=MSFT] .watch-rvol strong')).toHaveText('—');
+ await expect(page.locator('#watch-rows tr[data-symbol=NVDA] .watch-rvol strong')).toHaveText('—');
+ await expect(page.locator('#watch-rows tr[data-symbol=MSFT] [data-technical]')).toHaveText(['—','—','—','—','—']);
+ await expect(page.locator('#watch-rows tr[data-symbol=NVDA] [data-technical]')).toHaveText(['—','—','—','—','—']);
+ await aapl.locator('.watch-symbol-button').click();
+ await expect(page.locator('#watch-sma10')).toHaveText('$197.25');
+ await expect(page.locator('#watch-tech-time')).toContainText('2026-09-25T20:00:00.000Z');
+ await page.locator('#watch-rows tr[data-symbol=MSFT] .watch-symbol-button').click();
+ await expect(page.locator('#watch-sma10')).toHaveText('—');
+ await expect(page.locator('#watch-sma20')).toHaveText('—');
+ await expect(page.locator('#watch-tech-time')).toContainText('completed daily history unavailable');
+});
+
+// A refused row action explains its exact guard immediately without scrolling the long stock list.
+test('unavailable row trade opens feedback and restores the row trigger without a ticket request',async({page})=>{
+ await page.setViewportSize({width:1600,height:1000});await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.rows=Array.from({length:32},(_,index)=>({...value.rows[0],membership:{...value.rows[0].membership,symbol:'STOCK'+String(index).padStart(2,'0')}}));
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ let ticketRequests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/OrderTicket')ticketRequests++;});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(32);
+ const trigger=page.locator('#watch-rows tr[data-symbol=STOCK28] .watch-buy');
+ await trigger.scrollIntoViewIfNeeded();
+ const before=await page.locator('.watch-table-scroll').evaluate(node=>({table:node.scrollTop,page:window.scrollY}));
+ await trigger.click();await expect(page.locator('#OrderPopup')).toBeVisible();await expect(page.locator('#OrderPopupNotice')).toContainText('No executable strategy signal');
+ await expect(page.locator('#OrderPopupFrame')).toBeHidden();expect(ticketRequests).toBe(0);
+ expect(await page.locator('.watch-table-scroll').evaluate(node=>({table:node.scrollTop,page:window.scrollY}))).toEqual(before);
+ await page.locator('#OrderPopupClose').click();await expect(trigger).toBeFocused();
+ expect(await page.locator('.watch-table-scroll').evaluate(node=>({table:node.scrollTop,page:window.scrollY}))).toEqual(before);
+});
+
+// A feedback-only opening cannot replace a retained ticket, even when its command outcome is uncertain.
+test('unavailable trade feedback retains the exact unresolved ticket',async({page})=>{
+ await fixture(page);await signInAsAdmin(page);await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await page.locator('#watch-rows tr[data-symbol=AAPL] .watch-buy').click();
+ await expect(page.frameLocator('#OrderPopupFrame').locator('#OrderWorkflowForm')).toBeVisible();
+ const original=await page.locator('#OrderPopupFrame').getAttribute('src');
+ await page.locator('#OrderPopupFrame').evaluate(frame=>{frame.contentWindow.tradingFlowOrderState=()=> 'uncertain';});
+ await page.locator('#OrderPopupClose').click();
+ await page.locator('#watch-rows tr[data-symbol=MSFT] .watch-sell').click();
+ await expect(page.locator('#OrderPopupNotice')).toContainText('No held shares');
+ await expect(page.locator('#OrderPopupFrame')).toHaveAttribute('src',original);await expect(page.locator('#OrderPopupNotice')).toContainText('existing ticket is retained');
+ await page.locator('#OrderPopupClose').click();await page.locator('#OrderPopupResume').click();
+ await expect(page.locator('#OrderPopupFrame')).toHaveAttribute('src',original);
+});
+
+// Session closure is authoritative only after missing/disconnected/future quote checks; unknown stays delayed.
+test('closed and after-hours quote labels use the actual session names and retain timestamps',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.session=window.fixtureSession||'Closed';
+   value.rows[0].quote.timestamp=new Date(Date.now()-3*86400000).toISOString();
+   value.rows[1].quote=null;value.rows[2].quote.timestamp='2099-01-01T00:00:00Z';
+   // Deliver explicit session transitions immediately instead of waiting for the fixture interval.
+   window.fixtureSetSession=session=>{window.fixtureSession=session;value.session=session;listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));};
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toContainText('Market closed');
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toHaveAttribute('title',/Market closed.*NY/);
+ await expect(page.locator('#watch-rows tr[data-symbol=MSFT] .watch-trade')).toContainText('No quote');
+ await expect(page.locator('#watch-rows tr[data-symbol=NVDA] .watch-trade')).toContainText('Clock mismatch');
+ await page.evaluate(()=>window.fixtureSetSession('Unknown'));await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toContainText('Delayed');
+ await page.evaluate(()=>window.fixtureSetSession('AfterHours'));await expect(page.locator('#watch-session')).toHaveText('After hours');
+});
+
+// Failed news reads show neither successful zero counts nor a successful empty-history message.
+test('news read failure remains distinct from zero stored stories',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.news=[];value.newsCoverage='News is unavailable. Retry when the connection recovers.';
+   for(const item of value.rows){item.news=[];item.newsSentiment={...item.newsSentiment,available:false};}
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-news-list')).toContainText('Stored news could not be read');
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-news-counts')).toHaveText('News unavailable');
+ await page.locator('#watch-rows tr[data-symbol=AAPL] .watch-symbol-button').click();
+ await expect(page.locator('#watch-news-list')).toContainText('Stored news could not be read');
+ await expect(page.locator('#watch-news-list')).not.toContainText('No matched stories');
+});
+
+// Retained counts always expose their age after the observation stream disconnects.
+test('disconnected news summaries show their observed window',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   listener(event);this.dispatchEvent(new Event('error'));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-news-window')).toHaveText('Observed 1h · partial');
+ await expect(page.locator('#watch-rows tr[data-symbol=AAPL] .watch-trade')).toContainText('Disconnected');
+});
+
+// A future summary timestamp must never advertise a current trailing-hour count.
+test('future news summary time is shown as an observed window',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);for(const item of value.rows)item.newsSentiment.asOfUtc='2099-01-01T00:00:00Z';
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const button=page.getByRole('button',{name:'AAPL',exact:true});
+ await expect(button).toHaveText('AAPL');
+ const summary=page.locator('#watch-rows tr[data-symbol=AAPL] .watch-news-summary');
+ await expect(summary.locator('.watch-news-window')).toHaveText('Observed 1h · partial');
+ await expect(summary.locator('.watch-news-window')).toHaveAttribute('title',/2099-01-01T00:00:00.000Z/);
+});
+
+// Four-digit bounded-store counts stay inside the separate News cell while their full values stay inspectable.
+test('large sentiment counts stay inside their News column',async({page})=>{
+ await page.setViewportSize({width:1265,height:1000});await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);for(const item of value.rows){item.newsSentiment.positive=1000;item.newsSentiment.negative=1000;}
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const row=page.locator('#watch-rows tr[data-symbol=AAPL]');
+ const counts=row.locator('.watch-news-counts');await expect(counts).toHaveAttribute('title',/1000 positive · 1000 negative/);
+ const cell=await row.locator('.watch-news-summary').boundingBox(),line=await counts.boundingBox();
+ expect(line.x+line.width).toBeLessThanOrEqual(cell.x+cell.width);expect(await counts.evaluate(node=>getComputedStyle(node).textOverflow)).toBe('ellipsis');
+ await expect(page.getByRole('button',{name:'AAPL',exact:true})).toBeVisible();
+});
+
+// Strategy selection shares surplus across nine columns and retains the full-width 70/30 workspace.
+for(const width of [1280,1600,2560])test('strategy selection shares column surplus at '+width,async({page})=>{
+ await page.setViewportSize({width,height:1100});await fixture(page);await signIn(page);
+ const strategy={strategyId:'fixture.recorded',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
+ await page.route('**/api/v1/desk/strategy-choices',route=>route.fulfill({json:[{candidateRunId:'33333333-3333-3333-3333-333333333333',strategy,name:'Recorded fixture',mode:'paper',runStartedAtUtc:new Date().toISOString()}]}));
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);await assertColumnDistribution(page);
+ await page.locator('#watch-strategy').selectOption('0');await expect(page.locator('.watch-table')).not.toHaveClass(/watch-no-strategy/);await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await assertColumnDistribution(page,true);
+ const panel=await page.locator('.watch-stocks').boundingBox(),articleNews=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox(),toolbar=await page.locator('.watch-toolbar').boundingBox();
+ expect(panel.width/articleNews.width).toBeCloseTo(7/3,1);expect(grid.x).toBeCloseTo(toolbar.x,0);expect(grid.x+grid.width).toBeCloseTo(toolbar.x+toolbar.width,0);
+ const row=page.locator('#watch-rows tr[data-symbol=AAPL]'),holding=await textBounds(row.locator('.watch-holding-line strong')),holdingCell=await row.locator('td').nth(4).boundingBox();
+ expect(Math.abs(holding.x+holding.width/2-(holdingCell.x+holdingCell.width/2))).toBeLessThanOrEqual(1);
+ for(const side of ['buy','sell']){const button=await row.locator('.watch-'+side).boundingBox();expect(button.width).toBeGreaterThanOrEqual(88);expect(button.height).toBeGreaterThanOrEqual(44);}
+ await page.locator('#watch-strategy').selectOption('');await expect(page.locator('.watch-table')).toHaveClass(/watch-no-strategy/);await expect(page.locator('#watch-rows tr')).toHaveCount(3);await assertColumnDistribution(page);
+});
+
+// Clone only rendered fixture rows to verify vertical scrollbar geometry without writing stock data or making provider requests.
+for(const width of [1600,2560])test('long stock table preserves column distribution at '+width,async({page})=>{
+ await page.setViewportSize({width,height:1000});await fixture(page);await signIn(page);await page.goto('/Desk');
+ await expect(page.locator('#watch-rows tr')).toHaveCount(3);paused=true;
+ await page.locator('#watch-rows').evaluate(body=>{
+  const source=body.querySelector('tr');
+  for(let index=0;index<30;index++){const row=source.cloneNode(true);row.dataset.symbol='GEOMETRY'+index;body.append(row);}
+ });
+ const scroll=page.locator('.watch-table-scroll');
+ expect(await scroll.evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+ await assertColumnDistribution(page);
+ expect(await scroll.evaluate(node=>Math.abs((node.scrollWidth-node.clientWidth)-Math.max(0,948-node.clientWidth)))).toBeLessThanOrEqual(1);
+ const stocks=await page.locator('.watch-stocks').boundingBox(),news=await page.locator('.watch-news').boundingBox(),grid=await page.locator('.watch-grid').boundingBox(),toolbar=await page.locator('.watch-toolbar').boundingBox();
+ expect(stocks.width/news.width).toBeCloseTo(7/3,1);expect(grid.x).toBeCloseTo(toolbar.x,0);expect(grid.x+grid.width).toBeCloseTo(toolbar.x+toolbar.width,0);
+});
+
+// Daily RVOL and current session shares keep zero distinct from missing observations, with no technical-volume fallback.
+test('daily RVOL and session volume distinguish valid zero from unavailable data',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);
+   const zero=value.rows.find(row=>row.membership.symbol==='MSFT');zero.technical.relativeVolume=0;zero.sessionVolume.volume=0;
+   const missing=value.rows.find(row=>row.membership.symbol==='NVDA');missing.technical.relativeVolume=null;missing.technical.currentVolume=999999;missing.sessionVolume=null;
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const zero=page.locator('#watch-rows tr[data-symbol=MSFT]'),missing=page.locator('#watch-rows tr[data-symbol=NVDA]');
+ await expect(zero.locator('.watch-rvol strong')).toHaveText('0.00×');await expect(zero.locator('.watch-volume strong')).toHaveText('0');await expect(zero.locator('.watch-volume small')).toHaveText('Today');
+ await expect(zero.locator('.watch-rvol')).toHaveAttribute('title',/Completed 1d bar.*sip/);
+ await expect(zero.locator('.watch-volume')).toHaveAttribute('title',/0 shares.*New York calendar day.*sip.*observed/);
+ await expect(missing.locator('.watch-rvol strong')).toHaveText('—');await expect(missing.locator('.watch-volume strong')).toHaveText('—');
+});
+
+// Invalid or mismatched receipt provenance cannot produce a current-volume number from any other row field.
+test('session volume rejects invalid numbers, future clocks and inconsistent source dates',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data),base=value.rows[0],future=new Date(Date.parse(value.readAtUtc)+1000).toISOString();
+   const cases=[['MISSING',null],['NEGATIVE',{volume:-1}],['TEXT',{volume:'1250000'}],['NULLVALUE',{volume:null}],['WRONG',{ticker:'OTHER'}],['FUTUREBAR',{barTimestamp:future}],['FUTURERECEIPT',{asOfUtc:future}],['INVALIDTIME',{barTimestamp:'invalid'}],['BADDATE',{sessionDate:'2026-02-30'}],['DATECONFLICT',{sessionDate:'2001-01-01'}],['NON_SIP',{feed:'overnight'}],['NO_FEED',{feed:null}]];
+   value.rows=cases.map(([symbol,patch])=>({...base,membership:{...base.membership,symbol},technical:{...base.technical,currentVolume:999999,relativeVolume:symbol==='NEGATIVE'?-1:symbol==='TEXT'?'1.3':base.technical.relativeVolume,ticker:symbol==='WRONG'?'OTHER':symbol},sessionVolume:patch===null?null:{...base.sessionVolume,ticker:symbol,...patch}}));
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(12);
+ for(const symbol of ['NEGATIVE','TEXT','WRONG'])await expect(page.locator('#watch-rows tr[data-symbol='+symbol+'] .watch-rvol strong')).toHaveText('—');
+ for(const symbol of ['MISSING','NEGATIVE','TEXT','NULLVALUE','WRONG','FUTUREBAR','FUTURERECEIPT','INVALIDTIME','BADDATE','DATECONFLICT','NON_SIP','NO_FEED']){
+  const cell=page.locator('#watch-rows tr[data-symbol='+symbol+'] .watch-volume');await expect(cell.locator('strong')).toHaveText('—');await expect(cell.locator('small')).toHaveText('Unavailable');
+ }
+});
+
+// Older provider day bars stay explicitly dated while RVOL still describes its completed daily snapshot.
+test('past-dated session shares show Last session with exact dated provenance',async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.rows[0].sessionVolume={...value.rows[0].sessionVolume,barTimestamp:'2026-09-25T04:00:00Z',sessionDate:'2026-09-25',asOfUtc:value.readAtUtc};
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const row=page.locator('#watch-rows tr[data-symbol=AAPL]');
+ await expect(row.locator('.watch-volume strong')).toHaveText('1.25M');await expect(row.locator('.watch-volume small')).toHaveText('Last session');
+ await expect(row.locator('.watch-volume')).toHaveAttribute('title',/1,250,000 shares · 2026-09-25 New York calendar day.*includes regular and extended hours; excludes overnight-feed trades.*observed/);
+ await expect(row.locator('.watch-rvol strong')).toHaveText('1.30×');
+});
+
+// Receipt age and disconnection retain shares as observations without implying a live current-day count.
+for(const disconnected of [false,true])test('session shares retain observed provenance when '+(disconnected?'disconnected':'stale'),async({page})=>{
+ await fixture(page);await signIn(page);
+ await page.addInitScript(disconnected=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);
+   if(!disconnected){const at=Date.parse(value.readAtUtc)-120000,bar=new Date(at-1000);value.rows[0].sessionVolume={...value.rows[0].sessionVolume,asOfUtc:new Date(at).toISOString(),barTimestamp:bar.toISOString(),sessionDate:new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(bar)};}
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));if(disconnected)this.dispatchEvent(new Event('error'));
+  }:listener,options);}
+ };},disconnected);
+ await page.goto('/Desk');const cell=page.locator('#watch-rows tr[data-symbol=AAPL] .watch-volume');
+ await expect(cell.locator('strong')).toHaveText('1.25M');await expect(cell.locator('small')).toHaveText('Last observed');await expect(cell).toHaveAttribute('title',/observed.*NY/);
+});
+
+// Today follows the New York date at the snapshot time even when UTC has advanced to the next day.
+test('session volume Today uses the New York calendar date',async({page})=>{
+ await page.clock.install({time:new Date('2026-11-10T01:00:00Z')});await fixture(page);await signIn(page);
+ await page.addInitScript(()=>{const Native=window.EventSource;window.EventSource=class extends Native{
+  addEventListener(type,listener,options){return super.addEventListener(type,type==='snapshot'?event=>{
+   const value=JSON.parse(event.data);value.readAtUtc='2026-11-10T01:00:00Z';value.rows[0].sessionVolume={ticker:'AAPL',volume:1250000,barTimestamp:'2026-11-09T05:00:00Z',sessionDate:'2026-11-09',asOfUtc:value.readAtUtc,feed:'sip'};
+   listener(new MessageEvent('snapshot',{data:JSON.stringify(value)}));
+  }:listener,options);}
+ };});
+ await page.goto('/Desk');const cell=page.locator('#watch-rows tr[data-symbol=AAPL] .watch-volume');
+ await expect(cell.locator('small')).toHaveText('Today');await expect(cell).toHaveAttribute('title',/2026-11-09 New York calendar day/);
 });

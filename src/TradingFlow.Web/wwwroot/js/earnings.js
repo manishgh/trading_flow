@@ -22,9 +22,6 @@
     const sessionFilters = document.getElementById("earnings-session-filters");
     const capFilters = document.getElementById("earnings-cap-filters");
     const assessmentFilters = document.getElementById("earnings-assessment-filters");
-    const fromInput = document.getElementById("earnings-from");
-    const toInput = document.getElementById("earnings-to");
-    const rangeClear = document.getElementById("earnings-range-clear");
     const dateScope = document.getElementById("earnings-date-scope");
     const onlyHeldToggle = document.getElementById("earnings-only-held");
     const hasNewsToggle = document.getElementById("earnings-has-news");
@@ -35,76 +32,64 @@
         .split(",").map(value => value.trim().toUpperCase()).filter(Boolean));
 
     const serverFilters = { session: "all", marketCap: "all", dateScope: "today" };
-    // The rest are applied here because the payload is already fully
-    // materialised for the chosen date range.
+    // These refinements are sent to the API; only attention lanes filter the returned cards locally.
     const clientFilters = { assessment: "all", onlyHeld: false, hasNews: false, minSurprise: null, sort: "breakout" };
     let activeLane = null;
     let newsScopeTicker = null;
     let latestPayload = null;
     let loadSequence = 0, inFlight = null;
-    const advanced = document.getElementById('earnings-advanced');
     const initial = new URLSearchParams(location.search);
     for (const key of ['session','marketCap']) if (initial.has(key)) serverFilters[key] = initial.get(key);
-    if (initial.has('scope')) serverFilters.dateScope = initial.get('scope');
+    if (['today', 'nextBusinessDay', 'week'].includes(initial.get('scope'))) serverFilters.dateScope = initial.get('scope');
     for (const key of ['assessment','sort']) if (initial.has(key)) clientFilters[key] = initial.get(key);
     for (const key of ['onlyHeld','hasNews']) clientFilters[key] = initial.get(key) === 'true';
     if (initial.has('minSurprise')) clientFilters.minSurprise = Number(initial.get('minSurprise'));
-    fromInput.value = initial.get('from') || ''; toInput.value = initial.get('to') || '';
     if (minSurpriseInput) minSurpriseInput.value = initial.get('minSurprise') || '';
     if (sortInput) sortInput.value = clientFilters.sort;
     const searchInput = document.getElementById('earnings-search');
     const sectorInput = document.getElementById('earnings-sector');
     // Sector choices arrive with each response; keep the requested one until its option exists.
     let requestedSector = initial.get('sector') || '';
-    for (const input of advanced.elements) if (input.name && initial.has(input.name)) {
-        if (input.type === 'checkbox') input.checked = initial.get(input.name) === 'true'; else input.value = initial.get(input.name);
-    }
+    searchInput.value = initial.get('search') || '';
     onlyHeldToggle?.setAttribute('aria-pressed', String(clientFilters.onlyHeld));
     hasNewsToggle?.setAttribute('aria-pressed', String(clientFilters.hasNews));
     markStrip(assessmentFilters, 'data-assessment-value', clientFilters.assessment);
+    markStrip(dateScope, 'data-scope-value', serverFilters.dateScope);
 
+    // Build requests only from visible refinements; legacy URLs cannot reapply removed controls.
     function queryState() {
         const query = new URLSearchParams({ session: serverFilters.session, marketCap: serverFilters.marketCap, scope: serverFilters.dateScope });
         for (const [key,value] of Object.entries(clientFilters)) if (value !== null) query.set(key, String(value));
-        for (const [key,value] of new FormData(advanced)) if (value !== '') query.set(key, value);
-        if (requestedSector) query.set('sector', requestedSector);
-        if (fromInput.value) query.set('from', fromInput.value);
-        if (toInput.value) query.set('to', toInput.value);
+        if (searchInput.value) query.set('search', searchInput.value);
+        const sector = requestedSector || sectorInput.value;
+        if (sector) query.set('sector', sector);
         const visibleQuery = new URLSearchParams(query);
-        for (const [key,value] of Object.entries({session:'all',marketCap:'all',scope:'today',assessment:'all',onlyHeld:'false',hasNews:'false',sort:'breakout',view:'timeline'}))
+        for (const [key,value] of Object.entries({session:'all',marketCap:'all',scope:'today',assessment:'all',onlyHeld:'false',hasNews:'false',sort:'breakout'}))
             if (visibleQuery.get(key) === value) visibleQuery.delete(key);
         const url = new URL(location.href); url.search = visibleQuery.toString(); history.replaceState(null, '', url);
+        if (serverFilters.dateScope === 'week') {
+            const range = currentExchangeWeek();
+            query.delete('scope');
+            query.set('from', range.from);
+            query.set('to', range.to);
+        }
         return query;
     }
+
+    // Derive Monday through Sunday from New York's current date, regardless of the device timezone.
+    function currentExchangeWeek() {
+        const start = new Date(`${exchangeDate(Date.now())}T12:00:00Z`);
+        start.setUTCDate(start.getUTCDate() - (start.getUTCDay() + 6) % 7);
+        const from = start.toISOString().slice(0, 10);
+        start.setUTCDate(start.getUTCDate() + 6);
+        return { from, to: start.toISOString().slice(0, 10) };
+    }
+
     function exchangeDate(value) {
         const parts = new Intl.DateTimeFormat('en-US', { timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date(value));
         const part = name => parts.find(x => x.type === name).value;
         return `${part('year')}-${part('month')}-${part('day')}`;
     }
-    function renderCalendar(items) {
-        feed.classList.add('earnings-week');
-        const start = fromInput.value || exchangeDate(latestPayload.generatedAtUtc);
-        const finish = toInput.value || start;
-        const grouped = new Map();
-        for (const item of items) {
-            const key = exchangeDate(item.scheduledAtUtc);
-            if (!grouped.has(key)) grouped.set(key, []);
-            grouped.get(key).push(item);
-        }
-        // Include boundary dates after timezone conversion, even when the API used an operator date window.
-        const keys = new Set(grouped.keys());
-        for (let day = new Date(`${start}T12:00:00Z`), end = new Date(`${finish}T12:00:00Z`); day <= end; day.setUTCDate(day.getUTCDate()+1)) keys.add(day.toISOString().slice(0,10));
-        const used = [];
-        syncChildren(feed, [...keys].sort().map(date => {
-            const day = daySection('w:' + date, `${date} · New York`, ''); used.push('w:' + date);
-            const matches = grouped.get(date) || [];
-            day.none ??= text('p', 'No matching events', 'muted');
-            syncChildren(day.section, [day.header, ...(matches.length ? dayCards('w:' + date, matches) : [day.none])]);
-            return day.section;
-        }));
-        return used;
-    }
-
     /* --- in-place updates --------------------------------------------------
        Every refresh, filter change and ten-second poll patches the existing
        list: unchanged cards stay in the page, so open disclosures, focus,
@@ -547,8 +532,8 @@
         return exchangeDateLabel(key, { weekday: "long", month: "long", day: "numeric" });
     }
 
+    // Group the selected dates into New York reporting days while retaining existing card nodes.
     function renderTimeline(items, payload, totalForGroup) {
-        feed.classList.remove('earnings-week');
         if (!items.length) { syncChildren(feed, [emptyNote(feed)]); return []; }
 
         const groups = new Map();
@@ -646,6 +631,7 @@
         return result;
     }
 
+    // Patch the timeline and evidence rail without disturbing open cards or keyboard focus.
     function render() {
         if (!latestPayload) return;
         const all = latestPayload.items || [];
@@ -656,7 +642,7 @@
         for (const item of all) totals.set(dayKey(item), (totals.get(dayKey(item)) ?? 0) + 1);
 
         renderLanes(all);
-        const used = new Set(advanced.elements.view.value === 'week' ? renderCalendar(filtered) : renderTimeline(filtered, latestPayload, totals));
+        const used = new Set(renderTimeline(filtered, latestPayload, totals));
         for (const key of daySections.keys()) if (!used.has(key)) daySections.delete(key);
         for (const key of reportedSections.keys()) if (!used.has(key)) reportedSections.delete(key);
         if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
@@ -782,10 +768,7 @@
             }
 
             const query = queryState();
-            const from = fromInput?.value, to = toInput?.value;
-            if ((from || to) && (!from || !to || from > to || (new Date(to) - new Date(from)) / 86400000 > 34)) throw new Error('Choose both dates, in order, covering at most 35 days.');
-            const useRange = Boolean(from && to);
-            const endpoint = useRange ? "calendar" : "today-next-business-day";
+            const endpoint = serverFilters.dateScope === "week" ? "calendar" : "today-next-business-day";
             const response = await window.tradingFlowFetch(`/api/earnings/${endpoint}?${query}`, {
                 headers: { Accept: "application/json" },
                 cache: "no-store",
@@ -861,12 +844,11 @@
         loadCalendar(false);
     });
 
+    // Each preset owns its date window; loadCalendar cancels the request replaced by this choice.
     dateScope.addEventListener("click", event => {
         const button = event.target.closest("button[data-scope-value]");
         if (!button) return;
         serverFilters.dateScope = button.dataset.scopeValue;
-        if (fromInput) fromInput.value = "";
-        if (toInput) toInput.value = "";
         markStrip(dateScope, "data-scope-value", serverFilters.dateScope);
         loadCalendar(false);
     });
@@ -888,20 +870,6 @@
     });
     sortInput?.addEventListener("change", () => {
         clientFilters.sort = sortInput.value;
-        loadCalendar(false);
-    });
-    const rangeApply = document.getElementById("earnings-range-apply");
-    rangeApply?.addEventListener("click", () => {
-        if (fromInput?.value && toInput?.value) {
-            markStrip(dateScope, "data-scope-value", ""); // Clear preset tab highlighting
-            loadCalendar(false);
-        }
-    });
-    rangeClear?.addEventListener("click", () => {
-        if (fromInput) fromInput.value = "";
-        if (toInput) toInput.value = "";
-        serverFilters.dateScope = "today";
-        markStrip(dateScope, "data-scope-value", "today");
         loadCalendar(false);
     });
     newsScopeClear?.addEventListener("click", () => {
@@ -928,26 +896,9 @@
         }
     }
 
-    advanced.addEventListener('submit', event => { event.preventDefault(); loadCalendar(false); });
     sectorInput?.addEventListener('change', () => loadCalendar(false));
     let searchTimer = null;
     searchInput?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadCalendar(false), 300); });
-    document.getElementById('earnings-this-week').addEventListener('click', () => {
-        const now = new Date(`${exchangeDate(Date.now())}T12:00:00Z`);
-        now.setUTCDate(now.getUTCDate() - (now.getUTCDay()+6)%7);
-        fromInput.value = now.toISOString().slice(0,10); now.setUTCDate(now.getUTCDate()+6);
-        toInput.value = now.toISOString().slice(0,10);
-        markStrip(dateScope, 'data-scope-value', ''); loadCalendar(false);
-    });
-    const groupPicker = document.getElementById('earnings-group');
-    if (groupPicker) window.tradingFlowFetch('/api/v1/wishlists/mutable', { cache:'no-store' }).then(async response => {
-        if (!response.ok) return;
-        for (const group of await response.json()) {
-            const option = text('option', group.name); option.value = group.id; groupPicker.append(option);
-        }
-        groupPicker.value = initial.get('groupId') || '';
-        if (initial.has('groupId')) loadCalendar(false);
-    });
     loadCalendar();
     window.setInterval(tick, 1000);
     window.setInterval(() => loadCalendar(false, { background: true }), 10000);

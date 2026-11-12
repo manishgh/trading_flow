@@ -10,6 +10,8 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
     private Guid wishlistId;
     private string ticker = String.Empty;
     private bool isLoading;
+    private bool openingTicket;
+    private readonly LatestMarketRead intelligenceReads = new(() => AppServices.Api.SessionVersion);
     private decimal? latestAskPrice;
     private IReadOnlyList<StockStrategyChoice> strategyChoices = [];
     private CancellationTokenSource? strategyRequest;
@@ -44,7 +46,7 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
     protected override async void OnAppearing()
     {
         base.OnAppearing();
-        pageVisible = true;
+        pageVisible = true; intelligenceReads.Activate();
         AppServices.Api.SessionChanged += OnStrategySessionChanged;
         if (lastSeenSessionVersion != AppServices.Api.SessionVersion)
             OnStrategySessionChanged(AppServices.Api, EventArgs.Empty);
@@ -55,44 +57,52 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
     /// <summary>Stops page-owned reads while hidden; the next appearance compares the saved session version before reusing any state.</summary>
     protected override void OnDisappearing()
     {
-        pageVisible = false;
+        pageVisible = false; intelligenceReads.Deactivate();
         AppServices.Api.SessionChanged -= OnStrategySessionChanged;
         CancelStrategyRequest();
         base.OnDisappearing();
     }
 
+    // Fence quote and model observations to the visible stock and current account before enabling review.
     private async Task LoadAsync()
     {
-        if (isLoading || String.IsNullOrWhiteSpace(ticker))
-        {
-            return;
-        }
-
-        isLoading = true;
-        BusyIndicator.IsVisible = true;
-        BusyIndicator.IsRunning = true;
-        ErrorLabel.IsVisible = false;
+        if (isLoading || !intelligenceReads.Active || String.IsNullOrWhiteSpace(ticker)) return;
+        isLoading = true; var read = intelligenceReads.Begin(); var symbol = ticker; var group = wishlistId;
+        BusyIndicator.IsVisible = BusyIndicator.IsRunning = true; ErrorLabel.IsVisible = false;
+        latestAskPrice = null; ReviewOrderButton.IsEnabled = false;
         try
         {
-            var response = await AppServices.Api.GetSymbolIntelligenceAsync(wishlistId, ticker);
-            if (response is null)
-            {
-                throw new InvalidOperationException("Symbol intelligence response was empty.");
-            }
+            var response = await AppServices.Api.GetSymbolIntelligenceAsync(group, symbol, read.Token)
+                ?? throw new InvalidOperationException("No stock response returned.");
+            if (!intelligenceReads.IsCurrent(read) || ticker != symbol || wishlistId != group) return;
             Render(response);
         }
+        catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !intelligenceReads.IsCurrent(read)) { }
         catch (Exception exception)
         {
-            ErrorLabel.Text = $"Symbol detail unavailable: {exception.Message}";
-            ErrorLabel.IsVisible = true;
+            if (!intelligenceReads.IsCurrent(read)) return;
+            QuotePriceLabel.Text = "Unavailable"; QuoteLabel.Text = QuoteAgeLabel.Text = PositionLabel.Text = String.Empty;
+            ModelStatusLabel.Text = "Evidence unavailable"; ModelUnavailableLabel.IsVisible = false;
+            ModelGeneratedLabel.Text = ModelIdentityLabel.Text = String.Empty; SwingSection.IsVisible = ReadinessSection.IsVisible = false;
+            ErrorLabel.Text = $"Stock unavailable: {exception.Message}"; ErrorLabel.IsVisible = true;
         }
         finally
         {
             isLoading = false;
-            BusyIndicator.IsRunning = false;
-            BusyIndicator.IsVisible = false;
+            if (intelligenceReads.IsCurrent(read)) BusyIndicator.IsRunning = BusyIndicator.IsVisible = false;
+            else if (intelligenceReads.Active && pageVisible && read.Session == AppServices.Api.SessionVersion)
+                Dispatcher.Dispatch(async () => await LoadAsync());
         }
     }
+
+    // US stock prices use an explicit USD formatter rather than the device currency.
+    private static string Usd(decimal? value) => value is > 0m ? value.Value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-US")) : "unavailable";
+
+    // Reveal recorded strategy evidence without rerunning checks or submitting an order.
+    private void OnStrategyEvidenceClicked(object? sender, EventArgs e) => StrategyEvidencePanel.IsVisible = !StrategyEvidencePanel.IsVisible;
+
+    // Keep optional prediction provenance available without filling the stock screen with model metadata.
+    private void OnModelEvidenceClicked(object? sender, EventArgs e) => ModelEvidencePanel.IsVisible = !ModelEvidencePanel.IsVisible;
 
     /// <summary>Displays quote, holding and optional model facts; strategy conditions are read separately from the shared decision evidence.</summary>
     private void Render(MobileSymbolIntelligenceResponse response)
@@ -101,8 +111,9 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
         var decision = response.TradingFlowDecision;
         DecisionStatusLabel.Text = String.Empty;
         DecisionReasonLabel.Text = String.Empty;
-        QuoteLabel.Text = decision.QuoteText;
-        QuoteAgeLabel.Text = decision.QuoteAgeText;
+        QuotePriceLabel.Text = decision.MidPrice is > 0m ? decision.MidPrice.Value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-US")) : "Unavailable";
+        QuoteLabel.Text = $"Bid {Usd(decision.BidPrice)} · Ask {Usd(decision.AskPrice)}";
+        QuoteAgeLabel.Text = decision.QuoteTimestamp is { } stamp ? $"Quote {stamp.LocalDateTime:dd MMM yyyy HH:mm:ss}" : "Quote time unavailable";
         PositionLabel.Text = decision.HasOpenTrade && decision.Trade is not null
             ? $"Open position | {decision.Trade.Quantity:0.####} shares | {decision.Trade.PlText}"
             : "No open tracked position";
@@ -165,7 +176,11 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
     /// <summary>Fences old responses and discards owner-scoped request keys/results when authentication or the backend changes.</summary>
     private void OnStrategySessionChanged(object? sender, EventArgs args)
     {
-        CancelStrategyRequest();
+        CancelStrategyRequest(); intelligenceReads.Cancel(); latestAskPrice = null; ReviewOrderButton.IsEnabled = false;
+        QuotePriceLabel.Text = "Unavailable"; QuoteLabel.Text = QuoteAgeLabel.Text = PositionLabel.Text = String.Empty;
+        ModelStatusLabel.Text = "Reopen the stock to read this connection."; ModelUnavailableLabel.IsVisible = false;
+        ModelGeneratedLabel.Text = ModelIdentityLabel.Text = String.Empty; SwingSection.IsVisible = ReadinessSection.IsVisible = false;
+        BusyIndicator.IsRunning = BusyIndicator.IsVisible = false;
         lastSeenSessionVersion = AppServices.Api.SessionVersion;
         foreach (var submission in strategySubmissions.Values) submission.ForgetConnectionResult();
         strategySubmissions.Clear();
@@ -346,21 +361,41 @@ public partial class SymbolDetailPage : ContentPage, IQueryAttributable
         await Shell.Current.GoToAsync(nameof(CandidatesPage) + (run is { } id ? "?runId=" + id : "?wishlistId=" + wishlistId));
     }
 
+    // Serialize ticket opening and keep context/navigation failures local to the same visible stock and session.
     private async void OnReviewOrderClicked(object? sender, EventArgs e)
     {
-        if (latestAskPrice is not > 0m)
+        if (openingTicket || isLoading || latestAskPrice is not > 0m) return;
+        var session = AppServices.Api.SessionVersion;
+        var ask = latestAskPrice.Value;
+        var symbol = ticker;
+        var group = wishlistId;
+        openingTicket = true;
+        ReviewOrderButton.IsEnabled = false;
+        try
         {
-            return;
+            var context = await AppServices.Api.GetOrderContextAsync();
+            if (!pageVisible || session != AppServices.Api.SessionVersion || ticker != symbol || wishlistId != group) return;
+            if (context?.OperatorOverrideAllowed != true || group == Guid.Empty)
+            {
+                await Shell.Current.GoToAsync(nameof(CandidatesPage) + "?wishlistId=" + group);
+                return;
+            }
+            await Shell.Current.GoToAsync(
+                $"{nameof(OrderTicketPage)}?wishlistId={group}&ticker={Uri.EscapeDataString(symbol)}&limitPrice={ask.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         }
-
-        var context = await AppServices.Api.GetOrderContextAsync();
-        if (context?.OperatorOverrideAllowed != true || wishlistId == Guid.Empty)
+        catch (Exception exception)
         {
-            await Shell.Current.GoToAsync(nameof(CandidatesPage) + "?wishlistId=" + wishlistId);
-            return;
+            if (pageVisible && session == AppServices.Api.SessionVersion && ticker == symbol && wishlistId == group)
+            {
+                ErrorLabel.Text = $"Unable to open buy review: {exception.Message}";
+                ErrorLabel.IsVisible = true;
+            }
         }
-        await Shell.Current.GoToAsync(
-            $"{nameof(OrderTicketPage)}?wishlistId={wishlistId}&ticker={Uri.EscapeDataString(ticker)}&limitPrice={latestAskPrice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        finally
+        {
+            openingTicket = false;
+            if (pageVisible && session == AppServices.Api.SessionVersion && ticker == symbol && wishlistId == group)
+                ReviewOrderButton.IsEnabled = !isLoading && latestAskPrice is > 0m;
+        }
     }
-
 }

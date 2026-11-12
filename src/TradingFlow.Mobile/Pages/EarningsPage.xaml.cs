@@ -53,9 +53,13 @@ public partial class EarningsPage : ContentPage
     {
         refreshTimer.Stop(); AppServices.Api.SessionChanged -= OnSessionChanged; reads.Deactivate(); SetBusy(false); base.OnDisappearing();
     }
+    // Clear old-session records and show a loading message until the new calendar responds.
     private void SetSession()
     {
         groupsSession = -1; groups.Clear(); filters.SetAuthenticated(false);
+        FilterHost.IsVisible = false; FiltersButton.Text = "Filters / tools";
+        StatusLabel.Text = "Loading earnings…"; ReadDetailsLabel.Text = String.Empty;
+        EmptyTitleLabel.Text = "Loading earnings"; EmptyDetailLabel.Text = "Waiting for a calendar response.";
         ProviderStatusLabel.IsVisible = false;
         filters.SetAuthenticated(AppServices.Api.CurrentUserName is not null);
         RefreshProvidersButton.IsVisible = AppServices.Api.CurrentUserName is not null;
@@ -64,6 +68,7 @@ public partial class EarningsPage : ContentPage
         if (!reads.Active) return; reads.Cancel(); SetSession(); await LoadAsync();
     });
     private void SetBusy(bool busy) { BusyIndicator.IsRunning = BusyIndicator.IsVisible = busy; if (!busy) RefreshRoot.IsRefreshing = false; }
+    // Apply only the current calendar response and distinguish empty results from an unavailable read.
     private async Task LoadAsync(bool showBusy = true)
     {
         if (!reads.Active || providerBusy || settingDates) return;
@@ -84,6 +89,7 @@ public partial class EarningsPage : ContentPage
             var response = await AppServices.Api.GetFilteredEarningsAsync(query, from, to, read.Token) ?? throw new InvalidOperationException("No earnings response returned.");
             if (!reads.IsCurrent(read)) return;
             groups.Clear();
+            EmptyTitleLabel.Text = "No matching earnings"; EmptyDetailLabel.Text = "The calendar returned no events for these filters.";
             if (calendar) {
                 var dated = response.Items.GroupBy(x => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(x.ScheduledAtUtc, MarketZone).DateTime)).ToDictionary(x => x.Key, x => x.AsEnumerable());
                 var requested = Enumerable.Range(0, to!.Value.DayNumber - from!.Value.DayNumber + 1).Select(offset => from.Value.AddDays(offset));
@@ -93,10 +99,11 @@ public partial class EarningsPage : ContentPage
                 AddGroup($"Next | {response.NextBusinessDateLabel}", response.Items.Where(x => x.DayGroup == "nextBusinessDay"));
                 foreach (var other in response.Items.Where(x => x.DayGroup is not ("today" or "nextBusinessDay")).GroupBy(x => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(x.ScheduledAtUtc, MarketZone).DateTime))) AddGroup($"{other.Key:yyyy-MM-dd} | New York", other);
             }
-            StatusLabel.Text = $"{response.Items.Count} displayed / {response.TotalMatching?.ToString() ?? "unknown"} matching{(response.Truncated ? " | capped at 2,000" : "")} | {(response.MonitoringActive ? $"monitoring every {response.MonitoringIntervalSeconds}s" : "monitor offline")} | updated {response.GeneratedAtUtc.LocalDateTime:HH:mm:ss}";
+            ReadDetailsLabel.Text = $"{response.Items.Count} displayed / {response.TotalMatching?.ToString() ?? "unknown"} matching{(response.Truncated ? " | capped at 2,000" : "")} | {(response.MonitoringActive ? $"monitoring every {response.MonitoringIntervalSeconds}s" : "monitor offline")} | updated {response.GeneratedAtUtc.LocalDateTime:HH:mm:ss}";
+            StatusLabel.Text = $"{response.Items.Count} earnings{(response.Truncated ? " · capped at 2,000" : "")}{(response.MonitoringActive ? "" : " · monitor offline")}";
             StatusLabel.TextColor = ThemePalette.Positive;
         } catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
-        catch (Exception exception) { if (reads.IsCurrent(read)) { groups.Clear(); StatusLabel.Text = $"Earnings unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative; } }
+        catch (Exception exception) { if (reads.IsCurrent(read)) { groups.Clear(); ReadDetailsLabel.Text = String.Empty; EmptyTitleLabel.Text = "Earnings unavailable"; EmptyDetailLabel.Text = "Refresh to try again or check your backend in More → Settings."; StatusLabel.Text = $"Earnings unavailable: {exception.Message}"; StatusLabel.TextColor = ThemePalette.Negative; } }
         finally { if (reads.IsCurrent(read)) SetBusy(false); }
     }
     // Days whose reported section the user opened; kept across reloads so a refresh does not close it.
@@ -126,7 +133,18 @@ public partial class EarningsPage : ContentPage
     }
     private async void OnRefresh(object? sender, EventArgs e) => await LoadAsync();
     private async void OnFilterChanged(object? sender, EventArgs e) => await LoadAsync(false);
-    private void OnToggleFilters(object? sender, EventArgs e) => FilterHost.IsVisible = !FilterHost.IsVisible;
+    // Disclose secondary filters locally without issuing an additional request.
+    private void OnToggleFilters(object? sender, EventArgs e)
+    {
+        FilterHost.IsVisible = !FilterHost.IsVisible;
+        if (sender is Button button) button.Text = FilterHost.IsVisible ? "Close filters / tools" : "Filters / tools";
+    }
+    // Return to an existing News page when possible, preserving its feed and filter selection.
+    private async void OnOpenNewsFeed(object? sender, EventArgs e)
+    {
+        var stack = Shell.Current.Navigation.NavigationStack;
+        await Shell.Current.GoToAsync(stack.Count > 1 && stack[^2] is NewsPage ? ".." : nameof(NewsPage));
+    }
     private async void OnCalendarChanged(object? sender, ToggledEventArgs e) => await LoadAsync(false);
     private async void OnDateChanged(object? sender, DateChangedEventArgs e) => await LoadAsync(false);
     private async void OnThisWeek(object? sender, EventArgs e)
@@ -237,6 +255,10 @@ public partial class EarningsPage : ContentPage
                 OnPropertyChanged();
             }
         }
+
+        // Summarize the existing provider schedule without hiding its estimate marker; full clocks stay in Details.
+        public string ScheduleSummaryText =>
+            $"{TimeZoneInfo.ConvertTime(Item.ScheduledAtUtc, MarketZone):ddd HH:mm} NY · {Item.ReleaseWindowLabel}{(Item.IsScheduleEstimate ? " · estimated" : "")}";
 
         public string TechnicalText =>
             $"EMA10/20 {Format(Item.Ema10)}/{Format(Item.Ema20)} · MACD histogram {Format(Item.MacdHistogram, "0.0000")}";

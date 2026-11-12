@@ -27,7 +27,7 @@ public sealed class NewsStockSourceTests
         Assert.Contains(choices, x => x.Key == "saved:" + f.SavedId);
         Assert.Contains(choices, x => x.Key.StartsWith("signal:"));
         Assert.DoesNotContain(choices, x => x.Name == "Historical preparation");
-        Assert.Equal(new[] { "My wishlists", "Finviz lists" }, choices.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
+        Assert.Equal(new[] { "My stock groups", "Finviz lists" }, choices.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
         f.Provider.VerifyNoOtherCalls();
         f.Account.VerifyNoOtherCalls();
     }

@@ -1,196 +1,74 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
-             xmlns:controls="clr-namespace:TradingFlow.Mobile.Controls"
-             x:Class="TradingFlow.Mobile.Pages.WishlistsPage"
-             Title="Watch">
-    <RefreshView x:Name="RefreshRoot" Refreshing="OnRefresh">
-        <CollectionView x:Name="ItemsView"
-                        Margin="12,0"
-                        SelectionMode="None"
-                        ItemsUpdatingScrollMode="KeepScrollOffset">
-            <CollectionView.Header>
-                <VerticalStackLayout Padding="0,12,0,10" Spacing="10">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <VerticalStackLayout Spacing="2">
-                            <Label Text="Watch" Style="{StaticResource Headline}" />
-                            <Label Text="Scan candidates and inspect current TradingFlow eligibility."
-                                   Style="{StaticResource SubHeadline}" />
-                        </VerticalStackLayout>
-                        <controls:EnvironmentBadgeView Grid.Column="1" />
-                    </Grid>
-
-                    <Border Style="{StaticResource CardBorder}" Padding="10">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Label x:Name="StatusLabel"
-                                   Text="Checking backend..."
-                                   FontSize="13"
-                                   LineBreakMode="WordWrap" />
-                            <ActivityIndicator x:Name="BusyIndicator"
-                                               Grid.Column="1"
-                                               IsRunning="False"
-                                               IsVisible="False" />
-                        </Grid>
-                    </Border>
-
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <Picker x:Name="WishlistPicker"
-                                Title="Wishlist"
-                                SelectedIndexChanged="OnWishlistChanged"
-                                SemanticProperties.Description="Choose the watchlist to monitor" />
-                        <Button Grid.Column="1"
-                                Text="Refresh"
-                                Clicked="OnRefreshClicked"
-                                SemanticProperties.Description="Refresh watchlist status" />
-                    </Grid>
-
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <VerticalStackLayout Spacing="1">
-                            <Label x:Name="WishlistDetailLabel"
-                                   FontSize="13"
-                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                                   LineBreakMode="WordWrap" />
-                            <Label x:Name="StockCountLabel"
-                                   FontSize="12"
-                                   TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                        </VerticalStackLayout>
-                    </Grid>
-
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <Entry x:Name="TickerEntry"
-                               Placeholder="Add ticker"
-                               Keyboard="Text"
-                               TextChanged="OnTickerSearchChanged"
-                               SemanticProperties.Description="Ticker symbol to add to this watchlist" />
-                        <Button Grid.Column="1"
-                                Text="Add"
-                                Clicked="OnAddTicker"
-                                SemanticProperties.Description="Add ticker to this watchlist" />
-                    </Grid>
-
-                    <Picker x:Name="SuggestionsPicker"
-                            Title="Matching known symbols"
-                            IsVisible="False"
-                            SelectedIndexChanged="OnSuggestionSelected"
-                            SemanticProperties.Description="Matching known ticker symbols" />
-
-                    <SearchBar x:Name="WatchSearchBar"
-                               Placeholder="Filter by ticker or name"
-                               TextChanged="OnWatchFilterChanged"
-                               SemanticProperties.Description="Filter the watched markets" />
-
-                    <ScrollView Orientation="Horizontal"
-                                HorizontalScrollBarVisibility="Never">
-                        <HorizontalStackLayout Spacing="8">
-                            <Button x:Name="WatchAllButton"
-                                    Text="All"
-                                    Clicked="OnWatchScopeSelected"
-                                    CommandParameter="all"
-                                    SemanticProperties.Description="Show all watched markets" />
-                            <Button x:Name="WatchSignalButton"
-                                    Text="Past alerts"
-                                    Clicked="OnWatchScopeSelected"
-                                    CommandParameter="signal"
-                                    SemanticProperties.Description="Show stocks with a historical alert; these are not current strategy checks" />
-                            <Button x:Name="WatchTradeButton"
-                                    Text="In trade"
-                                    Clicked="OnWatchScopeSelected"
-                                    CommandParameter="trade"
-                                    SemanticProperties.Description="Show only markets with an open position" />
-                            <Button x:Name="WatchNewsButton"
-                                    Text="News"
-                                    Clicked="OnWatchScopeSelected"
-                                    CommandParameter="news"
-                                    SemanticProperties.Description="Show only markets with related news" />
-                        </HorizontalStackLayout>
-                    </ScrollView>
-
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                        <Label Text="Markets"
-                               FontAttributes="Bold"
-                               FontSize="18"
-                               VerticalTextAlignment="Center" />
-                        <Label x:Name="WatchCountLabel"
-                               Grid.Column="1"
-                               FontSize="12"
-                               VerticalTextAlignment="Center"
-                               TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" />
-                    </Grid>
-                </VerticalStackLayout>
-            </CollectionView.Header>
-
-            <CollectionView.EmptyView>
-                <VerticalStackLayout Padding="12,28" Spacing="6">
-                    <Label Text="No watched symbols"
-                           FontAttributes="Bold"
-                           FontSize="16"
-                           HorizontalTextAlignment="Center" />
-                    <Label Text="Add a ticker above or choose another wishlist."
-                           FontSize="13"
-                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                           HorizontalTextAlignment="Center" />
-                </VerticalStackLayout>
-            </CollectionView.EmptyView>
-
-            <CollectionView.ItemTemplate>
-                <DataTemplate>
-                    <Border Style="{StaticResource CardBorder}"
-                            Margin="0,0,0,8"
-                            Padding="10">
-                        <VerticalStackLayout Spacing="7">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                                <VerticalStackLayout Spacing="1">
-                                    <Label Text="{Binding DisplayTitle}"
-                                           FontAttributes="Bold"
-                                           FontSize="16" />
-                                    <Label Text="{Binding DetailText}"
-                                           FontSize="12"
-                                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                                           LineBreakMode="TailTruncation"
-                                           MaxLines="1" />
+             x:Class="TradingFlow.Mobile.Pages.WishlistsPage" Title="Stocks">
+    <Grid RowDefinitions="Auto,*">
+        <VerticalStackLayout Padding="20,8,20,12" Spacing="8">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <Picker x:Name="WishlistPicker" Title="Choose a stock group" SelectedIndexChanged="OnWishlistChanged"
+                        SemanticProperties.Description="Choose the stock group to follow" />
+                <Button Grid.Column="1" Text="Manage" Clicked="OnManageClicked" Style="{StaticResource QuietButton}" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <Label x:Name="StatusLabel" Text="Loading stocks…" Style="{StaticResource SubHeadline}" VerticalTextAlignment="Center" LineBreakMode="WordWrap" />
+                <ActivityIndicator x:Name="BusyIndicator" Grid.Column="1" IsRunning="False" IsVisible="False" />
+            </Grid>
+            <SearchBar x:Name="WatchSearchBar" Placeholder="Search your stocks" TextChanged="OnWatchFilterChanged" />
+            <Label x:Name="WatchCountLabel" Style="{StaticResource SubHeadline}" />
+        </VerticalStackLayout>
+        <RefreshView x:Name="RefreshRoot" Grid.Row="1" Refreshing="OnRefresh">
+            <CollectionView x:Name="ItemsView" SelectionMode="Single" SelectionChanged="OnStockSelected"
+                            ItemsUpdatingScrollMode="KeepScrollOffset">
+                <CollectionView.Header>
+<VerticalStackLayout x:Name="ManagePanel" IsVisible="False" Padding="20,0,20,16" Spacing="8">
+                <Label x:Name="WishlistDetailLabel" Style="{StaticResource SubHeadline}" />
+                <Label x:Name="StockCountLabel" Style="{StaticResource SubHeadline}" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Entry x:Name="TickerEntry" Placeholder="Add ticker" TextChanged="OnTickerSearchChanged" />
+                    <Button Grid.Column="1" Text="Add" Clicked="OnAddTicker" />
+                </Grid>
+                <Picker x:Name="SuggestionsPicker" Title="Matching symbols" IsVisible="False" SelectedIndexChanged="OnSuggestionSelected" />
+                <ScrollView Orientation="Horizontal" HorizontalScrollBarVisibility="Never">
+                    <HorizontalStackLayout Spacing="8">
+                        <Button x:Name="WatchAllButton" Text="All" Style="{StaticResource QuietButton}" Clicked="OnWatchScopeSelected" CommandParameter="all" />
+                        <Button x:Name="WatchSignalButton" Text="Past alerts" Style="{StaticResource QuietButton}" Clicked="OnWatchScopeSelected" CommandParameter="signal" SemanticProperties.Description="Historical alerts, not current executable signals" />
+                        <Button x:Name="WatchTradeButton" Text="In trade" Style="{StaticResource QuietButton}" Clicked="OnWatchScopeSelected" CommandParameter="trade" />
+                        <Button x:Name="WatchNewsButton" Text="News" Style="{StaticResource QuietButton}" Clicked="OnWatchScopeSelected" CommandParameter="news" />
+                    </HorizontalStackLayout>
+                </ScrollView>
+                <Button Text="Refresh stocks" Clicked="OnRefreshClicked" Style="{StaticResource QuietButton}" />
+            </VerticalStackLayout>
+                </CollectionView.Header>
+                <CollectionView.EmptyView>
+                    <VerticalStackLayout Padding="24,36" Spacing="8">
+                        <Label x:Name="EmptyTitleLabel" Text="Loading stocks" FontAttributes="Bold" FontSize="18" HorizontalTextAlignment="Center" />
+                        <Label x:Name="EmptyDetailLabel" Text="Your saved stock groups appear here." Style="{StaticResource SubHeadline}" HorizontalTextAlignment="Center" LineBreakMode="WordWrap" />
+                        <Button x:Name="EmptyActionButton" Text="Sign in" Clicked="OnEmptyActionClicked" IsVisible="False" HorizontalOptions="Center" />
+                    </VerticalStackLayout>
+                </CollectionView.EmptyView>
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <SwipeView>
+                            <SwipeView.RightItems>
+                                <SwipeItems><SwipeItem Text="News" BackgroundColor="{AppThemeBinding Light={StaticResource AccentStrongLight}, Dark={StaticResource AccentSurfaceDark}}" IsEnabled="{Binding HasNewsLink}" CommandParameter="{Binding .}" Invoked="OnOpenTickerNews" /></SwipeItems>
+                            </SwipeView.RightItems>
+                        <VerticalStackLayout Spacing="0">
+                            <Grid Padding="20,12" MinimumHeightRequest="72" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                <VerticalStackLayout Spacing="3" VerticalOptions="Center">
+                                    <Label Text="{Binding Ticker}" FontSize="17" FontAttributes="Bold" />
+                                    <Label Text="{Binding CompanyName}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" MaxLines="1" LineBreakMode="TailTruncation" />
                                 </VerticalStackLayout>
-                                <VerticalStackLayout Grid.Column="1" Spacing="1" HorizontalOptions="End">
-                                    <Label Text="{Binding PriceText}"
-                                           FontAttributes="Bold"
-                                           FontSize="16"
-                                           HorizontalTextAlignment="End" />
-                                    <Label Text="{Binding BidAskText}"
-                                           FontSize="12"
-                                           TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                                           HorizontalTextAlignment="End" />
+                                <VerticalStackLayout Grid.Column="1" Spacing="3" VerticalOptions="Center" HorizontalOptions="End">
+                                    <Label Text="{Binding PriceText}" FontSize="17" FontAttributes="Bold" HorizontalTextAlignment="End" />
+                                    <Label Text="{Binding MovementText}" FontSize="12" TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}" HorizontalTextAlignment="End" />
                                 </VerticalStackLayout>
                             </Grid>
-
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                <Label Text="{Binding StatusText}"
-                                       FontAttributes="Bold"
-                                       FontSize="12"
-                                       TextColor="{Binding StatusColor}"
-                                       VerticalTextAlignment="Center" />
-                                <Label Grid.Column="1"
-                                       Text="{Binding MovementText}"
-                                       FontSize="12"
-                                       TextColor="{AppThemeBinding Light={StaticResource TextSecondaryLight}, Dark={StaticResource TextSecondaryDark}}"
-                                       HorizontalTextAlignment="End"
-                                       IsVisible="{Binding HasMovement}" />
-                            </Grid>
-
-                            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
-                                <Button Text="Details"
-                                       Clicked="OnToggleTickerDetails"
-                                       CommandParameter="{Binding .}"
-                                        SemanticProperties.Description="Open market, eligibility, and model evidence details" />
-                                <Button Grid.Column="1"
-                                        Text="News"
-                                        Clicked="OnOpenTickerNews"
-                                        CommandParameter="{Binding .}"
-                                        IsEnabled="{Binding HasNewsLink}"
-                                        SemanticProperties.Description="Open the latest related news article" />
-                            </Grid>
+                            <BoxView HeightRequest="1" Margin="20,0" Color="{AppThemeBinding Light={StaticResource BorderDividerLight}, Dark={StaticResource BorderDividerDark}}" />
                         </VerticalStackLayout>
-                    </Border>
-                </DataTemplate>
-            </CollectionView.ItemTemplate>
-        </CollectionView>
-    </RefreshView>
+                        </SwipeView>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </RefreshView>
+    </Grid>
 </ContentPage>

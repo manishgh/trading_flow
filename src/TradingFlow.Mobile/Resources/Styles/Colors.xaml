@@ -18,35 +18,35 @@
          a sign or glyph so colour is never the only signal. -->
 
     <!-- Surfaces -->
-    <Color x:Key="PageBackgroundLight">#F4F6F8</Color>
-    <Color x:Key="PageBackgroundDark">#0F172A</Color>
+    <Color x:Key="PageBackgroundLight">#F7F8FA</Color>
+    <Color x:Key="PageBackgroundDark">#101117</Color>
     <Color x:Key="SurfacePanelLight">#FFFFFF</Color>
-    <Color x:Key="SurfacePanelDark">#1E293B</Color>
-    <Color x:Key="SurfaceSubtleLight">#FBFCFD</Color>
-    <Color x:Key="SurfaceSubtleDark">#243244</Color>
-    <Color x:Key="SurfaceInsetLight">#E7EDF2</Color>
-    <Color x:Key="SurfaceInsetDark">#2A3A4F</Color>
+    <Color x:Key="SurfacePanelDark">#191B24</Color>
+    <Color x:Key="SurfaceSubtleLight">#F7F8FB</Color>
+    <Color x:Key="SurfaceSubtleDark">#20232E</Color>
+    <Color x:Key="SurfaceInsetLight">#F0F1F6</Color>
+    <Color x:Key="SurfaceInsetDark">#272B38</Color>
 
     <!-- Text -->
-    <Color x:Key="TextPrimaryLight">#17202A</Color>
-    <Color x:Key="TextPrimaryDark">#E6EDF3</Color>
-    <Color x:Key="TextSecondaryLight">#5F6B7A</Color>
-    <Color x:Key="TextSecondaryDark">#9AA7B4</Color>
+    <Color x:Key="TextPrimaryLight">#292938</Color>
+    <Color x:Key="TextPrimaryDark">#EBEAF2</Color>
+    <Color x:Key="TextSecondaryLight">#656879</Color>
+    <Color x:Key="TextSecondaryDark">#A6A8BA</Color>
 
     <!-- Lines. BorderControl identifies an interactive control and meets 3:1.
          BorderDivider is decorative only and is deliberately subtler. -->
     <Color x:Key="BorderControlLight">#818B98</Color>
     <Color x:Key="BorderControlDark">#748094</Color>
-    <Color x:Key="BorderDividerLight">#E6EBEF</Color>
-    <Color x:Key="BorderDividerDark">#2F3F54</Color>
+    <Color x:Key="BorderDividerLight">#E5E6ED</Color>
+    <Color x:Key="BorderDividerDark">#303443</Color>
 
     <!-- Accent -->
-    <Color x:Key="AccentLight">#176B87</Color>
-    <Color x:Key="AccentDark">#1F6FEB</Color>
-    <Color x:Key="AccentStrongLight">#104E62</Color>
-    <Color x:Key="AccentStrongDark">#388BFD</Color>
-    <Color x:Key="AccentSurfaceLight">#EAF2F8</Color>
-    <Color x:Key="AccentSurfaceDark">#16283F</Color>
+    <Color x:Key="AccentLight">#7360C8</Color>
+    <Color x:Key="AccentDark">#B8A8F1</Color>
+    <Color x:Key="AccentStrongLight">#604BA9</Color>
+    <Color x:Key="AccentStrongDark">#C7BAFF</Color>
+    <Color x:Key="AccentSurfaceLight">#F0EDFB</Color>
+    <Color x:Key="AccentSurfaceDark">#2A2442</Color>
     <Color x:Key="OnAccentLight">#FFFFFF</Color>
     <Color x:Key="OnAccentDark">#FFFFFF</Color>
 
@@ -62,12 +62,12 @@
     <Color x:Key="EnvironmentLiveLight">#B45309</Color>
     <Color x:Key="EnvironmentLiveDark">#E3B341</Color>
 
-    <Color x:Key="FocusRingLight">#2563EB</Color>
-    <Color x:Key="FocusRingDark">#58A6FF</Color>
+    <Color x:Key="FocusRingLight">#7360C8</Color>
+    <Color x:Key="FocusRingDark">#C7BAFF</Color>
 
     <!-- Compatibility aliases for the MAUI template defaults. -->
-    <Color x:Key="Primary">#176B87</Color>
-    <Color x:Key="PrimaryDark">#74C4DC</Color>
+    <Color x:Key="Primary">#7360C8</Color>
+    <Color x:Key="PrimaryDark">#B8A8F1</Color>
     <Color x:Key="PrimaryDarkText">#242424</Color>
     <Color x:Key="Secondary">#DFD8F7</Color>
     <Color x:Key="SecondaryDarkText">#9880E5</Color>

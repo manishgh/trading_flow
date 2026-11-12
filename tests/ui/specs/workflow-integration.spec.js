@@ -56,6 +56,7 @@ test("lost override preview replays exact request and confirmation stays pending
  });
  await page.route("**/api/v1/orders/confirm",route=>json(route,{state:"confirmation_pending",rejectionReason:"Awaiting reconciliation"},202));
  await page.goto("/OrderTicket?wishlistId="+universeId+"&ticker=MSFT");
+ await page.getByText("Strategy & protection",{exact:true}).click();
  for(const [name,value] of [["limit","100"],["stop","98"],["target","106"]])await page.locator('[name="'+name+'"]').fill(value);
  await page.getByRole("button",{name:"Review order",exact:true}).click();await expect.poll(()=>requests.length).toBe(1);
  await expect(page.locator("#OrderWorkflowForm")).not.toHaveAttribute("inert");
@@ -88,6 +89,7 @@ for(const exactWindow of [false,true]) test("backtest retry preserves the "+(exa
  let captures=0;const requests=[];
  await page.route("**/api/v1/catalog",route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
  await page.route("**/api/v1/universes/preview",route=>{captures++;return json(route,{universeSnapshotId:universeId});});
+ await page.locator('.lab-group-settings > summary').click();
  await page.locator('[name="GroupSize"]').fill('5');
  await page.route("**/api/v1/backtests/plans/preview",route=>{
   requests.push(route.request().postDataJSON());
@@ -119,7 +121,8 @@ test.describe('research validation in a non-UTC device timezone',()=>{
   let captures=0,request;
   await page.route('**/api/v1/catalog',route=>json(route,{strategies:[{path:selectedPath,horizon:"swing",artifactStrategyId:identity.strategyId,semanticVersion:identity.semanticVersion,contentSha256:identity.contentSha256}]}));
   await page.route('**/api/v1/universes/preview',route=>{captures++;return json(route,{universeSnapshotId:universeId});});
-  await page.locator('[name="GroupSize"]').fill('5');
+  await page.locator('.lab-group-settings > summary').click();
+ await page.locator('[name="GroupSize"]').fill('5');
   await page.route('**/api/v1/backtests/plans/preview',route=>{request=route.request().postDataJSON().run;return json(route,planPreview(request));});
   await page.getByLabel('From UTC',{exact:true}).fill('2026-06-16T09:30');await page.getByLabel('To UTC',{exact:true}).fill('2026-06-15T16:00');
   await page.getByLabel('Account risk (% of equity)',{exact:true}).fill('101');
@@ -162,6 +165,7 @@ test('saving groups starts nothing and retrying start retains its command',async
   starts.push(route.request().postDataJSON());
   return starts.length===1?route.abort('failed'):json(route,{jobs:[{jobId:runId,status:'queued',cohort:{cohortName:'Group 1',strategy:identity}}]});
  });
+ await page.locator('.lab-group-settings > summary').click();
  await page.locator('[name="GroupSize"]').fill('5');
  await expect(page.getByRole('button',{name:'Save plan',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'Preview groups',exact:true}).click();
@@ -198,6 +202,7 @@ test('excluded stocks retain retry identity and reopen with the effective groups
   if(excludedSymbols.includes('MSFT'))effective.cohorts[0].symbols=['SOXL'];
   return json(route,{...effective,excludedSymbols});
  });
+ await page.locator('.lab-group-settings > summary').click();
  await page.locator('[name="GroupSize"]').fill('5');
  await page.getByLabel('Exclude stocks',{exact:true}).fill(' soxl, ');
  const preview=page.getByRole('button',{name:'Preview groups',exact:true});
@@ -247,6 +252,7 @@ test('saved Finviz selection captures its filters and retains the reviewed profi
   if(route.request().method()==='GET')return json(route,[]);
   save=route.request().postDataJSON();return json(route,{...planPreview(save.run),planId:18});
  });
+ await page.locator('.lab-group-settings > summary').click();
  await page.locator('[name="GroupSize"]').fill('5');
  await page.getByRole('button',{name:'Preview groups',exact:true}).click();
  await expect(page.locator('[data-backtest-plan-preview]')).toContainText('Group 1: MSFT');
@@ -254,4 +260,40 @@ test('saved Finviz selection captures its filters and retains the reviewed profi
  expect(capture.sources[0].sourceKey).toBe(screen.key);expect(capture.sources[0].query).toBe('sh_price_o20,ta_sma50_pa');
  await page.getByRole('button',{name:'Save plan',exact:true}).click();
  await expect.poll(()=>save?.run.configurationSha256).toBe('b'.repeat(64));
+});
+
+
+// Invalid custom groups must reveal both nested disclosures without losing the entered plan.
+test('invalid collapsed custom groups expose their field and retain the entered value', async ({page}) => {
+ await signIn(page); await openBacktestFixture(page);
+ await page.locator('input[name="StrategyPaths"]').first().check();
+ let captures = 0;
+ await page.route('**/api/v1/universes/preview', route => { captures++; return json(route, {universeSnapshotId: universeId}); });
+ await page.locator('.lab-group-settings > summary').click();
+ const groups = page.locator('#ManualCohorts');
+ await groups.fill('Research | -1 | MSFT');
+ await page.locator('.lab-group-settings > summary').click();
+ await page.locator('.research-configuration > summary').click();
+ await page.getByRole('button', {name:'Preview groups',exact:true}).click();
+ await expect(page.locator('.research-configuration')).toHaveAttribute('open','');
+ await expect(page.locator('.lab-group-settings')).toHaveAttribute('open','');
+ await expect(groups).toBeVisible();
+ await expect(groups).toHaveValue('Research | -1 | MSFT');
+ await expect(groups).toHaveAttribute('aria-invalid','true');
+ await expect(page.locator('[data-run-validation]')).toContainText('positive starting capital');
+ await expect(page.locator('[data-run-validation]')).toBeFocused();
+ expect(captures).toBe(0);
+});
+
+// Razor must render the version value beside each short label, with exact identity still available on demand.
+test('strategy cards render semantic versions and keep exact identity available', async ({page}) => {
+ await signIn(page); await page.goto('/Backtests');
+ const versions = await page.locator('.lab-strategy-heading > small').allTextContents();
+ expect(versions.length).toBeGreaterThan(0);
+ for (const version of versions) expect(version).toMatch(/^v\d+\.\d+\.\d+(?:[-+].*)?$/);
+ await expect(page.locator('.lab-strategy-list')).not.toContainText('@strategy.');
+ const details = page.locator('.lab-strategy-details').first();
+ await details.locator('summary').click();
+ await expect(details).toContainText('SHA-256');
+ await expect(details).toContainText('Strategy:');
 });

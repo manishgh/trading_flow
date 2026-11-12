@@ -1,6 +1,4 @@
-@* A page shown inside another screen, such as the order review in the Desk's detail panel:
-   the same styles and scripts as the full layout, without the site chrome. It reports its
-   height to the hosting screen so the embedding frame never shows a second scroll bar. *@
+@* Shared order workflow inside the retained popup; its viewport scrolls independently. *@
 <!DOCTYPE html>
 <html lang="en" data-environment="@(String.IsNullOrEmpty(Context.Request.Query["env"]) ? "paper" : Context.Request.Query["env"].ToString())" class="embedded">
 <head>
@@ -11,16 +9,13 @@
     <link rel="stylesheet" href="~/css/modernist.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/features.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/order-workflow.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/desk-theme.css" asp-append-version="true" />
     <script src="~/js/theme.js" asp-append-version="true"></script>
     <style>html.embedded body{margin:0;background:transparent}html.embedded main{padding:0}</style>
 </head>
-<body>
+<body class="workspace-app">
     <main id="main-content">@RenderBody()</main>
     <script src="~/js/api-client.js" asp-append-version="true"></script>
-    <script>
-        new ResizeObserver(() => parent.postMessage({ type: "tradingflow:embedded-height", height: document.documentElement.scrollHeight }, location.origin))
-            .observe(document.body);
-    </script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

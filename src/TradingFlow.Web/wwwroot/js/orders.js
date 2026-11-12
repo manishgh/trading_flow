@@ -1,3 +1,4 @@
+// Reconcile the journal in place while ticket links target the retained order popup.
 (() => {
     const summary = document.querySelector("[data-orders-page]");
     const body = document.querySelector(".orders-body");
@@ -44,7 +45,7 @@
         status.classList.toggle("muted", state !== "stale");
     }
 
-    /* The same page with the rail ticket opened on a symbol. Filter, sort and
+    /* A GET fallback for the shared popup on a symbol. Filter, sort and
        environment ride along; a replace adds the side and limit to prefill. */
     function ticketUrl(symbol, side, limitPrice, quantity) {
         const url = new URL(window.location.href);
@@ -69,6 +70,7 @@
         input.value = value ?? "";
     }
 
+    // Keep cancellation controls stable and mark independent ticket links for the shared popup.
     function updateActions(cell, item) {
         if (!cancelTemplate || !isWorking(item.state) || item.state === "CancelPending" || !item.brokerOrderId) {
             cell.replaceChildren();
@@ -95,8 +97,10 @@
         if(item.canReviewReplacement) { const button = append(cell, 'button', 'Replace', 'btn btn-secondary btn-sm'); button.type = 'button'; button.dataset.replacementOrder = item.clientOrderId; }
 
         const replace = append(cell, "a", "New ticket", "btn btn-secondary btn-sm");
+        replace.dataset.orderNewTicket = '';
+        replace.setAttribute('aria-haspopup', 'dialog');
         replace.href = ticketUrl(item.symbol, item.side || "buy", item.limitPrice, item.requestedQuantity);
-        replace.title = "A new ticket does not cancel the existing order; it opens a reviewed ticket beside the journal; it does not amend this order in place.";
+        replace.title = "A new ticket does not cancel the existing order; it opens a reviewed ticket in a popup; it does not amend this order in place.";
     }
 
     function updateRow(row, item) {
@@ -183,6 +187,7 @@
         removeEmptyState();
         const region = document.createElement("div");
         region.className = "table-scroll";
+        region.dataset.ordersRegion = "";
         region.setAttribute("role", "region");
         region.setAttribute("aria-label", "Order lifecycle table");
         region.tabIndex = 0;
@@ -209,7 +214,7 @@
     }
 
     function renderEmptyState() {
-        body.querySelector(".table-scroll")?.remove();
+        body.querySelector("[data-orders-region]")?.remove();
         if (body.querySelector("[data-orders-empty]")) return;
         const messages = {
             working: "No order is working right now.", filled: "No order has filled yet.",
@@ -227,7 +232,7 @@
         const visible = sortItems(items.filter(item => matchesFilter(item.state)));
         const active = document.activeElement;
         const windowScroll = [window.scrollX, window.scrollY];
-        const existingRegion = body.querySelector(".table-scroll");
+        const existingRegion = body.querySelector("[data-orders-region]");
         const regionScroll = existingRegion ? [existingRegion.scrollLeft, existingRegion.scrollTop] : null;
         if (visible.length === 0) {
             renderEmptyState();
@@ -243,7 +248,7 @@
                 tableBody.append(row);
             }
         }
-        const currentRegion = body.querySelector(".table-scroll");
+        const currentRegion = body.querySelector("[data-orders-region]");
         if (regionScroll && currentRegion === existingRegion) {
             currentRegion.scrollLeft = regionScroll[0];
             currentRegion.scrollTop = regionScroll[1];

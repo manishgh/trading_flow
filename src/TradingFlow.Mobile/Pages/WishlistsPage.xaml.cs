@@ -21,7 +21,11 @@ public partial class WishlistsPage : ContentPage
     private Guid? streamedWishlistId;
     private bool isLoading;
     private bool appearing;
+    private readonly LatestMarketRead reads = new(() => AppServices.Api.SessionVersion);
+    private long sessionVersion = -1, pageGeneration;
+    private string emptyActionRoute = nameof(LoginPage);
 
+    // Initialize a virtualized stocks list that reuses existing group reads and quote streams.
     public WishlistsPage()
     {
         InitializeComponent();
@@ -35,83 +39,116 @@ public partial class WishlistsPage : ContentPage
         refreshTimer.Tick += async (_, _) => await LoadAsync(showBusy: false);
     }
 
+    // Resume only this visible account's stock list; a changed connection discards all former group state.
     protected override async void OnAppearing()
     {
-        base.OnAppearing();
-        appearing = true;
-        refreshTimer.Start();
-        await LoadAsync();
+        base.OnAppearing(); appearing = true; pageGeneration++; reads.Activate();
+        api.SessionChanged += OnSessionChanged;
+        if (sessionVersion != api.SessionVersion) ResetSession();
+        refreshTimer.Start(); await LoadAsync();
     }
 
+    // Cancel snapshots and streams before another page can change the selected group or account.
     protected override void OnDisappearing()
     {
-        appearing = false;
-        refreshTimer.Stop();
-        StopStreams();
-        base.OnDisappearing();
+        appearing = false; pageGeneration++; refreshTimer.Stop(); reads.Deactivate(); StopStreams();
+        api.SessionChanged -= OnSessionChanged; SetBusy(false); base.OnDisappearing();
     }
 
+    // Reject queued callbacks immediately by session version, then reload the visible connection.
+    private void OnSessionChanged(object? sender, EventArgs e) => MainThread.BeginInvokeOnMainThread(async () =>
+    {
+        if (!appearing) return;
+        reads.Cancel(); ResetSession(); await LoadAsync();
+    });
+
+    // Remove all private rows, selections and suggestions from the previous account/backend.
+    private void ResetSession()
+    {
+        StopStreams(); sessionVersion = api.SessionVersion; selectedWishlist = null; wishlists = [];
+        WishlistPicker.ItemsSource = null; items.Clear(); visibleItems.Clear(); suggestions.Clear();
+        TickerEntry.Text = String.Empty; WishlistDetailLabel.Text = StockCountLabel.Text = WatchCountLabel.Text = String.Empty;
+        EmptyTitleLabel.Text = "Loading stocks"; EmptyDetailLabel.Text = "Reading saved stock groups.";
+        EmptyActionButton.IsVisible = SuggestionsPicker.IsVisible = false;
+        StatusLabel.Text = "Loading stocks…";
+    }
+
+    // Keep both foreground refresh and pull-to-refresh state consistent after cancellation.
+    private void SetBusy(bool busy)
+    {
+        BusyIndicator.IsVisible = BusyIndicator.IsRunning = busy;
+        if (!busy) RefreshRoot.IsRefreshing = false;
+    }
+
+    // Fetch the existing saved groups and one selected desk; obsolete account/group replies cannot paint the list.
     private async Task LoadAsync(bool showBusy = true)
     {
-        if (isLoading)
-        {
-            return;
-        }
-
-        isLoading = true;
-        BusyIndicator.IsVisible = showBusy;
-        BusyIndicator.IsRunning = showBusy;
+        if (isLoading || !reads.Active) return;
+        isLoading = true; var read = reads.Begin(); var generation = pageGeneration; SetBusy(showBusy);
+        EmptyActionButton.IsVisible = false;
         try
         {
-            var healthy = await api.CheckHealthAsync();
-            StatusLabel.Text = healthy ? "Connected · live watch data" : "Disconnected · watch data may be stale";
-            StatusLabel.TextColor = healthy ? ThemePalette.Positive : ThemePalette.Negative;
-
+            if (String.IsNullOrWhiteSpace(api.BaseUrl)) throw new InvalidOperationException("Select a backend in More → Settings.");
+            var available = await api.GetWishlistsAsync(read.Token) ?? throw new InvalidOperationException("No stock group response returned.");
+            if (!reads.IsCurrent(read)) return;
             var previousWishlistId = selectedWishlist?.Id;
-            wishlists = await api.GetWishlistsAsync() ?? Array.Empty<MobileWishlistResponse>();
-            WishlistPicker.ItemsSource = wishlists.ToList();
-            selectedWishlist = wishlists.FirstOrDefault(wishlist => wishlist.Id == previousWishlistId)
-                ?? wishlists.FirstOrDefault(wishlist => wishlist.IsDefault)
-                ?? wishlists.FirstOrDefault();
-            WishlistPicker.SelectedItem = selectedWishlist;
-            await LoadDeskAsync(notifyNewSignals: false);
-            RefreshSuggestions();
-            EnsureStreams();
+            wishlists = available;
+            selectedWishlist = wishlists.FirstOrDefault(group => group.Id == previousWishlistId)
+                ?? wishlists.FirstOrDefault(group => group.IsDefault) ?? wishlists.FirstOrDefault();
+            WishlistPicker.ItemsSource = wishlists.ToList(); WishlistPicker.SelectedItem = selectedWishlist;
+            await LoadDeskAsync(false, read);
+            if (!reads.IsCurrent(read)) return;
+            RefreshSuggestions(); EnsureStreams();
+            StatusLabel.Text = "Quotes shown with their source time"; StatusLabel.TextColor = ThemePalette.TextSecondary;
         }
+        catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
         catch (Exception exception)
         {
-            StatusLabel.Text = $"Wishlist error: {exception.Message}";
-            StatusLabel.TextColor = ThemePalette.Negative;
-            // Background refresh and initial authentication failures stay inline.
+            if (!reads.IsCurrent(read)) return;
+            ShowReadFailure(exception);
         }
         finally
         {
             isLoading = false;
-            BusyIndicator.IsRunning = false;
-            BusyIndicator.IsVisible = false;
-            RefreshRoot.IsRefreshing = false;
+            if (reads.IsCurrent(read)) SetBusy(false);
+            else if (reads.Active && (read.Session != api.SessionVersion || generation != pageGeneration))
+                Dispatcher.Dispatch(async () => await LoadAsync());
         }
     }
 
-    private async Task LoadDeskAsync(bool notifyNewSignals)
+    // Distinguish protected account access from a missing backend or failed read without claiming an empty group.
+    private void ShowReadFailure(Exception exception)
+    {
+        items.Clear(); ApplyWatchFilter(); StopStreams();
+        var signIn = exception is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden };
+        var missingBackend = String.IsNullOrWhiteSpace(api.BaseUrl);
+        EmptyTitleLabel.Text = signIn ? "Sign in to see your stocks" : missingBackend ? "Connect your trading desk" : "Stocks unavailable";
+        EmptyDetailLabel.Text = signIn ? "Your saved stock groups belong to your account."
+            : "Check the saved backend in Settings, then refresh.";
+        emptyActionRoute = signIn ? nameof(LoginPage) : nameof(SettingsPage);
+        EmptyActionButton.Text = signIn ? "Sign in" : "Open settings"; EmptyActionButton.IsVisible = true;
+        StatusLabel.Text = signIn ? "Sign-in required" : exception.Message;
+        StatusLabel.TextColor = signIn ? ThemePalette.TextSecondary : ThemePalette.Negative;
+    }
+
+    // Use the normal sign-in/settings routes; this action does not modify credentials or backend preferences.
+    private async void OnEmptyActionClicked(object? sender, EventArgs e) => await Shell.Current.GoToAsync(emptyActionRoute);
+
+    // Bind a desk snapshot to the exact selected group and current read before applying it.
+    private async Task LoadDeskAsync(bool notifyNewSignals, LatestMarketRead.Read read)
     {
         if (selectedWishlist is null)
         {
-            RenderWishlist();
-            ProcessSignals([], notifyNew: false);
-            return;
+            RenderWishlist(); EmptyTitleLabel.Text = "No stock group selected";
+            EmptyDetailLabel.Text = "Choose a saved group to follow its stocks."; return;
         }
-
-        var desk = await api.GetWishlistDeskAsync(selectedWishlist.Id, signalMinutes: 20, newsHours: 4);
-        if (desk is null)
-        {
-            RenderWishlist();
-            return;
-        }
-
-        selectedWishlist = desk.Wishlist;
-        RenderDesk(desk);
-        ProcessSignals(desk.RecentSignals, notifyNewSignals);
+        var id = selectedWishlist.Id;
+        var desk = await api.GetWishlistDeskAsync(id, signalMinutes: 20, newsHours: 4, cancellationToken: read.Token)
+            ?? throw new InvalidOperationException("No stock quotes response returned.");
+        if (!reads.IsCurrent(read) || selectedWishlist?.Id != id) return;
+        RenderDesk(desk); ProcessSignals(desk.RecentSignals, notifyNewSignals);
+        EmptyActionButton.IsVisible = false;
+        EmptyTitleLabel.Text = "No matching stocks"; EmptyDetailLabel.Text = "Change your search or use Manage to add a ticker.";
     }
 
     /// <summary>Shows existing alerts as history; polling never republishes an old generic alert as a fresh strategy notification.</summary>
@@ -154,7 +191,7 @@ public partial class WishlistsPage : ContentPage
             return watchScope switch
             {
                 "signal" => card.StatusText.Contains("Historical alert", StringComparison.OrdinalIgnoreCase),
-                "trade" => !String.IsNullOrWhiteSpace(card.TradeText),
+                "trade" => card.HasTrade,
                 "news" => card.HasNewsLink,
                 _ => true
             };
@@ -168,14 +205,14 @@ public partial class WishlistsPage : ContentPage
 
         if (WatchCountLabel is not null)
         {
-            WatchCountLabel.Text = matches.Count == items.Count
-                ? $"{items.Count}"
-                : $"{matches.Count} of {items.Count}";
+            WatchCountLabel.Text = $"{matches.Count} stocks" + (matches.Count == items.Count ? "" : $" · {items.Count} in group") +
+                (watchScope == "all" ? "" : " · " + (watchScope == "signal" ? "Past alerts" : watchScope == "trade" ? "In trade" : "News"));
         }
 
         UpdateWatchScopeButtons();
     }
 
+    // Keep selection contrast consistent with the same semantic action styles in both themes.
     private void UpdateWatchScopeButtons()
     {
         var buttons = new (Button Button, string Scope)[]
@@ -194,8 +231,7 @@ public partial class WishlistsPage : ContentPage
             }
 
             var selected = watchScope == scope;
-            button.BackgroundColor = selected ? ThemePalette.Accent : ThemePalette.SurfacePanel;
-            button.TextColor = selected ? Colors.White : ThemePalette.TextPrimary;
+            button.Style = (Style)Application.Current!.Resources[selected ? "ActionButton" : "QuietButton"];
         }
     }
 
@@ -309,14 +345,16 @@ public partial class WishlistsPage : ContentPage
         StartStreams(selectedWishlist.Id);
     }
 
+    // Start only one pair of streams for the selected group and capture the account generation.
     private void StartStreams(Guid wishlistId)
     {
         StopStreams();
         var cts = new CancellationTokenSource();
         streamCts = cts;
         streamedWishlistId = wishlistId;
-        _ = RunQuoteStreamAsync(wishlistId, cts.Token);
-        _ = RunActivityStreamAsync(wishlistId, cts.Token);
+        var session = api.SessionVersion;
+        _ = RunQuoteStreamAsync(wishlistId, session, cts.Token);
+        _ = RunActivityStreamAsync(wishlistId, session, cts.Token);
     }
 
     private void StopStreams()
@@ -342,7 +380,8 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
-    private async Task RunQuoteStreamAsync(Guid wishlistId, CancellationToken cancellationToken)
+    // Recheck ownership inside each queued UI callback, including callbacks delivered after cancellation.
+    private async Task RunQuoteStreamAsync(Guid wishlistId, long session, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -350,7 +389,7 @@ public partial class WishlistsPage : ContentPage
             {
                 await api.StreamWishlistQuotesAsync(wishlistId, updates =>
                 {
-                    MainThread.BeginInvokeOnMainThread(() => ApplyQuoteUpdates(updates));
+                    MainThread.BeginInvokeOnMainThread(() => { if (CanApplyStream(wishlistId, session, cancellationToken)) ApplyQuoteUpdates(updates); });
                     return Task.CompletedTask;
                 }, cancellationToken);
             }
@@ -370,7 +409,8 @@ public partial class WishlistsPage : ContentPage
         }
     }
 
-    private async Task RunActivityStreamAsync(Guid wishlistId, CancellationToken cancellationToken)
+    // Keep historical alerts scoped to the same visible group/account as their originating stream.
+    private async Task RunActivityStreamAsync(Guid wishlistId, long session, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -378,7 +418,7 @@ public partial class WishlistsPage : ContentPage
             {
                 await api.StreamWishlistActivityAsync(wishlistId, update =>
                 {
-                    MainThread.BeginInvokeOnMainThread(() => ApplyActivityUpdate(update));
+                    MainThread.BeginInvokeOnMainThread(() => { if (CanApplyStream(wishlistId, session, cancellationToken)) ApplyActivityUpdate(update); });
                     return Task.CompletedTask;
                 }, cancellationToken);
             }
@@ -397,6 +437,10 @@ public partial class WishlistsPage : ContentPage
             }
         }
     }
+
+    // An old group, connection or canceled stream can never update the current list.
+    private bool CanApplyStream(Guid group, long session, CancellationToken token) =>
+        appearing && session == api.SessionVersion && selectedWishlist?.Id == group && streamedWishlistId == group && !token.IsCancellationRequested;
 
     private static async Task<bool> DelayForReconnectAsync(CancellationToken cancellationToken)
     {
@@ -455,18 +499,38 @@ public partial class WishlistsPage : ContentPage
 
     private async void OnRefreshClicked(object? sender, EventArgs e) => await LoadAsync();
 
-    private void OnWishlistChanged(object? sender, EventArgs e)
+    // Change the group immediately and cancel any earlier snapshot before starting its replacement.
+    private async void OnWishlistChanged(object? sender, EventArgs e)
     {
-        if (WishlistPicker.SelectedItem is not MobileWishlistResponse wishlist || selectedWishlist?.Id == wishlist.Id)
+        if (!reads.Active || WishlistPicker.SelectedItem is not MobileWishlistResponse group || selectedWishlist?.Id == group.Id) return;
+        selectedWishlist = group; StopStreams(); items.Clear(); RenderWishlist(); RefreshSuggestions();
+        var read = reads.Begin(); SetBusy(true);
+        try
         {
-            return;
+            await LoadDeskAsync(false, read);
+            if (reads.IsCurrent(read)) EnsureStreams();
         }
+        catch (OperationCanceledException) when (read.Token.IsCancellationRequested || !reads.IsCurrent(read)) { }
+        catch (Exception exception)
+        {
+            if (reads.IsCurrent(read)) ShowReadFailure(exception);
+        }
+        finally { if (reads.IsCurrent(read)) SetBusy(false); }
+    }
 
-        selectedWishlist = wishlist;
-        RenderWishlist();
-        _ = LoadDeskAsync(notifyNewSignals: false);
-        RefreshSuggestions();
-        EnsureStreams();
+    // Put group maintenance behind one explicit action instead of mixing forms into the stock list.
+    private void OnManageClicked(object? sender, EventArgs e)
+    {
+        ManagePanel.IsVisible = !ManagePanel.IsVisible;
+        if (sender is Button button) button.Text = ManagePanel.IsVisible ? "Done" : "Manage";
+    }
+
+    // Open the existing stock detail workflow; tapping a row never starts an evaluation or order.
+    private async void OnStockSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (e.CurrentSelection.FirstOrDefault() is not WishlistStockCard card || selectedWishlist is null) return;
+        ItemsView.SelectedItem = null;
+        await Shell.Current.GoToAsync($"{nameof(SymbolDetailPage)}?wishlistId={selectedWishlist.Id}&ticker={Uri.EscapeDataString(card.Ticker)}");
     }
 
     private async void OnAddTicker(object? sender, EventArgs e)
@@ -474,6 +538,7 @@ public partial class WishlistsPage : ContentPage
         await AddTickerAsync(TickerEntry.Text);
     }
 
+    // Preserve the original add operation but discard its UI result if the selected account/group changed.
     private async Task AddTickerAsync(string? ticker)
     {
         if (selectedWishlist is null)
@@ -489,21 +554,27 @@ public partial class WishlistsPage : ContentPage
             return;
         }
 
+        var groupId = selectedWishlist.Id; var session = api.SessionVersion;
         try
         {
-            await api.AddWishlistTickerAsync(selectedWishlist.Id, new MobileWishlistItemRequest(normalizedTicker, null, null));
+            await api.AddWishlistTickerAsync(groupId, new MobileWishlistItemRequest(normalizedTicker, null, null));
+            if (!appearing || session != api.SessionVersion || selectedWishlist?.Id != groupId) return;
             TickerEntry.Text = string.Empty;
             await LoadAsync();
         }
         catch (Exception exception)
         {
-            await DisplayAlertAsync("Wishlists", exception.Message, "OK");
+            if (appearing && session == api.SessionVersion && selectedWishlist?.Id == groupId)
+                await DisplayAlertAsync("Wishlists", exception.Message, "OK");
         }
     }
 
+    // Preserve the existing direct article action as a secondary swipe action on compact stock rows.
     private async void OnOpenTickerNews(object? sender, EventArgs e)
     {
-        if (sender is not Button { CommandParameter: WishlistStockCard card } || String.IsNullOrWhiteSpace(card.NewsUrl))
+        var card = sender switch { Button button => button.CommandParameter as WishlistStockCard,
+            SwipeItem swipe => swipe.CommandParameter as WishlistStockCard, _ => null };
+        if (card is null || String.IsNullOrWhiteSpace(card.NewsUrl))
         {
             await DisplayAlertAsync("News", "No related news link is available for this ticker.", "OK");
             return;
@@ -589,10 +660,12 @@ public partial class WishlistsPage : ContentPage
 internal sealed class WishlistStockCard : INotifyPropertyChanged
 {
     private string displayTitle;
+    private string companyName = String.Empty;
+    private bool hasTrade;
     private string detailText;
-    private string priceText = "Last --";
+    private string priceText = "—";
     private string bidAskText = "Streaming quotes...";
-    private string movementText = String.Empty;
+    private string movementText = "Quote unavailable";
     private string statusText = "Select a strategy";
     private string eligibilityReason = "Select a strategy in stock details to collect and evaluate its conditions.";
     private string newsText = "No related news";
@@ -602,16 +675,20 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     private bool hasMovement;
     private bool hasNewsLink;
 
+    // Preserve ticker identity and the supplied company name before a quote snapshot arrives.
     public WishlistStockCard(MobileWishlistItemResponse item)
     {
         Ticker = item.Ticker;
+        companyName = item.DisplayName ?? String.Empty;
         displayTitle = item.DisplayTitle;
         detailText = item.DetailText;
     }
 
+    // Initialize a row from the existing desk snapshot without inferring price changes.
     public WishlistStockCard(MobileWishlistDeskRowResponse row)
     {
         Ticker = row.Ticker;
+        companyName = row.Item.DisplayName ?? String.Empty;
         displayTitle = row.Item.DisplayTitle;
         detailText = row.Item.DetailText;
         UpdateFromDesk(row);
@@ -620,6 +697,9 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public string Ticker { get; }
+
+    public string CompanyName { get => companyName; private set => SetField(ref companyName, value); }
+    public bool HasTrade { get => hasTrade; private set => SetField(ref hasTrade, value); }
 
     public string DisplayTitle
     {
@@ -701,19 +781,23 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
 
     public Color MovementColor => ThemePalette.TextSecondary;
 
+    // Refresh the item name without replacing the instance receiving live quote updates.
     public void UpdateStatic(MobileWishlistItemResponse item)
     {
+        CompanyName = item.DisplayName ?? String.Empty;
         DisplayTitle = item.DisplayTitle;
         DetailText = item.DetailText;
     }
 
+    // Use structured holdings and real quote timestamps for compact list facts and filters.
     public void UpdateFromDesk(MobileWishlistDeskRowResponse row)
     {
+        CompanyName = row.Item.DisplayName ?? String.Empty; HasTrade = row.Trade is not null;
         DisplayTitle = row.Item.DisplayTitle;
         DetailText = row.Item.DetailText;
-        PriceText = FirstNonEmpty(row.DisplayPrice, Format(row.MidPrice), "Last --");
+        PriceText = FirstNonEmpty(Format(row.MidPrice), row.DisplayPrice, "—");
         BidAskText = $"Bid {FirstNonEmpty(row.DisplayBid, Format(row.BidPrice), "--")} / Ask {FirstNonEmpty(row.DisplayAsk, Format(row.AskPrice), "--")}";
-        MovementText = row.QuoteTimestamp is { } stamp ? $"as of {stamp.LocalDateTime:HH:mm}" : String.Empty;
+        MovementText = QuoteTime(row.QuoteTimestamp);
         HasMovement = row.QuoteTimestamp is not null;
         ApplyStatus(row.StatusText, row.EligibilityReason);
         NewsText = row.LatestNews?.DisplayHeadline ?? "No related news";
@@ -724,24 +808,25 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
             : $"{row.Trade.SourceLabel} {row.Trade.Quantity:0.####} sh | {row.Trade.PlText} | {row.Trade.ProtectionSummary}";
     }
 
+    // Apply only supplied quote fields; absent or old timestamps never look like a fresh price change.
     public void ApplyQuote(WishlistQuoteUpdate update)
     {
-        PriceText = FirstNonEmpty(update.MidText, Format(update.MidPrice), "Last --");
+        PriceText = FirstNonEmpty(Format(update.MidPrice), update.MidText, "—");
 
         var bid = FirstNonEmpty(update.BidText, Format(update.BidPrice), "--");
         var ask = FirstNonEmpty(update.AskText, Format(update.AskPrice), "--");
         BidAskText = $"Bid {bid} / Ask {ask}";
 
-        if (update.Timestamp is { } stamp)
-        {
-            MovementText = $"as of {stamp.LocalDateTime:HH:mm}";
-            HasMovement = true;
-        }
-        else
-        {
-            MovementText = String.Empty;
-            HasMovement = false;
-        }
+        MovementText = QuoteTime(update.Timestamp);
+        HasMovement = update.Timestamp is not null;
+    }
+
+    // Include the local date for older-day quotes so a closed market's observation is never mistaken for today.
+    private static string QuoteTime(DateTimeOffset? timestamp)
+    {
+        if (timestamp is not { } source) return "Time unavailable";
+        var local = source.LocalDateTime;
+        return local.Date == DateTime.Now.Date ? $"As of {local:HH:mm}" : $"{local:dd MMM yyyy HH:mm}";
     }
 
     public void ApplySignal(MobileWishlistSignalResponse signal)
@@ -785,9 +870,10 @@ internal sealed class WishlistStockCard : INotifyPropertyChanged
         return String.Empty;
     }
 
+    // Listed US stock quotes remain USD regardless of the device display locale.
     private static string? Format(decimal? value)
     {
-        return value is null or <= 0 ? null : value.Value.ToString("C2");
+        return value is null or <= 0 ? null : value.Value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
     }
 
     private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

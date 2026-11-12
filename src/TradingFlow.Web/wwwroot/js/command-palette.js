@@ -12,19 +12,18 @@
 (function () {
   "use strict";
 
-  // Static screen registry. Labels match the primary navigation so what an
-  // operator reads in the top bar is what they can type.
+  // Match the persistent workspace destinations; detailed screens remain searchable.
   var SCREENS = [
     { label: "Desk", hint: "Live quotes, signals, holdings and news", path: "/Desk" },
-    { label: "Positions", hint: "Running trades and open risk", path: "/RunningTrades" },
-    { label: "Orders", hint: "Working and completed orders", path: "/Orders" },
-    { label: "News", hint: "Catalyst feed", path: "/News" },
+    { label: "Trading", hint: "Positions, working and completed orders", path: "/Orders" },
+    { label: "Strategies", hint: "Strategy run setup and monitoring", path: "/Paper" },
     { label: "Earnings", hint: "Reporting calendar and surprises", path: "/Earnings" },
-    { label: "Research", hint: "Backtests and optimisation runs", path: "/Backtests" },
+    { label: "News", hint: "Catalyst feed", path: "/News" },
+    { label: "Stock groups", hint: "Followed stocks and saved screens", path: "/Wishlists" },
+    { label: "Backtests", hint: "Strategy backtests and optimisation runs", path: "/Backtests" },
+    { label: "Position details", hint: "Running trades and open risk", path: "/RunningTrades" },
     { label: "System health", hint: "Connections and entry restrictions", path: "/Operations" },
     { label: "Morning preparation", hint: "Ready list collected before the open", path: "/Preparation" },
-    { label: "Paper runs", hint: "Trading run setup and monitoring", path: "/Paper" },
-    { label: "Sources", hint: "Symbol groups and universes", path: "/Wishlists" },
     { label: "Warmup", hint: "Indicator warm-up service", path: "/Warmup" }
   ];
 

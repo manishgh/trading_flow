@@ -1,7 +1,7 @@
 @page "/Paper"
 @model TradingFlow.Web.Pages.PaperModel
 @{
-    ViewData["Title"] = "Paper runs";
+    ViewData["Title"] = "Strategy runs";
     var selectedConfig = Model.Configs.FirstOrDefault(c => c.Path == Model.ConfigPath);
     var selectedStrategy = Model.Strategies.FirstOrDefault(s => s.Path == Model.SelectedStrategyPath);
     var wishlistTickers = String.IsNullOrWhiteSpace(Model.WishlistTickersCsv)
@@ -20,20 +20,14 @@
             parameters = TradingFlow.Web.Models.PaperExperimentParameterInput.From(strategy.Definition)
         }),
         new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
-    string AuditLine(TradingFlow.Web.Models.StrategyOption strategy)
-    {
-        var audit = strategy.Audit;
-        return audit is null
-            ? "No backtest summary recorded"
-            : $"Backtest: {audit.ReturnPct:+0.##;-0.##;0}% return · {audit.MaxDrawdownPct:0.##}% worst drawdown · {audit.Trades} trades · {audit.WinRatePct:0.#}% winners · average hold {audit.AverageHold}";
-    }
 }
 
-<div class="paper-page">
+<div class="paper-page execution-workspace">
 <div class="paper-head">
     <div>
-        <h1>Paper runs</h1>
-        <p class="muted">Run an authorized strategy on your stocks with paper money. Nothing here uses the live account.</p>
+        <span class="eyebrow">Strategies · Paper execution</span>
+        <h1>Strategy runs</h1>
+        <p class="muted">Configure an authorized strategy run for the paper account.</p>
     </div>
     <details class="paper-limits" data-trading-limits data-mode="paper">
         <summary>Account limits: <span data-trading-limits-summary>loading…</span> <span class="paper-edit">Edit</span></summary>
@@ -55,22 +49,22 @@
 
 <div class="paper-layout">
 <form method="post" data-run-workflow class="paper-card paper-start" aria-labelledby="paper-start-title">
-    <h2 id="paper-start-title">Start a paper run</h2>
+    <h2 id="paper-start-title">Start a strategy run</h2>
     <input type="hidden" name="BaseConfigPath" id="BaseConfigPath" value="@Model.ConfigPath" />
     <input type="hidden" asp-for="ConfigPath" />
 
     <div class="paper-steps">
         <div class="paper-step-label">1 · Stocks</div>
-        <div class="paper-step-fields">
+        <div class="paper-step-fields paper-stock-fields">
             @* Finviz screen alone trades exactly what the screen returns and ignores the wishlist. *@
             <fieldset class="paper-segmented" id="UniverseSource">
                 <legend>Stocks from</legend>
-                <label><input type="radio" name="UniverseSource" value="wishlist" checked="@(Model.UniverseSource == "wishlist")" /><span>Wishlist</span></label>
+                <label><input type="radio" name="UniverseSource" value="wishlist" checked="@(Model.UniverseSource == "wishlist")" /><span>Stock group</span></label>
                 <label><input type="radio" name="UniverseSource" value="screener" checked="@(Model.UniverseSource == "screener")" /><span>Finviz screen</span></label>
                 <label><input type="radio" name="UniverseSource" value="both" checked="@(Model.UniverseSource == "both")" /><span>Both</span></label>
             </fieldset>
             <div data-source-part="wishlist">
-                <label for="WishlistId">Wishlist</label>
+                <label for="WishlistId">Stock group</label>
                 <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&paperExecutionMode=' + encodeURIComponent(document.getElementById('PaperExecutionMode')?.value || 'shadow') + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
                     @foreach (var wishlist in Model.Wishlists)
                     {
@@ -80,7 +74,7 @@
                 <p class="muted paper-note" data-wishlist-tickers data-count="@wishlistTickers.Length">
                     @if (wishlistTickers.Length == 0)
                     {
-                        <span>This wishlist has no stocks. <a asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Add stocks in Manage wishlists</a>.</span>
+                        <span>This stock group has no stocks. <a asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Add stocks in Stock groups</a>.</span>
                     }
                     else
                     {
@@ -99,7 +93,7 @@
                         <option value="@preset.Name">@preset.Category · @preset.FilterQuery</option>
                     }
                 </datalist>
-                <p class="muted paper-note">Save screens by name in <a asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Manage wishlists</a>, or paste a Finviz query for a one-off run.</p>
+                <p class="muted paper-note">Save screens by name in <a asp-page="/Wishlists" asp-route-id="@Model.SelectedWishlist?.Id">Stock groups</a>, or paste a Finviz query for a one-off run.</p>
             </div>
         </div>
 
@@ -134,11 +128,16 @@
                 @(experimentMode
                     ? "Experiment runs are labelled as experiments and never count as evidence for promoting a strategy."
                     : "Shadow runs use a strategy whose exact version was authorized after research review.")
-                @if (selectedStrategy is not null)
-                {
-                    <br /><span>@AuditLine(selectedStrategy) · content hash @selectedStrategy.Identity.ContentSha256[..12]</span>
-                }
             </p>
+            @if (selectedStrategy is not null)
+            {
+                <details class="execution-help paper-strategy-identity">
+                    <summary>Exact strategy identity &amp; research evidence</summary>
+                    <p class="paper-note">@selectedStrategy.Definition.StrategyName · @selectedStrategy.Identity.SemanticVersion</p>
+                    <p class="paper-note">@selectedStrategy.Definition.StrategyId · SHA-256 @selectedStrategy.Identity.ContentSha256</p>
+                    <p class="paper-note">@(selectedStrategy.Audit is { } audit ? $"{audit.Trades} trades recorded · win rate {audit.WinRatePct:0.#}%. Review dated monthly research reports before interpreting performance." : "No backtest summary recorded.")</p>
+                </details>
+            }
             <label class="checkbox-field paper-check">
                 <input type="checkbox" id="NewsEnabledCheckbox" name="NewsEnabled" value="true" checked="@Model.NewsEnabled" disabled="@(!Model.SelectedStrategyUsesNews)" />
                 <span>Use news catalysts and vetoes</span>
@@ -184,7 +183,7 @@
         <p class="muted" id="PaperRunSummary" data-blocked="@(startBlockedReason is not null ? "true" : "false")">@(startBlockedReason ?? "")</p>
         <button type="submit" asp-page-handler="RunLive" class="button go"
                 disabled="@(Model.Strategies.Count == 0)"
-                aria-describedby="PaperRunSummary">Start paper run</button>
+                aria-describedby="PaperRunSummary">Start strategy run</button>
     </div>
 </form>
 
@@ -313,6 +312,8 @@
 </div>
 </div>
 </div>
+<link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
+
 @section Scripts {
     <script src="~/js/trading-limits.js" asp-append-version="true" defer></script>
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
