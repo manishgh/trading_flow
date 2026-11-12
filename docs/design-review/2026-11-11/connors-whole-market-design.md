@@ -106,6 +106,24 @@ FAIL and RETAIN_RESEARCH stay as above. A 40% drawdown limit cannot bound a shor
 - **What gets skipped:** only named data-unavailable reasons. Engine errors and timeouts still stop the run.
 - **Reporting skips:** skipped stocks are counted against the pool and flagged above 5%.
 
+### Amended 12 November 2026, later: one year, hourly entry (user decisions; replaces the periods and pass/fail above)
+
+- **Swing tests use one year.** The test year is 3 Nov 2025 - 30 Oct 2026. Daily candles from before it serve only to warm up the 200-day average; the 2016-2026 data stays for that and for later checks.
+- **Stocks:** complete-stocks rule over the test year plus its warm-up, i.e. complete from 2 Jan 2025. Same eligibility rules as above.
+- **Entry on hourly candles:**
+  - the daily rules are evaluated on the 15:00 New York hourly close, with that price standing in for the day's close (RSI(2), SMA200 and SMA5 on prior daily closes plus the 15:00 price);
+  - the buy fills in the 15:00-16:00 hour of the same day. This is the closest honest version of the book's buy-at-the-close, because it never uses the final close before it exists;
+  - exits use the same timing: close > SMA5 is checked on the 15:00 price and the position sells in the last hour.
+- **Pass/fail for one year:**
+  - **PASS** needs all of these:
+    - average net return per trade above 0, with a t-statistic of at least 3 on weekly portfolio returns;
+    - a profit factor of at least 1.2;
+    - long versions beat SPY over the same holding days;
+    - at least 300 trades.
+  - **FAIL:** an average at or below 0, a drawdown above 40%, or fewer than 300 trades.
+  - Anything else is RETAIN_RESEARCH.
+- **Holdout:** none in this year. A pass leads to paper shadowing, never to live trading, and needs a separate lifecycle decision.
+
 ## Decisions needed from you
 
 1. **2016 download:** run it (about 10 years, roughly 20-30 million bars, an hour or two), or test on the 16 months already held.
