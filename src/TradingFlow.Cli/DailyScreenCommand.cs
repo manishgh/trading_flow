@@ -63,9 +63,11 @@ public static class DailyScreenCommand
         var suspectedExcluded = 0;
         await using (var eligible = new StreamWriter(Path.Combine(folder, "eligible.csv")))
         await using (var splitDays = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SplitExclusionsFileName)))
+        await using (var suspectList = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SuspectedSplitsFileName)))
         {
             await eligible.WriteLineAsync("session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions");
             if (splitDays is not null) await splitDays.WriteLineAsync("session_date,ticker,reason");
+            if (suspectList is not null) await suspectList.WriteLineAsync("session_date,ticker,prior_close,open,move,volume_before,volume_after");
             await foreach (var partition in reader.ReadMarketBarPartitionsAsync(bars, cancellationToken))
             {
                 foreach (var group in partition.GroupBy(row => row.Symbol, StringComparer.Ordinal))
@@ -75,7 +77,11 @@ public static class DailyScreenCommand
                     var sessions = series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
                     var tradedSessions = ranking is null ? [] : sessions;
                     var stockSplits = splits.GetValueOrDefault(group.Key, []);
-                    var suspects = splitLookback is null ? [] : UnrecordedSplitSessions(series, stockSplits);
+                    var events = splitLookback is null ? [] : SuspectedSplitEvents(series, stockSplits);
+                    var suspects = events.Select(item => item.Session).ToArray();
+                    foreach (var item in events)
+                        await suspectList!.WriteLineAsync(string.Join(',', item.Session.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), group.Key,
+                            Text(item.PriorClose), Text(item.Open), Text(item.Move), Text(item.VolumeBefore), Text(item.VolumeAfter)));
                     foreach (var (date, values) in Screen(group.Key, series, stockSplits, rules, from, to))
                     {
                         if (splitLookback is { } lookback && SplitInLookback(sessions, date, stockSplits, lookback))
@@ -153,19 +159,38 @@ public static class DailyScreenCommand
     /// corporate actions record no split with that ex-date. Such a jump looks like a split the dataset does not list, so prices
     /// before it may be on another share basis. Input bars are one stock's daily bars in session order.
     /// </summary>
-    public static DateOnly[] UnrecordedSplitSessions(IReadOnlyList<OhlcvBar> series, IReadOnlyList<ShareSplit> splits)
+    public static DateOnly[] UnrecordedSplitSessions(IReadOnlyList<OhlcvBar> series, IReadOnlyList<ShareSplit> splits) =>
+        SuspectedSplitEvents(series, splits).Select(item => item.Session).ToArray();
+
+    /// <summary>One suspected unrecorded split: the overnight move and the mean share volume of up to 20 sessions on each side.</summary>
+    public sealed record SuspectedSplitEvent(DateOnly Session, decimal PriorClose, decimal Open, decimal Move, decimal VolumeBefore, decimal VolumeAfter);
+
+    /// <summary>
+    /// The jumps <see cref="UnrecordedSplitSessions"/> reports, with the values needed to tell a split from a real crash or
+    /// spike afterwards: a split moves the price by a simple ratio and share volume by its inverse; a real move does neither.
+    /// </summary>
+    public static IReadOnlyList<SuspectedSplitEvent> SuspectedSplitEvents(IReadOnlyList<OhlcvBar> series, IReadOnlyList<ShareSplit> splits)
     {
         var recorded = splits.Select(split => split.ExDate).ToHashSet();
-        var suspects = new List<DateOnly>();
+        var suspects = new List<SuspectedSplitEvent>();
         for (var i = 1; i < series.Count; i++)
         {
             if (series[i - 1].Close <= 0) continue;
             var move = series[i].Open / series[i - 1].Close;
             var session = DateOnly.FromDateTime(series[i].Timestamp.UtcDateTime);
-            if ((move <= 0.55m || move >= 1.90m) && !recorded.Contains(session)) suspects.Add(session);
+            if ((move <= 0.55m || move >= 1.90m) && !recorded.Contains(session))
+                suspects.Add(new(session, series[i - 1].Close, series[i].Open, move, MeanVolume(series, Math.Max(0, i - 20), i),
+                    MeanVolume(series, i, Math.Min(series.Count, i + 20))));
         }
-        return suspects.ToArray();
+        return suspects;
     }
+
+    // Mean share volume of bars [from, to); zero for an empty range.
+    private static decimal MeanVolume(IReadOnlyList<OhlcvBar> series, int from, int to) =>
+        to > from ? Enumerable.Range(from, to - from).Average(index => series[index].Volume) : 0m;
+
+    /// <summary>Diagnostic list of every suspected unrecorded split (not read by backtests): one row per stock and jump.</summary>
+    public const string SuspectedSplitsFileName = "suspected-splits.csv";
 
     /// <summary>
     /// True when a suspected unrecorded split falls inside the <paramref name="lookbackSessions"/> sessions before

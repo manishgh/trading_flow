@@ -91,4 +91,22 @@ public sealed class DailyScreenCommandTests
             screened.Select(item => item.Date));
         Assert.All(screened, item => Assert.Equal(200, item.Values.HistorySessions));
     }
+
+    // A suspected unrecorded split is listed with its overnight move and the mean volume on each side, so a 1-for-10 reverse
+    // split (price x10, volume /10) can be told apart from a real move afterwards.
+    [Fact]
+    public void SuspectedSplitEvents_RecordTheMoveAndVolumeOnEachSide()
+    {
+        var start = new DateTimeOffset(2026, 1, 1, 5, 0, 0, TimeSpan.Zero);
+        var series = Enumerable.Range(0, 6).Select(index => index < 3
+            ? new OhlcvBar("ABC", start.AddDays(index), "1Day", 1m, 1m, 1m, 1m, 1_000m)
+            : new OhlcvBar("ABC", start.AddDays(index), "1Day", 10m, 10m, 10m, 10m, 100m)).ToArray();
+
+        var item = Assert.Single(TradingFlow.Cli.DailyScreenCommand.SuspectedSplitEvents(series, []));
+
+        Assert.Equal(DateOnly.FromDateTime(series[3].Timestamp.UtcDateTime), item.Session);
+        Assert.Equal(10m, item.Move);
+        Assert.Equal(1_000m, item.VolumeBefore);
+        Assert.Equal(100m, item.VolumeAfter);
+    }
 }
