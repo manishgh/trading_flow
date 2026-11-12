@@ -277,7 +277,49 @@ eligibility rules.
 
 The download tool runs through `.tmp/run-cli.ps1`, which loads the Alpaca keys into its own process only.
 
-### 6.2 Other open items
+### 6.2 Connors RSI(2) on the whole US market (status 12 November)
+
+**Focus.** ORB 2.2.0 is paused, and swing strategies are the focus now. The design is
+`docs/design-review/2026-11-11/connors-whole-market-design.md`, approved with amendments.
+
+**Versions.** Connors long 9.1.0 (`0d052799…`), the risk-managed long 7.1.0 (`f3dc47e3…`) and short 2.1.0 (`f3e7c6c7…`). They have the same rules as 9.0.0, 7.0.0 and short 2.0.0, but run on as-traded prices.
+
+**Data.**
+- Whole-market daily bars, 2016-2026: dataset `64ac6058…`, 21.2 million bars.
+- XNYS calendar, 2016-2026: dataset `e565a03b…`, 2,723 sessions.
+
+**Stock list:** complete-stocks screen `connors-complete-stocks-20170101-20261030` (user rule, 12 November).
+- **Rule:** only stocks with a daily bar on every session from March 2016 to October 2026, no recorded split and no suspected unrecorded split, meaning an overnight move of -45% or worse, or +90% or more.
+- **Kept:** 2,281 stocks; 7,174 left out, each with a reason.
+- **Daily eligibility:** prior close at least $5, 20-day average volume at least 1M shares, 200 sessions of history, funds excluded. That gives 510-863 eligible stocks a day, and 1,248 different stocks during 2017-2023.
+- **Bias:** survivor bias is strong and accepted. Only stocks that traded cleanly for the whole decade remain, which flatters the long side.
+
+**Execution.**
+- **Portfolio:** one portfolio per version; $100,000; at most 10 positions of 10% each.
+- **Priority:** when there are more signals than free slots, the lowest RSI(2) goes first (the highest for the short).
+- **Costs:** 10 basis points of slippage per side, no commission.
+- **Splits:** a position held across a split is closed before the ex-date.
+- **Data gaps:** a position is held through a gap and exits at the next real open.
+- **Missing data:** it never stops a run; the stock is skipped and listed.
+
+**Pass/fail rules, frozen before any run:**
+- **Development:** 2017-2023. **Holdout:** 2024 to October 2026, opened once, and only after a pass.
+- **PASS needs all of these:**
+  - average monthly net return above 0 with a t-statistic of at least 3;
+  - a profit factor of at least 1.2;
+  - at least 5 of 7 positive years;
+  - long versions beat SPY over the same holding days;
+  - an equal-weight study of every signal is positive.
+- **FAIL:** an average at or below 0, a drawdown above 40%, or fewer than 300 trades. A failed version is retired.
+
+**Status.** All the code is reviewed by an independent engineering reviewer and a quant reviewer, and fixed. The one-month trial (January 2017, 9.1.0) is starting; the development runs follow.
+
+**Questions for Fable.**
+- What do independent tests report for RSI(2) mean reversion on US stocks since 2008?
+- How much does next-open entry, instead of same-day close entry, reduce the edge?
+- How large is the survivor bias of a "complete for ten years" universe for a buy-the-dip strategy?
+
+### 6.3 Other open items
 
 - Pass/fail rules for the swing strategies are not yet frozen, so no version can be retired or advanced from the current results.
 - Everything up to `6ddd22a` is pushed to main.
