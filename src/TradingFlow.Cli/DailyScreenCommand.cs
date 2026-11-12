@@ -61,6 +61,10 @@ public static class DailyScreenCommand
             ? Int32.Parse(lookbackText, CultureInfo.InvariantCulture) : null;
         var splitExcluded = 0;
         var suspectedExcluded = 0;
+        var required = await RequiredSessionsAsync(options, catalog, reader, to, cancellationToken);
+        var completeStocks = 0;
+        var incompleteStocks = 0;
+        await using (var incomplete = required is null ? null : new StreamWriter(Path.Combine(folder, IncompleteStocksFileName)))
         await using (var eligible = new StreamWriter(Path.Combine(folder, "eligible.csv")))
         await using (var splitDays = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SplitExclusionsFileName)))
         await using (var suspectList = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SuspectedSplitsFileName)))
@@ -68,6 +72,7 @@ public static class DailyScreenCommand
             await eligible.WriteLineAsync("session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions");
             if (splitDays is not null) await splitDays.WriteLineAsync("session_date,ticker,reason");
             if (suspectList is not null) await suspectList.WriteLineAsync("session_date,ticker,prior_close,open,move,volume_before,volume_after");
+            if (incomplete is not null) await incomplete.WriteLineAsync("ticker,reason");
             await foreach (var partition in reader.ReadMarketBarPartitionsAsync(bars, cancellationToken))
             {
                 foreach (var group in partition.GroupBy(row => row.Symbol, StringComparer.Ordinal))
@@ -77,11 +82,22 @@ public static class DailyScreenCommand
                     var sessions = series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
                     var tradedSessions = ranking is null ? [] : sessions;
                     var stockSplits = splits.GetValueOrDefault(group.Key, []);
-                    var events = splitLookback is null ? [] : SuspectedSplitEvents(series, stockSplits);
+                    var events = splitLookback is null && required is null ? [] : SuspectedSplitEvents(series, stockSplits);
                     var suspects = events.Select(item => item.Session).ToArray();
-                    foreach (var item in events)
-                        await suspectList!.WriteLineAsync(string.Join(',', item.Session.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), group.Key,
+                    if (suspectList is not null)
+                        foreach (var item in events)
+                            await suspectList.WriteLineAsync(string.Join(',', item.Session.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), group.Key,
                             Text(item.PriorClose), Text(item.Open), Text(item.Move), Text(item.VolumeBefore), Text(item.VolumeAfter)));
+                    if (required is not null)
+                    {
+                        if (IncompleteReason(sessions, required, stockSplits, suspects) is { } reason)
+                        {
+                            incompleteStocks++;
+                            await incomplete!.WriteLineAsync($"{group.Key},{reason}");
+                            continue;
+                        }
+                        completeStocks++;
+                    }
                     foreach (var (date, values) in Screen(group.Key, series, stockSplits, rules, from, to))
                     {
                         if (splitLookback is { } lookback && SplitInLookback(sessions, date, stockSplits, lookback))
@@ -119,8 +135,11 @@ public static class DailyScreenCommand
         if (splitLookback is not null)
             output.WriteLine($"Left out {splitExcluded} eligible stock-days whose {splitLookback}-session look-back contains a split ({SplitInLookbackReason}) and " +
                 $"{suspectedExcluded} whose look-back holds an overnight jump with no recorded split ({SuspectedUnrecordedSplitReason}).");
+        if (required is not null)
+            output.WriteLine($"Complete stocks from {required.Min():yyyy-MM-dd}: {completeStocks} kept, {incompleteStocks} left out ({IncompleteStocksFileName}).");
         var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile,
-            new ResearchScreenSplitRule(splitLookback, splitExcluded, suspectedExcluded), cancellationToken);
+            new ResearchScreenSplitRule(splitLookback, splitExcluded, suspectedExcluded, required?.Min(),
+                required is null ? null : completeStocks, required is null ? null : incompleteStocks), cancellationToken);
         output.WriteLine($"Manifest {ResearchScreenManifest.FileName} SHA-256 {manifestSha}.");
         return 0;
     }
@@ -188,6 +207,43 @@ public static class DailyScreenCommand
     // Mean share volume of bars [from, to); zero for an empty range.
     private static decimal MeanVolume(IReadOnlyList<OhlcvBar> series, int from, int to) =>
         to > from ? Enumerable.Range(from, to - from).Average(index => series[index].Volume) : 0m;
+
+    /// <summary>Stocks left out by --require-complete-from, one row per stock with the first reason found.</summary>
+    public const string IncompleteStocksFileName = "incomplete-stocks.csv";
+
+    /// <summary>
+    /// The exchange sessions every kept stock must have a bar on under --require-complete-from yyyy-MM-dd: the XNYS sessions
+    /// (from the --sessions dataset, which is then required) from that date to the window end. Null when the option is absent.
+    /// </summary>
+    private static async Task<SortedSet<DateOnly>?> RequiredSessionsAsync(IReadOnlyDictionary<string, string> options,
+        SqliteEvidenceCatalog catalog, ParquetEvidencePartitionDataReader reader, DateOnly to, CancellationToken cancellationToken)
+    {
+        if (!options.TryGetValue("--require-complete-from", out var fromText)) return null;
+        var from = Date(fromText);
+        var sessions = await Manifest(catalog, Require(options, "--sessions"), cancellationToken);
+        var days = (await reader.ReadExchangeSessionsAsync(sessions, cancellationToken))
+            .Select(row => row.TradeDate).Where(day => day >= from && day <= to).ToArray();
+        if (days.Length == 0 || days.Max() < to.AddDays(-7))
+            throw new InvalidDataException($"Exchange sessions dataset '{sessions.DatasetId}' does not cover {from:yyyy-MM-dd} to {to:yyyy-MM-dd}.");
+        return new SortedSet<DateOnly>(days);
+    }
+
+    /// <summary>
+    /// Why a stock fails the complete-stocks rule, or null when it passes: it must have a daily bar on every required session,
+    /// no recorded split and no suspected unrecorded split dated within the required sessions. <paramref name="sessions"/> are
+    /// the stock's own bar dates (New York session dates).
+    /// </summary>
+    public static string? IncompleteReason(IReadOnlyCollection<DateOnly> sessions, SortedSet<DateOnly> required,
+        IReadOnlyList<ShareSplit> splits, IReadOnlyCollection<DateOnly> suspects)
+    {
+        var first = required.Min;
+        var last = required.Max;
+        var missing = required.Count - sessions.Count(day => day >= first && day <= last && required.Contains(day));
+        if (missing > 0) return $"missing_sessions_{missing}";
+        if (splits.Any(split => split.ExDate >= first && split.ExDate <= last)) return "split_recorded";
+        if (suspects.Any(day => day >= first && day <= last)) return SuspectedUnrecordedSplitReason;
+        return null;
+    }
 
     /// <summary>Diagnostic list of every suspected unrecorded split (not read by backtests): one row per stock and jump.</summary>
     public const string SuspectedSplitsFileName = "suspected-splits.csv";

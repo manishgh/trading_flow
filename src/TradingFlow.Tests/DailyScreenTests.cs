@@ -92,6 +92,22 @@ public sealed class DailyScreenCommandTests
         Assert.All(screened, item => Assert.Equal(200, item.Values.HistorySessions));
     }
 
+    // The complete-stocks rule keeps a stock only with a bar on every required session and no split or suspected split in
+    // that span; each failure names its first reason.
+    [Fact]
+    public void IncompleteReason_KeepsOnlyStocksWithEveryRequiredSessionAndNoSplit()
+    {
+        var days = Enumerable.Range(0, 5).Select(index => new DateOnly(2026, 1, 5).AddDays(index)).ToArray();
+        var required = new SortedSet<DateOnly>(days);
+
+        Assert.Null(TradingFlow.Cli.DailyScreenCommand.IncompleteReason(days, required, [], []));
+        Assert.Equal("missing_sessions_1", TradingFlow.Cli.DailyScreenCommand.IncompleteReason(days.Where(day => day != days[2]).ToArray(), required, [], []));
+        Assert.Equal("split_recorded", TradingFlow.Cli.DailyScreenCommand.IncompleteReason(days, required, [new ShareSplit(days[3], 2m)], []));
+        Assert.Equal("suspected_unrecorded_split", TradingFlow.Cli.DailyScreenCommand.IncompleteReason(days, required, [], [days[1]]));
+        // A split before the required span does not count.
+        Assert.Null(TradingFlow.Cli.DailyScreenCommand.IncompleteReason(days, required, [new ShareSplit(days[0].AddDays(-30), 2m)], []));
+    }
+
     // A suspected unrecorded split is listed with its overnight move and the mean volume on each side, so a 1-for-10 reverse
     // split (price x10, volume /10) can be told apart from a real move afterwards.
     [Fact]

@@ -37,7 +37,15 @@ public sealed record ResearchRankingRuleValues(string Measure, int BaselineSessi
 /// <see cref="SuspectedUnrecordedSplitDays"/> counts eligible days left out because the same look-back holds an overnight
 /// jump (open 45% below or 90% above the previous close) with no recorded split (reason suspected_unrecorded_split).
 /// </summary>
-public sealed record ResearchScreenSplitRule(int? LookbackSessions, int ExcludedStockDays, int SuspectedUnrecordedSplitDays = 0);
+public sealed record ResearchScreenSplitRule(int? LookbackSessions, int ExcludedStockDays, int SuspectedUnrecordedSplitDays = 0,
+    // Complete-stocks rule (--require-complete-from): only stocks with a bar on every exchange session from this date to the
+    // window end, no recorded split and no suspected unrecorded split are screened; omitted when the rule was not used.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    DateOnly? CompleteStocksFrom = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? CompleteStocks = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    int? IncompleteStocks = null);
 
 /// <summary>A file named in the manifest with its SHA-256 (lower-case hex of its exact bytes).</summary>
 public sealed record ResearchScreenFile(string FileName, string Sha256);
@@ -70,7 +78,8 @@ public sealed record ResearchScreenManifest(
 
     /// <summary>The output files research-daily-screen may write, in publication order.</summary>
     public static readonly IReadOnlyList<string> OutputFileNames =
-        ["eligible.csv", "daily-counts.csv", RankedListFileName, RankedCountsFileName, "ranked-daily-exclusions.csv", "split-exclusions.csv"];
+        ["eligible.csv", "daily-counts.csv", RankedListFileName, RankedCountsFileName, "ranked-daily-exclusions.csv", "split-exclusions.csv",
+            "incomplete-stocks.csv"];
 
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
