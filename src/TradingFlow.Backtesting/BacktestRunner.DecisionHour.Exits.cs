@@ -1,4 +1,4 @@
-﻿using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Execution;
@@ -46,9 +46,9 @@ public sealed partial class BacktestRunner
         if (exit is null)
             return BuildOpenCandidate(run, candidateId, strategy, signal, direction, fillBar.Timestamp, entryPrice, stop, target,
                 stopDistance.Value, volume) with { FillTimeframe = ExecutionRules.DecisionHourFillTimeframe };
-        auditor.LogEvent(signal.Ticker, strategy.StrategyName, exit.Bar.Timestamp, ExecutionState.PositionClosed,
+        auditor.LogEvent(signal.Ticker, strategy.StrategyName, exit.At, ExecutionState.PositionClosed,
             $"Exit via {exit.Reason} at {exit.Price}", candidateId);
-        return BuildCandidate(candidateId, strategy, signal, direction, fillBar.Timestamp, entryPrice, stop, target, exit.Bar.Timestamp,
+        return BuildCandidate(candidateId, strategy, signal, direction, fillBar.Timestamp, entryPrice, stop, target, exit.At,
             exit.Price, exit.Reason, stopDistance.Value, volume) with { FillTimeframe = ExecutionRules.DecisionHourFillTimeframe };
     }
 
@@ -77,27 +77,40 @@ public sealed partial class BacktestRunner
         decimal target, decimal relativeVolume, decimal approximateTradeAmount)
     {
         var entry = context.Sessions[entrySession];
-        var fillTime = entry.Decision!.LastHourBar.Timestamp;
+        var fillBar = entry.Decision!.LastHourBar;
+        // The fill bar's range after the fill can already reach the stop or target (stop first); known at the bar's end.
+        if (ProtectiveExitOn(context.Strategy, fillBar, isShort, stop, target) is { } onFillBar)
+            return onFillBar with { At = fillBar.Timestamp.AddHours(1) };
         var next = entrySession + 1;
         var barsHeld = 0;
-        foreach (var bar in context.HourlyBars.Where(bar => bar.Timestamp > fillTime))
+        foreach (var bar in ExitSlicesAfter(context, entrySession, fillBar.Timestamp))
         {
             for (; next < context.Sessions.Count && context.Sessions[next].DecisionTimeUtc <= bar.Timestamp; next++)
             {
-                if (context.Sessions[next] is not { Decision: { } decision, Snapshot: { } snapshot } session) continue;
+                // Every held session counts towards the bar limit, also one without a decision (missing hourly bars), so
+                // the limit is never silently extended; its exit then fills at the next session that can decide.
                 barsHeld++;
+                if (context.Sessions[next] is not { Decision: { } decision, Snapshot: { } snapshot } session) continue;
                 var reason = DecisionHourExitReason(context, session, snapshot, isShort, barsHeld, entry.DecisionTimeUtc);
                 if (reason is null) continue;
                 var lastHour = decision.LastHourBar;
                 var price = isShort
                     ? ApplyShortExitSlippage(lastHour.Open, snapshot.RelativeVolume ?? relativeVolume, context.Strategy, approximateTradeAmount)
                     : ApplyLongExitSlippage(lastHour.Open, snapshot.RelativeVolume ?? relativeVolume, context.Strategy, approximateTradeAmount);
-                return new(lastHour, price, reason);
+                return new(lastHour, price, reason, lastHour.Timestamp);
             }
             if (ProtectiveExitOn(context.Strategy, bar, isShort, stop, target) is { } protective) return protective;
         }
         return null;
     }
+
+    /// <summary>
+    /// The slices resting orders are checked on after the entry fill, in time order: each later session's unresolved window
+    /// (09:30 to its first hourly bar, or the whole session without hourly bars) and every hourly bar after the fill bar.
+    /// </summary>
+    private static IEnumerable<OhlcvBar> ExitSlicesAfter(DecisionHourExitContext context, int entrySession, DateTimeOffset fillTime) =>
+        context.Sessions.Skip(entrySession + 1).Where(session => session.Window is not null).Select(session => session.Window!.Bar)
+            .Concat(context.HourlyBars.Where(bar => bar.Timestamp > fillTime)).OrderBy(bar => bar.Timestamp);
 
     /// <summary>
     /// The technical or time exit a later session's decision reads from its provisional snapshot (shared exit rules: the long
@@ -116,12 +129,14 @@ public sealed partial class BacktestRunner
 
     /// <summary>
     /// The stop or target a completed hourly bar touches, stop first when both are touched (the worst case, as the shared
-    /// simulator fills them). Prices are the order prices; the execution coordinator decides the actual fills.
+    /// simulator fills them); a bar opening through a level fills at its open. Prices are estimates; the execution coordinator decides the actual fills.
     /// </summary>
     private static DecisionHourExit? ProtectiveExitOn(StrategyDefinition strategy, OhlcvBar bar, bool isShort, decimal stop, decimal target)
     {
-        if (strategy.ExitRules.HasProtectiveStop && (isShort ? bar.High >= stop : bar.Low <= stop)) return new(bar, stop, "stop_loss");
-        if (strategy.ExitRules.HasProfitTarget && (isShort ? bar.Low <= target : bar.High >= target)) return new(bar, target, "take_profit");
+        if (strategy.ExitRules.HasProtectiveStop && (isShort ? bar.High >= stop : bar.Low <= stop))
+            return new(bar, isShort ? Math.Max(stop, bar.Open) : Math.Min(stop, bar.Open), "stop_loss", bar.Timestamp);
+        if (strategy.ExitRules.HasProfitTarget && (isShort ? bar.Low <= target : bar.High >= target))
+            return new(bar, isShort ? Math.Min(target, bar.Open) : Math.Max(target, bar.Open), "take_profit", bar.Timestamp);
         return null;
     }
 }

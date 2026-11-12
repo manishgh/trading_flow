@@ -122,6 +122,12 @@ FAIL and RETAIN_RESEARCH stay as above. A 40% drawdown limit cannot bound a shor
     - at least 300 trades.
   - **FAIL:** an average at or below 0, a drawdown above 40%, or fewer than 300 trades.
   - Anything else is RETAIN_RESEARCH.
+- **Amended again (12 Nov, user decision after the quant review):** a t-statistic of 3 on 52 weekly returns needs a Sharpe ratio near 3, so one year can only reject.
+  - **FAIL** (the version is retired): an average net return per trade at or below 0, or a drawdown above 40%.
+  - **Fewer than 300 trades:** RETAIN_RESEARCH, not FAIL.
+  - **Long versions:** tested against SPY with a t-test on weekly return differences.
+  - **Report:** states the smallest edge the year could detect, and how many stocks the complete-stocks rule removed that were eligible on at least one test day.
+  - **No PASS** comes from one year.
 - **Holdout:** none in this year. A pass leads to paper shadowing, never to live trading, and needs a separate lifecycle decision.
 
 ## Decisions needed from you

@@ -55,6 +55,69 @@ public static class DecisionHourDailyBars
         return (new SessionDecision(session.TradeDate, provisional, lastHour, decisionTime), null);
     }
 
+    /// <summary>Window kind: every regular-session hourly bar is present, so only 09:30 to the first bar (10:00) is unseen.</summary>
+    public const string FirstHalfHourWindow = "first_half_hour";
+
+    /// <summary>Window kind: some regular-session hourly bars are missing, so their part of the session is unseen too.</summary>
+    public const string MissingHourlyBarsWindow = "missing_hourly_bar";
+
+    /// <summary>
+    /// The part of a session the hourly bars do not show, as one slice from the regular open to the first hourly bar (or the
+    /// close when there is none), for resting stop and limit orders only: open = the daily open; its low (high) is the daily
+    /// low (high) when no hourly bar reaches it, so a touch seen only in the completed daily bar is placed here, before every
+    /// hourly bar; close = the first hourly bar's open (the daily close without hourly bars). Never an input to a decision.
+    /// </summary>
+    public sealed record UnresolvedWindow(OhlcvBar Bar, DateTimeOffset EndUtc, string Kind);
+
+    /// <summary>True when an hourly bar starts inside the session's [regular open, scheduled close), early closes included.</summary>
+    public static bool IsRegularSessionHour(OhlcvBar hourlyBar, MarketSessionSchedule session, TimeZoneInfo exchangeZone)
+    {
+        if (!session.IsTradingDay) return false;
+        var (open, close) = RegularSessionUtc(session, exchangeZone);
+        return hourlyBar.Timestamp >= open && hourlyBar.Timestamp < close;
+    }
+
+    /// <summary>
+    /// The unresolved window of a session (see <see cref="UnresolvedWindow"/>) from its completed daily bar and its
+    /// regular-session hourly bars; null when the first hourly bar starts at the open, so nothing is unseen before it.
+    /// </summary>
+    public static UnresolvedWindow? OpeningWindow(OhlcvBar dailyBar, IReadOnlyList<OhlcvBar> regularHourlyBars,
+        MarketSessionSchedule session, TimeZoneInfo exchangeZone)
+    {
+        var (open, close) = RegularSessionUtc(session, exchangeZone);
+        var hourly = regularHourlyBars.OrderBy(bar => bar.Timestamp).ToArray();
+        var end = hourly.Length > 0 ? hourly[0].Timestamp : close;
+        if (end <= open) return null;
+        var last = hourly.Length > 0 ? hourly[0].Open : dailyBar.Close;
+        var low = hourly.Length == 0 || dailyBar.Low < hourly.Min(bar => bar.Low) ? dailyBar.Low : last;
+        var high = hourly.Length == 0 || dailyBar.High > hourly.Max(bar => bar.High) ? dailyBar.High : last;
+        var unseenVolume = dailyBar.Volume - hourly.Sum(bar => bar.Volume);
+        var window = dailyBar with
+        {
+            Timestamp = open, Timeframe = "1h", High = Math.Max(high, Math.Max(dailyBar.Open, last)),
+            Low = Math.Min(low, Math.Min(dailyBar.Open, last)), Close = last, Volume = unseenVolume > 0 ? unseenVolume : dailyBar.Volume,
+            KnownAtUtc = null, CoverageVerifiedThroughUtc = null
+        };
+        var kind = hourly.Length == ExpectedHourStarts(open, close).Count() ? FirstHalfHourWindow : MissingHourlyBarsWindow;
+        return new(window, end, kind);
+    }
+
+    // The regular open and the scheduled (or early) close of a trading session, in UTC.
+    private static (DateTimeOffset Open, DateTimeOffset Close) RegularSessionUtc(MarketSessionSchedule session, TimeZoneInfo zone) =>
+        (Utc(session.TradeDate, session.RegularOpen, zone), Utc(session.TradeDate, session.RegularClose, zone));
+
+    // The clock-aligned hourly bar starts inside [open, close): 10:00 to 15:00 on a regular session.
+    private static IEnumerable<DateTimeOffset> ExpectedHourStarts(DateTimeOffset open, DateTimeOffset close)
+    {
+        var first = new DateTimeOffset(open.Year, open.Month, open.Day, open.Hour, 0, 0, TimeSpan.Zero);
+        if (first < open) first += Hour;
+        for (var start = first; start < close; start += Hour) yield return start;
+    }
+
+    // A local exchange time on a date, in UTC.
+    private static DateTimeOffset Utc(DateOnly date, TimeOnly time, TimeZoneInfo zone) =>
+        new(TimeZoneInfo.ConvertTimeToUtc(date.ToDateTime(time, DateTimeKind.Unspecified), zone), TimeSpan.Zero);
+
     /// <summary>
     /// The indicator values a decision reads: every indicator computed over the completed daily bars before the session plus
     /// the session's provisional bar, taking the last value. The final daily close of the session is never an input.

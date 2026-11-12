@@ -550,6 +550,8 @@ public sealed partial class BacktestRunner(
             evidenceScope: "candidate_hypothesis");
         var catalystStreamer = new CatalystStreamer(CreateNewsProvider(run));
         decisionHourIndicators = preparedMarket.MarketState.Indicators;
+        decisionHourEvidence = new DecisionHourEvidenceCache();
+        decisionHourDroppedHourlyBars = 0;
 
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
@@ -575,6 +577,9 @@ public sealed partial class BacktestRunner(
             preparedMarket.DataStart,
             preparedMarket.WindowEnd,
             cancellationToken);
+        // Decision-hour runs read only regular-session hourly bars (the calendar is loaded with the regime calendars above).
+        if (strategies.Any(IsDecisionHour))
+            (tickerContexts, decisionHourDroppedHourlyBars) = KeepRegularSessionHourlyBars(tickerContexts);
 
         foreach (var strategy in strategies)
         {
@@ -710,7 +715,8 @@ public sealed partial class BacktestRunner(
             : accounting is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
                 universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting) : null;
         var stoppingBatches = StoppingBatches(run, batches);
-        await PublishDataGapsAsync(run, batches, stoppingBatches, eventOutcome?.Trades ?? [], cancellationToken);
+        await PublishDataGapsAsync(run, batches, stoppingBatches, eventOutcome?.Trades ?? [], cancellationToken,
+            eventOutcome?.DecisionHourCounts);
         if (eventOutcome?.State is { } nativeState && stoppingBatches.Count > 0)
             eventOutcome = eventOutcome with { State = NativeDailySessionLedger.MarkUnavailableFrom(nativeState,
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(preparedMarket.WindowStart,

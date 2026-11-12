@@ -1,4 +1,4 @@
-﻿using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
@@ -20,12 +20,22 @@ public sealed partial class BacktestRunner
     // The pipeline's indicator engine (same evidence profile and calendar), used for provisional snapshots.
     private IndicatorEngine? decisionHourIndicators;
 
-    /// <summary>One session of one stock: its decision instant and either the decision evidence or the named skip reason.</summary>
-    private sealed record DecisionHourSession(DateOnly Session, int DailyIndex, DateTimeOffset DecisionTimeUtc,
-        DecisionHourDailyBars.SessionDecision? Decision, IndicatorSnapshot? Snapshot, string? SkipReason);
+    // Each stock-session's decision evidence, computed once per run and shared by every decision-hour strategy.
+    private DecisionHourEvidenceCache decisionHourEvidence = new();
 
-    /// <summary>A planned exit: the bar it fills on, the price estimate the candidate records and the exit reason.</summary>
-    private sealed record DecisionHourExit(OhlcvBar Bar, decimal Price, string Reason);
+    // Hourly bars outside their session's [regular open, scheduled close), dropped before any use (published evidence).
+    private int decisionHourDroppedHourlyBars;
+
+    /// <summary>
+    /// One session of one stock: its decision instant, the decision evidence or the named skip reason, and the unresolved
+    /// window (the part of the session no hourly bar shows) where resting stops and targets are checked on the daily bar.
+    /// </summary>
+    private sealed record DecisionHourSession(DateOnly Session, int DailyIndex, DateTimeOffset DecisionTimeUtc,
+        DecisionHourDailyBars.SessionDecision? Decision, IndicatorSnapshot? Snapshot, string? SkipReason,
+        DecisionHourDailyBars.UnresolvedWindow? Window);
+
+    /// <summary>A planned exit: the bar it fills on, the price estimate the candidate records, the reason and its stamp.</summary>
+    private sealed record DecisionHourExit(OhlcvBar Bar, decimal Price, string Reason, DateTimeOffset At);
 
     /// <summary>True when the strategy's immutable admission profile binds it to the decision-hour timing.</summary>
     private bool IsDecisionHour(StrategyDefinition strategy) =>
@@ -117,7 +127,8 @@ public sealed partial class BacktestRunner
     /// <summary>
     /// Builds the decision evidence of every trading session from the warm-up index on whose last hour completes inside the
     /// evaluation window: the provisional bar and snapshot (DecisionHourDailyBars, the pipeline's indicator engine on the prior
-    /// completed daily bars plus the provisional bar), or the named skip reason. Reads nothing after each decision time.
+    /// completed daily bars plus the provisional bar), or the named skip reason, from the run's shared cache. Decisions read
+    /// nothing after their decision time; the unresolved window (completed daily bar) serves resting orders only.
     /// </summary>
     private List<DecisionHourSession> BuildDecisionHourSessions(StrategyDefinition strategy, IReadOnlyList<OhlcvBar> dailyBars,
         IReadOnlyList<OhlcvBar> hourlyBars, int startIndex, DateTimeOffset evaluationStart, DateTimeOffset evaluationEnd,
@@ -139,12 +150,42 @@ public sealed partial class BacktestRunner
             var decisionTime = DecisionHourDailyBars.DecisionTimeUtc(schedule, zone);
             if (decisionTime < evaluationStart) continue;
             if (decisionTime.AddHours(1) > evaluationEnd) break;
-            var (decision, skip) = DecisionHourDailyBars.Build(dailyBars[index], hourlyBySession.GetValueOrDefault(date, []), schedule, zone);
-            var snapshot = decision is null ? null
-                : DecisionHourDailyBars.ProvisionalSnapshot(engine, dailyBars.Take(index).ToArray(), decision.ProvisionalDailyBar);
-            sessions.Add(new(date, index, decisionTime, decision, snapshot, skip));
+            var at = index;
+            var evidence = decisionHourEvidence.Get(dailyBars[index].Ticker, date, () =>
+                DecisionHourEvidenceCache.Compute(engine, dailyBars, at, hourlyBySession.GetValueOrDefault(date, []), schedule, zone));
+            sessions.Add(new(date, index, decisionTime, evidence.Decision, evidence.Snapshot, evidence.SkipReason, evidence.Window));
         }
         return sessions;
+    }
+
+    /// <summary>
+    /// Keeps only hourly bars that start inside their session's [regular open, scheduled close) (dropping pre-market,
+    /// after-hours and post-early-close bars, with their snapshots) in every prepared stock context, before any decision, stop
+    /// or fill reads them; returns the contexts and the number of bars dropped. Other timeframes are unchanged.
+    /// </summary>
+    private (IReadOnlyDictionary<string, PreparedTickerEvaluationContext> Contexts, int Dropped) KeepRegularSessionHourlyBars(
+        IReadOnlyDictionary<string, PreparedTickerEvaluationContext> contexts)
+    {
+        var schedules = candidateSessionSchedules ?? throw new InvalidDataException("The decision-hour timing requires an authoritative exchange calendar.");
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        bool Regular(OhlcvBar bar) => !bar.Timeframe.Equals(ExecutionRules.DecisionHourFillTimeframe, StringComparison.OrdinalIgnoreCase) ||
+            schedules.TryGetValue(ExchangeDate(bar.Timestamp, zone), out var schedule) && DecisionHourDailyBars.IsRegularSessionHour(bar, schedule, zone);
+        var dropped = 0;
+        var kept = contexts.ToDictionary(pair => pair.Key, pair =>
+        {
+            var context = pair.Value;
+            if (context.ErrorMessage is not null ||
+                !context.BarsByTimeframe.TryGetValue(ExecutionRules.DecisionHourFillTimeframe, out var hourly)) return context;
+            var keep = hourly.Select(Regular).ToArray();
+            dropped += keep.Count(value => !value);
+            var bars = new Dictionary<string, IReadOnlyList<OhlcvBar>>(context.BarsByTimeframe, StringComparer.OrdinalIgnoreCase)
+                { [ExecutionRules.DecisionHourFillTimeframe] = hourly.Where((_, i) => keep[i]).ToArray() };
+            var snapshots = new Dictionary<string, IReadOnlyList<IndicatorSnapshot>>(context.SnapshotsByTimeframe, StringComparer.OrdinalIgnoreCase);
+            if (snapshots.TryGetValue(ExecutionRules.DecisionHourFillTimeframe, out var hourlySnapshots) && hourlySnapshots.Count == keep.Length)
+                snapshots[ExecutionRules.DecisionHourFillTimeframe] = hourlySnapshots.Where((_, i) => keep[i]).ToArray();
+            return context with { BarsByTimeframe = bars, SnapshotsByTimeframe = snapshots, ProcessedBars = context.ProcessedBars.Where(Regular).ToArray() };
+        }, StringComparer.OrdinalIgnoreCase);
+        return (kept, dropped);
     }
 
     /// <summary>The exchange-calendar date of an instant.</summary>

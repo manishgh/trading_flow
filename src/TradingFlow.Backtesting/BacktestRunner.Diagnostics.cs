@@ -598,11 +598,12 @@ public sealed partial class BacktestRunner
         NativeDailyAccountingContext? accounting = null)
     {
         var admissionAudit = new PortfolioAdmissionAudit();
+        var holdingRules = accounting is { ResearchScreenHoldingRules: true }
+            ? new HoldingDataRules(NativeDailySessionLedger.ResolveSessions(accounting), accounting.SplitExDates) { Schedules = accounting.Sessions }
+            : null;
         var execution = new ChronologicalBacktestExecutionCoordinator(
-            portfolio, marketBars, executionEvidence: executionEvidence,
-            holdingRules: accounting is { ResearchScreenHoldingRules: true }
-                ? new HoldingDataRules(NativeDailySessionLedger.ResolveSessions(accounting), accounting.SplitExDates)
-                    { Schedules = accounting.Sessions } : null);
+            portfolio, marketBars, executionEvidence: executionEvidence, holdingRules: holdingRules,
+            decisionHour: DecisionHourInputs(candidates, accounting));
 
         foreach (var entryGroup in candidates
                      .OrderBy(candidate => candidate.EntryTimestamp.ToUniversalTime())
@@ -637,6 +638,13 @@ public sealed partial class BacktestRunner
                 if (regimeCalendar is not null && !regimeCalendar.IsOn(candidate.EntryTimestamp))
                 {
                     admissionAudit.Reject(candidate, "market_regime_off_on_entry_day");
+                    continue;
+                }
+
+                // A decision-hour entry on the eve of a split would be sold at once by the split rule; it is not admitted.
+                if (candidate.FillTimeframe is not null && holdingRules is not null && NextSessionIsExDate(candidate, holdingRules))
+                {
+                    admissionAudit.Reject(candidate, SplitEveEntryRefusedReason);
                     continue;
                 }
 
@@ -729,8 +737,35 @@ public sealed partial class BacktestRunner
             admissionAudit,
             execution.Failures)
         {
-            State = accounting is null ? null : BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting)
+            State = accounting is null ? null : BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting),
+            DecisionHourCounts = execution.DecisionHourCounts
+                .Append(new(SplitEveEntryRefusedReason, admissionAudit.RejectionCounts.GetValueOrDefault("portfolio_" + SplitEveEntryRefusedReason)))
+                .Where(pair => pair.Value > 0)
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
         };
+    }
+
+    /// <summary>Admission refusal of a decision-hour entry whose next trading session is a split ex-date of the stock.</summary>
+    internal const string SplitEveEntryRefusedReason = "split_ex_date_next_session";
+
+    // The decision-hour inputs of a native book (session schedules and the symbols of sub-daily-fill candidates), or null
+    // when no candidate fills on sub-daily bars, so every other book is built exactly as before.
+    private static DecisionHourExecution? DecisionHourInputs(IReadOnlyList<BacktestCandidateTrade> candidates, NativeDailyAccountingContext? accounting)
+    {
+        var symbols = candidates.Where(candidate => candidate.FillTimeframe is not null)
+            .Select(candidate => candidate.Ticker.Trim().ToUpperInvariant()).ToHashSet(StringComparer.Ordinal);
+        if (symbols.Count == 0) return null;
+        return new DecisionHourExecution(accounting?.Sessions
+            ?? throw new InvalidDataException("Decision-hour fills need the native daily book's session schedules."), symbols);
+    }
+
+    // True when the trading session after the candidate's New York entry session is a split ex-date of its stock.
+    private static bool NextSessionIsExDate(BacktestCandidateTrade candidate, HoldingDataRules rules)
+    {
+        var entrySession = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(candidate.EntryTimestamp,
+            TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime);
+        var next = rules.Sessions.FirstOrDefault(session => session > entrySession);
+        return next != default && rules.SplitExDates.Contains((candidate.Ticker.Trim().ToUpperInvariant(), next));
     }
 
     // An execution failure cannot be turned into apparently complete later monthly marks.
@@ -904,6 +939,9 @@ internal sealed record PortfolioBuildOutcome(
 {
     public EventPortfolioReplayOutcome? EventReplay { get; init; }
     public BacktestPortfolioState? State { get; init; }
+
+    // Decision-hour execution counts (resting-order touches, fill-bar exits, cancelled remainders, ex-date-eve refusals).
+    public IReadOnlyDictionary<string, int> DecisionHourCounts { get; init; } = new Dictionary<string, int>();
 }
 
 internal sealed class PortfolioAdmissionAudit

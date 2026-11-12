@@ -79,6 +79,96 @@ public sealed class DecisionHourHoldingRulesTests
         Assert.Contains(ledger.SessionMarks, mark => mark.SessionDate == gap[0] && mark.Price is null);
     }
 
+    // 16 September opens at 85, through the 90 stop: the stop fills at that open (less slippage) on the 09:30-10:00 window.
+    [Fact]
+    public void GapDownThroughTheStop_FillsAtTheOpen()
+    {
+        var day = new DateOnly(2026, 9, 16);
+        var bars = Reshape(Bars(_ => true), day, daily: bar => bar with { Open = 85m, High = 87m, Low = 84m, Close = 86m },
+            hourly: bar => bar with { Open = 85.5m, High = 86m, Low = 85m, Close = 85.5m });
+        var coordinator = Schedule(bars, Rules([]), exit: null);
+
+        coordinator.Complete(Cutoff);
+
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal(("stop_loss", At(day, 10)), (trade.ExitReason, trade.ExitTimestamp));
+        Assert.True(trade.ExitPrice <= 85m && trade.ExitPrice > 84m, $"gap stop filled at {trade.ExitPrice}");
+        Assert.Equal(1, coordinator.DecisionHourCounts["gap_open_stop"]);
+    }
+
+    // 16 September's daily low (89) is below the 90 stop while every hourly bar from 10:00 stays above it: the touch happened
+    // between 09:30 and 10:00, so the stop fills at 90 (less slippage) at 10:00.
+    [Fact]
+    public void StopTouchedOnlyBeforeTenOClock_FillsAtTheStop()
+    {
+        var day = new DateOnly(2026, 9, 16);
+        var bars = Reshape(Bars(_ => true), day, daily: bar => bar with { Low = 89m }, hourly: bar => bar);
+        var coordinator = Schedule(bars, Rules([]), exit: null);
+
+        coordinator.Complete(Cutoff);
+
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal(("stop_loss", At(day, 10)), (trade.ExitReason, trade.ExitTimestamp));
+        Assert.True(trade.ExitPrice <= 90m && trade.ExitPrice > 89m, $"stop filled at {trade.ExitPrice}");
+        Assert.Equal(1, coordinator.DecisionHourCounts[DecisionHourDailyBars.FirstHalfHourWindow + "_stop"]);
+    }
+
+    // 16 September has its daily bar (low 89) but no hourly bars: its stop is still checked on the daily bar over the whole
+    // session and fills at 90 (less slippage), stamped at the close.
+    [Fact]
+    public void HeldSessionWithoutHourlyBars_ChecksTheStopOnItsDailyBar()
+    {
+        var day = new DateOnly(2026, 9, 16);
+        var bars = Reshape(Bars(_ => true), day, daily: bar => bar with { Low = 89m }, hourly: null);
+        var coordinator = Schedule(bars, Rules([]), exit: null);
+
+        coordinator.Complete(Cutoff);
+
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal(("stop_loss", At(day, 16)), (trade.ExitReason, trade.ExitTimestamp));
+        Assert.Equal(1, coordinator.DecisionHourCounts[DecisionHourDailyBars.MissingHourlyBarsWindow + "_stop"]);
+    }
+
+    // The 15 September last-hour bar falls to 88 after the entry fills at its open: the 90 stop fills inside that bar.
+    [Fact]
+    public void StopInTheEntryHour_FillsOnTheFillBar()
+    {
+        var bars = Bars(_ => true).Select(bar => bar.Timestamp == At(EntryDay, 15) ? bar with { Low = 88m } : bar).ToArray();
+        var coordinator = Schedule(bars, Rules([]), exit: null);
+
+        coordinator.Complete(Cutoff);
+
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal(("stop_loss", At(EntryDay, 16), At(EntryDay, 16)), (trade.ExitReason, trade.EntryTimestamp, trade.ExitTimestamp));
+        Assert.Equal(1, coordinator.DecisionHourCounts["fill_bar_stop"]);
+    }
+
+    // The entry's last-hour bar trades 2,000 shares (a 5% cap fills 100 of 500) and the 17 September exit's 1,000 (50 of 100):
+    // each remainder is cancelled at the session close, not filled the next morning; the exit's rest is sold again at the
+    // 18 September last hour.
+    [Fact]
+    public void UnfilledRemainders_AreCancelledAtTheSessionClose()
+    {
+        var exitDay = new DateOnly(2026, 9, 17);
+        var bars = Bars(_ => true).Select(bar =>
+            bar.Timestamp == At(EntryDay, 15) ? bar with { Volume = 2_000m } :
+            bar.Timestamp == At(exitDay, 15) ? bar with { Volume = 1_000m } : bar).ToArray();
+        var coordinator = Schedule(bars, Rules([]), exit: At(exitDay, 15));
+
+        coordinator.Complete(Cutoff);
+
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal((100, "partial_fill_remainder_canceled", At(exitDay.AddDays(1), 16)), (trade.ShareQuantity, trade.EntryFillStatus, trade.ExitTimestamp));
+        Assert.Equal((1, 1), (coordinator.DecisionHourCounts["entry_remainder_cancelled"], coordinator.DecisionHourCounts["exit_remainder_cancelled"]));
+        Assert.DoesNotContain(coordinator.Snapshot(Cutoff).Fills, fill => fill.TimestampUtc == At(exitDay.AddDays(1), 11) || fill.TimestampUtc == At(EntryDay.AddDays(1), 11));
+    }
+
+    // Replaces one session's daily bar and hourly bars (null drops the hourly bars).
+    private static OhlcvBar[] Reshape(OhlcvBar[] bars, DateOnly day, Func<OhlcvBar, OhlcvBar> daily, Func<OhlcvBar, OhlcvBar>? hourly) =>
+        bars.Where(bar => hourly is not null || bar.Timeframe != "1h" || DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bar.Timestamp, NewYork).DateTime) != day)
+            .Select(bar => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(bar.Timestamp, NewYork).DateTime) != day ? bar
+                : bar.Timeframe == "1d" ? daily(bar) : hourly!(bar)).ToArray();
+
     // The rules for the given split ex-dates over the fixture's weekday sessions, with their schedules.
     private static HoldingDataRules Rules(IEnumerable<(string, DateOnly)> splits) =>
         new(Weekdays().ToArray(), splits.ToHashSet()) { Schedules = Calendar() };
@@ -87,7 +177,8 @@ public sealed class DecisionHourHoldingRulesTests
     // optional planned exit (a completed close-above-SMA5 decision) on a later last-hour bar.
     private static ChronologicalBacktestExecutionCoordinator Schedule(IReadOnlyCollection<OhlcvBar> bars, HoldingDataRules rules, DateTimeOffset? exit)
     {
-        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio, bars, holdingRules: rules);
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio, bars, holdingRules: rules,
+            decisionHour: new DecisionHourExecution(Calendar(), new HashSet<string> { "TEST" }));
         var candidate = new BacktestCandidateTrade("TEST", "Connors 7.2.0", "long", At(EntryDay, 15), 100m, 90m, 120m,
             exit, null, exit is null ? "open_at_study_end" : "technical_exit_above_sma5", 10m, StrategyId: Strategy.StrategyId, CandidateId: "held")
             { FillTimeframe = "1h" };

@@ -28,13 +28,14 @@ public sealed partial class BacktestRunner
     /// </summary>
     private async Task PublishDataGapsAsync(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches,
         IReadOnlyList<StrategyTickerBacktestBatch> stopping, IReadOnlyList<BacktestTrade> portfolioTrades,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, IReadOnlyDictionary<string, int>? decisionHourCounts = null)
     {
         var skipped = batches.Where(batch => !batch.Succeeded && !stopping.Contains(batch)).ToArray();
         var closed = portfolioTrades.Where(trade => trade.ExitReason is ChronologicalBacktestExecutionCoordinator.DataEndedExitReason
             or ChronologicalBacktestExecutionCoordinator.SplitExitReason).ToArray();
         var skippedStockDays = DecisionHourSkippedStockDays(batches);
-        if (skipped.Length == 0 && closed.Length == 0 && skippedStockDays is null) return;
+        var execution = DecisionHourExecutionCounts(decisionHourCounts);
+        if (skipped.Length == 0 && closed.Length == 0 && skippedStockDays is null && execution is null) return;
         var pool = run.Tickers.Count;
         var skippedStocks = skipped.Select(batch => batch.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var skippedPct = pool == 0 ? 0m : Decimal.Round(skippedStocks * 100m / pool, 4);
@@ -48,14 +49,28 @@ public sealed partial class BacktestRunner
                 .Select(batch => new { ticker = batch.Ticker, strategyId = batch.StrategyId, reason = batch.ErrorMessage }).ToArray(),
             forcedExits = closed.Select(trade => new { ticker = trade.Ticker, strategyId = trade.StrategyId, reason = trade.ExitReason,
                 candidateId = trade.CandidateId, lastCloseUtc = trade.ExitTimestamp, exitPrice = trade.ExitPrice }).ToArray(),
-            decisionHourSkippedStockDays = skippedStockDays
+            decisionHourSkippedStockDays = skippedStockDays,
+            decisionHourExecution = execution
         };
-        // The decision-hour field is left out when null, so other runs publish exactly the earlier fields.
+        // The decision-hour fields are left out when null, so other runs publish exactly the earlier fields.
         await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-data-gaps.json"),
             JsonSerializer.Serialize(payload, new JsonSerializerOptions
             {
                 WriteIndented = true, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
             }), cancellationToken);
+    }
+
+    /// <summary>
+    /// The decision-hour execution counts (gap_open_stop, first_half_hour_stop, missing_hourly_bar_stop, fill_bar_stop and
+    /// their target mirrors, cancelled entry and exit remainders, refused ex-date-eve entries) plus the hourly bars dropped
+    /// outside their session; null when all are zero (every other timing).
+    /// </summary>
+    private SortedDictionary<string, int>? DecisionHourExecutionCounts(IReadOnlyDictionary<string, int>? counts)
+    {
+        var all = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var pair in counts ?? new Dictionary<string, int>()) if (pair.Value > 0) all[pair.Key] = pair.Value;
+        if (decisionHourDroppedHourlyBars > 0) all["hourly_bars_outside_session"] = decisionHourDroppedHourlyBars;
+        return all.Count == 0 ? null : all;
     }
 
     /// <summary>

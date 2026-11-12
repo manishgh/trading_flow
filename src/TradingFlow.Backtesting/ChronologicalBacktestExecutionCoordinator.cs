@@ -44,19 +44,32 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     /// <summary>Exit reason of a holding closed at the last close before a split's ex-date.</summary>
     public const string SplitExitReason = "split_exit_before_ex_date";
 
+    // Decision-hour execution (sub-daily fills of daily strategies): session schedules, the unresolved window of each session
+    // by (symbol, window start) with its kind, and the published counts of the resting-order and remainder rules.
+    private readonly DecisionHourExecution? _decisionHour;
+    private readonly Dictionary<(string Symbol, DateTimeOffset Start), string> _windowKinds = [];
+    private readonly SortedDictionary<string, int> _decisionHourCounts = new(StringComparer.Ordinal);
+
+    /// <summary>Published decision-hour execution counts (gap and first-half-hour touches, fill-bar exits, cancelled remainders).</summary>
+    public IReadOnlyDictionary<string, int> DecisionHourCounts => _decisionHourCounts;
+
     // holdingRules (research-screen daily runs only): the run's trading sessions and split ex-dates, so a holding is closed at
     // its last real close before a split or when its bars never resume; null keeps the original behaviour exactly.
+    // decisionHour: the schedules and symbols of decision-hour candidates, whose unresolved windows (DecisionHourDailyBars)
+    // join the bar stream for resting orders; null (every other run) adds nothing.
     public ChronologicalBacktestExecutionCoordinator(
         PortfolioConfig portfolio,
         IReadOnlyCollection<OhlcvBar> marketBars,
         IDeterministicExecutionSimulator? simulator = null,
         IExecutionEventSink? executionEvidence = null,
-        HoldingDataRules? holdingRules = null)
+        HoldingDataRules? holdingRules = null,
+        DecisionHourExecution? decisionHour = null)
     {
         _portfolio = portfolio;
         _simulator = simulator ?? new DeterministicExecutionSimulator();
         _executionEvidence = executionEvidence;
         _holdingRules = holdingRules;
+        _decisionHour = decisionHour;
         for (var index = 0; index < (holdingRules?.Sessions.Count ?? 0); index++) _holdingSessionIndex[holdingRules!.Sessions[index]] = index;
         if (holdingRules is { Sessions.Count: > 0 })
             foreach (var bar in marketBars.Where(bar => bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase)))
@@ -68,7 +81,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         _duplicateBarIdentities = marketBars.GroupBy(bar => new MarketBarIdentity(
             NormalizeSymbol(bar.Ticker), bar.Timeframe.Trim().ToLowerInvariant(), bar.Timestamp.ToUniversalTime()))
             .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
-        _timeline = BuildTimeline(marketBars);
+        _timeline = BuildTimeline(marketBars, UnresolvedWindows(marketBars));
         _marketBarIdentities = marketBars
             .Select(bar => new MarketBarIdentity(
                 NormalizeSymbol(bar.Ticker),
@@ -379,7 +392,10 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             _state = step.State;
             AppendExecutionEvidence(step.Events);
             ApplyEvents(step.Events, bar);
+            if (_windowKinds.TryGetValue((symbol, timelineBar.StartUtc), out var windowKind))
+                CountProtectiveFills(step.Events, windowKind, bar.Open);
             FinalizeTerminalTrackers();
+            CheckFillBarProtection(symbol, trackers, timelineBar);
             foreach (var tracker in fineTrackers.Where(t => !t.IsTerminal))
             {
                 if (tracker.EntrySubmitted && tracker.EntryFilledQuantity == 0)
@@ -389,6 +405,50 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             }
         _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
+
+    // Decision-hour holdings whose entry first filled on this bar: their stop and target are placed just after the fill and
+    // checked against the rest of the same bar (the simulator's worst case: stop first when both are touched), as the bar's
+    // range after the fill is real. Skipped while another market order of the symbol still works, so no liquidity is reused.
+    private void CheckFillBarProtection(string symbol, IReadOnlyCollection<ExecutionTracker> trackers, TimelineBar bar)
+    {
+        var filled = trackers.Where(t => !t.IsTerminal && t.Plan.Candidate.FillTimeframe is not null &&
+            t.FirstEntryFillUtc == bar.EndUtc && t.EntryFilledQuantity > t.ExitFilledQuantity).ToArray();
+        if (filled.Length == 0 || _state.WorkingOrders.Values.Any(order => order.Command.OrderType == SimulatedOrderType.Market &&
+                NormalizeSymbol(order.Command.Symbol) == symbol)) return;
+        var start = bar.StartUtc.AddTicks(1);
+        var commands = new List<SimulatedOrderCommand>();
+        foreach (var tracker in filled) AddProtectiveOrderCommands(start, tracker, commands);
+        if (commands.Count == 0) return;
+        var sequence = _sourceSequences.TryGetValue(symbol, out var prior) ? prior + 1 : 0;
+        _sourceSequences[symbol] = sequence;
+        var step = _simulator.Advance(new ExecutionStepRequest(_state, new ExecutionMarketSlice(symbol, start, bar.EndUtc,
+            bar.AvailableAtUtc, sequence, IsCompleted: true, bar.Bar.Open, bar.Bar.High, bar.Bar.Low, bar.Bar.Close, bar.Bar.Volume),
+            commands, SlicePolicy(symbol, filled)));
+        _state = step.State;
+        AppendExecutionEvidence(step.Events);
+        ApplyEvents(step.Events, bar.Bar);
+        CountProtectiveFills(step.Events, "fill_bar", null);
+        FinalizeTerminalTrackers();
+    }
+
+    // Counts the stop and target fills of decision-hour holdings in one step as "{kind}_stop" / "{kind}_target"; when the
+    // slice opens (open) already through the level, the fill is a gap and counts as "gap_open_stop" / "gap_open_target".
+    private void CountProtectiveFills(IReadOnlyCollection<SimulatedExecutionEvent> events, string kind, decimal? open)
+    {
+        foreach (var fill in events.Where(item => item.LastFillQuantity > 0))
+        {
+            var tracker = _active.FirstOrDefault(item => item.OwnsOrder(fill.ClientOrderId));
+            if (tracker?.Plan.Candidate.FillTimeframe is null || tracker.ProtectiveKindOf(fill.ClientOrderId) is not { } level) continue;
+            var candidate = tracker.Plan.Candidate;
+            var gap = open is { } price && (level == "stop"
+                ? tracker.IsShort ? price >= candidate.StopLossPrice : price <= candidate.StopLossPrice
+                : tracker.IsShort ? price <= candidate.TakeProfitPrice : price >= candidate.TakeProfitPrice);
+            Count($"{(gap ? "gap_open" : kind)}_{level}");
+        }
+    }
+
+    // Adds one to a published decision-hour count.
+    private void Count(string name) => _decisionHourCounts[name] = _decisionHourCounts.GetValueOrDefault(name) + 1;
 
     // Build the shared cost policy for one symbol slice; every tracker on a symbol must carry one slippage setting.
     private ExecutionSimulationPolicy SlicePolicy(string symbol, IReadOnlyCollection<ExecutionTracker> trackers)
@@ -585,6 +645,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 continue;
             }
 
+            if (ExpireSessionMarketOrders(timestamp, tracker, commands)) continue;
             if (!tracker.EntrySubmitted && tracker.Plan.Candidate.EntryTimestamp.ToUniversalTime() <= timestamp)
             {
                 tracker.EntrySubmitted = true;
@@ -632,7 +693,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             }
             if (IsPriceTriggeredExit(tracker.Plan.Candidate.ExitReason) ||
                 tracker.Plan.Candidate.ExitTimestamp is null ||
-                tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime() > timestamp)
+                tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime() > timestamp ||
+                tracker.ExitRetryAtUtc > timestamp)
             {
                 AddProtectiveOrderCommands(timestamp, tracker, commands);
                 continue;
@@ -671,7 +733,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 tracker.IsShort ? SimulatedOrderSide.Buy : SimulatedOrderSide.Sell,
                 SimulatedOrderType.Market,
                 tracker.EntryFilledQuantity - tracker.ExitFilledQuantity,
-                tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime(),
+                tracker.ExitRetryAtUtc ?? tracker.Plan.Candidate.ExitTimestamp.Value.ToUniversalTime(),
                 _nextCommandSequence++,
                 IsRiskReducing: true,
                 SimulatedTimeInForce.Day,
@@ -680,6 +742,39 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 
         return commands;
     }
+
+    // Decision-hour market orders are day orders of their session: a remainder still working when a later session's first
+    // slice arrives is cancelled at that boundary (no fill happened after the close) and counted. An entry that never filled
+    // ends without a position (returns true); an exit remainder gets a new order submitted at this session's last hour.
+    private bool ExpireSessionMarketOrders(DateTimeOffset timestamp, ExecutionTracker tracker, ICollection<SimulatedOrderCommand> commands)
+    {
+        if (tracker.Plan.Candidate.FillTimeframe is null || _decisionHour is null) return false;
+        var session = SessionOf(timestamp);
+        if (_state.WorkingOrders.TryGetValue(tracker.EntryClientOrderId, out var entry) && SessionOf(entry.Command.KnownAtUtc) < session)
+        {
+            commands.Add(CancelCommand(entry, timestamp));
+            Count("entry_remainder_cancelled");
+            if (tracker.EntryFilledQuantity == 0)
+            {
+                tracker.IsTerminal = true;
+                return true;
+            }
+        }
+        if (_state.WorkingOrders.TryGetValue(tracker.ExitClientOrderId, out var exit) && SessionOf(exit.Command.KnownAtUtc) < session)
+        {
+            commands.Add(CancelCommand(exit, timestamp));
+            Count("exit_remainder_cancelled");
+            tracker.RenewExitOrder(_decisionHour.Schedules.TryGetValue(session, out var schedule) && schedule.IsTradingDay
+                ? TradingFlow.Engine.Indicators.DecisionHourDailyBars.DecisionTimeUtc(schedule, NewYork) : timestamp);
+        }
+        return false;
+    }
+
+    // A cancel command for one working order, known at the given instant.
+    private SimulatedOrderCommand CancelCommand(SimulatedWorkingOrder order, DateTimeOffset knownAt) =>
+        new(ExecutionCommandKind.Cancel, $"expire-{order.Command.ClientOrderId}-{_nextCommandSequence}", order.Command.Symbol,
+            order.Command.Side, order.Command.OrderType, 0, knownAt, _nextCommandSequence++, order.Command.IsRiskReducing,
+            TargetClientOrderId: order.Command.ClientOrderId);
 
     /// <summary>
     /// Installs stop and target orders only after an entry fill has become known.
@@ -988,8 +1083,34 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         return bar.Bar.Timeframe.Trim().Equals(executionTimeframe, StringComparison.OrdinalIgnoreCase);
     }
 
+    // The unresolved window of every session of each decision-hour symbol (DecisionHourDailyBars.OpeningWindow over its daily
+    // bar and regular-session hourly bars), as timeline slices from the regular open to the first hourly bar or the close; each
+    // window's kind is kept to classify the resting-order fills on it. Empty without decision-hour candidates.
+    private List<TimelineBar> UnresolvedWindows(IReadOnlyCollection<OhlcvBar> marketBars)
+    {
+        var windows = new List<TimelineBar>();
+        if (_decisionHour is not { } decisionHour) return windows;
+        var bySymbol = marketBars.Where(bar => decisionHour.Symbols.Contains(NormalizeSymbol(bar.Ticker)))
+            .GroupBy(bar => NormalizeSymbol(bar.Ticker));
+        foreach (var symbol in bySymbol)
+        {
+            var hourly = symbol.Where(bar => bar.Timeframe.Trim().Equals(ExecutionRules.DecisionHourFillTimeframe, StringComparison.OrdinalIgnoreCase))
+                .ToLookup(bar => SessionOf(bar.Timestamp));
+            foreach (var daily in symbol.Where(bar => bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase)))
+            {
+                var session = SessionOf(daily.Timestamp);
+                if (!decisionHour.Schedules.TryGetValue(session, out var schedule) || !schedule.IsTradingDay) continue;
+                var regular = hourly[session].Where(bar => TradingFlow.Engine.Indicators.DecisionHourDailyBars.IsRegularSessionHour(bar, schedule, NewYork)).ToArray();
+                if (TradingFlow.Engine.Indicators.DecisionHourDailyBars.OpeningWindow(daily, regular, schedule, NewYork) is not { } window) continue;
+                windows.Add(new TimelineBar(window.Bar, window.Bar.Timestamp, window.EndUtc, window.EndUtc));
+                _windowKinds[(symbol.Key, window.Bar.Timestamp)] = window.Kind;
+            }
+        }
+        return windows;
+    }
+
     private static TimelineBar[] BuildTimeline(
-        IReadOnlyCollection<OhlcvBar> marketBars)
+        IReadOnlyCollection<OhlcvBar> marketBars, IReadOnlyCollection<TimelineBar> windows)
     {
         var timeline = marketBars
             .Where(bar => !String.IsNullOrWhiteSpace(bar.Ticker) && !String.IsNullOrWhiteSpace(bar.Timeframe))
@@ -1010,6 +1131,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 var knownAtUtc = bar.KnownAtUtc?.ToUniversalTime() ?? endUtc;
                 return new TimelineBar(bar, startUtc, endUtc, knownAtUtc > endUtc ? knownAtUtc : endUtc);
             })
+            .Concat(windows)
             .OrderBy(item => item.AvailableAtUtc)
             .ThenBy(item => item.StartUtc)
             .ThenBy(item => NormalizeSymbol(item.Bar.Ticker), StringComparer.OrdinalIgnoreCase)
@@ -1060,7 +1182,21 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public string Identity { get; } = identity;
         public ChronologicalExecutionPlan Plan { get; } = plan;
         public string EntryClientOrderId { get; } = entryClientOrderId;
-        public string ExitClientOrderId { get; } = exitClientOrderId;
+        public string ExitClientOrderId { get; private set; } = exitClientOrderId;
+        private readonly HashSet<string> exitOrderIds = new(StringComparer.Ordinal) { exitClientOrderId };
+        private int exitRetries;
+
+        // When a decision-hour market exit whose remainder was cancelled at the session close may be submitted again.
+        public DateTimeOffset? ExitRetryAtUtc { get; private set; }
+
+        // A fresh client order ID for the remainder of a cancelled market exit, submitted again at retryAtUtc.
+        public void RenewExitOrder(DateTimeOffset retryAtUtc)
+        {
+            ExitClientOrderId = $"exit-{Identity}-retry-{++exitRetries}";
+            exitOrderIds.Add(ExitClientOrderId);
+            ExitRetryAtUtc = retryAtUtc;
+            MarketExitSubmitted = false;
+        }
         private string DataEndedClientOrderId => $"data-ended-{Identity}";
         private string SplitExitClientOrderId => $"split-exit-{Identity}";
 
@@ -1109,7 +1245,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public bool OwnsOrder(string clientOrderId)
         {
             if (EntryClientOrderId.Equals(clientOrderId, StringComparison.Ordinal) ||
-                ExitClientOrderId.Equals(clientOrderId, StringComparison.Ordinal) ||
+                exitOrderIds.Contains(clientOrderId) ||
                 DataEndedClientOrderId.Equals(clientOrderId, StringComparison.Ordinal) ||
                 SplitExitClientOrderId.Equals(clientOrderId, StringComparison.Ordinal))
             {
@@ -1119,6 +1255,10 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             return StopOrderIds.Contains(clientOrderId) ||
                 TargetOrderIds.Contains(clientOrderId);
         }
+
+        // "stop" or "target" for one of this holding's protective orders; null for any other order.
+        public string? ProtectiveKindOf(string clientOrderId) =>
+            StopOrderIds.Contains(clientOrderId) ? "stop" : TargetOrderIds.Contains(clientOrderId) ? "target" : null;
 
         public string? GetProtectiveOrderId(ProtectiveOrderKind kind) =>
             kind == ProtectiveOrderKind.Stop ? StopClientOrderId : TargetClientOrderId;
@@ -1201,6 +1341,13 @@ internal sealed record HoldingDataRules(IReadOnlyList<DateOnly> Sessions, IReadO
     /// <summary>The exchange schedule of each session (regular or early close); null when no holding fills on sub-daily bars.</summary>
     public IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>? Schedules { get; init; }
 }
+
+/// <summary>
+/// Decision-hour execution inputs of one book: the exchange schedule of each session and the symbols (upper case) of the
+/// candidates that fill on sub-daily bars, whose sessions get unresolved windows and session-close order expiry.
+/// </summary>
+internal sealed record DecisionHourExecution(IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule> Schedules,
+    IReadOnlySet<string> Symbols);
 
 internal sealed record ActiveBacktestExecution(
     string Ticker,

@@ -39,10 +39,10 @@ public sealed class DecisionHourBacktestTests
     public async Task PublishedRules_DecideAtFifteenHundredAndFillInTheLastHour()
     {
         using var root = new TemporaryFolder();
-        var result = await RunAsync(root.Path, "swing-connors-rsi2-published-decision-hour.bt-v9-2.yaml", ["AAA", "BBB", "CCC", "EEE", "FFF"]);
+        var result = await RunAsync(root.Path, "swing-connors-rsi2-published-decision-hour.bt-v9-2.yaml", ["AAA", "BBB", "CCC", "EEE", "FFF", "LLL"]);
 
         Assert.True(result.EconomicResultsComplete, Why(result));
-        Assert.DoesNotContain(result.CompletedTrades, trade => trade.Ticker is "BBB" or "CCC");
+        Assert.DoesNotContain(result.CompletedTrades, trade => trade.Ticker is "BBB" or "CCC" or "LLL");
         // The final 16:00 closes disagree with the 15:00 prices: AAA's would not signal and BBB's would.
         Assert.True(FinalCloseRsi2("AAA") > 5m && FinalCloseRsi2("BBB") < 5m);
         var aaa = Assert.Single(result.CompletedTrades, trade => trade.Ticker == "AAA");
@@ -63,6 +63,12 @@ public sealed class DecisionHourBacktestTests
         var skipped = gaps.RootElement.GetProperty("decisionHourSkippedStockDays").EnumerateObject().Single().Value;
         Assert.Equal((1, 1), (skipped.GetProperty(DecisionHourDailyBars.DecisionBarMissingReason).GetInt32(),
             skipped.GetProperty(DecisionHourDailyBars.LastHourBarMissingReason).GetInt32()));
+        // FFF's four bars outside the half day's 09:30-13:00 are dropped before use; LLL's and EEE's 16 September entries
+        // (eve of their 17 September ex-dates) are refused at admission.
+        var execution = gaps.RootElement.GetProperty("decisionHourExecution");
+        var counts = execution.Deserialize<Dictionary<string, int>>()!;
+        Assert.True(counts.GetValueOrDefault("hourly_bars_outside_session") == 4 &&
+            counts.GetValueOrDefault(BacktestRunner.SplitEveEntryRefusedReason) == 2, execution.GetRawText());
     }
 
     // 7.2.0: the ATR stop and the 2.5R target are checked on the hourly bars after the entry fill. GGG stops out on the 11:00
@@ -71,7 +77,7 @@ public sealed class DecisionHourBacktestTests
     public async Task RiskManagedRules_CheckStopsAndTargetsOnHourlyBars()
     {
         using var root = new TemporaryFolder();
-        var result = await RunAsync(root.Path, "swing-connors-rsi2-sma5-risk-managed-decision-hour.bt-v7-2.yaml", ["GGG", "HHH", "III"]);
+        var result = await RunAsync(root.Path, "swing-connors-rsi2-sma5-risk-managed-decision-hour.bt-v7-2.yaml", ["GGG", "HHH", "III", "JJJ"]);
 
         Assert.True(result.EconomicResultsComplete, Why(result));
         var exitBarEnd = At(DipDay.AddDays(1), 12);
@@ -83,6 +89,33 @@ public sealed class DecisionHourBacktestTests
         }
         var stopped = result.CompletedTrades.Single(item => item.Ticker == "GGG");
         Assert.True(stopped.ExitPrice <= stopped.StopLossPrice, $"stop fill {stopped.ExitPrice} above stop {stopped.StopLossPrice}");
+        // JJJ has no hourly bars on 16 September: that held session still counts towards the five-bar limit, so the limit
+        // exit is decided on 21 September (the fifth held session) and fills in its last hour.
+        var limited = result.CompletedTrades.Where(item => item.Ticker == "JJJ").MinBy(item => item.EntryTimestamp)!;
+        Assert.Equal((At(DipDay, 16), At(new(2026, 9, 21), 16), "max_hold_bars"), (limited.EntryTimestamp, limited.ExitTimestamp, limited.ExitReason));
+    }
+
+    // Parity of the shared per-stock-session cache with the full computation: a second strategy asking for the same session
+    // gets the same evidence, computed once, equal to the provisional snapshot over every prior completed daily bar.
+    [Fact]
+    public void SessionEvidenceCache_ComputesEachStockSessionOnceAndMatchesTheFullComputation()
+    {
+        var day = DipDay;
+        var index = Array.IndexOf(AllSessions, day) - 1; // daily bars start at the second session
+        var daily = AllSessions.Skip(1).Select(session => DailyBar("AAA", session)).ToArray();
+        var hourly = HourlyBars("AAA", day).ToArray();
+        var engine = new IndicatorEngine();
+        var schedule = MarketSessionSchedule.RegularDay(day);
+        var cache = new DecisionHourEvidenceCache();
+
+        var first = cache.Get("AAA", day, () => DecisionHourEvidenceCache.Compute(engine, daily, index, hourly, schedule, NewYork));
+        var second = cache.Get("aaa", day, () => throw new InvalidOperationException("computed twice"));
+
+        Assert.Same(first, second);
+        Assert.Equal(1, cache.ComputedCount);
+        var full = DecisionHourDailyBars.ProvisionalSnapshot(engine, daily.Take(index).ToArray(), first.Decision!.ProvisionalDailyBar);
+        Assert.Equal(JsonSerializer.Serialize(full), JsonSerializer.Serialize(first.Snapshot));
+        Assert.True(first.Snapshot!.Rsi2 < 5m);
     }
 
     // Why a run's economics are withheld: failed stocks, rejection counts and the ledger's unavailable reason (assertion text).
@@ -125,7 +158,7 @@ public sealed class DecisionHourBacktestTests
         var sessions = Sessions().Where(day => day >= new DateOnly(2026, 9, 1)).ToArray();
         await File.WriteAllLinesAsync(Path.Combine(folder, "eligible.csv"),
             new[] { "session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions" }.Concat(sessions.SelectMany(day =>
-                pool.Where(ticker => ticker != "EEE" || day < SplitExDate).Select(ticker => $"{day:yyyy-MM-dd},{ticker},60,2000000,120000000,1,300"))));
+                pool.Where(ticker => ticker is not ("EEE" or "LLL") || day < SplitExDate).Select(ticker => $"{day:yyyy-MM-dd},{ticker},60,2000000,120000000,1,300"))));
         await File.WriteAllLinesAsync(Path.Combine(folder, DailyScreenCommand.SplitExclusionsFileName), ["session_date,ticker,reason"]);
         await ResearchScreenManifest.PublishAsync(folder, new("daily", "actions", null, "sessions"),
             SyntheticScreen.Rules with { PriceBasis = DailyScreenPriceBasis.PriorClose }, null, sessions[0], sessions[^1],
@@ -167,6 +200,7 @@ public sealed class DecisionHourBacktestTests
         if (day == DipDay && ticker == "BBB") return plain with { Decision = Trend(ticker, i), LastHourOpen = Trend(ticker, i) };
         if (ticker == "CCC" && day == new DateOnly(2026, 9, 16)) return plain with { Missing = [14] };
         if (ticker == "CCC" && day == SplitExDate) return plain with { Missing = [15] };
+        if (ticker == "JJJ" && day == DipDay.AddDays(2)) return plain with { Missing = [10, 11, 12, 13, 14, 15] };
         if (day == HalfDay && ticker == "FFF") return plain;
         if (day == DipDay.AddDays(1) && ticker is "GGG" or "HHH" or "III")
         {
@@ -199,6 +233,9 @@ public sealed class DecisionHourBacktestTests
             "FFF" when day > HalfDay => trend + 0.6m,
             "GGG" or "HHH" or "III" when day == DipDay => trend - 3m,
             "GGG" or "HHH" or "III" when day > DipDay => trend + 1m,
+            "JJJ" when day >= DipDay => Trend(ticker, Array.IndexOf(AllSessions, DipDay)) - 3m,
+            "LLL" when day == DipDay.AddDays(2) => trend - 3m,
+            "LLL" when day >= SplitExDate => (trend - 3.2m) / 2m,
             _ => trend
         };
     }
@@ -217,6 +254,10 @@ public sealed class DecisionHourBacktestTests
                 : (open, Math.Max(open, close) + 0.05m, Math.Min(open, close) - 0.05m, close);
             yield return new OhlcvBar(ticker, At(day, hour), "1h", o, h, l, c, 200_000m, "sip", "raw");
         }
+        // FFF's bars outside the half day's regular session (pre-market 08:00, after the 13:00 close), far off its prices.
+        if (ticker == "FFF" && day == HalfDay)
+            foreach (var hour in new[] { 8, 13, 14, 15 })
+                yield return new OhlcvBar(ticker, At(day, hour), "1h", 1m, 1m, 1m, 1m, 200_000m, "sip", "raw");
     }
 
     // The price after the given number of the session's steps from its open towards its decision price.
@@ -226,7 +267,7 @@ public sealed class DecisionHourBacktestTests
     private static OhlcvBar DailyBar(string ticker, DateOnly day)
     {
         var path = Fixture(ticker, day);
-        var hourly = day >= new DateOnly(2026, 8, 24) ? HourlyBars(ticker, day).ToArray() : [];
+        var hourly = day >= new DateOnly(2026, 8, 24) ? HourlyBars(ticker, day).Where(bar => bar.Timestamp >= At(day, 10) && bar.Timestamp < At(day, CloseHour(day))).ToArray() : [];
         var high = hourly.Select(bar => bar.High).Append(Math.Max(path.Open, path.Close) + 0.5m).Max();
         var low = hourly.Select(bar => bar.Low).Append(Math.Min(path.Open, path.Close) - 0.5m).Min();
         return new OhlcvBar(ticker, At(day, 0), "1d", path.Open, high, low, path.Close, 2_000_000m, "sip", "raw");
@@ -246,14 +287,14 @@ public sealed class DecisionHourBacktestTests
     /// <summary>Serves the fixture's daily bars (from the second session), hourly bars (from 24 August 2026), calendar and EEE's split.</summary>
     private sealed class DecisionHourProvider : IMarketDataProvider, IMarketSessionScheduleProvider, IShareSplitProvider
     {
-        private static readonly string[] Tickers = ["AAA", "BBB", "CCC", "EEE", "FFF", "GGG", "HHH", "III", "SPY"];
+        private static readonly string[] Tickers = ["AAA", "BBB", "CCC", "EEE", "FFF", "GGG", "HHH", "III", "JJJ", "LLL", "SPY"];
         private readonly Lazy<OhlcvBar[]> bars = new(() => Tickers.SelectMany(ticker => Sessions().Skip(1).SelectMany(day =>
             new[] { DailyBar(ticker, day) }.Concat(day >= new DateOnly(2026, 8, 24) ? HourlyBars(ticker, day) : []))).ToArray());
 
         /// <summary>EEE's recorded 2-for-1 split, the only one in the fixture's corporate actions.</summary>
         public Task<IReadOnlyDictionary<string, IReadOnlyList<ShareSplit>>> LoadShareSplitsAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyDictionary<string, IReadOnlyList<ShareSplit>>>(
-                new Dictionary<string, IReadOnlyList<ShareSplit>> { ["EEE"] = [new ShareSplit(SplitExDate, 2m)] });
+                new Dictionary<string, IReadOnlyList<ShareSplit>> { ["EEE"] = [new ShareSplit(SplitExDate, 2m)], ["LLL"] = [new ShareSplit(SplitExDate, 2m)] });
 
         /// <summary>The fixture's bars of the requested stocks and timeframes inside [start, end).</summary>
         public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> timeframes,
