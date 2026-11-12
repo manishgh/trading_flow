@@ -14,7 +14,8 @@ engine:
   pipeline: tpl
   worker_count: 0
   bounded_capacity: 2000
-  indicator_warmup_bars: 260
+  # Connors reads at most 200 sessions (SMA200); 250 leaves margin and fits the 2016 start of the daily data.
+  indicator_warmup_bars: 250
   allow_late_warmup: true
   ticker_timeout_seconds: 1800
   max_retained_replay_bars: 5200000
@@ -27,9 +28,9 @@ time_window:
   # Diagnostic six-month window. Promotion-grade research uses the frozen
   # point-in-time research datasets and 2016-or-later program boundaries.
   lookback_days: 180
-  # 260 indicator bars are trading sessions, not calendar days. Four hundred
-  # calendar days supplies the required pre-evaluation history with margin.
-  warmup_lookback_days: 400
+  # 250 indicator bars are trading sessions, not calendar days. 365 calendar days
+  # (about 252 sessions) cover them and fit the daily data and calendar, which start 1 Jan 2016.
+  warmup_lookback_days: 365
   start:
   end:
 
