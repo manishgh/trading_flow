@@ -114,8 +114,37 @@ public static class IntradayBarsCollectionPlanCommand
         var bars = await catalog.GetDatasetAsync(datasetId, cancellationToken) ?? throw new InvalidDataException($"Dataset '{datasetId}' was not found.");
         var traded = await TradedSessionsAsync(new ParquetEvidencePartitionDataReader(new EvidenceParquetCodec(), store), bars,
             eligible.Values.SelectMany(symbols => symbols).ToHashSet(StringComparer.Ordinal), cancellationToken);
-        return await WriteAsync(options, output, CreateRequest(EligibleSecurities(eligible, traded), RegularSessionHours, Batch(options),
-            HourlyAttributes(eligiblePath, datasetId)), cancellationToken);
+        // --non-eligible-sessions true plans the complement: the sessions a position opened on an eligible day may still be held.
+        var complement = options.TryGetValue("--non-eligible-sessions", out var flag) && Boolean.Parse(flag);
+        var securities = complement ? NonEligibleSecurities(eligible, traded, to) : EligibleSecurities(eligible, traded);
+        var attributes = HourlyAttributes(eligiblePath, datasetId);
+        if (complement) attributes["session_scope"] = "non_eligible_traded_sessions";
+        return await WriteAsync(options, output, CreateRequest(securities, RegularSessionHours, Batch(options), attributes), cancellationToken);
+    }
+
+    /// <summary>
+    /// For each listed stock, its traded sessions from its first eligible session to <paramref name="to"/> on which it is not
+    /// eligible: a position bought on an eligible day can be held on these days and needs hourly bars to exit in the last
+    /// hour or to check its stop. Together with <see cref="EligibleSecurities"/> this covers every traded session once.
+    /// </summary>
+    public static IReadOnlyDictionary<DateOnly, IReadOnlyCollection<EvidenceSecurityIdentity>> NonEligibleSecurities(
+        IReadOnlyDictionary<DateOnly, IReadOnlyCollection<string>> eligible, IReadOnlyDictionary<string, (string SecurityId, DateOnly[] Sessions)> traded,
+        DateOnly to)
+    {
+        var eligibleDays = eligible.SelectMany(pair => pair.Value.Select(symbol => (symbol, pair.Key))).ToHashSet();
+        var firstEligible = eligibleDays.GroupBy(item => item.symbol, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Min(item => item.Key), StringComparer.Ordinal);
+        var needed = new SortedDictionary<DateOnly, List<EvidenceSecurityIdentity>>();
+        foreach (var (symbol, first) in firstEligible)
+        {
+            var history = traded.TryGetValue(symbol, out var found) ? found : throw new InvalidDataException($"{symbol} has no daily bars in the dataset.");
+            foreach (var day in history.Sessions.Where(day => day > first && day <= to && !eligibleDays.Contains((symbol, day))))
+            {
+                if (!needed.TryGetValue(day, out var list)) needed[day] = list = [];
+                list.Add(new EvidenceSecurityIdentity(history.SecurityId, symbol));
+            }
+        }
+        return needed.ToDictionary(pair => pair.Key, pair => (IReadOnlyCollection<EvidenceSecurityIdentity>)pair.Value);
     }
 
     /// <summary>Each eligible stock-session with the stock's security identifier; a stock missing from the daily dataset fails.</summary>
