@@ -3,7 +3,13 @@ namespace TradingFlow.Domain.Backtesting;
 // Original execution stamps remain available beside the coarser source-session accounting date.
 public sealed record BacktestPortfolioFill(string CandidateId, string StrategyId, string Ticker,
     bool IsBuy, bool IsEntry, int Quantity, decimal Price, decimal Fees, DateTimeOffset TimestampUtc,
-    DateOnly SourceSessionDate);
+    DateOnly SourceSessionDate)
+{
+    // Set (for example "1h") when a native daily book fills on sub-daily bars, which belong to their own New York session;
+    // null keeps the daily convention, where a fill stamped at a daily bar's completion belongs to the previous session.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? FillTimeframe { get; init; }
+}
 public sealed record BacktestOpenPosition(string CandidateId, string StrategyId, string Ticker,
     int SignedQuantity, decimal EntryBasis, decimal? MarkPrice, DateTimeOffset? MarkTimestampUtc,
     decimal? UnrealizedProfit);

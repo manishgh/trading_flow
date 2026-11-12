@@ -30,6 +30,11 @@ public sealed record BacktestCandidateTrade(
     public string DecisionStrategyId { get; init; } = "";
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public IntradayExecutionEvidence? IntradayExecution { get; init; }
+
+    // The bar timeframe the orders fill on when it is finer than the strategy's execution timeframe (decision-hour timing:
+    // a daily strategy filling on the last hourly bar); null fills on the strategy's own execution bars.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? FillTimeframe { get; init; }
 }
 
 public sealed record BacktestPendingExitDecision(DateTimeOffset KnownAtUtc, string Reason);

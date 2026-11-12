@@ -22,8 +22,9 @@ public sealed partial class BacktestRunner
 
     /// <summary>
     /// Publishes the run's data gaps beside the results: each skipped stock work item (stock, strategy, reason) with the
-    /// skipped stocks counted against the pool and flagged above 5%, and each holding closed at its last real close because
-    /// its bars never resumed or a split took effect, with the counts. Writes nothing when none of these occurred.
+    /// skipped stocks counted against the pool and flagged above 5%, each holding closed at its last real close because
+    /// its bars never resumed or a split took effect, with the counts, and (decision-hour timing) the stock-days skipped
+    /// because their decision or last-hour bar was missing, by strategy and reason. Writes nothing when none of these occurred.
     /// </summary>
     private async Task PublishDataGapsAsync(BacktestRunConfig run, IReadOnlyList<StrategyTickerBacktestBatch> batches,
         IReadOnlyList<StrategyTickerBacktestBatch> stopping, IReadOnlyList<BacktestTrade> portfolioTrades,
@@ -32,7 +33,8 @@ public sealed partial class BacktestRunner
         var skipped = batches.Where(batch => !batch.Succeeded && !stopping.Contains(batch)).ToArray();
         var closed = portfolioTrades.Where(trade => trade.ExitReason is ChronologicalBacktestExecutionCoordinator.DataEndedExitReason
             or ChronologicalBacktestExecutionCoordinator.SplitExitReason).ToArray();
-        if (skipped.Length == 0 && closed.Length == 0) return;
+        var skippedStockDays = DecisionHourSkippedStockDays(batches);
+        if (skipped.Length == 0 && closed.Length == 0 && skippedStockDays is null) return;
         var pool = run.Tickers.Count;
         var skippedStocks = skipped.Select(batch => batch.Ticker).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var skippedPct = pool == 0 ? 0m : Decimal.Round(skippedStocks * 100m / pool, 4);
@@ -45,10 +47,33 @@ public sealed partial class BacktestRunner
             items = skipped.OrderBy(batch => batch.Ticker, StringComparer.Ordinal)
                 .Select(batch => new { ticker = batch.Ticker, strategyId = batch.StrategyId, reason = batch.ErrorMessage }).ToArray(),
             forcedExits = closed.Select(trade => new { ticker = trade.Ticker, strategyId = trade.StrategyId, reason = trade.ExitReason,
-                candidateId = trade.CandidateId, lastCloseUtc = trade.ExitTimestamp, exitPrice = trade.ExitPrice }).ToArray()
+                candidateId = trade.CandidateId, lastCloseUtc = trade.ExitTimestamp, exitPrice = trade.ExitPrice }).ToArray(),
+            decisionHourSkippedStockDays = skippedStockDays
         };
+        // The decision-hour field is left out when null, so other runs publish exactly the earlier fields.
         await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "evidence", $"{run.RunName}-data-gaps.json"),
-            JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions
+            {
+                WriteIndented = true, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            }), cancellationToken);
+    }
+
+    /// <summary>
+    /// Decision-hour stock-days skipped for a missing decision or last-hour bar, counted per strategy and reason from the
+    /// work items' rejection counts; null when there are none (every other timing).
+    /// </summary>
+    private static Dictionary<string, Dictionary<string, int>>? DecisionHourSkippedStockDays(IEnumerable<StrategyTickerBacktestBatch> batches)
+    {
+        string[] reasons = [TradingFlow.Engine.Indicators.DecisionHourDailyBars.DecisionBarMissingReason,
+            TradingFlow.Engine.Indicators.DecisionHourDailyBars.LastHourBarMissingReason];
+        var counts = batches.Where(batch => batch.Diagnostics is not null)
+            .SelectMany(batch => reasons.Select(reason => (batch.StrategyId, Reason: reason,
+                Count: batch.Diagnostics!.RejectionCounts.GetValueOrDefault(reason))))
+            .Where(item => item.Count > 0)
+            .GroupBy(item => item.StrategyId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.GroupBy(item => item.Reason)
+                .ToDictionary(reasonGroup => reasonGroup.Key, reasonGroup => reasonGroup.Sum(item => item.Count)), StringComparer.Ordinal);
+        return counts.Count == 0 ? null : counts;
     }
 
     private static string ResolveDailyTimeframe(BacktestRunConfig run)
@@ -143,7 +168,7 @@ public sealed partial class BacktestRunner
         var screen = TradingFlow.Engine.Universe.PublishedResearchScreen.Read(Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
         RequireMembershipKnownBeforeEntry(run, screen);
         RequireSplitLookbackCoversStrategies(screen, strategies.Where(strategy =>
-            ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy == ExecutionRules.KeptGapAsTradedTimingPolicy));
+            ExecutionRules.IsAsTradedResearchTiming(ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy)));
         var (_, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
         var membership = screen.ToMembership(NewYorkDate(evaluationStart), NewYorkDate(windowEnd.AddTicks(-1)));
         var eligibleDays = run.Tickers.ToDictionary(ticker => ticker, ticker => membership.EligibleDays(ticker)
@@ -186,7 +211,7 @@ public sealed partial class BacktestRunner
         IReadOnlyList<StrategyDefinition> strategies, CancellationToken cancellationToken)
     {
         if (run.Universe?.RankedMembership is null || !strategies.Any(strategy =>
-                ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy == ExecutionRules.KeptGapAsTradedTimingPolicy))
+                ExecutionRules.IsAsTradedResearchTiming(ResolveRuntimeStrategy(strategy).AdmissionProfile.ExecutionTimingPolicy)))
             return new HashSet<(string, DateOnly)>();
         var splits = marketDataProviderFactory?.Invoke(run) as IShareSplitProvider ??
             (run.Providers.EvidenceCatalog is { } catalog ? TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.Open(catalog,

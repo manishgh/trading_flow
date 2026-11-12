@@ -557,50 +557,38 @@ public sealed partial class BacktestRunner
             return (takeProfitPrice, "take_profit");
         }
 
-        if (barsHeld >= strategy.ExitRules.MinHoldBarsBeforeTechnicalExit)
+        var scheduledReason = ShortTechnicalOrTimeExitReason(strategy, snapshot, barsHeld, bar.Timestamp, entryTimestamp, previousSnapshot);
+        if (scheduledReason is not null)
         {
-            if (strategy.ExitRules.ExitOnCloseBelowVwap &&
-                snapshot.Vwap is { } vwap &&
-                snapshot.CurrentPrice > vwap)
-            {
-                return (bar.Close, "technical_exit_above_vwap");
-            }
-
-            if (strategy.ExitRules.ExitOnMacdHistogramNegative &&
-                snapshot.MacdHistogram is { } histogram &&
-                histogram > 0)
-            {
-                return (bar.Close, "technical_exit_macd_histogram_positive");
-            }
-
-            // Connors short mirror: cover when the completed close falls below its 5-day average.
-            if (strategy.ExitRules.ExitOnCloseBelowSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice < sma5)
-            {
-                return (bar.Close, "technical_exit_below_sma5");
-            }
-
-            if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 &&
-                TechnicalExecutionEngine.IsSma10CrossedAboveSma20(snapshot, previousSnapshot))
-            {
-                return (bar.Close, "technical_exit_sma10_cross_above_sma20");
-            }
-        }
-
-        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars &&
-            maxHoldBars > 0 &&
-            barsHeld >= maxHoldBars)
-        {
-            return (bar.Close, "max_hold_bars");
-        }
-
-        var maxExitTimestamp = entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours);
-        if (bar.Timestamp >= maxExitTimestamp)
-        {
-            return (bar.Close, "max_hold");
+            return (bar.Close, scheduledReason);
         }
 
         lowestLowSinceEntry = Math.Min(lowestLowSinceEntry, bar.Low);
         return (null, null);
+    }
+
+    // The short side's technical exits (after the minimum hold), then the bar-count and hour limits, read from one observation:
+    // shared by the daily builder (a completed bar) and the decision-hour builder (a session's provisional snapshot). Returns
+    // the exit reason or null; sourceTimestamp is the observation's time and entryTimestamp the entry's, for the hour limit.
+    private static string? ShortTechnicalOrTimeExitReason(StrategyDefinition strategy, IndicatorSnapshot snapshot, int barsHeld,
+        DateTimeOffset sourceTimestamp, DateTimeOffset entryTimestamp, IndicatorSnapshot? previousSnapshot)
+    {
+        if (barsHeld >= strategy.ExitRules.MinHoldBarsBeforeTechnicalExit)
+        {
+            if (strategy.ExitRules.ExitOnCloseBelowVwap && snapshot.Vwap is { } vwap && snapshot.CurrentPrice > vwap)
+                return "technical_exit_above_vwap";
+            if (strategy.ExitRules.ExitOnMacdHistogramNegative && snapshot.MacdHistogram is { } histogram && histogram > 0)
+                return "technical_exit_macd_histogram_positive";
+            // Connors short mirror: cover when the close falls below its 5-day average.
+            if (strategy.ExitRules.ExitOnCloseBelowSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice < sma5)
+                return "technical_exit_below_sma5";
+            if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 && TechnicalExecutionEngine.IsSma10CrossedAboveSma20(snapshot, previousSnapshot))
+                return "technical_exit_sma10_cross_above_sma20";
+        }
+
+        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars && maxHoldBars > 0 && barsHeld >= maxHoldBars)
+            return "max_hold_bars";
+        return sourceTimestamp >= entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours) ? "max_hold" : null;
     }
 
     private static bool IsPriceTriggeredExitReason(string exitReason) =>

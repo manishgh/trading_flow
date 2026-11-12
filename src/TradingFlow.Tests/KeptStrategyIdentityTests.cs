@@ -63,8 +63,8 @@ public sealed class KeptStrategyIdentityTests
             parent.AdmissionProfile.ExecutionTimingPolicy).RequiredAdjustmentPolicy);
     }
 
-    // The decision-hour copies keep their as-traded parents' trading rules, bind the decision-hour timing policy (raw bars),
-    // and the decision engine refuses that policy until it is implemented, so they cannot run with daily timing by mistake.
+    // The decision-hour copies keep their as-traded parents' trading rules and bind the decision-hour timing policy, which
+    // reads raw (as-traded) bars like their parents and counts as an as-traded research-screen timing.
     [Theory]
     [InlineData("swing.connors-rsi2", "9.2.0", "9.1.0")]
     [InlineData("swing.connors-rsi2", "7.2.0", "7.1.0")]
@@ -79,8 +79,9 @@ public sealed class KeptStrategyIdentityTests
         Assert.Equivalent(parent.ResolvedStrategy with { StrategyId = "", StrategyName = "" },
             copy.ResolvedStrategy with { StrategyId = "", StrategyName = "" }, strict: true);
         Assert.Equal(ExecutionRules.DecisionHourAsTradedTimingPolicy, copy.AdmissionProfile.ExecutionTimingPolicy);
-        Assert.Throws<InvalidOperationException>(() => TradingFlow.Engine.Indicators.MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
-            copy.AdmissionProfile.ExecutionTimingPolicy));
+        Assert.Equal("raw", TradingFlow.Engine.Indicators.MarketEvidenceOperationalRules.ForExecutionTimingPolicy(
+            copy.AdmissionProfile.ExecutionTimingPolicy).RequiredAdjustmentPolicy);
+        Assert.True(ExecutionRules.IsAsTradedResearchTiming(copy.AdmissionProfile.ExecutionTimingPolicy));
     }
 
     // Optional lineage survives ordinary artifact serialization, and further derivation binds to its immediate source.

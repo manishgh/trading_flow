@@ -465,6 +465,11 @@ public static class BacktestArtifactIntegrity
         if (fills.Any(fill => !fill.IsEntry && (firstEntry is null || fill.TimestampUtc < firstEntry)))
             throw new InvalidDataException("An exit fill precedes its parent's first actual entry fill.");
         var remaining = fills.GroupBy(fill => fill).ToDictionary(group => group.Key, group => group.Count());
+        // One candidate fills on one timeframe; a sub-daily one (decision-hour timing) books each fill to its own session.
+        var fillTimeframes = fills.Select(fill => fill.FillTimeframe).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (fillTimeframes.Length > 1)
+            throw new InvalidDataException("Native fills of one admitted candidate declare different fill timeframes.");
+        var fillTimeframe = fillTimeframes.SingleOrDefault();
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT payload FROM fills WHERE candidate_id = $candidate_id;";
         command.Parameters.AddWithValue("$candidate_id", order.CandidateId);
@@ -484,7 +489,7 @@ public static class BacktestArtifactIntegrity
             var observed = new BacktestPortfolioFill(order.CandidateId, order.StrategyId, execution.Symbol,
                 execution.Side == SimulatedOrderSide.Buy, !execution.IsRiskReducing, execution.LastFillQuantity,
                 execution.FillPrice.Value, execution.Fees, execution.OccurredAtUtc,
-                NativeDailySessionLedger.SourceSessionDate(execution.OccurredAtUtc, valuationBasis));
+                NativeDailySessionLedger.FillSessionDate(execution.OccurredAtUtc, fillTimeframe, valuationBasis)) { FillTimeframe = fillTimeframe };
             if (!remaining.TryGetValue(observed, out var count) || count == 0)
                 throw new InvalidDataException("Native fill does not match one original execution event's timestamp, side, quantity, price and fees.");
             remaining[observed] = count - 1;

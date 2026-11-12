@@ -9,10 +9,13 @@ public sealed record MonthlyBacktestRow(string AliasId,string Name,StrategyMonth
 public static class MonthlyBacktestPresentation
 {
     // Actual intraday execution belongs to its New York date; native-daily receipts retain their previous-session convention.
-    public static DateOnly SourceSessionDate(DateTimeOffset timestamp, string? valuationBasis) =>
+    // A decision-hour strategy's fills end inside their own session's last hour, so they belong to that session.
+    public static DateOnly SourceSessionDate(DateTimeOffset timestamp, string? valuationBasis, string? executionTimingPolicy = null) =>
         valuationBasis == IntradayPortfolioExecution.ValuationBasis
             ? DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime)
-            : NativeDailySessionLedger.SourceSessionDate(timestamp);
+            : executionTimingPolicy == ExecutionRules.DecisionHourAsTradedTimingPolicy
+                ? NativeDailySessionLedger.ExecutionSessionDate(timestamp)
+                : NativeDailySessionLedger.SourceSessionDate(timestamp);
 
     // Publish the engine's reconciled source-session book; monthly costs/profit are changes in cumulative observations.
     public static IReadOnlyList<MonthlyRunResult> FromPortfolioState(StrategyBacktestResult strategy,
@@ -31,6 +34,9 @@ public static class MonthlyBacktestPresentation
             sessions.Any(session => session.SessionDate < first || session.SessionDate > last))
             throw new InvalidDataException("Portfolio monthly reporting requires unique session observations inside the frozen period.");
         var identity = new StrategyReference(runtime.Identity.StrategyId, runtime.Identity.SemanticVersion, runtime.Identity.ContentSha256);
+        // The session a completed trade's exit belongs to, by the strategy's valuation basis and timing.
+        DateOnly ExitSession(BacktestTrade trade) =>
+            SourceSessionDate(trade.ExitTimestamp, state.ValuationBasis, runtime.AdmissionProfile.ExecutionTimingPolicy);
         var rows = new List<MonthlyRunResult>();
         var opening = strategy.StartingCapital;
         var previousRealized = 0m;
@@ -60,7 +66,7 @@ public static class MonthlyBacktestPresentation
             var fills = state.Fills.Where(fill => fill.SourceSessionDate >= periodStart && fill.SourceSessionDate <= periodEnd).ToArray();
             rows.Add(new(identity, cohortName, month.ToString("yyyy-MM", CultureInfo.InvariantCulture),
                 unavailable is null ? opening : null, unavailable is null ? close.Equity : null, performance?.ReturnPct,
-                strategy.CompletedTrades.Count(trade => SourceSessionDate(trade.ExitTimestamp, state.ValuationBasis) >= periodStart && SourceSessionDate(trade.ExitTimestamp, state.ValuationBasis) <= periodEnd),
+                strategy.CompletedTrades.Count(trade => ExitSession(trade) >= periodStart && ExitSession(trade) <= periodEnd),
                 state.ValuationBasis, periodStart != month || periodEnd != calendarEnd, unavailable, performance?.CloseDrawdownPct,
                 strategy.StrategyId, strategy.StrategyName, close.RealizedNetProfit - previousRealized,
                 unavailable is null ? close.UnrealizedProfit : null, close.Fees - previousFees, close.Cash,
@@ -83,14 +89,16 @@ public static class MonthlyBacktestPresentation
         if(!strategy.EconomicResultsComplete||runtime.Definition.Execution.Timeframe!="1d"|| runtime.Definition.Session.IsContinuousMarket ||
             runtime.Definition.Session.ExchangeTimezone != "America/New_York" ||
             runtime.AdmissionProfile.ExecutionTimingPolicy is not ("completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or
-                ExecutionRules.KeptGapAsTradedTimingPolicy or "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5"))
+                ExecutionRules.KeptGapAsTradedTimingPolicy or ExecutionRules.DecisionHourAsTradedTimingPolicy or
+                "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5"))
             throw new InvalidOperationException("Verified native-daily completed-slice metadata is required for monthly display.");
         if(strategy.CompletedTrades.Count != strategy.AcceptedTradeCount ||
             Math.Abs(strategy.StartingCapital + strategy.CompletedTrades.Sum(trade => trade.NetProfit) - strategy.EndingCapital) > .01m)
             throw new InvalidOperationException("Complete, reconciled strategy trades are required; a trimmed UI summary cannot provide monthly returns.");
         var zone=TimeZoneInfo.FindSystemTimeZoneById(runtime.Definition.Session.ExchangeTimezone);
-        // Attribute old realized records using the same native daily availability-to-session policy.
-        DateOnly SourceDate(DateTimeOffset receipt)=>NativeDailySessionLedger.SourceSessionDate(receipt);
+        // Attribute old realized records using the same native daily availability-to-session policy (decision-hour fills: their own session).
+        DateOnly SourceDate(DateTimeOffset receipt)=>SourceSessionDate(receipt, NativeDailySessionLedger.ValuationBasis,
+            runtime.AdmissionProfile.ExecutionTimingPolicy);
         var first=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start,zone).DateTime);
         var last=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(end.AddTicks(-1),zone).DateTime);
         var byDate=strategy.CompletedTrades.GroupBy(trade=>SourceDate(trade.ExitTimestamp)).ToDictionary(group=>group.Key,group=>group.Sum(trade=>trade.NetProfit));

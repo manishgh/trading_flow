@@ -282,10 +282,20 @@ public sealed record ExecutionRules(
     /// <summary>
     /// Decision-hour timing on as-traded bars (approved 12 November 2026): each session's daily rules are evaluated on the
     /// prior completed daily closes plus the 15:00 New York hourly close standing in for that day's close, and entries and
-    /// exits fill in the 15:00-16:00 hourly bar (on a half day, the last hourly bar before the early close). Not yet
-    /// implemented by the decision engine, which refuses it, so a strategy bound to it cannot run with the wrong timing.
+    /// exits fill in the 15:00-16:00 hourly bar (on a half day, the last hourly bar before the early close). Implemented for
+    /// backtests (BacktestRunner.DecisionHour.cs); the paper/live runner does not yet decide at the decision hour.
     /// </summary>
     public const string DecisionHourAsTradedTimingPolicy = "decision-hour-close-last-hour-fill-as-traded-v1";
+
+    /// <summary>The bar timeframe decision-hour orders fill on and their stops and targets are checked on.</summary>
+    public const string DecisionHourFillTimeframe = "1h";
+
+    /// <summary>
+    /// True for the timings that read as-traded (unadjusted) daily bars in whole-market research screens: their holdings are
+    /// closed before a split's ex-date and their screens must leave out stock-days with a split in the look-back.
+    /// </summary>
+    public static bool IsAsTradedResearchTiming(string policy) =>
+        policy is KeptGapAsTradedTimingPolicy or DecisionHourAsTradedTimingPolicy;
 
     public ExecutionConfirmationRules EffectiveConfirmation =>
         Confirmation ?? ExecutionConfirmationRules.Disabled;

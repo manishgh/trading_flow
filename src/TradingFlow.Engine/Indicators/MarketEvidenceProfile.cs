@@ -150,7 +150,8 @@ public sealed record MarketEvidenceOperationalRules(
         "completed-bar-next-slice-market-exits-v3" or TradingFlow.Domain.Strategies.ExecutionRules.KeptGapTimingPolicy or
         "completed-bar-pending-stop-market-session-deadline-v1" or "completed-bar-next-open-market-session-deadline-v1" => Production,
         "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
-            TradingFlow.Domain.Strategies.ExecutionRules.KeptGapAsTradedTimingPolicy =>
+            TradingFlow.Domain.Strategies.ExecutionRules.KeptGapAsTradedTimingPolicy or
+            TradingFlow.Domain.Strategies.ExecutionRules.DecisionHourAsTradedTimingPolicy =>
             Production with { RequiredAdjustmentPolicy = "raw" },
         _ => throw new InvalidOperationException($"Unsupported execution timing policy '{policy}'.")
     };

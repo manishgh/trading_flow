@@ -68,6 +68,12 @@ public sealed record CandlePipelineResult(
     CandlePipelineMetrics Metrics)
 {
     public IReadOnlyList<OhlcvBar> AllBars => TickerStates.Values.SelectMany(x => x.AllBars).ToArray();
+
+    /// <summary>
+    /// The indicator engine (with the run's market evidence profile and calendar) that computed these snapshots, so a later
+    /// provisional snapshot (decision-hour timing) is computed exactly as the completed ones were. Null when not produced here.
+    /// </summary>
+    public IndicatorEngine? Indicators { get; init; }
 }
 
 internal sealed record TickerTimeframeBars(
@@ -344,7 +350,7 @@ public sealed class CandlePipelineEngine
         }
 
         progress?.Report($"Built candle pipeline state for {states.Count}/{request.Tickers.Count} ticker(s).");
-        return new CandlePipelineResult(states, failures, metrics.ToImmutable(failures.Count));
+        return new CandlePipelineResult(states, failures, metrics.ToImmutable(failures.Count)) { Indicators = indicatorEngine };
 
         async Task ReadProviderBarsAsync(IReadOnlyCollection<string> tickers, bool recordFailure)
         {

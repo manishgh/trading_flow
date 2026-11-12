@@ -12,6 +12,12 @@ using TradingFlow.Engine.Strategies;
 namespace TradingFlow.Backtesting;
 
 /// <summary>
+/// A session's provisional daily bar and the indicator snapshot computed with it, known at the decision time
+/// (DecisionHourDailyBars): the setup evidence of a decision made before the session's final close exists.
+/// </summary>
+public sealed record ProvisionalSetupObservation(OhlcvBar Bar, IndicatorSnapshot Snapshot);
+
+/// <summary>
 /// Converts adapter-owned state into the immutable evidence contract consumed by
 /// the strategy kernel. It truncates every series at the decision time so callers
 /// cannot accidentally expose future bars to a backtest decision.
@@ -40,7 +46,8 @@ public static class StrategyDecisionRequestAssembler
         IReadOnlyList<DateOnly>? expectedReferenceSessions = null,
         DrawdownDecisionContext? drawdownContext = null,
         HistoricalNewsPresenceContext? historicalNewsPresence = null,
-        IntradayBreakoutContext? previousSessionContext = null)
+        IntradayBreakoutContext? previousSessionContext = null,
+        ProvisionalSetupObservation? provisionalSetup = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeStrategy);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -86,6 +93,8 @@ public static class StrategyDecisionRequestAssembler
                 .OrderBy(snapshot => snapshot.Timestamp)
                 .ToImmutableArray();
             RequireCausalSnapshotAlignment(symbol, timeframe, sourceBars, completedBars, completedSnapshots, duration, asOfUtc);
+            if (provisionalSetup is not null && timeframe.Equals(runtimeStrategy.Definition.Timeframe, StringComparison.OrdinalIgnoreCase))
+                (completedBars, completedSnapshots) = AppendProvisional(completedBars, completedSnapshots, provisionalSetup, asOfUtc);
             bars[timeframe] = completedBars;
             snapshots[timeframe] = completedSnapshots;
             counts[timeframe] = Math.Min(completedBars.Length, completedSnapshots.Length);
@@ -172,6 +181,20 @@ public static class StrategyDecisionRequestAssembler
             ? "completed bars and indicator snapshots do not contain the same ordered source observations"
             : $"source {hiddenDependency.Timestamp:O} is not known until {hiddenDependency.KnownAtUtc:O}, so its dependent indicator snapshots cannot be used";
         throw new InvalidOperationException($"point_in_time_indicator_snapshots_unavailable: {symbol} {timeframe} at {asOfUtc:O}: {detail}.");
+    }
+
+    /// <summary>
+    /// Appends a session's provisional setup bar and its snapshot (decision-hour timing) after the completed series. The bar
+    /// must be known exactly at the decision time and open after the last completed bar; nothing later is ever appended.
+    /// </summary>
+    private static (ImmutableArray<OhlcvBar> Bars, ImmutableArray<IndicatorSnapshot> Snapshots) AppendProvisional(
+        ImmutableArray<OhlcvBar> completedBars, ImmutableArray<IndicatorSnapshot> completedSnapshots,
+        ProvisionalSetupObservation provisional, DateTimeOffset asOfUtc)
+    {
+        if (provisional.Bar.KnownAtUtc != asOfUtc || provisional.Snapshot.Timestamp != provisional.Bar.Timestamp ||
+            provisional.Bar.Timestamp >= asOfUtc || completedBars.LastOrDefault() is { } last && last.Timestamp >= provisional.Bar.Timestamp)
+            throw new InvalidOperationException("A provisional setup bar must be known at the decision time and follow the completed bars.");
+        return (completedBars.Add(provisional.Bar), completedSnapshots.Add(provisional.Snapshot));
     }
 
     public static async ValueTask<DrawdownDecisionContext?> ResolveDrawdownContextAsync(

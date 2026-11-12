@@ -35,6 +35,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     private readonly HoldingDataRules? _holdingRules;
     private readonly Dictionary<string, DateOnly> _lastDailySessionBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private int _nextHoldingSession;
+    private readonly Dictionary<DateOnly, int> _holdingSessionIndex = [];
     private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
 
     /// <summary>Exit reason of a holding closed at its last real close because its daily bars stopped.</summary>
@@ -56,6 +57,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         _simulator = simulator ?? new DeterministicExecutionSimulator();
         _executionEvidence = executionEvidence;
         _holdingRules = holdingRules;
+        for (var index = 0; index < (holdingRules?.Sessions.Count ?? 0); index++) _holdingSessionIndex[holdingRules!.Sessions[index]] = index;
         if (holdingRules is { Sessions.Count: > 0 })
             foreach (var bar in marketBars.Where(bar => bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase)))
             {
@@ -343,6 +345,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             bar = bar with { High = bar.Open, Low = bar.Open, Close = bar.Open, Volume = previous.Bar.Volume };
         }
         _lastBarsBySymbol[symbol] = timelineBar;
+        SellBeforeSplitAtLastHour(symbol, trackers, timelineBar);
         var commands = BuildCommands(timelineBar.StartUtc, trackers);
         var hasWorkingOrder = _state.WorkingOrders.Values.Any(order =>
             NormalizeSymbol(order.Command.Symbol).Equals(symbol, StringComparison.OrdinalIgnoreCase));
@@ -447,17 +450,55 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 
     // Sell (or cover) each holding at its last real close through the shared simulator. The slice reuses that bar's close and
     // volume and ends at the bar's own completion time, so the fill belongs to the last real session and no bar enters the bar
-    // stream. Working entry, exit and protective orders are cancelled first. No participation cap applies: the position must
-    // close; impact keeps the configured rate per unit of participation, so a larger exit costs proportionally more.
+    // stream.
     private void CloseAtLastClose(string symbol, IReadOnlyList<(ExecutionTracker Tracker, string Reason)> holdings)
     {
         var last = _lastBarsBySymbol[symbol];
-        var start = last.EndUtc.AddTicks(-1);
+        ForceExitAt(symbol, holdings, new ExecutionMarketSlice(symbol, last.EndUtc.AddTicks(-1), last.EndUtc, last.AvailableAtUtc, 0,
+            IsCompleted: true, last.Bar.Close, last.Bar.Close, last.Bar.Close, last.Bar.Close, last.Bar.Volume), last.Bar,
+            "forced_last_close_exit_not_filled");
+    }
+
+    // Sub-daily holdings (decision-hour timing) whose next session is a split's ex-date are sold (or covered) at the open of
+    // this session's last-hour bar, the timing's exit point, before the bar's own orders run; the one-tick slice at the open
+    // ends inside this session. Daily holdings keep the last-close rule above.
+    private void SellBeforeSplitAtLastHour(string symbol, IReadOnlyCollection<ExecutionTracker> trackers, TimelineBar bar)
+    {
+        if (!IsLastHourBeforeExDate(symbol, bar.StartUtc)) return;
+        var holdings = trackers
+            .Where(t => !t.IsTerminal && t.Plan.Candidate.FillTimeframe is not null && t.EntryFilledQuantity > t.ExitFilledQuantity)
+            .OrderBy(t => t.Identity, StringComparer.Ordinal).Select(t => (t, SplitExitReason)).ToArray();
+        if (holdings.Length == 0) return;
+        var open = bar.Bar.Open;
+        var end = bar.StartUtc.AddTicks(1);
+        ForceExitAt(symbol, holdings, new ExecutionMarketSlice(symbol, bar.StartUtc, end, end, 0, IsCompleted: true,
+            open, open, open, open, bar.Bar.Volume), bar.Bar, "forced_split_exit_not_filled");
+    }
+
+    // True when the bar starting at barStart is the last-hour bar (DecisionHourDailyBars) of a session whose next trading
+    // session is a split ex-date of the symbol; false without the session schedules.
+    private bool IsLastHourBeforeExDate(string symbol, DateTimeOffset barStart)
+    {
+        if (_holdingRules?.Schedules is not { } schedules) return false;
+        var session = SessionOf(barStart);
+        if (!schedules.TryGetValue(session, out var schedule) || !schedule.IsTradingDay ||
+            TradingFlow.Engine.Indicators.DecisionHourDailyBars.DecisionTimeUtc(schedule, NewYork) != barStart ||
+            !_holdingSessionIndex.TryGetValue(session, out var index) || index + 1 >= _holdingRules.Sessions.Count)
+            return false;
+        return _holdingRules.SplitExDates.Contains((symbol, _holdingRules.Sessions[index + 1]));
+    }
+
+    // Run the forced exits of the given holdings on one price-point slice through the shared simulator: working entry, exit and
+    // protective orders are cancelled first and a market order closes the rest. No participation cap applies, as the position
+    // must close; impact keeps the configured rate per unit of participation, so a larger exit costs proportionally more. A
+    // holding still open afterwards fails with failureReason.
+    private void ForceExitAt(string symbol, IReadOnlyList<(ExecutionTracker Tracker, string Reason)> holdings,
+        ExecutionMarketSlice slice, OhlcvBar source, string failureReason)
+    {
         var commands = new List<SimulatedOrderCommand>();
-        foreach (var (tracker, reason) in holdings) AddForcedExit(tracker, reason, start, commands);
+        foreach (var (tracker, reason) in holdings) AddForcedExit(tracker, reason, slice.StartUtc, commands);
         var sequence = _sourceSequences.TryGetValue(symbol, out var prior) ? prior + 1 : 0;
         _sourceSequences[symbol] = sequence;
-        var close = last.Bar.Close;
         var trackers = holdings.Select(item => item.Tracker).ToArray();
         var policy = SlicePolicy(symbol, trackers);
         policy = policy with
@@ -466,15 +507,12 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             ImpactBpsAtMaxParticipation = policy.MaxParticipationPct > 0m
                 ? policy.ImpactBpsAtMaxParticipation * 100m / policy.MaxParticipationPct : policy.ImpactBpsAtMaxParticipation
         };
-        var step = _simulator.Advance(new ExecutionStepRequest(_state,
-            new ExecutionMarketSlice(symbol, start, last.EndUtc, last.AvailableAtUtc, sequence, IsCompleted: true,
-                close, close, close, close, last.Bar.Volume),
-            commands, policy));
+        var step = _simulator.Advance(new ExecutionStepRequest(_state, slice with { SourceSequence = sequence }, commands, policy));
         _state = step.State;
         AppendExecutionEvidence(step.Events);
-        ApplyEvents(step.Events, last.Bar);
+        ApplyEvents(step.Events, source);
         FinalizeTerminalTrackers();
-        foreach (var tracker in trackers.Where(t => !t.IsTerminal)) Fail(tracker, "forced_last_close_exit_not_filled");
+        foreach (var tracker in trackers.Where(t => !t.IsTerminal)) Fail(tracker, failureReason);
         _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
     }
 
@@ -803,11 +841,14 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             }
 
             tracker.ExecutionFees += executionEvent.Fees;
+            // A sub-daily fill (decision-hour timing) is booked to its own session; a daily one keeps the daily convention.
+            var fillTimeframe = tracker.Plan.Candidate.FillTimeframe;
             _fills.Add(new(tracker.Identity, tracker.Plan.Candidate.StrategyId, tracker.Plan.Candidate.Ticker,
                 executionEvent.Side == SimulatedOrderSide.Buy,
                 executionEvent.ClientOrderId == tracker.EntryClientOrderId, executionEvent.LastFillQuantity,
                 executionEvent.FillPrice!.Value, executionEvent.Fees, executionEvent.OccurredAtUtc,
-                NativeDailySessionLedger.SourceSessionDate(executionEvent.OccurredAtUtc)));
+                NativeDailySessionLedger.FillSessionDate(executionEvent.OccurredAtUtc, fillTimeframe, NativeDailySessionLedger.ValuationBasis))
+                { FillTimeframe = fillTimeframe });
         }
     }
 
@@ -1143,16 +1184,23 @@ internal sealed record ChronologicalExecutionPlan(
     StrategyDefinition Strategy,
     int RequestedQuantity)
 {
-    public string ExecutionTimeframe => Candidate.ExecutionReplay is null
-        ? Strategy.Execution.Timeframe : ExecutionReplayPolicy.Timeframe;
+    // The bars this plan's orders fill on: the fine replay slices, the candidate's own fill timeframe (decision-hour: hourly
+    // bars), or the strategy's execution timeframe.
+    public string ExecutionTimeframe => Candidate.ExecutionReplay is not null
+        ? ExecutionReplayPolicy.Timeframe : Candidate.FillTimeframe ?? Strategy.Execution.Timeframe;
 }
 
 /// <summary>
 /// Research-screen daily holding rules: the run's ordered trading sessions (as the native ledger resolves them) and each
 /// stock's split ex-dates (symbol upper case). A holding is closed at its last real close before an ex-date, or when its
-/// bars never resume within these sessions.
+/// bars never resume within these sessions. A holding that fills on sub-daily bars (decision-hour timing) is instead sold
+/// at the open of the last-hour bar of the session before the ex-date, which needs the session schedules.
 /// </summary>
-internal sealed record HoldingDataRules(IReadOnlyList<DateOnly> Sessions, IReadOnlySet<(string Symbol, DateOnly ExDate)> SplitExDates);
+internal sealed record HoldingDataRules(IReadOnlyList<DateOnly> Sessions, IReadOnlySet<(string Symbol, DateOnly ExDate)> SplitExDates)
+{
+    /// <summary>The exchange schedule of each session (regular or early close); null when no holding fills on sub-daily bars.</summary>
+    public IReadOnlyDictionary<DateOnly, TradingFlow.Engine.Indicators.MarketSessionSchedule>? Schedules { get; init; }
+}
 
 internal sealed record ActiveBacktestExecution(
     string Ticker,

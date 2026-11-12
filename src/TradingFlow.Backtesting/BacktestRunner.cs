@@ -419,6 +419,9 @@ public sealed partial class BacktestRunner(
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
         var requiredTimeframes = ResolveRequiredTimeframes(strategies);
+        // Decision-hour strategies decide on and fill on hourly bars beside their daily series.
+        if (strategies.Any(IsDecisionHour))
+            requiredTimeframes = requiredTimeframes.Append(ExecutionRules.DecisionHourFillTimeframe).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         // SIP fills use physical events; observed five-minute bars are also needed for separately verified close valuation.
         if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1)
             requiredTimeframes = requiredTimeframes.Append(ExecutionReplayPolicy.Timeframe).Distinct().ToArray();
@@ -546,6 +549,7 @@ public sealed partial class BacktestRunner(
             sink: candidateHypothesisJournal,
             evidenceScope: "candidate_hypothesis");
         var catalystStreamer = new CatalystStreamer(CreateNewsProvider(run));
+        decisionHourIndicators = preparedMarket.MarketState.Indicators;
 
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
@@ -1372,6 +1376,10 @@ public sealed partial class BacktestRunner(
         RetainedCandidateBudget retainedCandidateBudget,
         CancellationToken cancellationToken)
     {
+        if (IsDecisionHour(strategy))
+            return await CreateDecisionHourCandidatesAsync(run, ResolveRuntimeStrategy(strategy), bars, snapshots, barsByTimeframe,
+                snapshotsByTimeframe, catalysts, evaluationStart, evaluationEnd, universeMembership, regimeCalendar, candidateJournal,
+                executionAuditor, retainedCandidateBudget, cancellationToken);
         var candidates = new List<BacktestCandidateTrade>();
         var diagnostics = new StrategyCandidateDiagnostics(strategy.StrategyId, strategy.StrategyName);
         // Prepared inputs can cover a larger comparison window; never inspect its later execution suffix.
@@ -1457,22 +1465,8 @@ public sealed partial class BacktestRunner(
             foreach (var decisionTime in decisionTimes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var eligibilityDay = DateOnly.FromDateTime(decisionTime.UtcDateTime);
-                var universeEligible = universeMembership is null ||
-                    universeMembership.IsMember(snapshot.Ticker, eligibilityDay);
-                var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(decisionTime);
-                var universeEvidence = new StrategyEligibilityEvidence(
-                    universeEligible,
-                    universeMembership is null ? "static_run_universe" : "historical_universe_membership",
-                    $"{snapshot.Ticker}:{eligibilityDay:yyyy-MM-dd}",
-                    decisionTime,
-                    JsonSerializer.Serialize(new { snapshot.Ticker, eligibilityDay, universeEligible }));
-                var regimeEvidence = new StrategyEligibilityEvidence(
-                    regimeEligible,
-                    regimeCalendar is null ? "strategy_has_no_regime_gate" : "historical_regime_calendar",
-                    $"{strategy.StrategyId}:{eligibilityDay:yyyy-MM-dd}",
-                    decisionTime,
-                    JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible }));
+                var (universeEvidence, regimeEvidence) = EligibilityEvidence(snapshot.Ticker, strategy, decisionTime,
+                    universeMembership, regimeCalendar);
                 var request = StrategyDecisionRequestAssembler.Create(
                     runtimeStrategy,
                     snapshot.Ticker,

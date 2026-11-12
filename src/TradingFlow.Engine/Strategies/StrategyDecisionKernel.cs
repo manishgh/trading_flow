@@ -208,7 +208,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         var setupBars = request.BarsByTimeframe[request.Strategy.Timeframe];
         var setupSnapshots = request.SnapshotsByTimeframe[request.Strategy.Timeframe];
         var latest = setupSnapshots[^1];
-        var setupAvailableAt = latest.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Timeframe));
+        var setupAvailableAt = IsDecisionHour(request) ? asOfUtc : latest.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Timeframe));
         if (request.Strategy.EntryRules.OpeningRangeBreakout is not null)
         {
             var evaluation = request.PreviousSessionContext is { } context
@@ -405,7 +405,10 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         // Historical stop context is not the time an order became actionable.
         // In particular, a prior-session intraday close cannot backdate a daily
         // setup, a delayed receipt, or a later admission decision.
-        var triggeredAtUtc = triggerSnapshot.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Execution.Timeframe));
+        // A decision-hour trigger is the session's provisional bar, known at the decision time rather than at its completion.
+        var triggeredAtUtc = IsDecisionHour(request) && confirmationIndex == executionSnapshots.Length - 1
+            ? asOfUtc
+            : triggerSnapshot.Timestamp.Add(TimeframeParser.Parse(request.Strategy.Execution.Timeframe));
         if (triggeredAtUtc < setupAvailableAt) triggeredAtUtc = setupAvailableAt;
         if (triggeredAtUtc < asOfUtc) triggeredAtUtc = asOfUtc;
         var orderPlan = new StrategyOrderPlan(
@@ -493,6 +496,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         if (request.AdmissionProfile.ExecutionTimingPolicy is not
             ("completed-bar-next-executable-bar-v1" or "completed-bar-asof-regime-scheduled-expiry-v2" or
              "completed-bar-next-slice-market-exits-v3" or ExecutionRules.KeptGapTimingPolicy or ExecutionRules.KeptGapAsTradedTimingPolicy or
+             ExecutionRules.DecisionHourAsTradedTimingPolicy or
              "completed-bar-precommitted-terminal-open-v4" or "completed-bar-precommitted-terminal-owned-v5" or
              OpeningRangeBreakoutRules.ExecutionTimingPolicy or OpeningRangeBreakoutRules.NextBarMarketTimingPolicy))
         {
@@ -503,6 +507,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         ValidateDiscovery(request.Candidate);
         ValidateMarketEvidence(request.Candidate.MarketState,
             MarketEvidenceOperationalRules.ForExecutionTimingPolicy(request.AdmissionProfile.ExecutionTimingPolicy));
+        if (IsDecisionHour(request)) RequireDecisionHourRequest(request);
         var requiredTimeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             request.Strategy.Timeframe,
@@ -527,7 +532,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 bars,
                 snapshots,
                 request.AsOfUtc,
-                request.Candidate.MarketState);
+                request.Candidate.MarketState,
+                provisionalLast: IsDecisionHour(request));
         }
 
         if (request.Strategy.EntryRules.DrawdownQualification is { } drawdownRules)
@@ -574,6 +580,31 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray());
         }
         return null;
+    }
+
+    /// <summary>True when the request is bound to the decision-hour timing (daily rules decided one hour before the close).</summary>
+    private static bool IsDecisionHour(StrategyDecisionRequest request) =>
+        request.AdmissionProfile.ExecutionTimingPolicy == ExecutionRules.DecisionHourAsTradedTimingPolicy;
+
+    /// <summary>
+    /// A session's provisional daily bar (DecisionHourDailyBars): it opened before the decision, is known exactly at it and
+    /// would complete only after it. Any other last bar would mean the decision read a completed or a future session.
+    /// </summary>
+    private static bool IsProvisionalAt(OhlcvBar bar, TimeSpan duration, DateTimeOffset asOfUtc) =>
+        bar.KnownAtUtc == asOfUtc && bar.Timestamp < asOfUtc && bar.Timestamp.Add(duration) > asOfUtc;
+
+    /// <summary>
+    /// Refuses decision-hour requests outside the implemented path: native daily setup and execution on one series with no
+    /// confirmation bar, confluence, drawdown gate or technical factor, which would read evidence this timing does not supply.
+    /// </summary>
+    private static void RequireDecisionHourRequest(StrategyDecisionRequest request)
+    {
+        var strategy = request.Strategy;
+        if (strategy.Timeframe != "1d" || strategy.Execution.Timeframe != "1d" || strategy.Execution.EffectiveConfirmation.Enabled ||
+            strategy.Confluence.Enabled || strategy.EntryRules.DrawdownQualification is not null ||
+            strategy.EntryRules.TechnicalFactor is not null || strategy.EntryRules.OpeningRangeBreakout is not null)
+            throw new InvalidOperationException("The decision-hour timing supports daily rules on one daily series only, without " +
+                "confirmation bars, confluence, drawdown gates, technical factors or opening ranges.");
     }
 
     private static void ValidateDiscovery(StrategyCandidateSnapshot candidate)
@@ -650,7 +681,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         ImmutableArray<OhlcvBar> bars,
         ImmutableArray<IndicatorSnapshot> snapshots,
         DateTimeOffset asOfUtc,
-        StrategyMarketStateEvidence marketEvidence)
+        StrategyMarketStateEvidence marketEvidence,
+        bool provisionalLast = false)
     {
         if (bars.Length < 2 || bars.Length != snapshots.Length)
         {
@@ -663,13 +695,15 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         {
             var bar = bars[index];
             var snapshot = snapshots[index];
+            // Under the decision-hour timing the last bar is the session's provisional bar, known exactly at the decision.
+            var provisional = provisionalLast && index == bars.Length - 1;
             if (!bar.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase) ||
                 !snapshot.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase) ||
                 !bar.Timeframe.Equals(timeframe, StringComparison.OrdinalIgnoreCase) ||
                 !snapshot.Timeframe.Equals(timeframe, StringComparison.OrdinalIgnoreCase) ||
                 bar.Timestamp != snapshot.Timestamp ||
                 previous is { } prior && bar.Timestamp <= prior ||
-                bar.Timestamp.Add(duration) > asOfUtc ||
+                (provisional ? !IsProvisionalAt(bar, duration, asOfUtc) : bar.Timestamp.Add(duration) > asOfUtc) ||
                 bar.KnownAtUtc is { } knownAt && knownAt > asOfUtc ||
                 !bar.DataFeed.Equals(marketEvidence.Feed, StringComparison.OrdinalIgnoreCase) ||
                 !bar.AdjustmentPolicy.Equals(marketEvidence.AdjustmentPolicy, StringComparison.OrdinalIgnoreCase) ||

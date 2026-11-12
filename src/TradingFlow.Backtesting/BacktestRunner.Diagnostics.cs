@@ -601,7 +601,8 @@ public sealed partial class BacktestRunner
         var execution = new ChronologicalBacktestExecutionCoordinator(
             portfolio, marketBars, executionEvidence: executionEvidence,
             holdingRules: accounting is { ResearchScreenHoldingRules: true }
-                ? new HoldingDataRules(NativeDailySessionLedger.ResolveSessions(accounting), accounting.SplitExDates) : null);
+                ? new HoldingDataRules(NativeDailySessionLedger.ResolveSessions(accounting), accounting.SplitExDates)
+                    { Schedules = accounting.Sessions } : null);
 
         foreach (var entryGroup in candidates
                      .OrderBy(candidate => candidate.EntryTimestamp.ToUniversalTime())

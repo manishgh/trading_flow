@@ -34,6 +34,16 @@ public static class NativeDailySessionLedger
             ? DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(execution, NewYork).DateTime)
             : SourceSessionDate(execution);
 
+    // A fill's source session: a fill on sub-daily bars (fillTimeframe set, decision-hour timing) belongs to the New York
+    // session it executed in, as its slice ends inside or at the close of that session; any other fill keeps the convention
+    // of the valuation basis above.
+    public static DateOnly FillSessionDate(DateTimeOffset fillTime, string? fillTimeframe, string valuationBasis) =>
+        fillTimeframe is null ? SourceSessionDate(fillTime, valuationBasis) : ExecutionSessionDate(fillTime);
+
+    // The New York session of an execution stamped at the end of its sub-daily slice (the instant just before the stamp).
+    public static DateOnly ExecutionSessionDate(DateTimeOffset sliceEnd) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(sliceEnd.AddTicks(-1), NewYork).DateTime);
+
     // These UTC keys order accounting sessions only; they do not claim an observed intraday execution time.
     private static DateTimeOffset AccountingKey(DateOnly date) => new(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
 
@@ -137,7 +147,10 @@ public static class NativeDailySessionLedger
             throw new InvalidDataException("Native admitted order plans are inconsistent.");
         foreach (var fill in fills)
         {
-            if (!sessions.Contains(fill.SourceSessionDate) || fill.SourceSessionDate != SourceSessionDate(fill.TimestampUtc, state.ValuationBasis) ||
+            if (fill.FillTimeframe is { } fillTimeframe && TradingFlow.Engine.Market.TimeframeParser.IsDailyOrHigher(fillTimeframe))
+                throw new InvalidDataException("A native fill's own fill timeframe must be sub-daily.");
+            if (!sessions.Contains(fill.SourceSessionDate) ||
+                fill.SourceSessionDate != FillSessionDate(fill.TimestampUtc, fill.FillTimeframe, state.ValuationBasis) ||
                 fill.TimestampUtc.Offset != TimeSpan.Zero || fill.TimestampUtc > context.CutoffUtc ||
                 fill.Quantity <= 0 || fill.Price <= 0 || fill.Fees < 0)
                 throw new InvalidDataException("A native fill has invalid quantity/cost or lies outside its source-session calendar.");

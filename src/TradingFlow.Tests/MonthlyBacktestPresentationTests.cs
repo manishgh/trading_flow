@@ -36,6 +36,16 @@ public sealed class MonthlyBacktestPresentationTests
             TradingFlow.Backtesting.NativeDailySessionLedger.ValuationBasis));
     }
 
+    /// <summary>A decision-hour exit filled at 16:00 on 1 October belongs to 1 October, not to the daily convention's 30 September.</summary>
+    [Fact]
+    public void DecisionHourExitAtTheClose_BelongsToItsOwnSession()
+    {
+        var exit = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
+        var basis = TradingFlow.Backtesting.NativeDailySessionLedger.ValuationBasis;
+        Assert.Equal(new DateOnly(2026, 10, 1), MonthlyBacktestPresentation.SourceSessionDate(exit, basis, ExecutionRules.DecisionHourAsTradedTimingPolicy));
+        Assert.Equal(new DateOnly(2026, 9, 30), MonthlyBacktestPresentation.SourceSessionDate(exit, basis, ExecutionRules.KeptGapAsTradedTimingPolicy));
+    }
+
     [Fact]
     public void SupportedEarlierMonth_RetainsItsClosedTradeCountWhenLaterMarksAreUnavailable()
     {
