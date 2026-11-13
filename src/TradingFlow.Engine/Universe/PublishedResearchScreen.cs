@@ -47,6 +47,12 @@ public sealed record ResearchScreenSplitRule(int? LookbackSessions, int Excluded
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     int? IncompleteStocks = null);
 
+/// <summary>
+/// A liquidity tier: on each session only eligible stocks ranked <see cref="FromRank"/> to <see cref="ToRank"/> (1 = highest)
+/// by the screen's average dollar volume of earlier sessions are kept; ties go by symbol. Ranks use only earlier sessions.
+/// </summary>
+public sealed record ResearchScreenLiquidityTier(int FromRank, int ToRank, string Measure = "average_dollar_volume");
+
 /// <summary>A file named in the manifest with its SHA-256 (lower-case hex of its exact bytes).</summary>
 public sealed record ResearchScreenFile(string FileName, string Sha256);
 
@@ -68,7 +74,10 @@ public sealed record ResearchScreenManifest(
     IReadOnlyDictionary<string, string> Outputs,
     // The split look-back rule and how many eligible stock-days it left out; omitted when the rule was not used.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    ResearchScreenSplitRule? SplitRule = null)
+    ResearchScreenSplitRule? SplitRule = null,
+    // The liquidity tier applied after the screen rules (ranks by 20-day average dollar volume); omitted when not used.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ResearchScreenLiquidityTier? LiquidityTier = null)
 {
     public const int CurrentSchemaVersion = 1;
     public const string CodeVersionName = "research-daily-screen-manifest-v1";
@@ -90,7 +99,7 @@ public sealed record ResearchScreenManifest(
     /// </summary>
     public static async Task<string> PublishAsync(string folder, ResearchScreenInputs inputs, DailyScreenRules screen,
         DailyRankingRules? ranking, DateOnly from, DateOnly to, string issuerIdentityBasis, string? fundExclusionPath,
-        CancellationToken cancellationToken, ResearchScreenSplitRule? splitRule = null)
+        CancellationToken cancellationToken, ResearchScreenSplitRule? splitRule = null, ResearchScreenLiquidityTier? liquidityTier = null)
     {
         var outputs = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var name in OutputFileNames.Where(name => File.Exists(Path.Combine(folder, name))))
@@ -99,7 +108,7 @@ public sealed record ResearchScreenManifest(
             : new ResearchScreenFile(Path.GetFileName(fundExclusionPath), await Sha256FileAsync(fundExclusionPath, cancellationToken));
         var manifest = new ResearchScreenManifest(CurrentSchemaVersion, CodeVersionName, from, to, inputs, ResearchScreenRuleValues.From(screen),
             ranking is null ? null : ResearchRankingRuleValues.From(ranking), issuerIdentityBasis, exclusion, outputs,
-            splitRule is { LookbackSessions: not null } ? splitRule : null);
+            splitRule is { LookbackSessions: not null } ? splitRule : null, liquidityTier);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, Json);
         await File.WriteAllBytesAsync(Path.Combine(folder, FileName), bytes, cancellationToken);
         return Sha256(bytes);

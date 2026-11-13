@@ -92,6 +92,30 @@ public sealed class DailyScreenCommandTests
         Assert.All(screened, item => Assert.Equal(200, item.Values.HistorySessions));
     }
 
+    // A liquidity tier keeps each session's stocks ranked within the tier by average dollar volume (highest first, ties by
+    // symbol), rewrites eligible.csv and recounts each session.
+    [Fact]
+    public async Task LiquidityTier_KeepsEachSessionsRankedStocksOnly()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tf-tier-" + Guid.NewGuid().ToString("N") + ".csv");
+        try
+        {
+            await File.WriteAllLinesAsync(path, [
+                "session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions",
+                "2026-01-05,AAA,10,1,300,,200", "2026-01-05,BBB,10,1,100,,200", "2026-01-05,CCC,10,1,200,,200",
+                "2026-01-06,AAA,10,1,50,,200", "2026-01-06,BBB,10,1,90,,200", "2026-01-06,CCC,10,1,90,,200"]);
+
+            var counts = await TradingFlow.Cli.DailyScreenCommand.ApplyLiquidityTierAsync(path, TradingFlow.Cli.DailyScreenCommand.ParseTier("2-3"), default);
+
+            var kept = (await File.ReadAllLinesAsync(path)).Skip(1).Select(line => line[..14]).ToArray();
+            // Day 1 ranks AAA, CCC, BBB -> keeps CCC, BBB; day 2 ranks BBB, CCC (tie by symbol), AAA -> keeps CCC, AAA.
+            Assert.Equal(new[] { "2026-01-05,BBB", "2026-01-05,CCC", "2026-01-06,AAA", "2026-01-06,CCC" }, kept);
+            Assert.Equal(new[] { 2, 2 }, counts.Values);
+            Assert.Throws<ArgumentException>(() => TradingFlow.Cli.DailyScreenCommand.ParseTier("5-1"));
+        }
+        finally { File.Delete(path); }
+    }
+
     // The complete-stocks rule keeps a stock only with a bar on every required session and no split or suspected split in
     // that span; each failure names its first reason.
     [Fact]

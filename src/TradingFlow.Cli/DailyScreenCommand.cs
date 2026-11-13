@@ -122,6 +122,8 @@ public static class DailyScreenCommand
             }
         }
 
+        var tier = options.TryGetValue("--liquidity-tier", out var tierText) ? ParseTier(tierText) : null;
+        if (tier is not null) counts = await ApplyLiquidityTierAsync(Path.Combine(folder, "eligible.csv"), tier, cancellationToken);
         await File.WriteAllLinesAsync(Path.Combine(folder, "daily-counts.csv"),
             new[] { "session_date,eligible" }.Concat(counts.Select(pair => $"{pair.Key:yyyy-MM-dd},{pair.Value}")), cancellationToken);
         output.WriteLine($"Screened {counts.Count} sessions from {from:yyyy-MM-dd} to {to:yyyy-MM-dd}; excluded {excluded.Count} listed symbols; output {folder}.");
@@ -137,9 +139,10 @@ public static class DailyScreenCommand
                 $"{suspectedExcluded} whose look-back holds an overnight jump with no recorded split ({SuspectedUnrecordedSplitReason}).");
         if (required is not null)
             output.WriteLine($"Complete stocks from {required.Min():yyyy-MM-dd}: {completeStocks} kept, {incompleteStocks} left out ({IncompleteStocksFileName}).");
+        if (tier is not null) output.WriteLine($"Liquidity tier: ranks {tier.FromRank}-{tier.ToRank} by average dollar volume of earlier sessions.");
         var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile,
             new ResearchScreenSplitRule(splitLookback, splitExcluded, suspectedExcluded, required?.Min(),
-                required is null ? null : completeStocks, required is null ? null : incompleteStocks), cancellationToken);
+                required is null ? null : completeStocks, required is null ? null : incompleteStocks), cancellationToken, tier);
         output.WriteLine($"Manifest {ResearchScreenManifest.FileName} SHA-256 {manifestSha}.");
         return 0;
     }
@@ -151,7 +154,7 @@ public static class DailyScreenCommand
     /// </summary>
     private static async Task<string> PublishManifestAsync(IReadOnlyDictionary<string, string> options, SqliteEvidenceCatalog catalog,
         DailyScreenRules rules, DailyRankingRules? ranking, DateOnly from, DateOnly to, string folder, string? excludeFile,
-        ResearchScreenSplitRule splitRule, CancellationToken cancellationToken)
+        ResearchScreenSplitRule splitRule, CancellationToken cancellationToken, ResearchScreenLiquidityTier? tier = null)
     {
         string? sessions = null;
         if (options.TryGetValue("--sessions", out var sessionsId))
@@ -164,7 +167,39 @@ public static class DailyScreenCommand
         var inputs = new ResearchScreenInputs(Require(options, "--bars"), Require(options, "--actions"),
             options.TryGetValue("--opening-bars", out var opening) ? opening : null, sessions);
         return await ResearchScreenManifest.PublishAsync(folder, inputs, rules, ranking, from, to, DailyRankingOutput.IssuerIdentityBasis,
-            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken, splitRule);
+            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken, splitRule, tier);
+    }
+
+    /// <summary>Parses --liquidity-tier "from-to" (1-based ranks, inclusive), e.g. "1-500" or "501-1500".</summary>
+    public static ResearchScreenLiquidityTier ParseTier(string text)
+    {
+        var parts = text.Split('-');
+        if (parts.Length != 2 || !Int32.TryParse(parts[0], CultureInfo.InvariantCulture, out var from) ||
+            !Int32.TryParse(parts[1], CultureInfo.InvariantCulture, out var to) || from < 1 || to < from)
+            throw new ArgumentException($"--liquidity-tier must be 'from-to' with 1 <= from <= to; got '{text}'.");
+        return new ResearchScreenLiquidityTier(from, to);
+    }
+
+    /// <summary>
+    /// Keeps, on each session of eligible.csv, only the stocks ranked within <paramref name="tier"/> by average dollar volume
+    /// (the value the screen measured from earlier sessions; highest first, ties by symbol), rewrites the file and returns the
+    /// per-session counts. Uses only values known before each session, so a tier never looks ahead.
+    /// </summary>
+    public static async Task<SortedDictionary<DateOnly, int>> ApplyLiquidityTierAsync(string eligiblePath, ResearchScreenLiquidityTier tier,
+        CancellationToken cancellationToken)
+    {
+        var lines = await File.ReadAllLinesAsync(eligiblePath, cancellationToken);
+        var header = lines[0];
+        var column = Array.IndexOf(header.Split(','), "average_dollar_volume");
+        if (column < 0) throw new InvalidDataException("eligible.csv has no average_dollar_volume column.");
+        var kept = lines.Skip(1).Where(line => line.Length > 0).Select(line => (Line: line, Cells: line.Split(',')))
+            .GroupBy(row => row.Cells[0], StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
+            .SelectMany(group => group.OrderByDescending(row => Decimal.Parse(row.Cells[column], CultureInfo.InvariantCulture))
+                .ThenBy(row => row.Cells[1], StringComparer.Ordinal).Skip(tier.FromRank - 1).Take(tier.ToRank - tier.FromRank + 1)
+                .OrderBy(row => row.Cells[1], StringComparer.Ordinal))
+            .ToArray();
+        await File.WriteAllLinesAsync(eligiblePath, new[] { header }.Concat(kept.Select(row => row.Line)), cancellationToken);
+        return new SortedDictionary<DateOnly, int>(kept.GroupBy(row => Date(row.Cells[0])).ToDictionary(group => group.Key, group => group.Count()));
     }
 
     /// <summary>Reason written for an eligible stock-day left out because a split lies inside its look-back.</summary>
