@@ -150,6 +150,41 @@ public class CandlePipelineEngineTests
         Assert.Contains("Cannot derive required timeframe 1m from coarser source timeframe 5m", reason);
     }
 
+    // A finer timeframe that was downloaded but came back empty for one stock is missing data (a named reason research
+    // screens skip and count), not a settings error; the Connors November 2025 check stopped on 20 such stocks.
+    [Fact]
+    public async Task RunAsync_DownloadedFinerTimeframeWithNoBarsIsNamedMissingData()
+    {
+        var engine = new CandlePipelineEngine();
+
+        var result = await engine.RunAsync(
+            new CandlePipelineRequest(
+                ["AAPL"],
+                ["1m", "5m"],
+                ["1m", "5m"],
+                "5m",
+                DateTimeOffset.UtcNow.AddDays(-1),
+                DateTimeOffset.UtcNow,
+                BoundedCapacity: 10,
+                WorkerCount: 2),
+            new WithoutTimeframeProvider(new CapturingMarketDataProvider(), "1m"),
+            CancellationToken.None);
+
+        Assert.True(result.Failures.TryGetValue("AAPL", out var reason));
+        Assert.True(MarketDataUnavailable.IsNamedReason(reason), reason);
+    }
+
+    // Passes every bar through except one timeframe, as a provider that returned nothing for it.
+    private sealed class WithoutTimeframeProvider(IMarketDataProvider inner, string omitted) : IMarketDataProvider
+    {
+        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> timeframes,
+            DateTimeOffset start, DateTimeOffset end, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await foreach (var bar in inner.GetBarsAsync(tickers, timeframes, start, end, cancellationToken))
+                if (!bar.Timeframe.Equals(omitted, StringComparison.OrdinalIgnoreCase)) yield return bar;
+        }
+    }
+
     [Fact]
     public async Task RunAsync_FiltersProviderBarThatIsNotCompletedAtRequestEnd()
     {

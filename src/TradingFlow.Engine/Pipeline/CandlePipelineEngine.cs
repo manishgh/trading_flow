@@ -544,9 +544,7 @@ public sealed class CandlePipelineEngine
             {
                 if (TimeframeParser.Parse(target) < TimeframeParser.Parse(request.DeriveFromTimeframe))
                 {
-                    failures[ticker] =
-                        $"Cannot derive required timeframe {target} from coarser source timeframe {request.DeriveFromTimeframe}. " +
-                        $"Add {target} to market_data.download_timeframes.";
+                    failures[ticker] = FinerTimeframeFailure(request, ticker, target);
                     continue;
                 }
 
@@ -619,6 +617,20 @@ public sealed class CandlePipelineEngine
         }
 
         return Math.Max(1, Environment.ProcessorCount - 1);
+    }
+
+    /// <summary>
+    /// Why a required timeframe finer than the derivation source is missing for one stock. When that timeframe was downloaded,
+    /// the provider simply returned no bars for this stock, which is missing data (a named reason a research screen skips and
+    /// counts); when it was never downloaded, the run settings are wrong, which stays an error that stops the run.
+    /// </summary>
+    private static string FinerTimeframeFailure(CandlePipelineRequest request, string ticker, string target)
+    {
+        var downloaded = request.DownloadTimeframes.Any(timeframe => timeframe.Equals(target, StringComparison.OrdinalIgnoreCase));
+        return downloaded
+            ? $"{MarketDataUnavailable.BarsMissing}: the provider returned no {target} bars for {ticker} in the requested window."
+            : $"Cannot derive required timeframe {target} from coarser source timeframe {request.DeriveFromTimeframe}. " +
+              $"Add {target} to market_data.download_timeframes.";
     }
 
     private static string NormalizeTickerForFailure(string ticker)
