@@ -70,7 +70,8 @@ public sealed class EtfRotationTests
             BacktestRunner.MeasureAdmissionCapacity(off, 100_000m, held, open));
         var on = off with { SameOpenExitsReleaseCapacity = true, SizeFromMarkedEquity = true };
         // B (an open-fill sale) is released; C (a stop inside the bar) is not. Marked equity adds 3 x 100 x (110 - 100).
-        Assert.Equal(new AdmissionCapacity(2, 103_000m / 3, 81_000m, 103_000m),
+        // The 2.5% the 3 x 32.5% slots leave unused (2,575 of 103,000) stays in cash: 70,000 + 11,000 - 2,575.
+        Assert.Equal(new AdmissionCapacity(2, 103_000m / 3, 78_425m, 103_000m),
             BacktestRunner.MeasureAdmissionCapacity(on, 100_000m, held, open));
     }
 

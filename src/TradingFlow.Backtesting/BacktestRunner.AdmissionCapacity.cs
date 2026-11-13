@@ -11,7 +11,9 @@ public sealed partial class BacktestRunner
     /// Capacity for entries filling at <paramref name="entryOpen"/>: held positions counted against the slot limit, the
     /// value of one slot, the value available to spend, and the equity the order planner caps a position against.
     /// <paramref name="realizedEquity"/> is starting capital plus closed-trade profit; each held position reserves its
-    /// planned cost. Marks use each position's last processed close, which is known before the open.
+    /// planned cost. Marks use each position's last processed close, which is known before the open. With same-open swaps
+    /// on, the share of sizing equity the slots leave unused (100% minus slots x position cap, 2.5% for 3 x 32.5%) stays
+    /// in cash: a sale fills at the open, not at the last close its value was counted at, and slippage applies.
     /// </summary>
     internal static AdmissionCapacity MeasureAdmissionCapacity(PortfolioConfig portfolio, decimal realizedEquity,
         IReadOnlyList<ActiveBacktestExecution> held, DateTimeOffset entryOpen)
@@ -24,10 +26,13 @@ public sealed partial class BacktestRunner
         var sizingEquity = portfolio.SizeFromMarkedEquity
             ? realizedEquity + held.Sum(position => MarkedValue(position) - position.ReservedNotional)
             : realizedEquity;
+        var cashKept = portfolio.SameOpenExitsReleaseCapacity
+            ? sizingEquity * Math.Max(0m, 1m - portfolio.MaxConcurrentPositions * portfolio.MaxPositionNotionalPct / 100m)
+            : 0m;
         return new AdmissionCapacity(
             held.Count - releasing.Length,
             sizingEquity / portfolio.MaxConcurrentPositions,
-            Math.Max(0m, realizedEquity - reserved + releasedValue),
+            Math.Max(0m, realizedEquity - reserved + releasedValue - cashKept),
             sizingEquity);
     }
 
