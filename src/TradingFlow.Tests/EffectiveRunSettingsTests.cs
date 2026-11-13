@@ -17,7 +17,7 @@ public sealed class EffectiveRunSettingsTests
     [InlineData(true)]
     public async Task DayWorkflow_FreezesPriorSessionWarmupWithoutCollectingCandlesDuringReview(bool preparedCalendar)
     {
-        using var fixture = await Fixture.CreateAsync();
+        using var fixture = await Fixture.CreateAsync(dayStrategy: true);
         // This fixture's swing-only terminal override is deliberately removed before selecting day research.
         var profileYaml = await File.ReadAllTextAsync(fixture.ProfilePath);
         await File.WriteAllTextAsync(fixture.ProfilePath, profileYaml.Replace(
@@ -373,7 +373,8 @@ public sealed class EffectiveRunSettingsTests
         public required BacktestRunRequest Request { get; init; }
 
         // Read only source-controlled catalogs; write every generated artifact under one disposable test root.
-        public static async Task<Fixture> CreateAsync(string policy = ExecutionReplayPolicy.DailyRthSipPortfolioV1)
+        // dayStrategy: the real catalog (opening-range breakout versions) instead of the retired daily test-owned copies.
+        public static async Task<Fixture> CreateAsync(string policy = ExecutionReplayPolicy.DailyRthSipPortfolioV1, bool dayStrategy = false)
         {
             var repo = TestRepository.FindRoot();
             var root = Path.Combine(Path.GetTempPath(), "tradingflow-effective-settings-" + Guid.NewGuid().ToString("N"));
@@ -382,11 +383,13 @@ public sealed class EffectiveRunSettingsTests
             {
                 var paths = new ProjectPaths(root);
                 var reader = new SimpleYamlReader();
-                var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+                var artifacts = dayStrategy
+                    ? new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader)
+                    : RetiredStrategyFixtures.Catalog(reader); // a daily strategy (retired versions, test-owned copies)
                 var store = new StrategyExperimentArtifactStore(Path.Combine(root, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
                 var authorization = new StrategyAuthorizationTestRegistry();
                 var catalog = new ConfigCatalogService(paths, reader, artifacts, store, authorization);
-                var strategy = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest)).First(item => item.Definition.Timeframe == "1d");
+                var strategy = (await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest)).First(item => dayStrategy || item.Definition.Timeframe == "1d");
                 var normalizedRoot = root.Replace('\\', '/');
                 // This empty synthetic graph tests setting preservation only; it cannot qualify an evidence-required recipe.
                 await File.WriteAllTextAsync(Path.Combine(root, "manifest.json"),

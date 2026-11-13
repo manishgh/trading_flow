@@ -16,8 +16,7 @@ public sealed class ShortSwingStrategyTests
     private const string ConnorsShortFile = "swing-connors-rsi2-short.bt-v2.yaml";
     private const string SnapbackShortFile = "swing-snapback-short.bt-v2.yaml";
 
-    private static StrategyDefinition Load(string name) => new SimpleYamlReader().ReadStrategy(
-        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name));
+    private static StrategyDefinition Load(string name) => new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy(name));
 
     // Build daily bars from closes (high/low one dollar around the close) and evaluate the last completed bar.
     private static (TradeSignal Signal, string? Rejection) EvaluateLastBar(StrategyDefinition strategy, IReadOnlyList<decimal> closes)
@@ -107,7 +106,7 @@ public sealed class ShortSwingStrategyTests
     [InlineData(SnapbackShortFile, "  close_above_sma_period: 20\n", "")]
     public void InvalidShortSettings_FailWhenLoaded(string file, string original, string replacement)
     {
-        var source = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", file))
+        var source = File.ReadAllText(RetiredStrategyFixtures.Strategy(file))
             .Replace("\r\n", "\n", StringComparison.Ordinal);
         Assert.Contains(original, source, StringComparison.Ordinal);
         var path = Path.Combine(Path.GetTempPath(), "tf-short-rule-" + Guid.NewGuid().ToString("N") + ".yaml");
@@ -124,7 +123,7 @@ public sealed class ShortSwingStrategyTests
     [Fact]
     public void FillDayCheck_WithAStop_FailsWhenLoaded()
     {
-        var source = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", SnapbackShortFile))
+        var source = File.ReadAllText(RetiredStrategyFixtures.Strategy(SnapbackShortFile))
             .Replace("\r\n", "\n", StringComparison.Ordinal).Replace("  initial_stop_mode: none", "  initial_stop_mode: atr", StringComparison.Ordinal);
         var path = Path.Combine(Path.GetTempPath(), "tf-fill-day-stop-" + Guid.NewGuid().ToString("N") + ".yaml");
         try

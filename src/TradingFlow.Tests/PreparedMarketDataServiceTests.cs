@@ -200,7 +200,7 @@ public sealed class PreparedMarketDataServiceTests
         var repository = TestRepository.FindRoot();
         var text = (await File.ReadAllTextAsync(Path.Combine(repository, "configs", "backtest", "swing-backtest-profile.yaml"))).Replace("\r\n", "\n", StringComparison.Ordinal);
         var strategyStart = text.IndexOf("\nstrategies:", StringComparison.Ordinal);
-        text = text[..strategyStart] + "\nstrategies:\n  - " + Path.Combine(repository, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml").Replace('\\', '/') + "\n";
+        text = text[..strategyStart] + "\nstrategies:\n  - " + RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml").Replace('\\', '/') + "\n";
         text = text.Replace("max_retained_replay_bars: 1000000", "max_retained_replay_bars: " + maximumBars, StringComparison.Ordinal)
             .Replace("  provider: alpaca", "  provider: " + provider, StringComparison.Ordinal)
             .Replace("mode: unresolved_wishlist", "mode: static", StringComparison.Ordinal);

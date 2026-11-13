@@ -196,7 +196,7 @@ public sealed class EventMonthlyRunResultsTests
             Writer = original.Writer; Identity = original.Identity;
             var reader = new SimpleYamlReader();
             var repo = TestRepository.FindRoot();
-            var catalog = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+            var catalog = RetiredStrategyFixtures.Catalog(reader);
             var runtime = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(original.Config.Strategies[0], StrategySelectionMode.Backtest);
             var start = DateTimeOffset.Parse("2026-04-30T04:00:00Z");
             var end = DateTimeOffset.Parse("2026-05-30T04:00:00Z");

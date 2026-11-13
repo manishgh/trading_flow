@@ -18,8 +18,7 @@ public sealed class CurrentStrategyEvidenceTests
     public void FreshNewsVeto_IsRecognizedAsARequiredNewsCapability()
     {
         var root = TestRepository.FindRoot();
-        var source = new SimpleYamlReader().ReadStrategy(Path.Combine(root, "configs", "backtest", "strategies",
-            "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var source = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         Assert.False(StrategyCapabilityInspector.UsesNews(source));
         var strategy = source with { EntryRules = source.EntryRules with { VetoFreshNewsHours = 48m } };
         Assert.True(StrategyCapabilityInspector.UsesNews(strategy));

@@ -38,16 +38,33 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
         this.artifactWriter = artifactWriter ?? throw new ArgumentNullException(nameof(artifactWriter));
     }
 
+    /// <summary>
+    /// Stored paper experiments whose source strategy is no longer in the catalog (retired), found by the last
+    /// <see cref="List"/>: manifest path and reason. They are left untouched on disk and can never run.
+    /// </summary>
+    public IReadOnlyList<(string ManifestPath, string Reason)> SkippedRetiredSources { get; private set; } = [];
+
+    /// <summary>
+    /// Every runnable paper experiment. An experiment whose source strategy was retired from the catalog is skipped and
+    /// recorded in <see cref="SkippedRetiredSources"/> instead of failing the whole listing; loading it directly
+    /// (<see cref="RequireExact"/>) still refuses, so a retired strategy can never run.
+    /// </summary>
     public IReadOnlyList<StrategyArtifact> List()
     {
         if (!Directory.Exists(root))
         {
+            SkippedRetiredSources = [];
             return [];
         }
 
-        return Directory.EnumerateFiles(root, ManifestFileName, SearchOption.AllDirectories)
+        var skipped = new List<(string, string)>();
+        var loaded = Directory.EnumerateFiles(root, ManifestFileName, SearchOption.AllDirectories)
             .Where(path => !IsStagingPath(path))
-            .Select(Load)
+            .Select(path => TryLoadRunnable(path, skipped))
+            .OfType<StrategyArtifact>()
+            .ToArray();
+        SkippedRetiredSources = skipped;
+        return loaded
             .OrderBy(artifact => artifact.Identity.StrategyId, StringComparer.Ordinal)
             .ThenBy(artifact => artifact.Identity.SemanticVersion, StringComparer.Ordinal)
             .ThenBy(artifact => artifact.Identity.ContentSha256, StringComparer.Ordinal)
@@ -165,6 +182,20 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
             {
                 Directory.Delete(staging, recursive: true);
             }
+        }
+    }
+
+    /// <summary>Loads one stored experiment, or records it as skipped when its source strategy is no longer in the catalog.</summary>
+    private StrategyArtifact? TryLoadRunnable(string manifestPath, List<(string, string)> skipped)
+    {
+        try
+        {
+            return Load(manifestPath);
+        }
+        catch (KeyNotFoundException exception)
+        {
+            skipped.Add((manifestPath, "source_strategy_retired: " + exception.Message));
+            return null;
         }
     }
 

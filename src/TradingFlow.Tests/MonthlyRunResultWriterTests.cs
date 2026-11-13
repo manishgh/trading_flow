@@ -138,9 +138,9 @@ public sealed class MonthlyRunResultWriterTests
     {
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+        var artifacts = RetiredStrategyFixtures.Catalog(reader);
         var validator = new StrategyRunArtifactValidator(reader, artifacts);
-        var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+        var strategyPath = RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         var runtime = validator.ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
         var start = DateTimeOffset.Parse("2026-01-07T05:00:00Z");
         var end = DateTimeOffset.Parse("2026-02-03T05:00:00Z");

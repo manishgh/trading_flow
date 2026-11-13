@@ -32,7 +32,7 @@ public sealed class BacktestExecutionProfileResolverTests
     public void SwingProfile_PreservesExistingSettings()
     {
         var profile = Profile();
-        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var strategy = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         Assert.Equal(profile, BacktestExecutionProfileResolver.Resolve(profile, [strategy]));
         Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy, DayStrategy()]));
         Assert.Throws<InvalidOperationException>(() => BacktestExecutionProfileResolver.Resolve(profile, [strategy], ExecutionReplayPolicy.IntradayRthFiveMinuteV1));

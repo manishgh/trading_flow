@@ -274,7 +274,7 @@ public sealed class OpeningRangeBreakoutTests
         Assert.True(planned.Order.DeployedNotional <= 2500m);
         Assert.Equal(3m, result.OrderPlan.TargetRMultiple);
         Assert.Equal("day", StrategyHorizonResolver.Resolve(strategy));
-        var swing = new SimpleYamlReader().ReadStrategy(Path.Combine(root, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var swing = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         Assert.DoesNotContain("openingRangeBreakout", JsonSerializer.Serialize(swing, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var pending = result.OrderPlan.PendingEntry with { EntryOrderMode = IntradayEntryOrderMode.NextBarLimit,
             OpeningRangeHigh = null, OpeningRangeLow = null, OpeningRangeOpen = null, OpeningRangeClose = null,

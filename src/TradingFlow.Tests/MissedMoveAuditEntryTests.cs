@@ -112,8 +112,7 @@ public sealed class MissedMoveAuditEntryTests
 
     // Reuse a registered definition so strategy-id to display-name resolution matches normal results.
     private static StrategyDefinition Strategy() => new TradingFlow.Engine.Configuration.SimpleYamlReader()
-        .ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies",
-            "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        .ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
 
     // The snapshot exposes fills independently of completed trades; no candidate hypothesis enters this helper.
     private static BacktestPortfolioState State(IReadOnlyList<BacktestPortfolioFill> fills) => new(

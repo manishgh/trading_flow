@@ -93,7 +93,7 @@ public sealed class SwingCausalityAndMethodTests
         var context=new PreparedTickerEvaluationContext("SPY",new Dictionary<string,IReadOnlyList<OhlcvBar>>{{"1d",bars}},
             new Dictionary<string,IReadOnlyList<IndicatorSnapshot>>{{"1d",snapshots}},bars,bars.Length,[],null);
         var contexts=new Dictionary<string,PreparedTickerEvaluationContext>{{"SPY",context}};
-        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
+        var catalog=RetiredStrategyFixtures.Catalog(reader);
         var runner=new BacktestRunner(reader,catalog);
         var method=typeof(BacktestRunner).GetMethod("ProcessPreparedStrategyTickerAsync",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!;
         var scratch=Path.Combine(Path.GetTempPath(),"TradingFlowWarmup-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(scratch);
@@ -154,7 +154,7 @@ public sealed class SwingCausalityAndMethodTests
         var captured=new FrozenProvider(bars);var run=profile with {Provider="csv",Tickers=["SPY"],Intervals=["1d"],
             DerivedTimeframes=new TradingFlow.Domain.Backtesting.DerivedTimeframeConfig("1d"),
             TimeWindow=profile.TimeWindow with {Type="fixed",Start=bars[0].Timestamp,End=bars[^1].Timestamp.AddDays(1),WarmupLookbackDays=0}};
-        var runner=new BacktestRunner(reader,new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader),marketDataProviderFactory:_=>captured);
+        var runner=new BacktestRunner(reader,RetiredStrategyFixtures.Catalog(reader),marketDataProviderFactory:_=>captured);
         var scratch=Path.Combine(Path.GetTempPath(),"TradingFlowFrozenSource-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(scratch);
         try {
             var owned=runner.CreateWorkspace(run,Path.Combine(scratch,"result.json"));
@@ -172,7 +172,7 @@ public sealed class SwingCausalityAndMethodTests
         var root = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
         var run = reader.ReadBacktestRun(Path.Combine(root, "configs/backtest/swing-backtest-profile.yaml"));
-        var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(root, Path.Combine(root, "configs/strategy-catalog.json"), reader));
+        var runner = new BacktestRunner(reader, RetiredStrategyFixtures.Catalog(reader));
         var scratch = Path.Combine(Path.GetTempPath(), "TradingFlowPathLength-" + Guid.NewGuid().ToString("N"));
         var productionOwnerLength = Path.GetFullPath(Path.Combine(root, "../../outputs/technical-cycle-20261008/results/tech-cycle-v5/portfolio")).Length;
         var owner = Path.Combine(scratch, new string('p', Math.Max(1, productionOwnerLength - scratch.Length - 1)));
@@ -203,8 +203,8 @@ public sealed class SwingCausalityAndMethodTests
     public void CanonicalRuntimeIdentity_SurvivesResearchYamlAlias(string file, string id, string version)
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
-        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
-        var path=Path.Combine(root,"configs","backtest","strategies",file);
+        var catalog=RetiredStrategyFixtures.Catalog(reader);
+        var path=RetiredStrategyFixtures.Strategy(file);
         var validated=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
             path,TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
         var runtime=StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition,catalog);
@@ -217,9 +217,9 @@ public sealed class SwingCausalityAndMethodTests
     public async Task ValidatedSnapshotIdentity_IsWrittenToPublishedAudit_AndOwnedInputsRetainedForReview()
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
-        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
+        var catalog=RetiredStrategyFixtures.Catalog(reader);
         var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
-        var artifact=catalog.RequireSourcePath(Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var artifact=catalog.RequireSourcePath(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         const string version="7.0.0-test-snapshot";
         var hash=TradingFlow.Domain.Research.EvidenceCanonicalJson.ComputeSha256(new TradingFlow.Domain.Strategies.CanonicalStrategyDocument(
             artifact.Identity.StrategyId,version,artifact.ResolvedStrategy,artifact.AdmissionProfile));
@@ -257,10 +257,10 @@ public sealed class SwingCausalityAndMethodTests
     public async Task PublishedConnors_RunsWithoutStopOrTargetOrders()
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
-        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs","strategy-catalog.json"),reader);
+        var catalog=RetiredStrategyFixtures.Catalog(reader);
         var profile=reader.ReadBacktestRun(Path.Combine(root,"configs","backtest","swing-backtest-profile.yaml"));
         var validated=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(root,"configs","backtest","strategies","swing-connors-rsi2-published.bt-v9.yaml"),
+            RetiredStrategyFixtures.Strategy("swing-connors-rsi2-published.bt-v9.yaml"),
             TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
         var runtime=StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition,catalog);
         var start=DateTimeOffset.Parse("2025-01-01T05:00:00Z");
@@ -318,6 +318,6 @@ public sealed class SwingCausalityAndMethodTests
     }
 
     private static TradingFlow.Domain.Strategies.StrategyDefinition Read(string file)=>
-        new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(),"configs","backtest","strategies",file));
+        new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy(file));
     private static OhlcvBar Bar(string time,decimal close)=>new("SPY",DateTimeOffset.Parse(time),"1d",close,close+1,Math.Max(.1m,close-1),close,1000,"sip","all");
 }

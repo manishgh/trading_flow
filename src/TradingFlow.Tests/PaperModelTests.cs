@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -190,7 +190,8 @@ public sealed class PaperModelTests
             "src",
             "TradingFlow.Tests", "Fixtures", "Strategies",
             "daily-trailing-swing.fixture.yaml");
-        var artifactCatalog = CreateStrategyArtifactCatalog(repoRoot);
+        // Paper experiments derive from swing research artifacts; the retired test-owned copies supply them.
+        var artifactCatalog = RetiredStrategyFixtures.Catalog();
         var artifactStoreRoot = Path.Combine(
             Path.GetTempPath(),
             "trading-flow-paper-page-derived-experiment",
@@ -208,7 +209,7 @@ public sealed class PaperModelTests
             artifactCatalog,
             artifactStore,
             authorizations);
-        var model = CreateModel(repoRoot, CreateCatalog(repoRoot), configWriter: writer);
+        var model = CreateModel(repoRoot, CreateCatalog(repoRoot, artifactCatalog), configWriter: writer);
         model.PaperExecutionMode = "experiment";
         model.ExperimentSourceStrategyPath = sourcePath;
         model.PageContext = new PageContext
@@ -347,16 +348,18 @@ public sealed class PaperModelTests
         public TradingFlowDbContext CreateDbContext() => new(options);
     }
 
-    private static ConfigCatalogService CreateCatalog(string repoRoot)
+    // artifacts: the lifecycle catalog to list (the real one when null).
+    private static ConfigCatalogService CreateCatalog(string repoRoot, StrategyArtifactCatalog? artifacts = null)
     {
         var reader = new SimpleYamlReader();
+        artifacts ??= CreateStrategyArtifactCatalog(repoRoot, reader);
         return new ConfigCatalogService(
             new ProjectPaths(repoRoot),
             reader,
-            CreateStrategyArtifactCatalog(repoRoot, reader),
+            artifacts,
             new StrategyExperimentArtifactStore(
                 Path.Combine(Path.GetTempPath(), "trading-flow-empty-experiments", Guid.NewGuid().ToString("N")),
-                CreateStrategyArtifactCatalog(repoRoot, reader),
+                artifacts,
                 reader,
                 AtomicFileArtifactWriter.Instance),
             new StrategyAuthorizationTestRegistry());

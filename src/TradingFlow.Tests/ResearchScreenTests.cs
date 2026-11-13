@@ -171,7 +171,7 @@ public sealed class ResearchScreenTests
     public void FailedStockWorkItems_ResearchScreensSkipOnlyNamedDataUnavailableReasons()
     {
         var profile = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml"));
+            RetiredStrategyFixtures.Profile("connors-whole-market-daily-profile.yaml"));
         TradingFlow.Backtesting.StrategyTickerBacktestBatch Batch(string ticker, string? error) => new(ticker, "s", "S", error is null,
             error, [], [], null, new TradingFlow.Backtesting.StrategyCandidateDiagnostics("s", "S"));
         TradingFlow.Backtesting.StrategyTickerBacktestBatch[] batches = [Batch("AAA", null),
@@ -221,8 +221,7 @@ public sealed class ResearchScreenTests
         await ResearchScreenManifest.PublishAsync(folder, new("daily", "actions", null, "sessions"), Rules with { PriceBasis = DailyScreenPriceBasis.PriorClose },
             null, new(2026, 10, 1), new(2026, 10, 1), "alpaca_security_id", null, default, new ResearchScreenSplitRule(lookback, 0));
         var screen = PublishedResearchScreen.Read(folder);
-        var strategy = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs",
-            "backtest", "strategies", "swing-connors-rsi2-published-as-traded.bt-v9-1.yaml"));
+        var strategy = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-published-as-traded.bt-v9-1.yaml"));
 
         var refused = Record.Exception(() => TradingFlow.Backtesting.BacktestRunner.RequireSplitLookbackCoversStrategies(screen, [strategy]));
 
@@ -236,7 +235,7 @@ public sealed class ResearchScreenTests
     public void ConnorsDailyProfile_ReadsBackTheApprovedRunValues()
     {
         var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml"));
+            RetiredStrategyFixtures.Profile("connors-whole-market-daily-profile.yaml"));
 
         Assert.Equal(["1d"], run.Intervals);
         Assert.Equal("1d", run.DerivedTimeframes.Source);
@@ -295,7 +294,7 @@ public sealed class ResearchScreenTests
     public void ConnorsHourlyProfile_ReadsBackTheApprovedRunValues()
     {
         var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-hourly-profile.yaml"));
+            RetiredStrategyFixtures.Profile("connors-whole-market-hourly-profile.yaml"));
 
         Assert.Equal(["1d", "1h"], run.Intervals);
         Assert.Equal((100_000m, 10, 10m, 0m, 0m), (run.Portfolio.StartingCapital, run.Portfolio.MaxConcurrentPositions,
@@ -320,7 +319,7 @@ public sealed class ResearchScreenTests
         var windowStart = DateTimeOffset.Parse("2026-10-01T04:00:00Z");
         var windowEnd = DateTimeOffset.Parse("2026-10-03T04:00:00Z");
         var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
-            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "connors-whole-market-daily-profile.yaml")) with
+            RetiredStrategyFixtures.Profile("connors-whole-market-daily-profile.yaml")) with
         {
             TimeWindow = new("fixed", 1, windowStart, windowEnd, 10),
             Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode,

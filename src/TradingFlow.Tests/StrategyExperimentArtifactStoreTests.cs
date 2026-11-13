@@ -23,10 +23,7 @@ public sealed class StrategyExperimentArtifactStoreTests
         try
         {
             var reader = new SimpleYamlReader();
-            var sourceCatalog = new StrategyArtifactCatalog(
-                repositoryRoot,
-                Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-                reader);
+            var sourceCatalog = RetiredStrategyFixtures.Catalog(reader);
             var experimentStore = new StrategyExperimentArtifactStore(
                 Path.Combine(tempRoot, "registered-experiments"),
                 sourceCatalog,
@@ -56,13 +53,13 @@ public sealed class StrategyExperimentArtifactStoreTests
                 registry);
             var operationId = Guid.NewGuid();
             var registered = writer.RegisterPaperExperiment(
-                Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
+                RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
                 "7.0.0",
                 "unit-test-operator",
                 operationId,
                 RegistrationTime);
             var replay = writer.RegisterPaperExperiment(
-                Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
+                RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
                 "7.0.0",
                 "unit-test-operator",
                 operationId,
@@ -70,7 +67,7 @@ public sealed class StrategyExperimentArtifactStoreTests
             Assert.Equal(registered.Identity, replay.Identity);
             var duplicate = Assert.Throws<InvalidOperationException>(() =>
                 writer.RegisterPaperExperiment(
-                    Path.Combine(repositoryRoot, "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
+                    RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),
                     "7.0.0",
                     "unit-test-operator",
                     Guid.NewGuid(),
@@ -119,10 +116,7 @@ public sealed class StrategyExperimentArtifactStoreTests
     {
         var repositoryRoot = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var sourceCatalog = new StrategyArtifactCatalog(
-            repositoryRoot,
-            Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-            reader);
+        var sourceCatalog = RetiredStrategyFixtures.Catalog(reader);
         var tempRoot = Path.Combine(
             Path.GetTempPath(),
             "trading-flow-strategy-roundtrip-test",
@@ -170,10 +164,7 @@ public sealed class StrategyExperimentArtifactStoreTests
         try
         {
             var reader = new SimpleYamlReader();
-            var sourceCatalog = new StrategyArtifactCatalog(
-                repositoryRoot,
-                Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-                reader);
+            var sourceCatalog = RetiredStrategyFixtures.Catalog(reader);
             var storeRoot = Path.Combine(tempRoot, "registered-experiments");
             var authorizations = new StrategyAuthorizationTestRegistry();
             RunConfigWriter Writer() => new(
@@ -187,12 +178,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                     reader,
                     AtomicFileArtifactWriter.Instance),
                 authorizations);
-            var sourcePath = Path.Combine(
-                repositoryRoot,
-                "configs",
-                "backtest",
-                "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+            var sourcePath = RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
 
             var operationId = Guid.NewGuid();
             var registered = await Task.WhenAll(
@@ -233,10 +219,7 @@ public sealed class StrategyExperimentArtifactStoreTests
         try
         {
             var reader = new SimpleYamlReader();
-            var sourceCatalog = new StrategyArtifactCatalog(
-                repositoryRoot,
-                Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-                reader);
+            var sourceCatalog = RetiredStrategyFixtures.Catalog(reader);
             var store = new StrategyExperimentArtifactStore(
                 Path.Combine(tempRoot, "registered-experiments"),
                 sourceCatalog,
@@ -251,12 +234,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 sourceCatalog,
                 store,
                 failFirst);
-            var sourcePath = Path.Combine(
-                repositoryRoot,
-                "configs",
-                "backtest",
-                "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+            var sourcePath = RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
             var operationId = Guid.NewGuid();
 
             Assert.Throws<IOException>(() => writer.RegisterPaperExperiment(
@@ -304,10 +282,7 @@ public sealed class StrategyExperimentArtifactStoreTests
         try
         {
             var reader = new SimpleYamlReader();
-            var sourceCatalog = new StrategyArtifactCatalog(
-                repositoryRoot,
-                Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-                reader);
+            var sourceCatalog = RetiredStrategyFixtures.Catalog(reader);
             var store = new StrategyExperimentArtifactStore(
                 Path.Combine(tempRoot, "registered-experiments"),
                 sourceCatalog,
@@ -321,12 +296,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 sourceCatalog,
                 store,
                 authorizations);
-            var sourcePath = Path.Combine(
-                repositoryRoot,
-                "configs",
-                "backtest",
-                "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+            var sourcePath = RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
 
             var operationId = Guid.NewGuid();
             var registered = writer.RegisterPaperExperiment(
@@ -402,6 +372,37 @@ public sealed class StrategyExperimentArtifactStoreTests
         }
     }
 
+    // A paper experiment whose source strategy is later retired from the catalog no longer breaks the listing: it is skipped
+    // with a reason, left on disk, and still refused when loaded directly (13 Nov 2026, Connors 9.0.0 retirement).
+    [Fact]
+    public void ListSkipsExperimentWhoseSourceWasRetired()
+    {
+        var repositoryRoot = TestRepository.FindRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "trading-flow-experiment-retired-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var reader = new SimpleYamlReader();
+            var experimentsRoot = Path.Combine(tempRoot, "registered-experiments");
+            var retiredCatalog = RetiredStrategyFixtures.Catalog(reader);
+            var source = retiredCatalog.RequireSourcePath(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-published.bt-v9.yaml"));
+            var registered = new StrategyExperimentArtifactStore(experimentsRoot, retiredCatalog, reader, AtomicFileArtifactWriter.Instance)
+                .Register(source, source.ResolvedStrategy, "9.0.0", "operator", new SortedDictionary<string, string>(StringComparer.Ordinal),
+                    RunConfigWriter.SerializeStrategyYaml(source.ResolvedStrategy));
+
+            var currentCatalog = new StrategyArtifactCatalog(repositoryRoot, Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"), reader);
+            var store = new StrategyExperimentArtifactStore(experimentsRoot, currentCatalog, reader, AtomicFileArtifactWriter.Instance);
+
+            Assert.Empty(store.List());
+            Assert.Contains("source_strategy_retired", Assert.Single(store.SkippedRetiredSources).Reason, StringComparison.Ordinal);
+            Assert.ThrowsAny<Exception>(() => store.RequireExact(registered.Identity));
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public void ChangedExperiment_RequiresNewVersionAndRecordsOverride()
     {
@@ -411,10 +412,7 @@ public sealed class StrategyExperimentArtifactStoreTests
         try
         {
             var reader = new SimpleYamlReader();
-            var sourceCatalog = new StrategyArtifactCatalog(
-                repositoryRoot,
-                Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-                reader);
+            var sourceCatalog = RetiredStrategyFixtures.Catalog(reader);
             var store = new StrategyExperimentArtifactStore(
                 Path.Combine(tempRoot, "registered-experiments"),
                 sourceCatalog,
@@ -428,12 +426,7 @@ public sealed class StrategyExperimentArtifactStoreTests
                 sourceCatalog,
                 store,
                 authorizations);
-            var sourcePath = Path.Combine(
-                repositoryRoot,
-                "configs",
-                "backtest",
-                "strategies",
-                "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+            var sourcePath = RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
             var strategyOverride = new StrategyParameterOverride(
                 sourcePath,
                 2.5m,

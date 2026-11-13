@@ -131,11 +131,11 @@ public sealed class DecisionHourBacktestTests
     {
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+        var catalog = RetiredStrategyFixtures.Catalog(reader);
         var validated = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(repo, "configs", "backtest", "strategies", strategyFile), TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+            RetiredStrategyFixtures.Strategy(strategyFile), TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
         var runtime = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition, catalog);
-        var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "connors-whole-market-hourly-profile.yaml"));
+        var profile = reader.ReadBacktestRun(RetiredStrategyFixtures.Profile("connors-whole-market-hourly-profile.yaml"));
         var screen = await PublishEligibleScreenAsync(Path.Combine(folder, "screen"), pool);
         var start = At(new(2026, 9, 1), 0);
         var run = profile with

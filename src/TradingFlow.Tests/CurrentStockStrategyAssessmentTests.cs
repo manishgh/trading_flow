@@ -223,7 +223,7 @@ public sealed class CurrentStockStrategyAssessmentTests
                 var repo = TestRepository.FindRoot();
                 var yaml = new SimpleYamlReader();
                 var artifacts = executionMinutes is { } minutes ? h.BoundaryCatalog(repo, minutes, yaml) :
-                    new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), yaml);
+                    RetiredStrategyFixtures.Catalog(yaml);
                 var experiments = new StrategyExperimentArtifactStore(h.root, artifacts, yaml, AtomicFileArtifactWriter.Instance);
                 var profiles = new ConfigCatalogService(new(repo), yaml, artifacts, experiments, new StrategyAuthorizationTestRegistry());
                 // The desk serves price-only daily strategies; the historical-news diagnostic recipe is backtest-only.

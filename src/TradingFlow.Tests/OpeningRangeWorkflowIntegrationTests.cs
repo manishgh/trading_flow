@@ -34,7 +34,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
     {
         var profile = ReadProfile();
         var openingRange = ReadStrategy(recipe);
-        var daily = ReadStrategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
+        var daily = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         var effective = BacktestExecutionProfileResolver.Resolve(profile, [openingRange]);
         Assert.Equal(ExecutionReplayPolicy.IntradayRthFiveMinuteStopMarketV1, effective.Engine.ExecutionReplayPolicyId);
         Assert.Equal(profile.Portfolio, effective.Portfolio);

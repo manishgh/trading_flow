@@ -116,7 +116,7 @@ public sealed class SignalStudyCommandTests
         var actions = await market.SplitsAsync([("EEE", ExDate, 2m)]);
         var sessions = await market.SessionsAsync(new DateOnly(2016, 12, 1), new DateOnly(2019, 1, 31));
         var screen = await PublishScreenAsync(Path.Combine(folder, "screen"), bars.DatasetId, actions.DatasetId, sessions.DatasetId);
-        var strategy = Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-published-as-traded.bt-v9-1.yaml");
+        var strategy = RetiredStrategyFixtures.Strategy("swing-connors-rsi2-published-as-traded.bt-v9-1.yaml");
         var request = new SignalStudyCommand.Request(market.CatalogPath, market.ObjectRoot, screen.Folder, bars.DatasetId, actions.DatasetId,
             [strategy], entry, 10m, from ?? From, to ?? To, Path.Combine(folder, "study"));
         var provider = market.Provider(new(market.CatalogPath, market.ObjectRoot, screen.RankedListSha256, bars.DatasetId, sessions.DatasetId, [], [],

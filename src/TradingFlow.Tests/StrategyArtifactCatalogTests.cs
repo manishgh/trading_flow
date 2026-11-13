@@ -16,21 +16,10 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(
             new[]
             {
-                "swing.connors-rsi2-short@2.0.0",
-                "swing.connors-rsi2-short@2.1.0",
-                "swing.connors-rsi2-short@2.2.0",
-                "swing.connors-rsi2@7.0.0",
-                "swing.connors-rsi2@7.1.0",
-                "swing.connors-rsi2@7.2.0",
-                "swing.connors-rsi2@9.0.0",
-                "swing.connors-rsi2@9.1.0",
-                "swing.connors-rsi2@9.2.0",
-                "swing.snapback-short@2.0.0",
-                "swing.snapback@2.0.0",
+                // The swing artifacts were retired on 13 November 2026 (test-owned copies: RetiredStrategyFixtures).
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
-                "technical.opening-range-breakout@2.1.0",
-                "technical.recovery-sma5-news-avoidance@1.0.0"
+                "technical.opening-range-breakout@2.1.0"
             },
             snapshot.ExecutableArtifacts
                 .Select(artifact => $"{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}")
@@ -57,8 +46,9 @@ public sealed class StrategyArtifactCatalogTests
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
         Assert.Contains(artifacts, item =>
-            item.Identity.StrategyId == "swing.connors-rsi2" &&
-            item.Identity.SemanticVersion == "7.0.0");
+            item.Identity.StrategyId == "technical.opening-range-breakout" &&
+            item.Identity.SemanticVersion == "1.2.0");
+        Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId.StartsWith("swing.", StringComparison.Ordinal));
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.catalyst-drift");
     }
@@ -66,7 +56,8 @@ public sealed class StrategyArtifactCatalogTests
     [Fact]
     public void ModeFiltering_RequiresExactAuthorizedIdentityAndHonorsSuspension()
     {
-        var catalog = CreateCatalog();
+        // Paper selection needs a swing artifact; the retired test-owned copies supply one.
+        var catalog = RetiredStrategyFixtures.Catalog();
         var identity = catalog.GetSelectable(StrategySelectionMode.Backtest)[0].Identity;
 
         Assert.Single(catalog.GetSelectable(
@@ -125,7 +116,8 @@ public sealed class StrategyArtifactCatalogTests
     [Fact]
     public void AuthorizationSelection_PreservesExactArtifactIdentity()
     {
-        var catalog = CreateCatalog();
+        // Paper selection needs a swing artifact; the retired test-owned copies supply one.
+        var catalog = RetiredStrategyFixtures.Catalog();
         var source = catalog.GetSelectable(StrategySelectionMode.Backtest)[0];
         var authorized = Assert.Single(catalog.GetSelectable(
             StrategySelectionMode.RunPaperShadow,

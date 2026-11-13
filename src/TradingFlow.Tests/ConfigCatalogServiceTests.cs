@@ -24,29 +24,13 @@ public sealed class ConfigCatalogServiceTests
 
         Assert.Equal(new[]
         {
-            "swing.connors-rsi2-short@2.0.0",
-            "swing.connors-rsi2-short@2.1.0",
-            "swing.connors-rsi2-short@2.2.0",
-            "swing.connors-rsi2@7.0.0",
-            "swing.connors-rsi2@7.1.0",
-            "swing.connors-rsi2@7.2.0",
-            "swing.connors-rsi2@9.0.0",
-            "swing.connors-rsi2@9.1.0",
-            "swing.connors-rsi2@9.2.0",
-            "swing.snapback-short@2.0.0",
-            "swing.snapback@2.0.0",
+            // The swing artifacts were retired on 13 November 2026; only the opening-range breakout versions remain.
             "technical.opening-range-breakout@1.2.0",
             "technical.opening-range-breakout@2.0.0",
-            "technical.opening-range-breakout@2.1.0",
-            "technical.recovery-sma5-news-avoidance@1.0.0"
+            "technical.opening-range-breakout@2.1.0"
         }, strategies.Select(strategy => $"{strategy.Identity.StrategyId}@{strategy.Identity.SemanticVersion}")
             .Order(StringComparer.Ordinal));
-        Assert.Contains(strategies, strategy =>
-            strategy.FileName == "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml" && strategy.Audit is null);
-        Assert.All(strategies.Where(strategy => strategy.Identity.StrategyId.StartsWith("technical.recovery-", StringComparison.Ordinal)),
-            strategy => Assert.Equal("technical.recovery-sma5-exit", strategy.Artifact.DerivedFromIdentity?.StrategyId));
-        Assert.All(strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing"),
-            strategy => Assert.Equal("1d", strategy.Definition.Timeframe));
+        Assert.DoesNotContain(strategies, strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing");
         var dayStrategies = strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "day").ToArray();
         Assert.Equal(3, dayStrategies.Length);
         Assert.All(dayStrategies, strategy => Assert.Contains(strategy.Definition.Timeframe, new[] { "5m", "15m" }));

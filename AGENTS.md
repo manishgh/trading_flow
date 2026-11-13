@@ -320,20 +320,21 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- The catalog holds 8 research artifacts and no archived artifacts, with no paper
+- The catalog holds 3 research artifacts and no archived artifacts, with no paper
   execution or live authorization: opening-range breakout 1.2.0 and its published-recipe
-  2.0.0, Connors RSI-2 7.0.0 and its published-rules 9.0.0, swing snapback 2.0.0 and its interim control
-  `technical.recovery-sma5-news-avoidance`, and the no-stop short mirrors `swing.connors-rsi2-short` 2.0.0 and
-  `swing.snapback-short` 2.0.0 (backtest research only; broker planning refuses plans without a stop). Removed artifacts are listed in
-  `docs/research/retired-strategy-artifacts-2026-11-07.md`; the published-method
-  versions in `docs/design-review/2026-11-08/published-method-versions-proposal.md`.
+  versions 2.0.0 and 2.1.0. Connors RSI-2 (long and short), snapback (long and short) and
+  `technical.recovery-sma5-news-avoidance` were retired on 13 November 2026 after the ten-year
+  signal study (`docs/research/retired-strategy-artifacts-2026-11-13.md`); earlier removals are in
+  `docs/research/retired-strategy-artifacts-2026-11-07.md`. Test-owned copies of the retired files
+  live in `src/TradingFlow.Tests/Fixtures/RetiredStrategies/`.
 - Research/archive is artifact disposition. Paper experiment, paper shadow, and
   validated are exact-identity authorization grants.
 - Web/mobile paper mode is explicit and never falls back to research.
 
 Backtest profiles currently worth keeping:
 
-- `configs/backtest/swing-backtest-profile.yaml`
+- `configs/backtest/swing-backtest-profile.yaml` (generic daily run settings; its strategy list is empty since the
+  13 November 2026 retirement, so a run names its strategies)
 
 Paper profiles may combine persisted wishlist and screener discovery sources:
 

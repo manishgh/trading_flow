@@ -301,8 +301,10 @@ folder is not promotion evidence. Experimental variants live under
 paper-shadow run.
 
 The exact bootstrap classification is in
-`configs/strategy-catalog.json`: 8 research artifacts, no archived artifacts, and no
-paper-experiment, paper-shadow, or validated authorization.
+`configs/strategy-catalog.json`: 3 research artifacts (the opening-range breakout
+versions), no archived artifacts, and no paper-experiment, paper-shadow, or validated
+authorization. The swing mean-reversion artifacts were retired on 13 November 2026
+(`docs/research/retired-strategy-artifacts-2026-11-13.md`).
 Folder location is not authority.
 
 Strategy content identity is `(strategy_id, semantic_version, content_sha256)`.

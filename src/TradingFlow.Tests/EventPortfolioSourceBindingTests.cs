@@ -36,8 +36,7 @@ public sealed class EventPortfolioSourceBindingTests
         Assert.Empty(direct.UnavailableReasons);
         var reader = new SimpleYamlReader();
         var repository = TestRepository.FindRoot();
-        var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(repository,
-            Path.Combine(repository, "configs", "strategy-catalog.json"), reader),
+        var runner = new BacktestRunner(reader, RetiredStrategyFixtures.Catalog(reader),
             marketDataProviderFactory: _ => throw new InvalidOperationException("This bridge fixture must not request provider data."));
         var workspace = runner.CreateWorkspace(fixture.Run, fixture.ResultPath);
         var journal = new Journal();
@@ -150,8 +149,7 @@ public sealed class EventPortfolioSourceBindingTests
         using var fixture = await Fixture.CreateAsync();
         var reader = new SimpleYamlReader();
         var repository = TestRepository.FindRoot();
-        var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(repository,
-            Path.Combine(repository, "configs", "strategy-catalog.json"), reader));
+        var runner = new BacktestRunner(reader, RetiredStrategyFixtures.Catalog(reader));
         var request = Request();
         var first = runner.CreateWorkspace(fixture.Run, fixture.ResultPath);
         var firstResult = await first.ExecuteAsync(() => first.Runner.ExecuteEventPortfolioAsync(first.Run,
@@ -177,8 +175,7 @@ public sealed class EventPortfolioSourceBindingTests
         var reader = new SimpleYamlReader();
         var repository = TestRepository.FindRoot();
         var provider = new EmptyFixtureMarketProvider();
-        var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(repository,
-            Path.Combine(repository, "configs", "strategy-catalog.json"), reader), marketDataProviderFactory: _ => provider);
+        var runner = new BacktestRunner(reader, RetiredStrategyFixtures.Catalog(reader), marketDataProviderFactory: _ => provider);
         var result = await new StrategyOptimizer(reader, runner).OptimizeAsync(configuration, default);
         Assert.Equal(2, result.TotalPermutations);
         Assert.Equal(2, result.TopRuns.Count);
@@ -239,8 +236,7 @@ public sealed class EventPortfolioSourceBindingTests
         Assert.StartsWith(fixture.Root + Path.DirectorySeparatorChar, admittedRun.NormalizedRoot, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(fixture.Root, admittedRun.ResultsRoot);
         var repository = new SqliteJobRepository(database);
-        var catalog = new StrategyArtifactCatalog(TestRepository.FindRoot(),
-            Path.Combine(TestRepository.FindRoot(), "configs", "strategy-catalog.json"), reader);
+        var catalog = RetiredStrategyFixtures.Catalog(reader);
         var executor = new Mock<IBacktestRunExecutor>(MockBehavior.Strict);
         var service = new BacktestJobService(executor.Object, repository, reader, BacktestJobServiceOptions.Default, catalog);
         var started = await service.StartAsync("frozen-source", configPath);
@@ -329,6 +325,7 @@ public sealed class EventPortfolioSourceBindingTests
             var reader = new SimpleYamlReader();
             var source = reader.ReadBacktestRun(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "swing-backtest-profile.yaml"));
             fixture.Run = source with { Tickers = ["AAA"], Universe = UniverseConfig.StaticUniverse,
+                Strategies = [RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")],
                 Engine = source.Engine with { ExecutionReplayPolicyId = ExecutionReplayPolicy.DailyRthSipPortfolioV1 },
                 ResultsRoot = fixture.Root };
             await fixture.WriteCalendarAsync([0]);

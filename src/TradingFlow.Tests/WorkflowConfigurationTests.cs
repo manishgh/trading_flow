@@ -19,7 +19,7 @@ public sealed class WorkflowConfigurationTests
         try
         {
             var reader = new SimpleYamlReader();
-            var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+            var artifacts = RetiredStrategyFixtures.Catalog(reader);
             var store = new StrategyExperimentArtifactStore(Path.Combine(temporary, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
             var catalog = new ConfigCatalogService(new ProjectPaths(repo), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
             var audits = new Moq.Mock<TradingFlow.Domain.Audit.IDecisionAuditRepository>(Moq.MockBehavior.Strict);
@@ -54,7 +54,7 @@ public sealed class WorkflowConfigurationTests
         try
         {
             var reader = new SimpleYamlReader();
-            var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+            var artifacts = RetiredStrategyFixtures.Catalog(reader);
             var store = new StrategyExperimentArtifactStore(Path.Combine(temporary, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
             var authorization = new StrategyAuthorizationTestRegistry();
             var writer = new RunConfigWriter(new ProjectPaths(temporary), reader, AtomicFileArtifactWriter.Instance, artifacts, store, authorization);

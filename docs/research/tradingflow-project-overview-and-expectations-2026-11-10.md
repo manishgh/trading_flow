@@ -100,6 +100,8 @@ deleted.
 
 ## 3. The strategies we keep
 
+> **Retired 13 November 2026.** Connors RSI(2) long and short (all versions), snapback long and short and recovery with news avoidance (3.1, 3.2 and 3.4 below) were retired after the ten-year signal study found no edge over holding the eligible stocks (`docs/research/reversal-signal-study-2026-11-13.md`, ledger `docs/research/retired-strategy-artifacts-2026-11-13.md`). The catalog now holds only the opening-range breakout versions; research moves to the ETF trend core. The text below is kept as the record of what was tested.
+
 The catalog (`configs/strategy-catalog.json`) holds nine research artifacts, with ORB 2.2.0 approved but not yet built. A strategy version
 that fails its frozen pass/fail rules is retired and recorded in
 `docs/research/retired-strategy-artifacts-2026-11-07.md`.

@@ -35,12 +35,12 @@ public sealed class ResearchScreenDailyRunTests
         using var root = new TemporaryFolder();
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+        var catalog = RetiredStrategyFixtures.Catalog(reader);
         var validated = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(repo, "configs", "backtest", "strategies", "swing-connors-rsi2-published-as-traded.bt-v9-1.yaml"),
+            RetiredStrategyFixtures.Strategy("swing-connors-rsi2-published-as-traded.bt-v9-1.yaml"),
             TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
         var runtime = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition, catalog);
-        var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "connors-whole-market-daily-profile.yaml"));
+        var profile = reader.ReadBacktestRun(RetiredStrategyFixtures.Profile("connors-whole-market-daily-profile.yaml"));
         var screen = await PublishEligibleScreenAsync(Path.Combine(root.Path, "screen"));
         var start = Midnight(new(2026, 9, 1));
         var run = profile with

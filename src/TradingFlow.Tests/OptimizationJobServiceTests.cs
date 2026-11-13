@@ -32,9 +32,9 @@ public sealed class OptimizationJobServiceTests : IAsyncLifetime
         var copiedConfigs = Path.Combine(testRoot, "configs");
         CopyDirectory(sourceConfigs, copiedConfigs);
         optimizationPath = Path.Combine(copiedConfigs, "optimization.yaml");
-        await File.WriteAllTextAsync(optimizationPath, """
+        await File.WriteAllTextAsync(optimizationPath, $"""
 run_name: durable-optimization-test
-base_strategy: backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml
+base_strategy: {RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml").Replace('\\', '/')}
 backtest_config: backtest/swing-backtest-profile.yaml
 metric: TotalReturnPct
 top_n_results: 1

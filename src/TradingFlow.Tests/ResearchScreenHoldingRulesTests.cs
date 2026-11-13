@@ -105,8 +105,7 @@ public sealed class ResearchScreenHoldingRulesTests
         MaxConcurrentPositions: 10, FixedBuyFee: 0m, FixedSellFee: 0m, MaxOpenTradesPerTicker: 10, PreventOverlappingTickerPositions: true,
         MaxBarParticipationPct: 5m);
 
-    private static readonly TradingFlow.Domain.Strategies.StrategyDefinition Strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(
-        TestRepository.FindRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed-as-traded.bt-v7-1.yaml"));
+    private static readonly TradingFlow.Domain.Strategies.StrategyDefinition Strategy = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed-as-traded.bt-v7-1.yaml"));
 
     private static DateTimeOffset Cutoff => Midnight(Last.AddDays(1));
 

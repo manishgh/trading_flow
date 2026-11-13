@@ -85,7 +85,7 @@ public sealed class HistoricalNewsCatalogTests
     {
         using var fixture = new HistoricalDiagnosticNewsTests.Archive();
         var reader = new SimpleYamlReader();
-        var original = reader.ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name));
+        var original = reader.ReadStrategy(RetiredStrategyFixtures.Strategy(name));
         var snapshot = Path.Combine(fixture.Root, "strategy.yaml");
         File.WriteAllText(snapshot, RunConfigWriter.SerializeStrategyYaml(original));
         var restored = reader.ReadStrategy(snapshot);
@@ -104,7 +104,7 @@ public sealed class HistoricalNewsCatalogTests
     {
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+        var artifacts = RetiredStrategyFixtures.Catalog(reader);
         var store = new StrategyExperimentArtifactStore(Path.Combine(fixture.Root, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
         return new(new ProjectPaths(fixture.Root), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
     }

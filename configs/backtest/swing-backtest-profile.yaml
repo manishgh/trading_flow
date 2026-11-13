@@ -105,6 +105,7 @@ artifacts:
 universe:
   mode: unresolved_wishlist
 
+# Generic daily run settings. The swing strategies it served were retired on 13 November 2026
+# (docs/research/retired-strategy-artifacts-2026-11-13.md); a run names its strategies when it is planned.
 strategies:
-  - strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml
 

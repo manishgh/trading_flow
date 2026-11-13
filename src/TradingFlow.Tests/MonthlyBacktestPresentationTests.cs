@@ -50,9 +50,9 @@ public sealed class MonthlyBacktestPresentationTests
     public void SupportedEarlierMonth_RetainsItsClosedTradeCountWhenLaterMarksAreUnavailable()
     {
         var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();
-        var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs/strategy-catalog.json"),reader);
+        var catalog=RetiredStrategyFixtures.Catalog(reader);
         var runtime=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),StrategySelectionMode.Backtest);
+            RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),StrategySelectionMode.Backtest);
         var start=DateTimeOffset.Parse("2026-06-01T04:00:00Z");var end=DateTimeOffset.Parse("2026-08-01T04:00:00Z");
         var exit=DateTimeOffset.Parse("2026-07-01T04:00:00Z");
         var trade=new BacktestTrade("ABC",runtime.Definition.StrategyName,"long",exit.AddDays(-2),exit,1,100,110,90,120,
@@ -73,8 +73,8 @@ public sealed class MonthlyBacktestPresentationTests
     [Fact]
     public void ExitReceiptOnFebruaryFirstBelongsToJanuarySourceSession_AndNextMonthDenominatorCarries()
     {
-        var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();var catalog=new StrategyArtifactCatalog(root,Path.Combine(root,"configs/strategy-catalog.json"),reader);
-        var runtime=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(Path.Combine(root,"configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),StrategySelectionMode.Backtest);
+        var root=TestRepository.FindRoot();var reader=new SimpleYamlReader();var catalog=RetiredStrategyFixtures.Catalog(reader);
+        var runtime=new StrategyRunArtifactValidator(reader,catalog).ReadAndValidateRuntimeArtifact(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"),StrategySelectionMode.Backtest);
         var t=DateTimeOffset.Parse("2026-02-01T05:00:00Z");
         BacktestTrade Trade(DateTimeOffset exit,decimal pnl)=>new("X","RSI","long",exit.AddDays(-2),exit,10,10,11,9,14,"technical_exit",pnl,0,pnl);
         var strategy=new StrategyBacktestResult(runtime.Definition.StrategyId,"RSI","test",1000,990,-10,-1,0,2,1,2,2,0,1,1,[Trade(t,100),Trade(t.AddDays(1),-110)]);
@@ -87,9 +87,9 @@ public sealed class MonthlyBacktestPresentationTests
     {
         var root = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs/strategy-catalog.json"), reader);
+        var catalog = RetiredStrategyFixtures.Catalog(reader);
         var runtime = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(root, "configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"), StrategySelectionMode.Backtest);
+            RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"), StrategySelectionMode.Backtest);
         var summary = new StrategyBacktestResult(runtime.Definition.StrategyId, "RSI", "test", 1000, 1100,
             100, 10, 0, 2, 0, 1, 1, 0, 1, 0, []);
         var error = Assert.Throws<InvalidOperationException>(() => MonthlyBacktestPresentation.FromCompletedTrades(

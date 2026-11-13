@@ -63,8 +63,7 @@ public sealed class KeptSwingRuleTests
     [InlineData("enable_short: true")]
     public void RemovedSetupThreshold_FailsWhenLoaded(string rule)
     {
-        var source = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies",
-            "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var source = File.ReadAllText(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")).Replace("\r\n", "\n", StringComparison.Ordinal);
         Assert.DoesNotContain("\n  " + rule.Split(':')[0] + ":", source, StringComparison.Ordinal);
         var path = Path.Combine(Path.GetTempPath(), "tf-removed-rule-" + Guid.NewGuid().ToString("N") + ".yaml");
         try

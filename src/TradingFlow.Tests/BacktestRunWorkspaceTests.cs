@@ -18,8 +18,9 @@ public sealed class BacktestRunWorkspaceTests
         {
             var reader = new SimpleYamlReader();
             var repo = TestRepository.FindRoot();
-            var runner = new BacktestRunner(reader, new StrategyArtifactCatalog(repo, Path.Combine(repo,"configs/strategy-catalog.json"),reader));
-            var run = reader.ReadBacktestRun(Path.Combine(repo,"configs/backtest/swing-backtest-profile.yaml"));
+            var runner = new BacktestRunner(reader, RetiredStrategyFixtures.Catalog(reader));
+            var run = reader.ReadBacktestRun(Path.Combine(repo,"configs/backtest/swing-backtest-profile.yaml"))
+                with { Strategies = [RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")] };
             var result = Path.Combine(output,"result.json");
             Assert.Throws<InvalidOperationException>(() => runner.CreateExecutionJournalPath("candidate"));
             var workspace = runner.CreateWorkspace(run,result);

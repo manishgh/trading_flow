@@ -6,9 +6,9 @@ using TradingFlow.Engine.Configuration;
 namespace TradingFlow.Tests;
 
 /// <summary>
-/// Pins the three research artifacts kept on 7 November 2026 to the identities recorded in
-/// docs/research/retired-strategy-artifacts-2026-11-07.md, so removing other strategies or their code
-/// can never silently change what a kept strategy is.
+/// Pins the catalog's opening-range breakout versions, and the test-owned copies of the strategies retired on 13 November
+/// 2026 (RetiredStrategyFixtures), to the identities recorded in docs/research/retired-strategy-artifacts-2026-11-07.md and
+/// -2026-11-13.md, so removing strategies or their code can never silently change what a kept or retired version was.
 /// </summary>
 public sealed class KeptStrategyIdentityTests
 {
@@ -34,7 +34,7 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2-short", "2.2.0", "34a4438d39a56020ba11ac08b6364cd003885ca681888025c1f4cbc26aa27a3e", "swing.connors-rsi2-short")]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
-        var artifact = Assert.Single(CreateCatalog().GetSnapshot().ExecutableArtifacts,
+        var artifact = Assert.Single(AllArtifacts(),
             artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
         Assert.Equal(new StrategyArtifactIdentity(id, version, hash), artifact.Identity);
         Assert.Equal(parent, artifact.DerivedFromIdentity?.StrategyId);
@@ -48,7 +48,7 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2-short", "2.1.0", "2.0.0", "rsi2_descending")]
     public void AsTradedCopies_KeepTheRulesAndAcceptRawDailyBars(string id, string version, string parentVersion, string rankMode)
     {
-        var artifacts = CreateCatalog().GetSnapshot().ExecutableArtifacts;
+        var artifacts = RetiredStrategyFixtures.Catalog().GetSnapshot().ExecutableArtifacts;
         var copy = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
         var parent = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == parentVersion);
 
@@ -71,7 +71,7 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2-short", "2.2.0", "2.1.0")]
     public void DecisionHourCopies_KeepTheRulesAndBindTheDecisionHourPolicy(string id, string version, string parentVersion)
     {
-        var artifacts = CreateCatalog().GetSnapshot().ExecutableArtifacts;
+        var artifacts = RetiredStrategyFixtures.Catalog().GetSnapshot().ExecutableArtifacts;
         var copy = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == version);
         var parent = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == id && artifact.Identity.SemanticVersion == parentVersion);
 
@@ -88,7 +88,7 @@ public sealed class KeptStrategyIdentityTests
     [Fact]
     public void Lineage_RoundTripsAndFurtherDerivationUsesExactSourceIdentity()
     {
-        var catalog = CreateCatalog();
+        var catalog = RetiredStrategyFixtures.Catalog();
         var artifacts = catalog.GetSelectable(StrategySelectionMode.Backtest);
         var derivedSource = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "technical.recovery-sma5-news-avoidance");
         var replay = EvidenceCanonicalJson.Deserialize<StrategyArtifact>(EvidenceCanonicalJson.SerializeToUtf8Bytes(derivedSource));
@@ -108,7 +108,7 @@ public sealed class KeptStrategyIdentityTests
     public void EveryCatalogStrategy_SurvivesTheRunSnapshotRoundTrip()
     {
         var reader = new SimpleYamlReader();
-        foreach (var artifact in CreateCatalog().GetSnapshot().ExecutableArtifacts)
+        foreach (var artifact in AllArtifacts())
         {
             var path = Path.Combine(Path.GetTempPath(), "tf-snapshot-roundtrip-" + Guid.NewGuid().ToString("N") + ".yaml");
             try
@@ -129,4 +129,8 @@ public sealed class KeptStrategyIdentityTests
         var root = TestRepository.FindRoot();
         return new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
     }
+
+    // The real catalog's artifacts followed by the retired test-owned copies.
+    private static IReadOnlyList<StrategyArtifact> AllArtifacts() =>
+        [.. CreateCatalog().GetSnapshot().ExecutableArtifacts, .. RetiredStrategyFixtures.Catalog().GetSnapshot().ExecutableArtifacts];
 }

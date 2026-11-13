@@ -16,7 +16,7 @@ namespace TradingFlow.Tests;
 public sealed class PublishedMethodComponentTests
 {
     private static string StrategyPath(string name) =>
-        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name);
+        RetiredStrategyFixtures.Strategy(name);
 
     // No stop: quantity comes from the notional cap alone and the whole position is the planned loss.
     [Fact]
@@ -97,8 +97,9 @@ public sealed class PublishedMethodComponentTests
     [InlineData("swing.connors-rsi2", "7.0.0", StrategyArtifactCatalog.NoStopRiskPolicy)]
     public void CatalogRejectsMismatchedRiskPolicy(string strategyId, string version, string riskPolicy)
     {
-        var root = TestRepository.FindRoot();
-        var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "configs", "strategy-catalog.json")))!.AsObject();
+        // The retired versions keep their catalog entries in the test-owned fixture repository.
+        var root = RetiredStrategyFixtures.Root;
+        var manifest = JsonNode.Parse(File.ReadAllText(RetiredStrategyFixtures.CatalogPath))!.AsObject();
         var entry = manifest["strategies"]!.AsArray().Single(item =>
             (string?)item!["strategyId"] == strategyId && (string?)item["semanticVersion"] == version)!;
         var profileId = (string)entry["admissionProfileId"]!;

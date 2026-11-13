@@ -10,7 +10,7 @@ public sealed class RunConfigParsingTests
     public void OpeningGapPolicy_SurvivesGeneratedRunFiles()
     {
         var reader = new SimpleYamlReader();
-        var original = reader.ReadStrategy(Path.Combine(FindRepositoryRoot(), "configs", "backtest", "strategies", "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var original = reader.ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
         var path = Path.Combine(Path.GetTempPath(), $"opening-gap-roundtrip-{Guid.NewGuid():N}.yaml");
         try
         {
@@ -28,7 +28,7 @@ public sealed class RunConfigParsingTests
     {
         var root = FindRepositoryRoot();
         var reader = new SimpleYamlReader();
-        var strategies = Path.Combine(root, "configs", "backtest", "strategies");
+        var strategies = Path.Combine(RetiredStrategyFixtures.Root, "configs", "backtest", "strategies");
         var kept = Path.Combine(strategies, "swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml");
         Assert.Equal(ExecutionRules.KeepAndExitNextOpen, reader.ReadStrategy(kept).Execution.OpeningGapPolicy);
         Assert.Null(reader.ReadStrategy(Path.Combine(strategies, "recovery-sma5-news-avoidance.bt-v1.yaml")).Execution.OpeningGapPolicy);
@@ -68,8 +68,8 @@ public sealed class RunConfigParsingTests
 
     [Theory]
     [InlineData("src/TradingFlow.Tests/Fixtures/Strategies/daily-trailing-swing.fixture.yaml")]
-    [InlineData("configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")]
-    [InlineData("configs/backtest/strategies/recovery-sma5-news-avoidance.bt-v1.yaml")]
+    [InlineData("src/TradingFlow.Tests/Fixtures/RetiredStrategies/configs/backtest/strategies/swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml")]
+    [InlineData("src/TradingFlow.Tests/Fixtures/RetiredStrategies/configs/backtest/strategies/recovery-sma5-news-avoidance.bt-v1.yaml")]
     public void StrategySerialization_RoundTripsSharedSwingBrain(string strategyFile)
     {
         var root = FindRepositoryRoot();
@@ -99,9 +99,8 @@ public sealed class RunConfigParsingTests
         var run = new SimpleYamlReader().ReadBacktestRun(
             Path.Combine(root, "configs", "backtest", "swing-backtest-profile.yaml"));
 
-        Assert.NotEmpty(run.Strategies);
-        Assert.All(run.Strategies, path =>
-            Assert.Equal("1d", new SimpleYamlReader().ReadStrategy(path).Timeframe, ignoreCase: true));
+        // Its daily swing strategies were retired on 13 November 2026; a run names its strategies when planned.
+        Assert.Empty(run.Strategies);
     }
 
     private static string FindRepositoryRoot()
