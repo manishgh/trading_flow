@@ -1,6 +1,7 @@
 # ETF trend core: design for approval (13 November 2026)
 
-Status: proposal; nothing is built. Research only. This is the next step of the independent review's plan
+Status: approved 13 November 2026 with option B (trend rule first, no monthly rebalancing); built and tested. Development
+result: RETAIN_RESEARCH, see `docs/research/etf-trend-core-development-2026-11-13.md`. Research only. This is the next step of the independent review's plan
 (`docs/research/fable-review-2026-11-12.md`, sections 1.4 and 4.2). Single-stock RSI(2) mean reversion was rejected
 by the ten-year study (`docs/research/reversal-signal-study-2026-11-13.md`).
 
