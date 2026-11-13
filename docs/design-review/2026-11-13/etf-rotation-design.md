@@ -1,6 +1,7 @@
 # ETF sector rotation (12-1 momentum, top 3): design for approval (13 November 2026)
 
-Status: proposal; nothing is built. Research only. This is the "declared neighbour" in
+Status: approved 13 November 2026; built and tested. Development result: RETAIN_RESEARCH, see
+`docs/research/etf-rotation-development-2026-11-13.md`. Research only. This is the "declared neighbour" in
 `docs/design-review/2026-11-13/etf-trend-core-design.md`. The trend rule itself ended at RETAIN_RESEARCH
 (`docs/research/etf-trend-core-development-2026-11-13.md`): it halved the drawdown but kept only 58% of buy-and-hold's
 return.
