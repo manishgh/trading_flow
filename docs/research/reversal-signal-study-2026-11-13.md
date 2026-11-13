@@ -83,3 +83,20 @@ stocks that traded cleanly for the whole decade:
 **Survivor bias** inflates what holding stocks appears to earn: the survivors' benchmark is +0.32% against +0.27% over the same 4-day holds. It does not create or remove the rule's own edge, which is zero on both lists.
 
 **The complete-stocks list** therefore makes absolute returns look about 0.05% per trade better than reality. It must not be used to report profit figures; the point-in-time lists replace it for research.
+
+## Index and sector funds (step 4.1.4)
+
+The same rule on 15 funds (SPY, QQQ, IWM, DIA and 11 Select Sector funds; screen
+`index-and-sector-funds-20170101-20261030`), 5 basis points per side, 2017-2023:
+
+| Trades | Gross per trade | Net per trade | Same funds, same days | Edge per trade | Daily t | Win rate |
+|---|---|---|---|---|---|---|
+| 649 | +0.37% | +0.27% | +0.36% | **-0.09%** | -2.07 | 65.2% |
+
+- **The analyzer's label:** RETAIN_RESEARCH. That is only because 649 trades on 15 funds fall below its minimum sample sizes, which were set for single stocks.
+- **The edge:** negative. Buying a dipped fund for four days earned less than simply holding the funds.
+- **Verdict:** under the plan, the fund version is kept only if it passes on its own, and it does not. RSI(2) reversal is retired on funds too.
+
+## Decision (user, 13 November 2026)
+
+Retire single-stock RSI(2) mean reversion and its fund version: Connors long and short (all versions), snapback long and short, and recovery with news avoidance. Move to the ETF trend core (`docs/design-review/2026-11-13/etf-trend-core-design.md`).
