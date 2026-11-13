@@ -23,6 +23,16 @@ public sealed partial class BacktestRunner
                 $"{strategy.StrategyId} uses a decision schedule or the entry-factor exit, which only the default daily candle replay supports.");
     }
 
+    /// <summary>
+    /// True when a scheduled strategy's setup bar is not on its entry schedule, so the daily loop skips it before building a
+    /// decision. The kernel would reject the same bar with the same rule; skipping first avoids writing a full decision record
+    /// (which embeds the stock's drawdown history) for each of the roughly 20 off-schedule sessions of every month.
+    /// </summary>
+    private bool IsOffDecisionSchedule(StrategyDefinition strategy, IndicatorSnapshot setupSnapshot) =>
+        strategy.EntryRules.DecisionSchedule is { } schedule &&
+        !DecisionSchedules.IsDecisionSession(schedule, ExchangeSessionCalendar.SessionDate(setupSnapshot.Timestamp),
+            NextExchangeSession(setupSnapshot.Timestamp));
+
     // Attach the calendar's next trading session after the request's setup bar when the strategy schedules its entries.
     private StrategyDecisionRequest WithNextExchangeSession(StrategyDecisionRequest request, StrategyDefinition strategy)
     {

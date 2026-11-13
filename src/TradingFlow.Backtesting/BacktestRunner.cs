@@ -1433,6 +1433,12 @@ public sealed partial class BacktestRunner(
                 break;
             }
 
+            if (IsOffDecisionSchedule(strategy, snapshot))
+            {
+                diagnostics.IncrementRejection("not_on_decision_schedule");
+                continue;
+            }
+
             diagnostics.EvaluatedBarCount++;
             var discoveryExpiry = BacktestDecisionTiming.ResolveExpiry(
                 signalAvailableTimestamp, strategy.Timeframe, strategy.Session, candidateSessionSchedules);
