@@ -117,5 +117,3 @@ universe:
 
 strategies:
   - strategies/etf-rotation-12-1.bt-v1.yaml
-
-
