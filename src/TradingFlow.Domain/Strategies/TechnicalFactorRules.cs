@@ -12,10 +12,13 @@ public sealed record TechnicalFactorRules(string Metric, int LookbackBars = 20,
     public const string Connors = "connors_rsi_3_2_100";
     public const string Squeeze = "bollinger_squeeze_breakout";
     public const string RelativeRoc = "benchmark_relative_roc";
+    // Percent distance of the close from its simple average of the last LookbackBars closes (Faber's trend measure).
+    public const string SmaDistance = "sma_distance";
     [System.Text.Json.Serialization.JsonIgnore]
     public int RequiredCompletedBars => Metric switch
     {
         Connors => 260,
+        SmaDistance => LookbackBars,
         AtrDistance => 20,
         Ibs => 2,
         Squeeze => LookbackBars + 21,
@@ -23,7 +26,7 @@ public sealed record TechnicalFactorRules(string Metric, int LookbackBars = 20,
     };
     public void Validate()
     {
-        if (Metric is not (AtrDistance or Roc or Ibs or Connors or Squeeze or RelativeRoc) ||
+        if (Metric is not (AtrDistance or Roc or Ibs or Connors or Squeeze or RelativeRoc or SmaDistance) ||
             LookbackBars < 1 || LookbackBars > 500 || MinValue is null && MaxValue is null ||
             MinValue is { } min && MaxValue is { } max && min >= max)
             throw new InvalidOperationException("Unsupported or unbounded technical factor.");

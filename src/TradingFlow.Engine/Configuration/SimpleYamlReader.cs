@@ -177,7 +177,8 @@ public sealed class SimpleYamlReader
                 MinShortReversionRsi2: OptionalDecimal(map, "entry_rules.min_short_reversion_rsi2"),
                 RequirePriceBelowSma200ForShort: OptionalBool(map, "entry_rules.require_price_below_sma200_for_short", false),
                 MinCloseAboveSmaPct: OptionalDecimal(map, "entry_rules.min_close_above_sma_pct"),
-                CloseAboveSmaPeriod: OptionalNullableInt(map, "entry_rules.close_above_sma_period")),
+                CloseAboveSmaPeriod: OptionalNullableInt(map, "entry_rules.close_above_sma_period"),
+                DecisionSchedule: OptionalNullableString(map, "entry_rules.decision_schedule")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -220,7 +221,9 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.exit_on_close_above_sma5", false),
                 OptionalBool(map, "exit_rules.exit_on_close_below_sma5", false),
                 OptionalBool(map, "exit_rules.check_exits_from_fill_day", false),
-                ReadContinuationProtection(map)),
+                ReadContinuationProtection(map),
+                OptionalDecimal(map, "exit_rules.exit_on_entry_factor_at_or_below"),
+                OptionalNullableString(map, "exit_rules.entry_factor_exit_schedule")),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps"),
@@ -255,6 +258,7 @@ public sealed class SimpleYamlReader
         ValidateNoStopRules(strategy);
         ValidateStretchAndShortThresholds(strategy.EntryRules);
         ValidateShortCoverExit(strategy);
+        ValidateScheduledRules(strategy);
         map.ThrowIfUnknownKeys(path);
         return strategy;
     }
@@ -797,6 +801,23 @@ public sealed class SimpleYamlReader
         if ((rsi2ShortSetup && rules.MinShortReversionRsi2 is null) ||
             rules.MinShortReversionRsi2 is not (null or (> 0m and < 100m)))
             throw new InvalidOperationException("min_short_reversion_rsi2 is required for short_setup_type rsi2_overbought and must be above 0 and below 100.");
+    }
+
+    // Decision schedules must be known names on a daily rule. The entry-factor exit recomputes the long entry factor from the
+    // stock's own completed bars, so it needs a factor that does not read a benchmark; its schedule needs the exit itself.
+    private static void ValidateScheduledRules(StrategyDefinition strategy)
+    {
+        DecisionSchedules.Validate(strategy.EntryRules.DecisionSchedule, "entry_rules.decision_schedule");
+        DecisionSchedules.Validate(strategy.ExitRules.EntryFactorExitSchedule, "exit_rules.entry_factor_exit_schedule");
+        var scheduled = strategy.EntryRules.DecisionSchedule is not null || strategy.ExitRules.EntryFactorExitSchedule is not null;
+        if (scheduled && !(strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) &&
+                strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Decision schedules require a daily strategy and daily execution.");
+        if (strategy.ExitRules.EntryFactorExitSchedule is not null && strategy.ExitRules.ExitOnEntryFactorAtOrBelow is null)
+            throw new InvalidOperationException("exit_rules.entry_factor_exit_schedule requires exit_rules.exit_on_entry_factor_at_or_below.");
+        if (strategy.ExitRules.ExitOnEntryFactorAtOrBelow is not null &&
+            strategy.EntryRules.TechnicalFactor is not { Metric: not TechnicalFactorRules.RelativeRoc })
+            throw new InvalidOperationException("exit_rules.exit_on_entry_factor_at_or_below requires an entry technical_factor that does not use a benchmark.");
     }
 
     // The close-below-SMA5 cover exit is checked only on short positions; on any other direction it would silently never fire.

@@ -85,7 +85,9 @@ public sealed record StrategyDecisionRequest(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DrawdownDecisionContext? DrawdownContext = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] HistoricalNewsPresenceContext? HistoricalNewsPresence = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] StrategySelectionMode? SelectionMode = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayBreakoutContext? PreviousSessionContext = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayBreakoutContext? PreviousSessionContext = null,
+    // The exchange calendar's next trading session after the setup bar's session; required by a scheduled entry rule.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateOnly? NextExchangeSessionDate = null);
 
 public sealed record StrategyDecisionRule(
     string Stage,

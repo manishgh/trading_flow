@@ -384,6 +384,7 @@ public sealed partial class MobileAutomationService
         IndicatorSnapshot snapshot)
     {
         TechnicalExecutionEngine.RequireSupportedExitPolicy(guardianStrategy);
+        TechnicalExecutionEngine.RequireNoBacktestOnlyRules(guardianStrategy);
         var atr = snapshot.Atr is > 0m
             ? snapshot.Atr.Value
             : throw new InvalidOperationException("Operator-direct entry requires a positive ATR.");

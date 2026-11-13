@@ -50,8 +50,22 @@ public static class TechnicalFactorCalculator
                     100m * widths.Count(width => width < priorWidth) / rules.LookbackBars);
             case TechnicalFactorRules.RelativeRoc:
                 return Relative(rules, bars, index, reference, asOfUtc, expectedReferenceSessions);
+            case TechnicalFactorRules.SmaDistance:
+                return SmaDistance(rules, bars, index) is { } distance
+                    ? Result(distance) : Result(null, reason: "sma_history_unavailable");
             default: throw new InvalidOperationException("Unsupported technical factor.");
         }
+    }
+
+    // Percent distance of bar[index]'s close from the simple average of the LookbackBars closes ending at index; null when
+    // fewer completed closes exist or the average is not positive.
+    private static decimal? SmaDistance(TechnicalFactorRules rules, IReadOnlyList<OhlcvBar> bars, int index)
+    {
+        if (index + 1 < rules.LookbackBars) return null;
+        var sum = 0m;
+        for (var i = index - rules.LookbackBars + 1; i <= index; i++) sum += bars[i].Close;
+        var average = sum / rules.LookbackBars;
+        return average > 0m ? 100m * (bars[index].Close / average - 1m) : null;
     }
 
     private static decimal? Finite(double? value) => value is { } number && Double.IsFinite(number) ? (decimal)number : null;

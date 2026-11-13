@@ -23,6 +23,7 @@ public sealed class PositionGuardianEngine
         decimal takeProfitPrice)
     {
         TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
+        TechnicalExecutionEngine.RequireNoBacktestOnlyRules(strategy);
         if (executionBars.Count == 0 || executionSnapshots.Count == 0)
         {
             return PositionGuardianDecision.Hold("market_state_unavailable", initialStopLossPrice);

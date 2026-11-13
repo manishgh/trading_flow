@@ -257,11 +257,15 @@ public sealed partial class BacktestRunner
         }
     }
 
-    /// <summary>The longest number of daily sessions a strategy's entry indicators read: SMA200, the confluence EMA, or 20.</summary>
+    /// <summary>
+    /// The longest number of daily sessions a strategy's entry indicators read: SMA200, the confluence EMA, the technical
+    /// factor's completed bars (for example 210 for the ETF trend average), or 20.
+    /// </summary>
     internal static int LongestIndicatorLookback(StrategyDefinition strategy) => new[]
     {
         strategy.EntryRules.RequirePriceAboveSma200 || strategy.EntryRules.RequirePriceAboveSma200Daily ? 200 : 0,
         strategy.Confluence.Enabled ? strategy.Confluence.EmaPeriod : 0,
+        strategy.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0,
         20
     }.Max();
 

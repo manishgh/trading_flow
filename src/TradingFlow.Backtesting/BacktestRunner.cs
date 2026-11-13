@@ -1382,6 +1382,7 @@ public sealed partial class BacktestRunner(
         RetainedCandidateBudget retainedCandidateBudget,
         CancellationToken cancellationToken)
     {
+        RequireScheduledRulesSupported(run, strategy, IsDecisionHour(strategy));
         if (IsDecisionHour(strategy))
             return await CreateDecisionHourCandidatesAsync(run, ResolveRuntimeStrategy(strategy), bars, snapshots, barsByTimeframe,
                 snapshotsByTimeframe, catalysts, evaluationStart, evaluationEnd, universeMembership, regimeCalendar, candidateJournal,
@@ -1500,6 +1501,7 @@ public sealed partial class BacktestRunner(
                         snapshot.Ticker, decisionTime, barsByTimeframe, "backtest", cancellationToken),
                     strategy.EntryRules.HistoricalNewsDiagnostic is not null && _historicalNewsProvider is not null
                         ? await _historicalNewsProvider.ResolveAsync(snapshot.Ticker, decisionTime, cancellationToken) : null);
+                request = WithNextExchangeSession(request, strategy);
                 var persistedDecision = await candidateDecisions.EvaluateAsync(
                     simulationRun,
                     request,

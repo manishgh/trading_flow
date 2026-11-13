@@ -15,6 +15,39 @@ public sealed class TechnicalExecutionEngine
                 "Continuation protection requires the day-trading order lifecycle; this execution path cannot apply its stop and target updates yet.");
     }
 
+    /// <summary>
+    /// Refuses, before any order work, a strategy that uses rules only the daily backtest replay implements: a decision schedule
+    /// (paper and live do not yet pass the exchange calendar's next session) and the entry-factor exit (the paper position
+    /// guardian does not apply it, so a position without a stop or target would never be sold).
+    /// </summary>
+    public static void RequireNoBacktestOnlyRules(StrategyDefinition strategy)
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+        if (strategy.EntryRules.DecisionSchedule is not null || strategy.ExitRules.ExitOnEntryFactorAtOrBelow is not null ||
+            strategy.ExitRules.EntryFactorExitSchedule is not null)
+            throw new NotSupportedException(
+                $"{strategy.StrategyName} uses a decision schedule or the entry-factor exit, which only the daily backtest replay applies; it cannot run in paper or live trading yet.");
+    }
+
+    public const string EntryFactorExitReason = "technical_exit_entry_factor";
+
+    /// <summary>
+    /// Exit when the entry rule's technical factor, recomputed on completed bar <paramref name="index"/>, is at or below the
+    /// strategy's exit threshold (for example the close falling below its 210-day average). Checked only when
+    /// <paramref name="isScheduledSession"/> says this session is on the exit schedule. The caller fills at the next open.
+    /// A factor that cannot be computed keeps the position: no exit is invented from missing history.
+    /// </summary>
+    public static string? GetEntryFactorExitReason(StrategyDefinition strategy, IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots, int index, bool isScheduledSession)
+    {
+        if (strategy.ExitRules.ExitOnEntryFactorAtOrBelow is not { } threshold || !isScheduledSession) return null;
+        var factor = strategy.EntryRules.TechnicalFactor
+            ?? throw new InvalidOperationException("exit_on_entry_factor_at_or_below requires entry_rules.technical_factor.");
+        var evidence = TradingFlow.Engine.Strategies.TechnicalFactorCalculator.Analyze(
+            factor, bars, snapshots, index, null, bars[index].Timestamp);
+        return evidence.Value is { } value && value <= threshold ? EntryFactorExitReason : null;
+    }
+
     /// <summary>Evaluates supported long exits with existing protection before technical or time exits.</summary>
     public (decimal? ExitPrice, string? ExitReason) EvaluateBarForExit(
         StrategyDefinition strategy,

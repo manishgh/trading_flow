@@ -220,13 +220,13 @@ public sealed partial class BacktestRunner
     }
 
     /// <summary>
-    /// The universe and regime evidence of one decision: the stock's membership on the decision's UTC date and the strategy's
-    /// regime calendar at the decision time (static universe / no regime gate when absent).
+    /// The universe and regime evidence of one decision: the stock's membership on the session the decision trades in (see
+    /// EligibilitySession) and the strategy's regime calendar at the decision time (static universe / no regime gate when absent).
     /// </summary>
-    private static (StrategyEligibilityEvidence Universe, StrategyEligibilityEvidence Regime) EligibilityEvidence(string ticker,
+    private (StrategyEligibilityEvidence Universe, StrategyEligibilityEvidence Regime) EligibilityEvidence(string ticker,
         StrategyDefinition strategy, DateTimeOffset decisionTime, UniverseMembership? universeMembership, RegimeCalendar? regimeCalendar)
     {
-        var eligibilityDay = DateOnly.FromDateTime(decisionTime.UtcDateTime);
+        var eligibilityDay = EligibilitySession(decisionTime);
         var universeEligible = universeMembership is null || universeMembership.IsMember(ticker, eligibilityDay);
         var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(decisionTime);
         var universe = new StrategyEligibilityEvidence(universeEligible,

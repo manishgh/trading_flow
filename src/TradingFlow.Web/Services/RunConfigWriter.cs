@@ -938,6 +938,7 @@ public sealed class RunConfigWriter
         if (strategy.EntryRules.RequirePriceBelowSma200ForShort) yaml.AppendLine("  require_price_below_sma200_for_short: true");
         AppendOptionalDecimal(yaml, "  min_close_above_sma_pct", strategy.EntryRules.MinCloseAboveSmaPct);
         if (strategy.EntryRules.CloseAboveSmaPeriod is { } closeAboveSmaPeriod) yaml.AppendLine($"  close_above_sma_period: {closeAboveSmaPeriod}");
+        if (strategy.EntryRules.DecisionSchedule is { } entrySchedule) yaml.AppendLine($"  decision_schedule: {entrySchedule}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -1047,6 +1048,8 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  exit_on_close_above_sma5: {strategy.ExitRules.ExitOnCloseAboveSma5.ToString().ToLowerInvariant()}");
         if (strategy.ExitRules.ExitOnCloseBelowSma5) yaml.AppendLine("  exit_on_close_below_sma5: true");
         if (strategy.ExitRules.CheckExitsFromFillDay) yaml.AppendLine("  check_exits_from_fill_day: true");
+        AppendOptionalDecimal(yaml, "  exit_on_entry_factor_at_or_below", strategy.ExitRules.ExitOnEntryFactorAtOrBelow);
+        if (strategy.ExitRules.EntryFactorExitSchedule is { } exitSchedule) yaml.AppendLine($"  entry_factor_exit_schedule: {exitSchedule}");
         yaml.AppendLine($"  enable_atr_trailing_stop: {strategy.ExitRules.EnableAtrTrailingStop.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  trailing_stop_atr_multiple: {strategy.ExitRules.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  trailing_activation_r: {strategy.ExitRules.TrailingActivationR.ToString(CultureInfo.InvariantCulture)}");

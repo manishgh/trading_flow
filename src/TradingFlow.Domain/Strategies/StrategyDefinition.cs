@@ -194,7 +194,9 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinShortReversionRsi2 = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequirePriceBelowSma200ForShort = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinCloseAboveSmaPct = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? CloseAboveSmaPeriod = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? CloseAboveSmaPeriod = null,
+    // Sessions on which new entries may be decided (DecisionSchedules); null decides on every completed session.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DecisionSchedule = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -236,7 +238,11 @@ public sealed record ExitRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitOnCloseAboveSma5 = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitOnCloseBelowSma5 = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool CheckExitsFromFillDay = false,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ContinuationProtectionRules? ContinuationProtection = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ContinuationProtectionRules? ContinuationProtection = null,
+    // Close the position, at the next open, when the entry rule's technical factor is at or below this value on a completed bar.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? ExitOnEntryFactorAtOrBelow = null,
+    // Sessions on which that factor exit is checked (DecisionSchedules); null checks every completed session.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EntryFactorExitSchedule = null)
 {
     /// <summary>Published rules such as Connors RSI-2 place no protective stop; long-only research backtests size by position notional instead.</summary>
     public const string NoStop = "none";

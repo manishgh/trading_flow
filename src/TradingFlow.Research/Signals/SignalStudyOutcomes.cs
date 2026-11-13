@@ -72,6 +72,7 @@ public static class SignalStudyOutcomes
             (entry.DrawdownQualification is not null, "a drawdown gate"),
             (entry.HistoricalNewsDiagnostic is not null || entry.RequirePositiveNews, "news rules"),
             (entry.OpeningRangeBreakout is not null, "an opening range"),
+            (entry.DecisionSchedule is not null || exits.ExitOnEntryFactorAtOrBelow is not null, "a decision schedule or entry-factor exit"),
             (exits.HasProtectiveStop || exits.HasProfitTarget || exits.EnableAtrTrailingStop, "intrabar stop or target orders"),
             (exits.EnableConfirmedVwapExit || exits.ExitOnLogPriceFade, "VWAP-confirmation or log-price-fade exits")
         }.Where(item => item.Present).Select(item => item.Name).ToArray();

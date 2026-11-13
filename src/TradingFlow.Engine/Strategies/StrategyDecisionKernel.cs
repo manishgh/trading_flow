@@ -243,6 +243,13 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             return Finish(failedState, noEntryReason: "outside_session_window");
         }
 
+        if (request.Strategy.EntryRules.DecisionSchedule is { } schedule &&
+            ScheduleRejection(schedule, latest.Timestamp, request.NextExchangeSessionDate, rules) is { } scheduleReason)
+        {
+            var failedState = FailAdmission(ref currentState, scheduleReason, asOfUtc, transitions);
+            return Finish(failedState, noEntryReason: scheduleReason);
+        }
+
         AddRule(rules, "qualification", "inside_session_window", true, "exchange_calendar", new
         {
             latest.Timestamp,
@@ -454,6 +461,24 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         }
         Move(ref currentState, StrategyCandidateState.Triggered, "execution_trigger_satisfied", asOfUtc, transitions);
         return Finish(StrategyCandidateState.Triggered, direction, signal, orderPlan);
+    }
+
+    /// <summary>
+    /// Records whether the setup bar's session is on the entry decision schedule and returns the rejection reason when it is
+    /// not. The next trading session comes from the exchange calendar; without it the schedule cannot be judged, so the
+    /// decision fails with a data error rather than trading on an unknown day.
+    /// </summary>
+    private static string? ScheduleRejection(string schedule, DateTimeOffset setupBarStart, DateOnly? nextSession,
+        List<StrategyDecisionRule> rules)
+    {
+        var session = ExchangeSessionCalendar.SessionDate(setupBarStart);
+        if (nextSession is not { } next)
+            throw new InvalidDataException(
+                $"Entry decision schedule {schedule} needs the exchange calendar's next session after {session:yyyy-MM-dd}; it was not supplied.");
+        var onSchedule = DecisionSchedules.IsDecisionSession(schedule, session, next);
+        AddRule(rules, "qualification", onSchedule ? "on_decision_schedule" : "not_on_decision_schedule", onSchedule,
+            "exchange_calendar", new { schedule, session, nextSession = next });
+        return onSchedule ? null : "not_on_decision_schedule";
     }
 
     // Verify immutable identity, policy/mode binding and aligned completed inputs before computing any strategy fields.

@@ -22,6 +22,17 @@
       "derivedIndicatorProfileVersion": "2.3.0",
       "riskPolicy": "account-risk-budget-v1",
       "executionTimingPolicy": "completed-bar-pending-stop-market-session-deadline-v1"
+    },
+    {
+      "profileId": "month-end-no-stop-kept-gaps-as-traded-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.2.0",
+      "riskPolicy": "position-notional-no-stop-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
     }
   ],
   "strategies": [
@@ -58,6 +69,22 @@
         "semanticVersion": "2.0.0",
         "contentSha256": "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429"
       }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/etf-trend-10m.bt-v1.yaml",
+      "strategyId": "etf.trend-10m",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
+      "reason": "Approved 13 November 2026 (docs/design-review/2026-11-13/etf-trend-core-design.md, option B): Faber (2007) timing rule on the 15 index and sector funds. At each month's last close hold a fund whose close is above its 210-session average, otherwise cash; fill at the next open; fixed equal slots without monthly rebalancing; 5 bps per side; as-traded bars without dividends. Research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/etf-buy-and-hold-control.bt-v1.yaml",
+      "strategyId": "etf.buy-and-hold-control",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
+      "reason": "Comparison control for etf.trend-10m@1.0.0, required by its pass rules: buys each fund at its first eligible month-end and never sells, with the same slots, timing, costs and bars. A measurement benchmark, never a strategy to trade."
     }
   ]
 }

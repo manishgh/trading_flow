@@ -76,6 +76,7 @@ public sealed class TechnicalFactorTests
     [InlineData(TechnicalFactorRules.Ibs,1,0.2)]
     [InlineData(TechnicalFactorRules.Connors,100,10)]
     [InlineData(TechnicalFactorRules.Squeeze,100,0)]
+    [InlineData(TechnicalFactorRules.SmaDistance,210,0)]
     public void FactorAtCompletedPrefix_IsUnaffectedByFutureBars(string metric,int period,double threshold)
     {
         var bars=Bars(400);var i=300;

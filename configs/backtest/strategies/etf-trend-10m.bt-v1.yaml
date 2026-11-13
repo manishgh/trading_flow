@@ -1,0 +1,73 @@
+# Faber (2007), "A Quantitative Approach to Tactical Asset Allocation" (SSRN 962461): timing rule on index and sector funds.
+# Design: docs/design-review/2026-11-13/etf-trend-core-design.md (approved 13 November 2026, option B: no monthly rebalance).
+# At the last session of each month, hold a fund if its close is above its 10-month simple average, otherwise hold cash.
+# The 10-month average is the 210-session average of daily closes. Decisions use the completed month-end close and fill at
+# the next open (the first session of the new month). Each fund has a fixed slot set by the run profile's position notional.
+# Differences from the paper: positions are sized when bought and not rebalanced monthly; cash earns 0% (the paper uses
+# Treasury bills); as-traded prices, so dividends are not included (the paper uses total returns); daily 210-session average
+# instead of ten month-end closes.
+strategy_id: research.etf-trend-10m.bt-v1
+strategy_name: RESEARCH ETF Trend 10-Month Average V1 (Faber timing, month-end, as-traded bars)
+source: faber_2007_quantitative_approach_to_tactical_asset_allocation
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: momentum
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 25
+  require_positive_news: false
+  decision_schedule: month_end
+  technical_factor:
+    metric: sma_distance
+    lookback_bars: 210
+    min_value: 0
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 0
+  target_r_multiple: 0
+  max_hold_hours: 1000000.0
+  max_hold_bars:
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  exit_on_entry_factor_at_or_below: 0
+  entry_factor_exit_schedule: month_end
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  check_exits_from_fill_day: true
+  initial_stop_mode: none
+  profit_target_mode: none
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

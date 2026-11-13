@@ -245,6 +245,9 @@ public sealed partial class BacktestRunner
                 exitPriceLogTrend?.Slope,
                 exitVolumeLogTrend?.Slope,
                 previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null);
+            // The entry-factor exit is a completed-close technical exit, judged after the stop, target and other exits.
+            if (exitReason is null && EntryFactorExitReason(strategy, bars, snapshots, i) is { } factorExit)
+                (exitPrice, exitReason) = (bar.Close, factorExit);
 
             if (exitPrice.HasValue && exitReason is not null)
             {

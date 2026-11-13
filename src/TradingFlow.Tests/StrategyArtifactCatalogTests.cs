@@ -16,7 +16,10 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(
             new[]
             {
-                // The swing artifacts were retired on 13 November 2026 (test-owned copies: RetiredStrategyFixtures).
+                // The single-stock swing artifacts were retired on 13 November 2026 (test-owned copies: RetiredStrategyFixtures);
+                // the ETF trend core and its buy-and-hold control were added the same day.
+                "etf.buy-and-hold-control@1.0.0",
+                "etf.trend-10m@1.0.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
                 "technical.opening-range-breakout@2.1.0"

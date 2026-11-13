@@ -110,7 +110,11 @@ public sealed partial class LiveRunner(
         CancellationToken cancellationToken,
         IProgress<string>? progress)
     {
-        foreach (var strategy in strategies) TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
+        foreach (var strategy in strategies)
+        {
+            TechnicalExecutionEngine.RequireSupportedExitPolicy(strategy);
+            TechnicalExecutionEngine.RequireNoBacktestOnlyRules(strategy);
+        }
         RunUniverseValidator.RequireResolved(run);
         _decisionContextProvider = _configuredDecisionContextProvider ?? FrozenManifestDecisionContextProvider.FromConfig(run.Engine);
         RequireSwingStrategies(strategies);
