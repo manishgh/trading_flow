@@ -202,7 +202,8 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             if (!SubscriptionAcknowledgementMatchesExpected(acknowledgement, expected))
             {
                 throw new InvalidOperationException(
-                    $"Alpaca subscription acknowledgement does not match the complete expected symbol set [{String.Join(", ", expected)}].");
+                    $"Alpaca subscription acknowledgement does not match the complete expected symbol set [{String.Join(", ", expected)}]. " +
+                    DescribeAcknowledgementDifference(acknowledgement, expected));
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -316,6 +317,23 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         acknowledgement.UpdatedBars.SetEquals(expected) &&
         acknowledgement.Trades.SetEquals(expected) &&
         acknowledgement.Statuses.SetEquals(expected);
+
+    /// <summary>
+    /// For a mismatched acknowledgement, names per channel (bars, updatedBars, trades, statuses) the symbols Alpaca left out and
+    /// the extra symbols it listed, so a failed subscription can be diagnosed from the log without guessing.
+    /// </summary>
+    internal static string DescribeAcknowledgementDifference(SubscriptionAcknowledgement acknowledgement, IReadOnlySet<string> expected)
+    {
+        var channels = new (string Name, IReadOnlySet<string> Symbols)[]
+        {
+            ("bars", acknowledgement.Bars), ("updatedBars", acknowledgement.UpdatedBars),
+            ("trades", acknowledgement.Trades), ("statuses", acknowledgement.Statuses)
+        };
+        var parts = channels.Where(channel => !channel.Symbols.SetEquals(expected)).Select(channel =>
+            $"{channel.Name}: missing [{String.Join(", ", expected.Except(channel.Symbols, StringComparer.OrdinalIgnoreCase).Order())}] " +
+            $"extra [{String.Join(", ", channel.Symbols.Except(expected, StringComparer.OrdinalIgnoreCase).Order())}]");
+        return "Acknowledged differences: " + String.Join("; ", parts) + ".";
+    }
 
     private static IReadOnlySet<string> ReadSymbolSet(JsonElement element, string propertyName)
     {
