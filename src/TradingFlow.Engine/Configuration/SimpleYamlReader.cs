@@ -223,7 +223,8 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "exit_rules.check_exits_from_fill_day", false),
                 ReadContinuationProtection(map),
                 OptionalDecimal(map, "exit_rules.exit_on_entry_factor_at_or_below"),
-                OptionalNullableString(map, "exit_rules.entry_factor_exit_schedule")),
+                OptionalNullableString(map, "exit_rules.entry_factor_exit_schedule"),
+                OptionalBool(map, "exit_rules.exit_when_off_list", false)),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps"),
@@ -378,7 +379,9 @@ public sealed class SimpleYamlReader
                 OptionalDecimal(runMap, "portfolio.impact_bps_at_max_participation") ?? 0m,
                 OptionalInt(runMap, "portfolio.max_execution_order_history", 1_000_000),
                 OptionalDecimal(runMap, "portfolio.commission_per_share") ?? 0m,
-                OptionalDecimal(runMap, "portfolio.max_gross_exposure_pct")),
+                OptionalDecimal(runMap, "portfolio.max_gross_exposure_pct"),
+                OptionalBool(runMap, "portfolio.same_open_exits_release_capacity", false),
+                OptionalBool(runMap, "portfolio.size_from_marked_equity", false)),
             new SignalSourceConfig(
                 OptionalString(runMap, "signal_source.type", "internal_candles"),
                 OptionalBool(runMap, "signal_source.require_signature", false),
@@ -813,6 +816,10 @@ public sealed class SimpleYamlReader
         if (scheduled && !(strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) &&
                 strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Decision schedules require a daily strategy and daily execution.");
+        // The off-list exit is judged on the same schedule as the list-gated entries, so it needs a decision schedule.
+        if (strategy.ExitRules.ExitWhenOffList && (strategy.EntryRules.DecisionSchedule is null ||
+                !strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("exit_rules.exit_when_off_list requires entry_rules.decision_schedule and direction: long.");
         if (strategy.ExitRules.EntryFactorExitSchedule is not null && strategy.ExitRules.ExitOnEntryFactorAtOrBelow is null)
             throw new InvalidOperationException("exit_rules.entry_factor_exit_schedule requires exit_rules.exit_on_entry_factor_at_or_below.");
         if (strategy.ExitRules.ExitOnEntryFactorAtOrBelow is not null &&

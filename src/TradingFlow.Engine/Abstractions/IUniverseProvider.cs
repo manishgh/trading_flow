@@ -28,6 +28,12 @@ public sealed class UniverseMembership
     public bool IsMember(string ticker, DateOnly day) =>
         eligibleDaysByTicker.TryGetValue(ticker, out var days) && days.Contains(day);
 
+    /// <summary>
+    /// True when the list names at least one stock on <paramref name="day"/>. A day it names nobody on lies outside the
+    /// list's (or the run's) sessions, so absence that day says nothing about a single stock.
+    /// </summary>
+    public bool NamesAnyStockOn(DateOnly day) => eligibleDaysByTicker.Values.Any(days => days.Contains(day));
+
     /// <summary>The days a ticker qualified on, in date order; empty when it never qualified. Used to publish the audit record.</summary>
     public IReadOnlyList<DateOnly> EligibleDays(string ticker) =>
         eligibleDaysByTicker.TryGetValue(ticker, out var days) ? days.Order().ToArray() : [];

@@ -32,9 +32,10 @@ public sealed class KeptStrategyIdentityTests
     [InlineData("swing.connors-rsi2", "9.2.0", "5938933c5800110d3574b4d5d0a067e70ba0ede4e86cb620d09ccb64c4568534", "swing.connors-rsi2")]
     [InlineData("swing.connors-rsi2", "7.2.0", "87bfbc48a88cf563b04c22300a4f9283b5635daac3e16979d7414243505cb067", "swing.connors-rsi2")]
     [InlineData("swing.connors-rsi2-short", "2.2.0", "34a4438d39a56020ba11ac08b6364cd003885ca681888025c1f4cbc26aa27a3e", "swing.connors-rsi2-short")]
-    // ETF trend core and its buy-and-hold comparison control (13 Nov 2026).
+    // ETF trend core, its buy-and-hold comparison control and the sector rotation (13 Nov 2026).
     [InlineData("etf.trend-10m", "1.0.0", "e998f9ccd93d4630c21123e8d89826c5a02c1e93e601793d3f96333e8ec60b08", null)]
     [InlineData("etf.buy-and-hold-control", "1.0.0", "b39db129ba80d31c5dc9b03ae20b52453dbee90f8e6b12390436699147781ec5", null)]
+    [InlineData("etf.rotation-12-1", "1.0.0", "15dd1e26911df66c54f2f5f1c9cdd7bffa5c83ca21091efa50e08c0ab761ff9b", null)]
     public void KeptArtifacts_KeepTheirRecordedCanonicalHashes(string id, string version, string hash, string? parent)
     {
         var artifact = Assert.Single(AllArtifacts(),

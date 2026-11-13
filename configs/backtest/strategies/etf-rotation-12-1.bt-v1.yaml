@@ -1,0 +1,75 @@
+# Faber (2010), "Relative Strength Strategies for Investing" (SSRN 1585517), with the absolute trend filter of Antonacci (2014),
+# "Dual Momentum Investing". Design: docs/design-review/2026-11-13/etf-rotation-design.md (approved 13 November 2026).
+# Run on a research list that keeps, each session, the 3 sector funds with the highest 12-1 month return measured at the
+# prior close (research-daily-screen --rank-by return_12_1 --rank-tier 1-3). At each month's last close a listed fund is
+# bought at the next open if its close is above its 210-session average; a held fund is sold at the next open when it is
+# off the list for that session or its close is at or below the average. Same trading rules as etf.trend-10m@1.0.0 plus the
+# off-list exit. Run with etf-rotation-profile.yaml (3 slots; same-open swaps; sizing from marked equity).
+# Differences from the papers: no monthly trimming back to equal weight; cash earns 0%; as-traded prices without dividends;
+# daily 210-session average instead of ten month-end closes.
+strategy_id: research.etf-rotation-12-1.bt-v1
+strategy_name: RESEARCH ETF Sector Rotation 12-1 Top 3 V1 (Faber 2010 relative strength with the 10-month trend filter, month-end, as-traded bars)
+source: faber_2010_relative_strength_strategies_antonacci_2014_dual_momentum
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: momentum
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  recent_high_lookback_bars: 20
+  volatility_contraction_lookback_bars: 25
+  require_positive_news: false
+  decision_schedule: month_end
+  technical_factor:
+    metric: sma_distance
+    lookback_bars: 210
+    min_value: 0
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 0
+  target_r_multiple: 0
+  max_hold_hours: 1000000.0
+  max_hold_bars:
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  exit_on_entry_factor_at_or_below: 0
+  entry_factor_exit_schedule: month_end
+  exit_when_off_list: true
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  check_exits_from_fill_day: true
+  initial_stop_mode: none
+  profit_target_mode: none
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

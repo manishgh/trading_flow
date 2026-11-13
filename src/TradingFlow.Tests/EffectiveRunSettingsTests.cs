@@ -258,6 +258,24 @@ public sealed class EffectiveRunSettingsTests
         Assert.Equal(plain.Portfolio with { CommissionPerShare = 0.0035m, MaxGrossExposurePct = 400m }, read.Portfolio);
     }
 
+    // The rotation's same-open swap and marked-equity settings are carried from the profile into the generated run and read
+    // back exactly; a profile without them writes neither key.
+    [Fact]
+    public async Task GeneratedRun_RoundTripsRotationAdmissionSettings()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        var plainPath = fixture.Writer.WriteBacktestConfig(fixture.Request);
+        var plain = fixture.Reader.ReadBacktestRun(plainPath);
+        Assert.DoesNotContain("same_open_exits_release_capacity", File.ReadAllText(plainPath), StringComparison.Ordinal);
+        var profile = await File.ReadAllTextAsync(fixture.ProfilePath);
+        await File.WriteAllTextAsync(fixture.ProfilePath, profile.Replace("  max_execution_order_history: 9876",
+            "  max_execution_order_history: 9876\n  same_open_exits_release_capacity: true\n  size_from_marked_equity: true", StringComparison.Ordinal));
+
+        var read = fixture.Reader.ReadBacktestRun(fixture.Writer.WriteBacktestConfig(fixture.Request));
+
+        Assert.Equal(plain.Portfolio with { SameOpenExitsReleaseCapacity = true, SizeFromMarkedEquity = true }, read.Portfolio);
+    }
+
     // Reject a typo before writing snapshots, instead of accidentally falling back to native daily execution.
     [Fact]
     public async Task UnknownReplayPolicy_DoesNotCreateRunFiles()

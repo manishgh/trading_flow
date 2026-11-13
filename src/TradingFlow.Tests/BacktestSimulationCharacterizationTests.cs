@@ -373,7 +373,8 @@ public sealed class BacktestSimulationCharacterizationTests
             snapshots,
             new ExecutionAuditor(20, sink, "candidate_hypothesis"),
             CancellationToken.None,
-            1
+            1,
+            null
         ]);
     }
 

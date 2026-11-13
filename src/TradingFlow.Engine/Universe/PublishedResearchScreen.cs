@@ -48,10 +48,20 @@ public sealed record ResearchScreenSplitRule(int? LookbackSessions, int Excluded
     int? IncompleteStocks = null);
 
 /// <summary>
-/// A liquidity tier: on each session only eligible stocks ranked <see cref="FromRank"/> to <see cref="ToRank"/> (1 = highest)
-/// by the screen's average dollar volume of earlier sessions are kept; ties go by symbol. Ranks use only earlier sessions.
+/// A rank tier: on each session only eligible stocks ranked <see cref="FromRank"/> to <see cref="ToRank"/> (1 = highest) by
+/// <see cref="Measure"/> are kept; ties go by symbol. Every measure uses only earlier sessions. The default is the screen's
+/// average dollar volume (a liquidity tier); <see cref="Return12Minus1"/> ranks by past return (a momentum tier).
 /// </summary>
-public sealed record ResearchScreenLiquidityTier(int FromRank, int ToRank, string Measure = "average_dollar_volume");
+public sealed record ResearchScreenLiquidityTier(int FromRank, int ToRank, string Measure = ResearchScreenLiquidityTier.AverageDollarVolume)
+{
+    public const string AverageDollarVolume = "average_dollar_volume";
+
+    /// <summary>
+    /// Return from the close 252 sessions before the latest prior close to the close 21 sessions before it (12 months skipping
+    /// the most recent month, Faber 2010 / Antonacci 2014), on the session's split basis. Needs 253 earlier sessions.
+    /// </summary>
+    public const string Return12Minus1 = "return_12_1";
+}
 
 /// <summary>A file named in the manifest with its SHA-256 (lower-case hex of its exact bytes).</summary>
 public sealed record ResearchScreenFile(string FileName, string Sha256);

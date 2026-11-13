@@ -24,9 +24,9 @@ public sealed class TechnicalExecutionEngine
     {
         ArgumentNullException.ThrowIfNull(strategy);
         if (strategy.EntryRules.DecisionSchedule is not null || strategy.ExitRules.ExitOnEntryFactorAtOrBelow is not null ||
-            strategy.ExitRules.EntryFactorExitSchedule is not null)
+            strategy.ExitRules.EntryFactorExitSchedule is not null || strategy.ExitRules.ExitWhenOffList)
             throw new NotSupportedException(
-                $"{strategy.StrategyName} uses a decision schedule or the entry-factor exit, which only the daily backtest replay applies; it cannot run in paper or live trading yet.");
+                $"{strategy.StrategyName} uses a decision schedule, the entry-factor exit or the off-list exit, which only the daily backtest replay applies; it cannot run in paper or live trading yet.");
     }
 
     public const string EntryFactorExitReason = "technical_exit_entry_factor";

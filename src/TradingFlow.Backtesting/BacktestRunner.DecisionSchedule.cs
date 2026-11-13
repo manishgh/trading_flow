@@ -1,6 +1,7 @@
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Strategies;
 
@@ -16,7 +17,7 @@ public sealed partial class BacktestRunner
     /// </summary>
     private static void RequireScheduledRulesSupported(BacktestRunConfig run, StrategyDefinition strategy, bool decisionHour)
     {
-        var scheduled = strategy.EntryRules.DecisionSchedule is not null ||
+        var scheduled = strategy.EntryRules.DecisionSchedule is not null || strategy.ExitRules.ExitWhenOffList ||
             strategy.ExitRules.ExitOnEntryFactorAtOrBelow is not null || strategy.ExitRules.EntryFactorExitSchedule is not null;
         if (scheduled && (decisionHour || run.Engine.ExecutionReplayPolicyId is not null))
             throw new NotSupportedException(
@@ -32,6 +33,24 @@ public sealed partial class BacktestRunner
         strategy.EntryRules.DecisionSchedule is { } schedule &&
         !DecisionSchedules.IsDecisionSession(schedule, ExchangeSessionCalendar.SessionDate(setupSnapshot.Timestamp),
             NextExchangeSession(setupSnapshot.Timestamp));
+
+    /// <summary>
+    /// Refuses, before any data work, rotation settings a run would otherwise ignore or fail on mid-run: the same-open swap
+    /// and marked-equity settings are applied only by the default daily replay's admission; the off-list exit needs that
+    /// replay, a research-list universe, and one position per ticker (otherwise a fund that stays listed is bought again
+    /// each month).
+    /// </summary>
+    private static void RequireRotationSettingsSupported(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
+    {
+        var defaultReplay = run.Engine.ExecutionReplayPolicyId is null;
+        if ((run.Portfolio.SameOpenExitsReleaseCapacity || run.Portfolio.SizeFromMarkedEquity) && !defaultReplay)
+            throw new InvalidOperationException(
+                "portfolio.same_open_exits_release_capacity and portfolio.size_from_marked_equity apply only to the default daily replay.");
+        if (!strategies.Any(strategy => strategy.ExitRules.ExitWhenOffList)) return;
+        if (!defaultReplay || run.Universe?.RankedMembership is null || !run.Portfolio.PreventOverlappingTickerPositions)
+            throw new InvalidOperationException(
+                "exit_rules.exit_when_off_list needs the default daily replay, a research-list universe and portfolio.prevent_overlapping_ticker_positions: true.");
+    }
 
     // Attach the calendar's next trading session after the request's setup bar when the strategy schedules its entries.
     private StrategyDecisionRequest WithNextExchangeSession(StrategyDecisionRequest request, StrategyDefinition strategy)
@@ -75,6 +94,27 @@ public sealed partial class BacktestRunner
             throw new InvalidDataException(
                 $"The daily bar starting {barStart:O} falls on {session:yyyy-MM-dd}, which the exchange calendar does not list as a trading session.");
         return ExchangeSessionCalendar.NextTradingSession(calendar, session);
+    }
+
+    public const string OffListExitReason = "technical_exit_off_list";
+
+    /// <summary>
+    /// The off-list exit for completed bar <paramref name="index"/>: on a session of the entry decision schedule, the position
+    /// is sold at the next open when the run's research list does not name the stock for that next session (the session a
+    /// purchase would be judged on). Null when the rule is off, the session is off schedule, the stock stays listed, or the
+    /// list names no stock at all that session (past the list's or the run's end), where the position is simply kept.
+    /// </summary>
+    private string? OffListExitReasonAt(StrategyDefinition strategy, IReadOnlyList<OhlcvBar> bars, int index,
+        UniverseMembership? membership)
+    {
+        if (!strategy.ExitRules.ExitWhenOffList) return null;
+        var bar = bars[index];
+        var next = NextExchangeSession(bar.Timestamp);
+        if (!DecisionSchedules.IsDecisionSession(strategy.EntryRules.DecisionSchedule, ExchangeSessionCalendar.SessionDate(bar.Timestamp), next))
+            return null;
+        var list = membership
+            ?? throw new InvalidOperationException($"{strategy.StrategyId} sells funds that leave its list, so it needs a research-list universe.");
+        return list.IsMember(bar.Ticker, next) || !list.NamesAnyStockOn(next) ? null : OffListExitReason;
     }
 
     // The entry-factor exit reason for completed bar index, or null when it does not fire or is off schedule.

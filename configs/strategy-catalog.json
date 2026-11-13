@@ -85,6 +85,14 @@
       "lifecycle": "research",
       "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
       "reason": "Comparison control for etf.trend-10m@1.0.0, required by its pass rules: buys each fund at its first eligible month-end and never sells, with the same slots, timing, costs and bars. A measurement benchmark, never a strategy to trade."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/etf-rotation-12-1.bt-v1.yaml",
+      "strategyId": "etf.rotation-12-1",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
+      "reason": "Approved 13 November 2026 (docs/design-review/2026-11-13/etf-rotation-design.md): Faber (2010) relative strength with the Antonacci (2014) absolute filter on the 11 sector funds. Run on a list keeping the top 3 by 12-1 month return; at each month's last close buy a listed fund above its 210-session average, sell a held fund that left the list or fell to or below its average; fills at the next open; 3 slots with same-open swaps and marked-equity sizing (etf-rotation-profile.yaml); 5 bps per side; as-traded bars. Research only."
     }
   ]
 }

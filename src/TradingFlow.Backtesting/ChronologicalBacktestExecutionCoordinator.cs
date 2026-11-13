@@ -94,6 +94,10 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 
     public IReadOnlyList<BacktestExecutionFailure> Failures => _failures;
 
+    /// <summary>
+    /// The live positions as admission sees them: planned cost, the planned exit (for same-open swaps) and the close of the
+    /// latest bar processed since this position's own entry bar (for marked equity); no close yet means none is reported.
+    /// </summary>
     public IReadOnlyList<ActiveBacktestExecution> ActiveExecutions => _active
         .Where(tracker => !tracker.IsTerminal)
         .Select(tracker => new ActiveBacktestExecution(
@@ -102,8 +106,21 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             tracker.Plan.Strategy.StrategyId,
             tracker.Plan.Candidate.EntryTimestamp,
             tracker.Plan.RequestedQuantity,
-            tracker.Plan.RequestedQuantity * (tracker.Plan.Candidate.PlanningReferencePrice ?? tracker.Plan.Candidate.EntryPrice)))
+            tracker.Plan.RequestedQuantity * (tracker.Plan.Candidate.PlanningReferencePrice ?? tracker.Plan.Candidate.EntryPrice))
+        {
+            PlannedExitTimestamp = tracker.Plan.Candidate.ExitTimestamp,
+            PlannedExitReason = tracker.Plan.Candidate.ExitReason,
+            LastClose = CloseSinceEntry(tracker)
+        })
         .ToArray();
+
+    // The latest processed close of the tracker's ticker, only when that bar is its entry bar or later: a fund bought again
+    // must never be marked at the close left over from an earlier holding.
+    private decimal? CloseSinceEntry(ExecutionTracker tracker) =>
+        _lastBarsBySymbol.TryGetValue(NormalizeSymbol(tracker.Plan.Candidate.Ticker), out var last) &&
+        last.StartUtc >= tracker.Plan.Candidate.EntryTimestamp.ToUniversalTime()
+            ? last.Bar.Close
+            : null;
 
     public void AdvanceThrough(DateTimeOffset timestamp)
     {
@@ -1355,4 +1372,14 @@ internal sealed record ActiveBacktestExecution(
     string StrategyId,
     DateTimeOffset EntryTimestamp,
     int RequestedQuantity,
-    decimal ReservedNotional);
+    decimal ReservedNotional)
+{
+    /// <summary>The candidate's planned exit bar start (an open fill for next-open exits), or null while it is still open.</summary>
+    public DateTimeOffset? PlannedExitTimestamp { get; init; }
+
+    /// <summary>The candidate's planned exit reason, used to tell an open-fill sale from a stop or target hit inside a bar.</summary>
+    public string? PlannedExitReason { get; init; }
+
+    /// <summary>Close of the latest bar of this ticker the coordinator has processed (known before the admission time).</summary>
+    public decimal? LastClose { get; init; }
+}

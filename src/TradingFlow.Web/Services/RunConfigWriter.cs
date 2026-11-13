@@ -1050,6 +1050,7 @@ public sealed class RunConfigWriter
         if (strategy.ExitRules.CheckExitsFromFillDay) yaml.AppendLine("  check_exits_from_fill_day: true");
         AppendOptionalDecimal(yaml, "  exit_on_entry_factor_at_or_below", strategy.ExitRules.ExitOnEntryFactorAtOrBelow);
         if (strategy.ExitRules.EntryFactorExitSchedule is { } exitSchedule) yaml.AppendLine($"  entry_factor_exit_schedule: {exitSchedule}");
+        if (strategy.ExitRules.ExitWhenOffList) yaml.AppendLine("  exit_when_off_list: true");
         yaml.AppendLine($"  enable_atr_trailing_stop: {strategy.ExitRules.EnableAtrTrailingStop.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  trailing_stop_atr_multiple: {strategy.ExitRules.TrailingStopAtrMultiple.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  trailing_activation_r: {strategy.ExitRules.TrailingActivationR.ToString(CultureInfo.InvariantCulture)}");
@@ -1206,6 +1207,9 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  commission_per_share: {portfolio.CommissionPerShare.ToString(CultureInfo.InvariantCulture)}");
         if (portfolio.MaxGrossExposurePct is { } gross)
             yaml.AppendLine($"  max_gross_exposure_pct: {gross.ToString(CultureInfo.InvariantCulture)}");
+        // Opt-in rotation admission settings, written only when set so other runs are unchanged.
+        if (portfolio.SameOpenExitsReleaseCapacity) yaml.AppendLine("  same_open_exits_release_capacity: true");
+        if (portfolio.SizeFromMarkedEquity) yaml.AppendLine("  size_from_marked_equity: true");
     }
 
     /// <summary>Quote a scalar the current reader can round-trip; reject characters it cannot preserve instead of changing them.</summary>

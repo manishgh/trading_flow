@@ -945,6 +945,7 @@ public sealed partial class BacktestRunner(
             throw new InvalidOperationException("portfolio.commission_per_share and portfolio.max_gross_exposure_pct need an intraday candle replay policy.");
         if (run.Portfolio.CommissionPerShare < 0m || run.Portfolio.MaxGrossExposurePct is <= 0m)
             throw new InvalidOperationException("portfolio.commission_per_share must be non-negative and portfolio.max_gross_exposure_pct positive.");
+        RequireRotationSettingsSupported(run, strategies);
         if (run.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
             foreach (var strategy in strategies) ValidateFineExecutionPolicy(run, strategy);
         if (!run.Mode.Equals("backtest", StringComparison.OrdinalIgnoreCase))
@@ -1565,7 +1566,8 @@ public sealed partial class BacktestRunner(
                     executionSnapshots,
                     executionAuditor,
                     cancellationToken,
-                    plannedEntryIndex);
+                    plannedEntryIndex,
+                    universeMembership);
                 if (candidate is null)
                 {
                     lastReason = "no_next_bar_or_invalid_stop";

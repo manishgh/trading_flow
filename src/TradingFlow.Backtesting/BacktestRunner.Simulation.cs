@@ -54,7 +54,8 @@ public sealed partial class BacktestRunner
         IReadOnlyList<IndicatorSnapshot> snapshots,
         TradingFlow.Engine.Execution.ExecutionAuditor auditor,
         CancellationToken cancellationToken,
-        int? plannedEntryIndex = null)
+        int? plannedEntryIndex = null,
+        TradingFlow.Engine.Abstractions.UniverseMembership? membership = null)
     {
         var signalCloseTimestamp = signal.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
         var entryIndex = plannedEntryIndex ?? FindFirstBarIndexAtOrAfter(bars, signalCloseTimestamp);
@@ -245,9 +246,12 @@ public sealed partial class BacktestRunner
                 exitPriceLogTrend?.Slope,
                 exitVolumeLogTrend?.Slope,
                 previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null);
-            // The entry-factor exit is a completed-close technical exit, judged after the stop, target and other exits.
+            // The entry-factor and off-list exits are completed-close technical exits, judged after the stop, target and other
+            // exits and filled at the next open.
             if (exitReason is null && EntryFactorExitReason(strategy, bars, snapshots, i) is { } factorExit)
                 (exitPrice, exitReason) = (bar.Close, factorExit);
+            if (exitReason is null && OffListExitReasonAt(strategy, bars, i, membership) is { } offList)
+                (exitPrice, exitReason) = (bar.Close, offList);
 
             if (exitPrice.HasValue && exitReason is not null)
             {

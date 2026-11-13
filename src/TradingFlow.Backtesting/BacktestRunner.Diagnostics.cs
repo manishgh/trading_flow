@@ -659,26 +659,24 @@ public sealed partial class BacktestRunner
                     continue;
                 }
 
-                if (activePositions.Count >= portfolio.MaxConcurrentPositions)
+                var capacity = MeasureAdmissionCapacity(portfolio, equity, activePositions, entryGroup.Key);
+                if (capacity.HeldCount >= portfolio.MaxConcurrentPositions)
                 {
                     admissionAudit.Reject(
                         candidate,
                         "max_concurrent_positions_reached",
-                        $"Actual: {activePositions.Count}, Allowed: {portfolio.MaxConcurrentPositions}");
+                        $"Actual: {capacity.HeldCount}, Allowed: {portfolio.MaxConcurrentPositions}");
                     continue;
                 }
 
-                var slotPositionValue = equity / portfolio.MaxConcurrentPositions;
-                var reservedPositionValue = activePositions.Sum(position => position.ReservedNotional);
-                var availablePositionValue = Math.Max(0m, equity - reservedPositionValue);
-                var requestedNotional = Math.Min(slotPositionValue, availablePositionValue);
+                var requestedNotional = Math.Min(capacity.SlotValue, capacity.AvailableValue);
                 var side = candidate.Direction.Equals("short", StringComparison.OrdinalIgnoreCase)
                     ? PlannedOrderSide.Short
                     : PlannedOrderSide.Long;
                 var planningRequest = new OrderPlanningRequest(
                     candidate.Ticker,
                     side,
-                    equity,
+                    capacity.SizingEquity,
                     candidate.PlanningReferencePrice ?? candidate.EntryPrice,
                     candidate.InitialStopKind.Equals(ExitRules.NoStop, StringComparison.OrdinalIgnoreCase)
                         ? PlannedStopRequest.NoStop()
@@ -737,7 +735,8 @@ public sealed partial class BacktestRunner
             admissionAudit,
             execution.Failures)
         {
-            State = accounting is null ? null : BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting),
+            State = accounting is null ? null
+                : RequireSwapsKeptCashCovered(portfolio, BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting)),
             DecisionHourCounts = execution.DecisionHourCounts
                 .Append(new(SplitEveEntryRefusedReason, admissionAudit.RejectionCounts.GetValueOrDefault("portfolio_" + SplitEveEntryRefusedReason)))
                 .Where(pair => pair.Value > 0)

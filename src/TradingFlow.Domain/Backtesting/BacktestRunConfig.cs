@@ -262,7 +262,13 @@ public sealed record PortfolioConfig(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] decimal CommissionPerShare = 0m,
     // Gross exposure limit in percent of equity (400 = 4x leverage). When set, untriggered stop orders reserve no capital
     // and each position is capped at its trigger so total gross exposure stays within it. Null keeps the cash-only limit.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxGrossExposurePct = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxGrossExposurePct = null,
+    // Before admitting entries at an open, positions whose planned sale fills at that same open free their slot and their
+    // sale value (at the last close) for those entries (an ETF rotation swap). Off keeps every existing admission unchanged.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool SameOpenExitsReleaseCapacity = false,
+    // Size each new position's slot from marked equity (cash plus held positions at their last close) instead of starting
+    // capital plus closed profits. Off keeps every existing sizing unchanged.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool SizeFromMarkedEquity = false);
 
 public sealed record SignalSourceConfig(
     string Type,

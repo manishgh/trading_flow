@@ -242,7 +242,10 @@ public sealed record ExitRules(
     // Close the position, at the next open, when the entry rule's technical factor is at or below this value on a completed bar.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? ExitOnEntryFactorAtOrBelow = null,
     // Sessions on which that factor exit is checked (DecisionSchedules); null checks every completed session.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EntryFactorExitSchedule = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EntryFactorExitSchedule = null,
+    // On each session of the entry decision schedule, close the position at the next open when the run's research list does
+    // not name it for that next session (a fund that dropped out of a ranked list, such as the rotation's top 3).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitWhenOffList = false)
 {
     /// <summary>Published rules such as Connors RSI-2 place no protective stop; long-only research backtests size by position notional instead.</summary>
     public const string NoStop = "none";
