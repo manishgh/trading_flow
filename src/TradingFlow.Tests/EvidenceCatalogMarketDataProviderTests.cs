@@ -259,6 +259,36 @@ internal sealed class SyntheticEvidenceCatalog : IDisposable
     }
 
     /// <summary>
+    /// Publishes a corporate-actions dataset of forward splits (symbol, ex-date, new shares per old share), with the Alpaca
+    /// old_rate/new_rate fields the shared split reader parses.
+    /// </summary>
+    public async Task<EvidenceDatasetManifest> SplitsAsync(IReadOnlyList<(string Symbol, DateOnly ExDate, decimal Ratio)> splits)
+    {
+        var received = new DateTimeOffset(2026, 10, 2, 0, 0, 0, TimeSpan.Zero);
+        var rows = splits.Select((split, index) => new CorporateActionEvidenceRow(1, RunId, ConfigHash, CodeVersion, "alpaca-market-data", "alpaca",
+            CorporateActionEvidenceType.ForwardSplit, $"split-{index}-{split.Symbol}", null, null, split.Symbol, null, split.ExDate, split.ExDate,
+            split.ExDate, null, null, new Dictionary<string, string> { ["symbol"] = split.Symbol, ["old_rate"] = "1",
+                ["new_rate"] = split.Ratio.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+            received, [new EvidenceRowSourceAddress(Source.ObservationId, Source.Artifact.Content.Sha256)])).ToArray();
+        var first = splits.Min(split => split.ExDate);
+        var provenance = new EvidencePartitionProvenance("alpaca", "/v1/corporate-actions", "alpaca-market-data", "raw", "USD", first, [], [],
+            splits.Select(split => split.Symbol).Distinct().ToArray(), "event", new DateTimeOffset(first.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero),
+            new DateTimeOffset(splits.Max(split => split.ExDate).AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero));
+        var partition = await new EvidenceParquetPartitionPublisher(codec, store).PublishCorporateActionsAsync(new EvidenceParquetPartitionRequest(
+            "actions-" + Guid.NewGuid().ToString("N"), EvidenceDatasetKind.CorporateActions, 1, provenance, [Source], RunId, ConfigHash, Normalizer,
+            CodeVersion, new EvidenceQualityReport(), new EvidenceObjectNamespace("normalized/synthetic-actions")), rows);
+        return Add(EvidenceParquetPartitionPublisher.BuildDatasetManifest(EvidenceDatasetKind.CorporateActions, 1, DateTimeOffset.UtcNow,
+            "job-" + Guid.NewGuid().ToString("N"), new string('f', 64), ConfigHash, CodeVersion, Normalizer, "alpaca-market-data", [partition],
+            new EvidenceQualityReport()));
+    }
+
+    /// <summary>The catalog file path a provider configuration names (the synthetic catalog serves datasets from memory).</summary>
+    public string CatalogPath => Path.Combine(folder.Path, "catalog.db");
+
+    /// <summary>The object store root a provider configuration names.</summary>
+    public string ObjectRoot => Path.Combine(folder.Path, "objects");
+
+    /// <summary>
     /// An adapter over a small market: ABC daily bars for three sessions, three ABC and one XYZ five-minute bars from 1 October
     /// 2026 13:30 UTC, two ABC one-minute bars, and an XNYS calendar for 21 September to 10 October 2026.
     /// </summary>

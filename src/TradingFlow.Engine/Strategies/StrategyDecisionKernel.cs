@@ -303,14 +303,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             setupAvailableAt
         });
 
-        var relativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(request.Strategy, latest);
-        var longRejection = AllowsLong(request.Strategy)
-            ? entryEvaluator.GetLongEntryRejection(request.Strategy, signal, latest, relativeVolume)
-            : "direction_not_long";
-        var shortRejection = AllowsShort(request.Strategy)
-            ? entryEvaluator.GetShortEntryRejection(request.Strategy, signal, latest, relativeVolume)
-            : "direction_not_short";
-        var direction = longRejection is null ? "long" : shortRejection is null ? "short" : null;
+        var (direction, longRejection, shortRejection, relativeVolume) = ResolveEntryDirection(request.Strategy, signal, latest, entryEvaluator);
         if (direction is null)
         {
             var reason = ChoosePrimaryRejection(longRejection!, shortRejection!);
@@ -580,6 +573,21 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray());
         }
         return null;
+    }
+
+    /// <summary>
+    /// The entry-direction stage of the shared decision path: the strategy's long and short entry rules applied to a setup
+    /// signal and its completed snapshot. Returns the admitted direction (long first, null when neither passes), each side's
+    /// rejection and the relative volume the rules read. Research signal studies call it too, so they never re-implement it.
+    /// </summary>
+    public static (string? Direction, string? LongRejection, string? ShortRejection, decimal? RelativeVolume) ResolveEntryDirection(
+        StrategyDefinition strategy, TradeSignal signal, IndicatorSnapshot latest, StrategyDecisionBrain? evaluator = null)
+    {
+        evaluator ??= new StrategyDecisionBrain();
+        var relativeVolume = StrategyDecisionBrain.ResolveEntryRelativeVolume(strategy, latest);
+        var longRejection = AllowsLong(strategy) ? evaluator.GetLongEntryRejection(strategy, signal, latest, relativeVolume) : "direction_not_long";
+        var shortRejection = AllowsShort(strategy) ? evaluator.GetShortEntryRejection(strategy, signal, latest, relativeVolume) : "direction_not_short";
+        return (longRejection is null ? "long" : shortRejection is null ? "short" : null, longRejection, shortRejection, relativeVolume);
     }
 
     /// <summary>True when the request is bound to the decision-hour timing (daily rules decided one hour before the close).</summary>

@@ -66,6 +66,30 @@ public sealed class TechnicalExecutionEngine
         return (null, null);
     }
 
+    // The short side's technical exits (after the minimum hold), then the bar-count and hour limits, read from one observation:
+    // shared by the daily and decision-hour backtest builders and research signal studies. Returns
+    // the exit reason or null; sourceTimestamp is the observation's time and entryTimestamp the entry's, for the hour limit.
+    public static string? GetShortTechnicalOrTimeExitReason(StrategyDefinition strategy, IndicatorSnapshot snapshot, int barsHeld,
+        DateTimeOffset sourceTimestamp, DateTimeOffset entryTimestamp, IndicatorSnapshot? previousSnapshot)
+    {
+        if (barsHeld >= strategy.ExitRules.MinHoldBarsBeforeTechnicalExit)
+        {
+            if (strategy.ExitRules.ExitOnCloseBelowVwap && snapshot.Vwap is { } vwap && snapshot.CurrentPrice > vwap)
+                return "technical_exit_above_vwap";
+            if (strategy.ExitRules.ExitOnMacdHistogramNegative && snapshot.MacdHistogram is { } histogram && histogram > 0)
+                return "technical_exit_macd_histogram_positive";
+            // Connors short mirror: cover when the close falls below its 5-day average.
+            if (strategy.ExitRules.ExitOnCloseBelowSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice < sma5)
+                return "technical_exit_below_sma5";
+            if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 && IsSma10CrossedAboveSma20(snapshot, previousSnapshot))
+                return "technical_exit_sma10_cross_above_sma20";
+        }
+
+        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars && maxHoldBars > 0 && barsHeld >= maxHoldBars)
+            return "max_hold_bars";
+        return sourceTimestamp >= entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours) ? "max_hold" : null;
+    }
+
     public string? GetTechnicalOrTimeExitReason(StrategyDefinition strategy,
         IndicatorSnapshot snapshot, int barsHeld, DateTimeOffset sourceTimestamp,
         DateTimeOffset entrySourceTimestamp, decimal? priceLogSlope = null,

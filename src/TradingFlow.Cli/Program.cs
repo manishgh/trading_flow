@@ -78,6 +78,13 @@ if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.IntradayBarsCollectionPlan
     return;
 }
 
+// Signal study (stage 1 of the research funnel): every declared variant's signals on a research screen's eligible stock-days.
+if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.SignalStudyCommand.Name, StringComparison.Ordinal))
+{
+    Environment.ExitCode = await TradingFlow.Cli.SignalStudyCommand.RunAsync(args[1..], Console.Out, CancellationToken.None);
+    return;
+}
+
 // Point-in-time daily screen over a published as-traded bar dataset.
 if (args.Length > 0 && args[0].Equals(TradingFlow.Cli.DailyScreenCommand.Name, StringComparison.Ordinal))
 {

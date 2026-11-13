@@ -122,7 +122,7 @@ public sealed partial class BacktestRunner
     {
         var previous = session.DailyIndex > 0 ? context.DailySnapshots[session.DailyIndex - 1] : null;
         return isShort
-            ? ShortTechnicalOrTimeExitReason(context.Strategy, snapshot, barsHeld, session.DecisionTimeUtc, entryDecisionTime, previous)
+            ? TechnicalExecutionEngine.GetShortTechnicalOrTimeExitReason(context.Strategy, snapshot, barsHeld, session.DecisionTimeUtc, entryDecisionTime, previous)
             : new TechnicalExecutionEngine().GetTechnicalOrTimeExitReason(context.Strategy, snapshot, barsHeld, session.DecisionTimeUtc,
                 entryDecisionTime, previousSnapshot: previous);
     }
