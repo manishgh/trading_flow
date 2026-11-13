@@ -48,9 +48,15 @@ public static class DailyScreenCommand
         rules.Validate();
         var from = Date(Require(options, "--from"));
         var to = Date(Require(options, "--to"));
-        var excluded = options.TryGetValue("--exclude-symbols", out var excludeFile)
-            ? File.ReadLines(Path.GetFullPath(excludeFile)).Select(line => line.Trim().ToUpperInvariant()).Where(line => line.Length > 0).ToHashSet(StringComparer.Ordinal)
-            : [];
+        var excluded = options.TryGetValue("--exclude-symbols", out var excludeFile) ? ReadSymbolList(excludeFile) : [];
+        // --include-symbols file screens only the listed symbols (e.g. a fixed set of index and sector funds); the file's
+        // SHA-256 is recorded in the manifest in place of the exclusion list, so the list is part of the screen's identity.
+        HashSet<string>? included = null;
+        if (options.TryGetValue("--include-symbols", out var includeFile))
+        {
+            if (excludeFile is not null) throw new ArgumentException("Use --include-symbols or --exclude-symbols, not both.");
+            included = ReadSymbolList(includeFile);
+        }
         var splits = ShareSplits.FromCorporateActions(await reader.ReadCorporateActionsAsync(actions, cancellationToken));
         var ranking = await RankingAsync(options, catalog, reader, cancellationToken);
 
@@ -77,7 +83,7 @@ public static class DailyScreenCommand
             {
                 foreach (var group in partition.GroupBy(row => row.Symbol, StringComparer.Ordinal))
                 {
-                    if (excluded.Contains(group.Key)) continue;
+                    if (excluded.Contains(group.Key) || (included is not null && !included.Contains(group.Key))) continue;
                     var series = group.OrderBy(row => row.BarStartUtc).Select(ToBar).ToArray();
                     var sessions = series.Select(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime)).ToArray();
                     var tradedSessions = ranking is null ? [] : sessions;
@@ -167,8 +173,14 @@ public static class DailyScreenCommand
         var inputs = new ResearchScreenInputs(Require(options, "--bars"), Require(options, "--actions"),
             options.TryGetValue("--opening-bars", out var opening) ? opening : null, sessions);
         return await ResearchScreenManifest.PublishAsync(folder, inputs, rules, ranking, from, to, DailyRankingOutput.IssuerIdentityBasis,
-            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken, splitRule, tier);
+            excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken, splitRule, tier,
+            options.TryGetValue("--include-symbols", out var includeFile) ? Path.GetFullPath(includeFile) : null);
     }
+
+    /// <summary>Reads a one-symbol-per-line list (blank lines ignored), upper-cased.</summary>
+    private static HashSet<string> ReadSymbolList(string path) =>
+        File.ReadLines(Path.GetFullPath(path)).Select(line => line.Trim().ToUpperInvariant()).Where(line => line.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
 
     /// <summary>Parses --liquidity-tier "from-to" (1-based ranks, inclusive), e.g. "1-500" or "501-1500".</summary>
     public static ResearchScreenLiquidityTier ParseTier(string text)

@@ -77,7 +77,10 @@ public sealed record ResearchScreenManifest(
     ResearchScreenSplitRule? SplitRule = null,
     // The liquidity tier applied after the screen rules (ranks by 20-day average dollar volume); omitted when not used.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    ResearchScreenLiquidityTier? LiquidityTier = null)
+    ResearchScreenLiquidityTier? LiquidityTier = null,
+    // The fixed symbol list a screen was limited to (--include-symbols), with its SHA-256; omitted when not used.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ResearchScreenFile? IncludedSymbols = null)
 {
     public const int CurrentSchemaVersion = 1;
     public const string CodeVersionName = "research-daily-screen-manifest-v1";
@@ -99,7 +102,8 @@ public sealed record ResearchScreenManifest(
     /// </summary>
     public static async Task<string> PublishAsync(string folder, ResearchScreenInputs inputs, DailyScreenRules screen,
         DailyRankingRules? ranking, DateOnly from, DateOnly to, string issuerIdentityBasis, string? fundExclusionPath,
-        CancellationToken cancellationToken, ResearchScreenSplitRule? splitRule = null, ResearchScreenLiquidityTier? liquidityTier = null)
+        CancellationToken cancellationToken, ResearchScreenSplitRule? splitRule = null, ResearchScreenLiquidityTier? liquidityTier = null,
+        string? includedSymbolsPath = null)
     {
         var outputs = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var name in OutputFileNames.Where(name => File.Exists(Path.Combine(folder, name))))
@@ -108,7 +112,9 @@ public sealed record ResearchScreenManifest(
             : new ResearchScreenFile(Path.GetFileName(fundExclusionPath), await Sha256FileAsync(fundExclusionPath, cancellationToken));
         var manifest = new ResearchScreenManifest(CurrentSchemaVersion, CodeVersionName, from, to, inputs, ResearchScreenRuleValues.From(screen),
             ranking is null ? null : ResearchRankingRuleValues.From(ranking), issuerIdentityBasis, exclusion, outputs,
-            splitRule is { LookbackSessions: not null } ? splitRule : null, liquidityTier);
+            splitRule is { LookbackSessions: not null } ? splitRule : null, liquidityTier,
+            includedSymbolsPath is null ? null
+                : new ResearchScreenFile(Path.GetFileName(includedSymbolsPath), await Sha256FileAsync(includedSymbolsPath, cancellationToken)));
         var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, Json);
         await File.WriteAllBytesAsync(Path.Combine(folder, FileName), bytes, cancellationToken);
         return Sha256(bytes);
