@@ -24,6 +24,8 @@ public sealed partial class ConfigCatalogService
             try
             {
                 var manifest = HistoricalDiagnosticNewsManifestStore.ReadPublished(publication);
+                if (RelocatedPackageReason(manifest, publication) is { } relocated)
+                    return new DecisionContextEvidenceChoice(reference, "Historical company news", false, relocated, null);
                 using var scope = OpenHistoricalNewsScope(reference, manifest, publication);
                 var provider = scope?.Resolve(scope.Bind(new EngineConfig(String.Empty, 0, 0, 0, 0, false) { EvidenceResearchRoot = manifest.ResearchRoot,
                     EvidenceManifestPath = publication.Path, EvidenceManifestSha256 = publication.Sha256 }))
@@ -34,12 +36,29 @@ public sealed partial class ConfigCatalogService
                         provider?.DependencyGraphSha256 ?? HistoricalDiagnosticNewsManifestStore.DeclaredDependencyGraphSha256(publication, manifest),
                         scope?.AssessmentSummary));
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or System.Text.Json.JsonException)
+            catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or
+                InvalidOperationException or ArgumentException or System.Text.Json.JsonException)
             {
                 return new DecisionContextEvidenceChoice(reference, "Historical company news", false,
                     "Published diagnostic cannot be read and verified: " + exception.Message, null);
             }
         }).ToArray();
+    }
+
+    /// <summary>
+    /// The reason a published package is unavailable because the data folder moved after it was published: its manifest
+    /// records an absolute research root that no longer contains the package, so the evidence check (which refuses files
+    /// outside that root) cannot verify it. The manifest is fingerprinted and never rewritten. Null when not relocated.
+    /// </summary>
+    private static string? RelocatedPackageReason(HistoricalDiagnosticNewsManifest manifest, HistoricalDiagnosticNewsPublication publication)
+    {
+        if (String.IsNullOrWhiteSpace(manifest.ResearchRoot) || !Path.IsPathFullyQualified(manifest.ResearchRoot)) return null;
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(manifest.ResearchRoot));
+        var location = Path.GetFullPath(publication.Path);
+        return location.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : $"Recorded under {root}, but the package is now in {Path.GetDirectoryName(location)}. The data folder moved after " +
+              "this package was published, so its recorded files cannot be verified; it stays on disk unchanged.";
     }
 
     /// <summary>Resolves a server publication ID and captures its complete verified graph while leaving execution settings unchanged.</summary>

@@ -78,6 +78,39 @@ public sealed class HistoricalNewsCatalogTests
             new EngineConfig("channels", 1, 20, 260, 120, false), [strict]));
     }
 
+    [Fact]
+    // A package published before the data folder moved records a root that no longer holds it: it is listed as unavailable
+    // with the reason, and the rest of the catalog (strategy lists) keeps working.
+    public async Task PackageRecordedUnderAnotherFolder_IsUnavailableWithAReason()
+    {
+        using var fixture = new HistoricalDiagnosticNewsTests.Archive();
+        fixture.News("empty", []);
+        Publish(fixture, fixture.Provider().Manifest);
+        // Copy the published package into a data folder outside the recorded root, as moving the data to another drive does.
+        var moved = Path.Combine(Path.GetTempPath(), "tf-moved-news-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var source = Path.Combine(fixture.Root, "data", "research", "evidence", "historical-news-diagnostics");
+            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(moved, "data", "research", "evidence", "historical-news-diagnostics", Path.GetRelativePath(source, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+            var catalog = Catalog(fixture, moved);
+
+            var choice = Assert.Single(catalog.GetDecisionContextEvidenceChoices());
+
+            Assert.False(choice.Available);
+            Assert.Contains("data folder moved", choice.UnavailableReason);
+            Assert.NotEmpty(await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest));
+        }
+        finally
+        {
+            if (Directory.Exists(moved)) Directory.Delete(moved, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("recovery-sma5-news-avoidance.bt-v1.yaml", "avoid_recent_company_news")]
     // Generated durable strategy snapshots retain the registered treatment through the normal YAML writer/parser.
@@ -100,13 +133,14 @@ public sealed class HistoricalNewsCatalogTests
         HistoricalDiagnosticNewsManifestStore.PublishExclusive(Path.Combine(fixture.Root, "data", "research", "evidence", "historical-news-diagnostics"), manifest);
 
     // Shares real catalog and authorization components with an isolated operator data root.
-    private static ConfigCatalogService Catalog(HistoricalDiagnosticNewsTests.Archive fixture)
+    // The optional root stands for a data folder the evidence was later moved to.
+    private static ConfigCatalogService Catalog(HistoricalDiagnosticNewsTests.Archive fixture, string? root = null)
     {
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
         var artifacts = RetiredStrategyFixtures.Catalog(reader);
         var store = new StrategyExperimentArtifactStore(Path.Combine(fixture.Root, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
-        return new(new ProjectPaths(fixture.Root), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
+        return new(new ProjectPaths(root ?? fixture.Root), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
     }
 
     // Sends server identities and hashes only, never a client-controlled physical evidence path.
