@@ -1,73 +1,83 @@
-# Paper trading the ETF sector rotation: design for approval (14 November 2026)
+# Monthly ETF paper rotation: revised design review
 
-Status: proposal; nothing is built. The rotation `etf.rotation-12-1@1.0.0` ended its development test at RETAIN_RESEARCH
-(`docs/research/etf-rotation-development-2026-11-13.md`): 93% of buy-and-hold's return with 64% of its worst fall. The
-user chose to paper trade it as a slow core holding (14 November 2026). Paper trading here proves the live system makes
-the same decisions and gets fills close to the backtest's. It cannot prove profit: 12 decisions a year are far too few.
+Updated: 14 November 2026. Supersedes the same-day proposal that assumed existing paper submission could place a same-open swap.
+Status: **deferred by the user for later research; no monthly driver or trading grant added.** The protection and execution requirements below remain future design prerequisites.
+Tracking: [audit repair plan](../../implementation/audit-repairs-2026-11-14.md).
 
-## What it does, in plain words
+## Intended outcome and evidence boundary
 
-Once a month, after the last trading session's close:
-1. **Read prices:** read the 11 sector funds' completed daily bars from Alpaca (the same SIP feed the backtest data came from).
-2. **Measure:** compute each fund's 12-1 month return and its 210-session average with the same functions the backtest used.
-3. **Choose:** the target holdings are the top 3 by 12-1 return that also close above their average. Fewer than 3 qualifying means some cash.
-4. **Compare:** compare the target with what this paper run holds. A fund to sell left the top 3 or fell below its average; a fund to buy is a new member.
-5. **Order:** place market-on-open orders on the Alpaca paper account for the next session: sales first, then purchases. Each purchase is sized at marked equity divided by 3, within the run's own capital, keeping the 2.5% cash reserve.
+Prove that the running system computes the frozen rotation's monthly decisions and records explainable paper execution. This does not establish profitable trading or authorize real-money execution. Preserve the strategy identity, its untouched holdout and the user's success thresholds.
 
-Nothing happens on the other days. A month with no change places no orders.
+The old proposal described opening sales followed by opening purchases, reuse of `MeasureAdmissionCapacity`, and a paper experiment grant as sufficient. Independent code/design review found that these are insufficient:
 
-## Existing parts reused
+1. Unfilled sales do not replenish broker buying power. Submitting a sell first does not mean it fills before a buy. The backtest admission function intentionally releases planned sale proceeds at prior-close values; it cannot determine spendable paper cash.
+2. Current Alpaca entry and exit adapters reject opening-auction time-in-force. Auction support needs explicit order contracts, cutoff handling and tests.
+3. Rotation declares no initial stop and no target. The common entry gate requires positive stop and target distances, recovery checks protection, and the operating boundaries require protective-stop coverage. A paper-experiment grant does not override these rules.
+4. Broker-account buying power is not the same as this run's unreserved cash. Other runs, manual positions and working orders must be accounted for.
 
-**Shared decision code**, the same functions the backtest calls (one brain):
-- `DecisionSchedules`, `ExchangeSessionCalendar`, `TechnicalFactorCalculator` (`sma_distance`), `DailyScreenCommand.Return12Minus1`;
-- the tier ranking, moved from the command-line project into the engine so the backtest list and paper trading share one ranking function;
-- `MeasureAdmissionCapacity`, so paper uses the same slot and cash numbers.
+## Policy decision before implementation
 
-**Existing broker and run machinery:**
-- the paper order submission service with its idempotency keys;
-- run tags on orders;
-- the paper-experiment grant (`StrategyExperimentArtifactStore`), bound to the exact identity `etf.rotation-12-1@1.0.0` / `15dd1e26…`;
-- the existing Paper page to start, see and cancel the run.
+Keep monthly execution disabled while the user chooses between preserving the stopless rotation with an explicitly reviewed paper-only protection-policy exception, or researching a separate protected strategy with its own identity and frozen test. Neither choice is implied by the repair authorization. Never add fake stop/target values or weaken the shared gate to make the existing identity pass.
 
-**Exchange calendar and Alpaca daily bars:** as already used by the warm-up and paper paths.
+The reporting and paper-lifecycle repairs do not depend on that decision and proceed separately.
 
-## New pieces (smallest change)
+## Shared decision calculation
 
-1. **A monthly rebalance service:** a hosted background service, the same pattern as the preparation scheduler. It wakes after the close of each session the calendar marks as a month's last, and runs the steps above for each active rotation paper run. It replaces the refusal of `decision_schedule` and `exit_when_off_list` on the paper path for this one strategy shape only. Daily paper runs keep refusing them.
-2. **A small record per decision:** for each month-end, store the date, each fund's 12-1 return and distance from its average, the target, the orders sent and their fills. This feeds the Paper page and the comparison in point 3.
-3. **A comparison check:** for every past month-end, recompute the decision from the frozen evidence catalog. It must equal the development backtest's holdings exactly; this is a test, not a run. In live use, each month's decision is also recomputed from the catalog once the bars are collected; any difference is flagged.
+Reuse `DecisionSchedules`, `ExchangeSessionCalendar`, `TechnicalFactorCalculator` and the existing 12-1 ranking calculation, extracting the CLI ranking into a shared engine function only when this implementation is approved.
 
-## Safety
+For the target execution session, use the eligible membership computed strictly from earlier bars, ending at the completed month-end decision close. Rank that eligible set with the existing deterministic tie ordering, select the top three, then apply the 210-session trend filter. A top-three fund failing the filter leaves its slot in cash; do not substitute rank four. Preserve later listings, split exclusions and the distinction between a valid empty membership list and unavailable membership evidence.
 
-**Account and orders:**
-- **Paper only:** the paper account guard (`Alpaca:ExpectedAccountId`) stays; no live endpoint.
-- **No duplicates:** one decision per month-end per run, with an idempotency key per order, so a restart can never send an order twice.
-- **Missing data:** a fund with missing or late bars produces no decision for that month, with the reason shown. Nothing is guessed.
+Record account, owning run, exact strategy artifact hash, decision and target execution sessions in New York, frozen bar/membership fingerprints, rankings, trend values, target and every exit condition. The unique executable decision key is (account, owning run, New York decision session). Store the strategy artifact hash, target execution session and input fingerprints as immutable contents, not new identity dimensions. Preserve subsequent provider corrections as evidence revisions; a correction cannot create another executable decision after reservation or submission.
 
-**Pausing:** the run can be paused or cancelled from the Paper page. Cancelling never sells by itself; the user chooses whether to close positions.
+## Funding and order timing approaches
 
-## What success looks like (from the success-definition draft)
+### A. Reconciled sales, then bounded purchases (recommended engineering approach)
 
-- **Matching decisions:** every monthly decision equals the backtest's decision recomputed on the same data.
-- **Fills:** close to the modelled open: proposal within 0.10% on average.
-- **Duration:** no missed month and no unexplained order over 6 monthly decisions, after which the user decides whether real money is considered under the success definition.
+Use a fixed execution window in the next target regular session. Send owned-position sales through the existing intent and dispatch journal. Observe and reconcile actual fills before reserving new purchases. A partially sold holding retains its slot; rejected or ambiguous sales release neither a slot nor cash. New purchases use explicit price limits, whole-share quantities, fees and existing unreserved run cash, bounded by the configured capital, 32.5% position cap and 2.5% reserve. Apply fresh broker/account eligibility as an additional constraint, never as permission to spend other runs' capital.
 
-## Verification
+This approach changes execution timing from the backtest's simultaneous opening fills. It requires a separate matching execution replay before activation. Target/ranking parity is still required, but identical holdings or opening fills must not be claimed. Define the exact time window and price-limit policy before implementing; no overnight fallback for missed orders.
 
-**Unit tests:**
-- the month-end trigger;
-- target selection against the backtest functions;
-- sell-before-buy ordering and sizing;
-- idempotency across a restart;
-- refusal on missing bars.
+### B. Opening auction with independently funded buys
 
-**Comparison test:** every 2017-2023 month-end's paper decision equals the development backtest's holdings.
+If opening-auction timing is required, reserve buys solely from pre-existing unreserved cash and already free slots. Do not count unfilled opening sales. Add explicit supported auction contracts and price bounds; verify the configured paper account's actual behavior first. The result may leave cash or an incomplete rebalance when there is insufficient prefunded capacity. This divergence must be modeled and visible.
 
-**Before the first real month-end:** a paper run on the Alpaca paper account, started by the user from the Paper page.
+Alpaca documents that OPG orders submitted between 09:28 and 19:00 Eastern are rejected, after-19:00 orders queue for the next open, and unfilled auction remainders cancel. An after-close scheduler cannot blindly submit an OPG order at 16:00. Use the target exchange session and official broker rules, not a fixed UTC offset or submission-date assumption.
 
-**Reviews:** an independent code review and the affected test slices, then the full test suite.
+Sources inspected during independent review: [Alpaca orders](https://docs.alpaca.markets/us/docs/orders-at-alpaca), [paper simulation](https://docs.alpaca.markets/us/docs/paper-trading). Paper simulation does not by itself prove live opening-auction execution quality.
 
-## Scope
+## Durable execution and recovery
 
-- **Work:** about two days of building and tests.
-- **Then:** paper runs on its own once a month. The next month-end is 30 November 2026, with orders at the 1 December open.
+Reuse the existing order-intent journal, fenced dispatcher lease, pre-POST persistence, broker lookup, position ownership, reconciliation and protection services. Add no parallel broker submission path.
+
+- Derive stable per-order client IDs from account, owning run, frozen monthly decision and order leg. Persist the exact payload before submission.
+- A timed-out POST may have succeeded. An initial lookup miss is not proof that it did not; retain the ambiguous state for broker confirmation or operator resolution rather than submitting a second order.
+- Reconcile fills idempotently, including duplicate and out-of-order notifications. Update owned quantities and reservations atomically.
+- Enforce strategy authority, run entry health, target session, deadline, fresh market inputs, available run cash and reservations immediately before the first broker POST, including recovery/background dispatch.
+- After the execution deadline, forbid the first POST of every planned monthly buy and sell, including recovered/prepared monthly exits. Cancel working remainders and reconcile their terminal filled/canceled state before releasing reservations or slots; unresolved broker states retain reservations and are reported as incomplete. Continue reconciliation, adoption, cancellation, required protection and separately authorized safety exits. Never roll a missed monthly order into another session without a new recorded decision.
+- Pause/cancel stops new entries and cancels pending eligible entry work through existing machinery. It does not automatically sell holdings. Unknown broker state remains visible.
+- If local position ownership or account cash cannot be reconciled, new entries stay disabled. Do not silently net a manual/other-run holding into this run.
+
+Sources: [Alpaca order lifecycle and timeout guidance](https://docs.alpaca.markets/us/docs/working-with-orders), [lookup by client order ID](https://docs.alpaca.markets/us/reference/getorderbyclientorderid).
+
+## Acceptance tests before activation
+
+1. **Decisions:** every development-period month-end (2017-2023) matches the frozen eligible universe, rankings, target and exit reasons. No 2024-2026 holdout access. Missing/corrected/delayed input is explicitly withheld or versioned, never guessed.
+2. **Cash and capacity:** fully invested swap; zero, partial, rejected and ambiguous sales; opposing gaps and fees; competing buy reservations; other-run/manual same-symbol exposure. No spending of unfilled proceeds, unauthorized borrowing or duplicate exits. A partial sale retains capacity usage.
+3. **Recovery:** crash before POST, accepted POST with lost response, lookup lag, failed acknowledgement persistence, two workers, duplicate/out-of-order fills, revocation and stopped run. The same persisted command is adopted or reconciled once; ambiguity is never treated as safe to resend.
+4. **Time:** DST, holidays, early closes, restart on both sides of the cutoff, missed window and after-19:00 auction targeting. Assert exact New York decision and execution sessions and documented late-order behavior.
+5. **Execution comparison:** replay the chosen timing protocol and show target parity separately from fill/holding differences, partial fills, rejects and misses. Store modeled reference, send-time executable quote, broker fill and reason for each divergence.
+6. **Protection:** resolve the policy conflict explicitly and verify the resulting authorized strategy identity through entry, recovery, dispatch, cancellation and shutdown. No fake protection values.
+7. **Reviews:** independent plan/execution reviewer plus a different independent code/design reviewer; focused compiler, integration, persistence, safety and deterministic replay tests. Provider paper smoke is a separate explicitly activated checkpoint, never an incidental test.
+
+## Review record
+
+Independent Reviewer B (`design_review`) rejected the original proposal and identified funding, broker TIF, stopless protection, ownership, cutoff and recovery issues. Independent Reviewer A (`plan_review`) confirmed the need for separate decision parity and execution-timing verification. This revision records those findings and the smallest reusable approaches. Final design acceptance is pending the protection-policy and execution-protocol decisions; implementation has not begun.
+
+Follow-up independent design review accepted this revision with two clarifications: executable uniqueness excludes mutable data fingerprints, and first-submission deadlines cover both monthly order sides. Both clarifications are incorporated above.
+
+## Subsequent user clarification
+
+The user distinguishes monthly rotation for holdings lasting months from intraday and swing trades. Swing exits may follow a defined support break; stops need not be an arbitrary fixed percentage. Preserve that distinction in the next design revision. The current monthly artifact stays research-only because its execution/protection policy has not been implemented or reviewed as a separate authorized long-holding path. Current shared gates remain intact during the reporting/lifecycle repairs.
+
+Also see the tracking plan's research-source clarification: this exact 12-1 / 210-session / no-trimming combination is an adaptation, not a verified exact reproduction of one published recipe.
+The user subsequently instructed that sector rotation be kept separate and disabled for current use. A reversible catalog disable feature is now included in checkpoint S1 of the tracking plan. This is not retirement or deletion; monthly implementation and activation are deferred until a future explicit request.

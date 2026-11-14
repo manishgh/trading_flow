@@ -28,6 +28,7 @@ public sealed partial class LiveRunner
                 "LiveRunner iteration interval must be positive.");
     }
 
+    // Journal infrastructure exceptions separately from the shared strategy evaluator.
     private async Task SaveTickerPipelineFailureAuditsAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -55,7 +56,7 @@ public sealed partial class LiveRunner
                 Ticker = ticker,
                 StrategyName = strategy.StrategyName,
                 Timestamp = DateTimeOffset.UtcNow,
-                Decision = "Rejected",
+                Decision = "Failed",
                 RejectionReason = $"ticker_pipeline_failed ({reason})",
                 SignalJson = signalJson
             }, cancellationToken);

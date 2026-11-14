@@ -192,7 +192,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         }
     }
 
-    /// <summary>Recover dispatchable work; entries already expired by current account limits require no further broker action.</summary>
+    /// <summary>Recover dispatchable work and retire entries that fail the current pre-POST fences.</summary>
     public async Task<int> RecoverPendingAsync(
         IBrokerClient broker,
         CancellationToken cancellationToken = default)
@@ -233,6 +233,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
                     exception is OrderDispatchNoLongerRequiredException or
                     OrderDispatchExpiredException or
                     OrderDispatchRunInactiveException or
+                    PaperEntryDispatchBlockedException or
                     OrderDispatchUnsupportedHorizonException or
                     PortfolioRiskReservationRejectedException or
                     PositionExitInProgressException)
@@ -258,7 +259,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         return recovered;
     }
 
-    /// <summary>Adopt known broker work first; only a fresh authorized entry may cross the first broker-POST boundary.</summary>
+    /// <summary>Adopt known broker work first, then enforce current paper ownership, discovery and risk before a new POST.</summary>
     private async Task<OrderSubmissionResult> DispatchClaimedAsync(
         OrderDispatchLease lease,
         IBrokerClient broker,
@@ -345,7 +346,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         }
         catch (Exception exception) when (
             exception is OrderDispatchExpiredException or OrderDispatchRunInactiveException or
-                OrderDispatchUnsupportedHorizonException or PortfolioRiskReservationRejectedException)
+                PaperEntryDispatchBlockedException or OrderDispatchUnsupportedHorizonException or PortfolioRiskReservationRejectedException)
         {
             var latest = await events.GetCurrentAsync(intent.ClientOrderId, cancellationToken)
                 ?? throw new InvalidOperationException(
@@ -365,6 +366,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
                             {
                                 OrderDispatchExpiredException => "dispatch_expired_before_broker_post",
                                 OrderDispatchUnsupportedHorizonException => "unsupported_entry_horizon",
+                                PaperEntryDispatchBlockedException blocked => blocked.ReasonCode,
                                 PortfolioRiskReservationRejectedException rejection => rejection.ReasonCode,
                                 _ => "owning_run_inactive_before_broker_post"
                             },

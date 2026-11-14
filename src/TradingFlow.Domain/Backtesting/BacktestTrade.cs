@@ -39,6 +39,7 @@ public sealed record BacktestCandidateTrade(
 
 public sealed record BacktestPendingExitDecision(DateTimeOffset KnownAtUtc, string Reason);
 
+/// <summary>A completed position. Use fill timing for economic time when present. The original timestamps support replay reconciliation.</summary>
 public sealed record BacktestTrade(
     string Ticker,
     string StrategyName,
@@ -58,4 +59,19 @@ public sealed record BacktestTrade(
     string EntryFillStatus = "filled",
     decimal EntryEstimatedParticipationPct = 0m,
     string StrategyId = "",
-    string CandidateId = "");
+    string CandidateId = "")
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestFillTiming? EntryFillTiming { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestFillTiming? ExitFillTiming { get; init; }
+
+    // EntryTimestamp and ExitTimestamp retain the original journal stamps for reconciliation.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyTimestampBasis => EntryFillTiming is null && ExitFillTiming is null ? null : "execution_processing_stamp";
+}
+
+/// <summary>Separates the modeled execution point from the simulated event stamp and the source evidence availability.</summary>
+public sealed record BacktestFillTiming(DateOnly SourceSessionDate, DateTimeOffset? EconomicTimestampUtc,
+    string Basis, DateTimeOffset ProcessingTimestampUtc, DateTimeOffset AvailableAtUtc);

@@ -494,7 +494,10 @@ public sealed class SimpleYamlReader
             OptionalDateTimeOffset(runMap, "universe.resolved_at_utc"),
             dailyEligibility,
             ReadDailyRanking(runMap, dailyEligibility),
-            rankedMembership);
+            rankedMembership)
+        {
+            WishlistName = OptionalString(runMap, "universe.wishlist_name", String.Empty) is { Length: > 0 } name ? name : null
+        };
     }
 
     /// <summary>

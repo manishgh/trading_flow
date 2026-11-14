@@ -45,9 +45,8 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
     public IReadOnlyList<(string ManifestPath, string Reason)> SkippedRetiredSources { get; private set; } = [];
 
     /// <summary>
-    /// Every runnable paper experiment. An experiment whose source strategy was retired from the catalog is skipped and
-    /// recorded in <see cref="SkippedRetiredSources"/> instead of failing the whole listing; loading it directly
-    /// (<see cref="RequireExact"/>) still refuses, so a retired strategy can never run.
+    /// Validated paper experiment artifacts, including those whose source is disabled for new work.
+    /// An experiment whose source was retired is skipped and recorded in <see cref="SkippedRetiredSources"/>.
     /// </summary>
     public IReadOnlyList<StrategyArtifact> List()
     {
@@ -71,6 +70,7 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
             .ToArray();
     }
 
+    // Registers immutable experiment content only while its exact catalog source is available for new work.
     public StrategyArtifact Register(
         StrategyArtifact source,
         StrategyDefinition resolvedStrategy,
@@ -84,7 +84,7 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
         ArgumentException.ThrowIfNullOrWhiteSpace(registeredBy);
         ArgumentNullException.ThrowIfNull(overrideDiff);
         ArgumentException.ThrowIfNullOrWhiteSpace(resolvedYaml);
-        _ = sourceCatalog.RequireExact(source.Identity);
+        source = sourceCatalog.RequireExact(source.Identity);
 
         var artifact = sourceCatalog.CreateDerivedArtifact(
             source,
@@ -124,10 +124,19 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
         ?? throw new KeyNotFoundException(
             $"Paper experiment '{identity.StrategyId}@{identity.SemanticVersion}/{identity.ContentSha256}' was not found.");
 
+    // Reports durable registration independently of the source's current availability.
     public bool IsRegistered(StrategyArtifactIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(identity);
         return List().Any(artifact => artifact.Identity == identity);
+    }
+
+    // Refuses a new or replacement grant while the registered experiment's exact source is disabled.
+    public bool IsAvailableForAuthorization(StrategyArtifactIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var artifact = List().SingleOrDefault(item => item.Identity == identity);
+        return artifact is not null && sourceCatalog.GetDisabledReason(artifact) is null;
     }
 
     private StrategyArtifact WriteNewArtifact(
@@ -199,12 +208,10 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
         }
     }
 
+    // Retains exact parent lineage for current admission while preserving historical artifact validation.
     private StrategyArtifact Load(string manifestPath)
     {
-        var manifest = JsonSerializer.Deserialize<StrategyCatalogArtifactManifest>(
-                           File.ReadAllBytes(manifestPath),
-                           JsonOptions)
-                       ?? throw new InvalidDataException($"Paper-experiment manifest '{manifestPath}' is empty.");
+        var manifest = ReadManifest(manifestPath);
         if (manifest.SchemaVersion != 1 ||
             manifest.Disposition != StrategyArtifactDisposition.Research ||
             manifest.RegisteredAtUtc == default ||
@@ -241,8 +248,23 @@ public sealed class StrategyExperimentArtifactStore : IStrategyExperimentArtifac
             Hash(File.ReadAllBytes(strategyPath)),
             resolved,
             manifest.AdmissionProfile,
-            manifest.SourceIdentity.ContentSha256);
+            manifest.SourceIdentity.ContentSha256,
+            manifest.SourceIdentity);
     }
+
+    // Recognizes the durable experiment store's document and returns the adjacent catalog manifest if present.
+    public static string? FindManifestForStrategyDocument(string strategyPath)
+    {
+        if (!Path.GetFileName(strategyPath).Equals(StrategyFileName, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var manifestPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(strategyPath))!, ManifestFileName);
+        return File.Exists(manifestPath) ? manifestPath : null;
+    }
+
+    // Reads the exact parent metadata using the registered experiment's existing manifest format.
+    internal static StrategyCatalogArtifactManifest ReadManifest(string manifestPath) =>
+        JsonSerializer.Deserialize<StrategyCatalogArtifactManifest>(File.ReadAllBytes(manifestPath), JsonOptions)
+        ?? throw new InvalidDataException($"Paper-experiment manifest '{manifestPath}' is empty.");
 
     private string ResolveArtifactDirectory(StrategyArtifactIdentity identity) => ResolveInsideRoot(Path.Combine(
         SafeSegment(identity.StrategyId),

@@ -31,7 +31,11 @@ public sealed record PreparedBacktestMarket(
     DateTimeOffset EvaluationStart,
     DateTimeOffset WindowStart,
     DateTimeOffset WindowEnd,
-    PreparedMarketDataSummary? PreparedMarketData = null);
+    PreparedMarketDataSummary? PreparedMarketData = null)
+{
+    internal MarketDataProvenance? SourceProvenance { get; init; }
+    internal MarketPriceBasis? PriceBasis { get; init; }
+}
 
 public sealed partial class BacktestRunner(
     SimpleYamlReader yamlReader,
@@ -123,13 +127,17 @@ public sealed partial class BacktestRunner(
         progress?.Report(BacktestProgress.StageOnly("loading_strategies", $"Loading {run.Strategies.Count} strategy config(s)."));
         var artifactValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
         var runtimeStrategies = run.Strategies
-            .Select(path => artifactValidator.ReadAndValidateRuntimeArtifact(path, StrategySelectionMode.Backtest))
+            .Select(path => artifactValidator.ReadAndAuthorizeRuntimeArtifact(path, StrategySelectionMode.Backtest))
             .ToArray();
         return await RunValidatedAsync(run, runtimeStrategies, startedAt, resultPath, cancellationToken, progress, preparedDataReference,
             verified, requireLiveScope);
     }
 
-    /// <summary>Executes explicit strategy definitions while retaining the same preparation and workspace lifetime rules.</summary>
+    /// <summary>Reads a research tool's base strategy and checks the catalog before that tool stages or loads data.</summary>
+    public StrategyDefinition ReadResearchStrategy(string strategyPath) =>
+        new StrategyRunArtifactValidator(yamlReader, strategyArtifacts).ReadResearchDefinition(strategyPath);
+
+    /// <summary>Checks explicit definitions for disabled catalog matches before creating their execution workspace.</summary>
     public async Task<BacktestResult> RunAsync(
         BacktestRunConfig run,
         StrategyDefinition[] strategies,
@@ -139,6 +147,8 @@ public sealed partial class BacktestRunner(
         IProgress<BacktestProgress>? progress = null,
         PreparedMarketDataRequestReference? preparedDataReference = null)
     {
+        foreach (var strategy in strategies)
+            strategyArtifacts.RequireEnabledIfKnown(strategy);
         run = await ResolveAdmittedRollingEndAsync(run, preparedDataReference, cancellationToken);
         var workspace = CreateWorkspace(run, resultPath);
         workspace.Runner.preparedDataReference = preparedDataReference;
@@ -279,9 +289,8 @@ public sealed partial class BacktestRunner(
     }
 
     /// <summary>
-    /// Replaces the static ticker list with a point-in-time screened universe when the run
-    /// opts into historical_screener mode. No-op for static runs, so existing configs are
-    /// unaffected. The screened list is derived only from data before the evaluation start.
+    /// Resolves dated membership and binds verified screen identity for reporting on this execution.
+    /// Frozen input settings remain the source of record for reproducing the request.
     /// </summary>
     private async Task<(
         BacktestRunConfig Run,
@@ -295,7 +304,14 @@ public sealed partial class BacktestRunner(
         RunUniverseValidator.RequireResolved(run);
         if (run.Universe is { IsHistoricalScreener: false, RankedMembership: { } ranked })
         {
-            return (run, await ResolveRankedMembershipAsync(run, ranked, strategies, cancellationToken, progress), null);
+            var (resolvedMembership, name, manifestSha256) =
+                await ResolveRankedMembershipAsync(run, ranked, strategies, cancellationToken, progress);
+            var reporting = run.Validation.BiasRisk with
+            {
+                ResolvedScreenName = name,
+                ResolvedScreenManifestSha256 = manifestSha256
+            };
+            return (run with { Validation = run.Validation with { BiasRisk = reporting } }, resolvedMembership, null);
         }
 
         if (run.Universe is { IsHistoricalScreener: false, DailyEligibility: not null } fixedList)
@@ -317,7 +333,6 @@ public sealed partial class BacktestRunner(
         // screen below still runs on top so within-window selection stays point-in-time.
         var configuredTickers = run.Tickers;
         var effectiveUniverse = universe;
-        var universeSource = UniverseConfig.HistoricalScreenerMode;
         if (universe.UsesFinvizScreen)
         {
             var pool = await ResolveFinvizCandidatePoolAsync(universe, cancellationToken);
@@ -333,7 +348,6 @@ public sealed partial class BacktestRunner(
                 "finviz_candidates",
                 $"Candidate pool: {configuredTickers.Count} ({pool.Count} from Finviz{(universe.MergesCuratedAndFinviz ? $" + {universe.Candidates.Count} curated" : String.Empty)})."));
             effectiveUniverse = universe with { Candidates = Array.Empty<string>() };
-            universeSource = universe.MergesCuratedAndFinviz ? "historical_screener/curated+finviz" : "historical_screener/finviz";
         }
 
         progress?.Report(BacktestProgress.StageOnly(
@@ -368,7 +382,6 @@ public sealed partial class BacktestRunner(
             }
 
             effectiveTickers = union;
-            universeSource += "/per_day";
         }
 
         progress?.Report(BacktestProgress.StageOnly(
@@ -379,7 +392,6 @@ public sealed partial class BacktestRunner(
 
         var biasRisk = run.Validation.BiasRisk with
         {
-            UniverseSource = universeSource,
             UniverseAsOfDate = resolution.AsOfDate
         };
         var resolvedRun = run with
@@ -413,7 +425,8 @@ public sealed partial class BacktestRunner(
             throw new InvalidOperationException("Shared market preparation requires strategies with the same admitted price-adjustment basis.");
         var (dataStart, evaluationStart, windowEnd) = ResolveWindow(run.TimeWindow);
         // A daily eligible-list research screen reads each stock only from its first eligible day minus the warm-up.
-        var provider = CompletedBacktestDataProvider.Wrap(ResearchScreenDataWindows.Apply(CreateProvider(run),
+        var source = CreateProvider(run);
+        var provider = CompletedBacktestDataProvider.Wrap(ResearchScreenDataWindows.Apply(source,
             ResearchScreenDataWindows.Starts(run, dataStart, evaluationStart, windowEnd)));
 
         var completedTickerCount = 0;
@@ -479,6 +492,7 @@ public sealed partial class BacktestRunner(
             totalTickerCount,
             totalTickerCount));
 
+        var provenance = MarketPriceBasis.ReadProvenance(source);
         return new PreparedBacktestMarket(
             marketState,
             benchmarkBars,
@@ -486,7 +500,12 @@ public sealed partial class BacktestRunner(
             evaluationStart,
             evaluationStart,
             windowEnd,
-            preparedData?.Summary);
+            preparedData?.Summary)
+        {
+            SourceProvenance = provenance,
+            PriceBasis = MarketPriceBasis.FromBars(marketState.TickerStates.Values.SelectMany(state =>
+                state.BarsByTimeframe.Values.SelectMany(bars => bars)), provenance)
+        };
     }
 
     public async Task<BacktestResult> RunPreparedAsync(
@@ -768,7 +787,7 @@ public sealed partial class BacktestRunner(
                 bestStrategy.MaxDrawdownPct,
                 bestStrategy.AcceptedTradeCount,
                 bestStrategy.RejectedTradeCount);
-        var validation = _validator.Validate(run, allBars, preparedMarket.BenchmarkBars, strategyResults);
+        var validation = _validator.Validate(run, allBars, preparedMarket, strategyResults, candidateSessionSchedules);
         var missedMoves = BuildMissedMoveAudits(strategies, unifiedCompletedTradesForAudit, allBars,
             unifiedPortfolio.PortfolioState);
         var publishedEconomics = BuildPublishedEconomicSummary(

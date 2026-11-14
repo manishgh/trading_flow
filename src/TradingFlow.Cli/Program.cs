@@ -1062,7 +1062,7 @@ if (args.Length > 0 && args[0].Equals("evaluate-entry", StringComparison.Ordinal
     var runtimeStrategy = new StrategyRunArtifactValidator(
         reader,
         CreateStrategyArtifactCatalog(reader))
-        .ReadAndValidateRuntimeArtifact(
+        .ReadAndAuthorizeRuntimeArtifact(
             strategyPath,
             TradingFlow.Domain.Strategies.StrategySelectionMode.DiagnosticReplay);
     var requestedTickers = !String.IsNullOrWhiteSpace(ticker)

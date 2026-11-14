@@ -9,6 +9,10 @@ public sealed record BacktestPortfolioFill(string CandidateId, string StrategyId
     // null keeps the daily convention, where a fill stamped at a daily bar's completion belongs to the previous session.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? FillTimeframe { get; init; }
+
+    // TimestampUtc remains the original processing stamp used by the source-session ledger.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestFillTiming? FillTiming { get; init; }
 }
 public sealed record BacktestOpenPosition(string CandidateId, string StrategyId, string Ticker,
     int SignedQuantity, decimal EntryBasis, decimal? MarkPrice, DateTimeOffset? MarkTimestampUtc,

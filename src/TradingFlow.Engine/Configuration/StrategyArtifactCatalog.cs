@@ -21,7 +21,7 @@ public sealed class StrategyArtifactCatalog
     private readonly string repositoryRoot;
     private readonly string manifestPath;
     private readonly SimpleYamlReader yamlReader;
-    private readonly Lazy<StrategyCatalogSnapshot> snapshot;
+    private readonly Lazy<CatalogState> state;
 
     public StrategyArtifactCatalog(
         string repositoryRoot,
@@ -33,15 +33,80 @@ public sealed class StrategyArtifactCatalog
         this.yamlReader = yamlReader ?? throw new ArgumentNullException(nameof(yamlReader));
         this.repositoryRoot = Path.GetFullPath(repositoryRoot);
         this.manifestPath = Path.GetFullPath(manifestPath);
-        snapshot = new Lazy<StrategyCatalogSnapshot>(Load, LazyThreadSafetyMode.ExecutionAndPublication);
+        state = new Lazy<CatalogState>(Load, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
-    public StrategyCatalogSnapshot GetSnapshot() => snapshot.Value;
+    // Returns the complete immutable catalog, including research artifacts disabled for new work.
+    public StrategyCatalogSnapshot GetSnapshot() => state.Value.Snapshot;
+
+    // Checks both the exact catalog identity's lineage and any separately declared source lineage.
+    public string? GetDisabledReason(StrategyArtifact artifact)
+    {
+        ArgumentNullException.ThrowIfNull(artifact);
+        var canonical = state.Value.ByIdentity.GetValueOrDefault(artifact.Identity);
+        if (canonical is not null && canonical.DerivedFromIdentity != artifact.DerivedFromIdentity &&
+            GetLineageDisabledReason(canonical) is { } reason)
+            return reason;
+
+        return GetLineageDisabledReason(artifact);
+    }
+
+    // Walks one declared lineage, returning the catalog reason of its first disabled artifact.
+    private string? GetLineageDisabledReason(StrategyArtifact artifact)
+    {
+        var current = artifact;
+        var visited = new HashSet<StrategyArtifactIdentity>();
+        while (true)
+        {
+            if (state.Value.DisabledReasons.TryGetValue(current.Identity, out var reason))
+                return $"Strategy '{current.Identity.StrategyId}@{current.Identity.SemanticVersion}' is disabled. {reason}";
+
+            if (current.DerivedFromIdentity is not { } parent ||
+                !state.Value.ByIdentity.TryGetValue(parent, out var source))
+                return null;
+            if (!visited.Add(parent))
+                throw new InvalidDataException($"Strategy '{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}' has a cycle in its catalog lineage.");
+
+            current = source;
+        }
+    }
+
+    // Rejects new work without affecting source lookup or historical identity checks.
+    public StrategyArtifact RequireEnabled(StrategyArtifact artifact)
+    {
+        if (GetDisabledReason(artifact) is { } reason)
+            throw new InvalidOperationException(reason);
+        return artifact;
+    }
+
+    // A generated identity may also be an exact catalog entry with its own availability and lineage.
+    public void RequireEnabledIfKnown(StrategyArtifactIdentity identity)
+    {
+        if (state.Value.ByIdentity.TryGetValue(identity, out var artifact))
+            RequireEnabled(artifact);
+    }
 
     public string ResolveSourcePath(StrategyArtifact artifact)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         return ResolveInsideRepository(artifact.SourcePath);
+    }
+
+    // Protects entry points that accept a raw definition without a catalog path or immutable sidecar.
+    // A definition is a match only when its exact canonical content matches a disabled artifact.
+    public void RequireEnabledIfKnown(StrategyDefinition definition)
+    {
+        foreach (var artifact in GetSnapshot().ExecutableArtifacts.Where(item =>
+                     item.ResolvedStrategy.StrategyId == definition.StrategyId))
+        {
+            var reason = GetDisabledReason(artifact);
+            if (reason is null)
+                continue;
+            var canonical = new CanonicalStrategyDocument(artifact.Identity.StrategyId,
+                artifact.Identity.SemanticVersion, definition, artifact.AdmissionProfile);
+            if (EvidenceCanonicalJson.ComputeSha256(canonical) == artifact.Identity.ContentSha256)
+                throw new InvalidOperationException(reason);
+        }
     }
 
     // Research news diagnostics remain backtest-only even if an unrelated authorization grant names their identity.
@@ -54,10 +119,13 @@ public sealed class StrategyArtifactCatalog
         var blocked = (suspended ?? [])
             .Select(IdentityKey)
             .ToHashSet(StringComparer.Ordinal);
-        var artifacts = GetSnapshot().ExecutableArtifacts.Where(artifact => mode == StrategySelectionMode.Backtest ||
-            artifact.ResolvedStrategy.EntryRules.HistoricalNewsDiagnostic is null &&
-            artifact.ResolvedStrategy.EntryRules.OpeningRangeBreakout is null &&
-            artifact.AdmissionProfile.HistoricalNewsDiagnosticPolicyId is null).ToArray();
+        var artifacts = GetSnapshot().ExecutableArtifacts
+            .Where(artifact => GetDisabledReason(artifact) is null)
+            .Where(artifact => mode == StrategySelectionMode.Backtest ||
+                artifact.ResolvedStrategy.EntryRules.HistoricalNewsDiagnostic is null &&
+                artifact.ResolvedStrategy.EntryRules.OpeningRangeBreakout is null &&
+                artifact.AdmissionProfile.HistoricalNewsDiagnosticPolicyId is null)
+            .ToArray();
         return mode switch
         {
             StrategySelectionMode.Backtest or
@@ -82,26 +150,30 @@ public sealed class StrategyArtifactCatalog
         };
     }
 
+    // Resolves historical identity without consulting current availability.
     public StrategyArtifact RequireExact(StrategyArtifactIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(identity);
-        return GetSnapshot().ExecutableArtifacts.SingleOrDefault(artifact =>
-                   IdentityKey(artifact.Identity).Equals(IdentityKey(identity), StringComparison.Ordinal))
-               ?? throw new KeyNotFoundException(
-                   $"Strategy artifact '{identity.StrategyId}@{identity.SemanticVersion}/{identity.ContentSha256}' was not found.");
+        return GetSnapshot().ExecutableArtifacts.SingleOrDefault(artifact => artifact.Identity == identity)
+            ?? throw new KeyNotFoundException(
+                $"Strategy artifact '{identity.StrategyId}@{identity.SemanticVersion}/{identity.ContentSha256}' was not found.");
     }
 
-    public StrategyArtifact RequireSourcePath(string sourcePath)
+    // Determines whether a path is a canonical catalog source, allowing ad hoc research callers to keep their own inputs.
+    public StrategyArtifact? FindSourcePath(string sourcePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         var fullPath = Path.GetFullPath(sourcePath);
         return GetSnapshot().ExecutableArtifacts.SingleOrDefault(artifact =>
-                   ResolveInsideRepository(artifact.SourcePath).Equals(fullPath, StringComparison.OrdinalIgnoreCase))
-               ?? throw new InvalidOperationException(
-                   $"Strategy source '{sourcePath}' is not an executable research artifact in the lifecycle catalog.");
+            ResolveInsideRepository(artifact.SourcePath).Equals(fullPath, StringComparison.OrdinalIgnoreCase));
     }
 
-    // Bind each derived run snapshot to its exact source identity without changing canonical strategy content.
+    // Requires a canonical file without treating a change in availability as a change in identity.
+    public StrategyArtifact RequireSourcePath(string sourcePath) =>
+        FindSourcePath(sourcePath) ?? throw new InvalidOperationException(
+            $"Strategy source '{sourcePath}' is not an executable research artifact in the lifecycle catalog.");
+
+    // Binds a derived snapshot to an enabled source and enforces availability of any exact catalog identity it recreates.
     public StrategyArtifact CreateDerivedArtifact(
         StrategyArtifact source,
         StrategyDefinition resolvedStrategy,
@@ -115,6 +187,7 @@ public sealed class StrategyArtifactCatalog
                 "Archived strategies cannot produce executable run snapshots.");
         }
 
+        RequireEnabled(source);
         var canonical = new CanonicalStrategyDocument(
             source.Identity.StrategyId,
             semanticVersion,
@@ -137,6 +210,7 @@ public sealed class StrategyArtifactCatalog
                 $"Strategy '{identity.StrategyId}@{identity.SemanticVersion}' is already occupied by different canonical bootstrap content.");
         }
 
+        RequireEnabledIfKnown(identity);
         return new StrategyArtifact(
             identity,
             StrategyArtifactDisposition.Research,
@@ -150,7 +224,7 @@ public sealed class StrategyArtifactCatalog
     }
 
     // Resolve classified source files and optional immutable parent lineage using the shared canonical identity rules.
-    private StrategyCatalogSnapshot Load()
+    private CatalogState Load()
     {
         if (!File.Exists(manifestPath))
         {
@@ -182,6 +256,7 @@ public sealed class StrategyArtifactCatalog
         var executable = new List<StrategyArtifact>();
         var archived = new List<ArchivedStrategyArtifact>();
         var identityHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        var disabledReasons = new Dictionary<StrategyArtifactIdentity, string>();
 
         foreach (var item in manifest.Strategies)
         {
@@ -238,6 +313,13 @@ public sealed class StrategyArtifactCatalog
                     $"Bootstrap artifact '{relativePath}' cannot start in lifecycle '{lifecycle}'.");
             }
 
+            if (!item.Enabled)
+            {
+                if (String.IsNullOrWhiteSpace(item.DisabledReason))
+                    throw new InvalidDataException($"Disabled strategy '{stableId}@{semanticVersion}' requires a disabledReason in the strategy catalog.");
+                disabledReasons[identity] = item.DisabledReason.Trim();
+            }
+
             executable.Add(new StrategyArtifact(
                 identity,
                 StrategyArtifactDisposition.Research,
@@ -250,7 +332,9 @@ public sealed class StrategyArtifactCatalog
                 item.DerivedFromIdentity));
         }
 
-        return new StrategyCatalogSnapshot(executable, archived);
+        return new CatalogState(new StrategyCatalogSnapshot(executable, archived),
+            executable.GroupBy(artifact => artifact.Identity).ToDictionary(group => group.Key, group => group.First()),
+            disabledReasons);
     }
 
     /// <summary>Risk policy label for strategies with no protective stop, sized by position notional.</summary>
@@ -385,6 +469,11 @@ public sealed class StrategyArtifactCatalog
     private static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
+    private sealed record CatalogState(
+        StrategyCatalogSnapshot Snapshot,
+        IReadOnlyDictionary<StrategyArtifactIdentity, StrategyArtifact> ByIdentity,
+        IReadOnlyDictionary<StrategyArtifactIdentity, string> DisabledReasons);
+
     private sealed class Manifest
     {
         public int SchemaVersion { get; init; }
@@ -417,5 +506,7 @@ public sealed class StrategyArtifactCatalog
         public string AdmissionProfileId { get; init; } = String.Empty;
         public string Reason { get; init; } = String.Empty;
         public StrategyArtifactIdentity? DerivedFromIdentity { get; init; }
+        public bool Enabled { get; init; } = true;
+        public string? DisabledReason { get; init; }
     }
 }

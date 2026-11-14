@@ -151,6 +151,9 @@ public sealed record StrategyCatalogSnapshot(
 public interface IStrategyExperimentArtifactCatalog
 {
     bool IsRegistered(StrategyArtifactIdentity identity);
+
+    // A new authorization may require current operational eligibility in addition to a durable registration.
+    bool IsAvailableForAuthorization(StrategyArtifactIdentity identity) => IsRegistered(identity);
 }
 
 public sealed record StrategyAuthorizationGrant(

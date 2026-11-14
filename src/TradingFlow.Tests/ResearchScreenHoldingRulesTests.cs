@@ -34,6 +34,9 @@ public sealed class ResearchScreenHoldingRulesTests
         var trade = Assert.Single(coordinator.CompletedTrades);
         Assert.Equal(ChronologicalBacktestExecutionCoordinator.DataEndedExitReason, trade.ExitReason);
         Assert.Equal((500, Price(new(2026, 9, 17)) * 0.999m, Midnight(new(2026, 9, 18))), (trade.ShareQuantity, trade.ExitPrice, trade.ExitTimestamp));
+        Assert.Equal("regular_session_close", trade.ExitFillTiming!.Basis);
+        Assert.Equal(Midnight(new(2026, 9, 17)).AddHours(13), trade.ExitFillTiming.EconomicTimestampUtc);
+        Assert.Equal(trade.ExitTimestamp, trade.ExitFillTiming.AvailableAtUtc);
         var state = coordinator.Snapshot(Cutoff);
         Assert.Empty(state.PendingOrders);
         Assert.Empty(state.OpenPositions);
@@ -57,6 +60,9 @@ public sealed class ResearchScreenHoldingRulesTests
         var trade = Assert.Single(coordinator.CompletedTrades);
         Assert.Equal(ChronologicalBacktestExecutionCoordinator.SplitExitReason, trade.ExitReason);
         Assert.Equal((Price(new(2026, 9, 17)) * 0.999m, Midnight(new(2026, 9, 18))), (trade.ExitPrice, trade.ExitTimestamp));
+        Assert.Equal("regular_session_close", trade.ExitFillTiming!.Basis);
+        Assert.Equal(Midnight(new(2026, 9, 17)).AddHours(13), trade.ExitFillTiming.EconomicTimestampUtc);
+        Assert.Equal(trade.ExitTimestamp, trade.ExitFillTiming.ProcessingTimestampUtc);
         Assert.Empty(coordinator.Snapshot(Cutoff).PendingOrders);
     }
 
@@ -83,7 +89,11 @@ public sealed class ResearchScreenHoldingRulesTests
 
     // The rules for the given split ex-dates over the fixture's weekday sessions.
     private static HoldingDataRules Rules(IEnumerable<(string, DateOnly)> splits) =>
-        new(Weekdays().ToArray(), splits.ToHashSet());
+        new(Weekdays().ToArray(), splits.ToHashSet())
+        {
+            Schedules = Calendar().ToDictionary(item => item.Key, item => item.Key == new DateOnly(2026, 9, 17)
+                ? item.Value with { RegularClose = new TimeOnly(13, 0) } : item.Value)
+        };
 
     // Schedules one 500-share long held from the 15 September open, with the stop and target 7.1.0 places, and an optional
     // planned exit (a completed close-above-SMA5 signal) at a later open.

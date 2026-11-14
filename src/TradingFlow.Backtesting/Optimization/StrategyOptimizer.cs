@@ -26,21 +26,21 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         if (evaluationCutoffUtc is not null && run.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase))
             run = run with { TimeWindow = run.TimeWindow with { End = run.TimeWindow.End ?? evaluationCutoffUtc } };
         ValidateConfiguration(config, run);
+        var baseStrategy = runner.ReadResearchStrategy(config.BaseStrategyPath);
         var resultOwner = durableAttemptRoot ?? Path.Combine(run.ResultsRoot, "optimization", config.RunName);
         var workspace = runner.CreateWorkspace(run, Path.Combine(resultOwner, "optimization.json"));
         var scoped = new StrategyOptimizer(yamlReader, workspace.Runner, _artifactWriter);
         return await workspace.ExecuteAsync(() => scoped.OptimizeCoreAsync(optimizationConfigPath, cancellationToken,
-            progress, optimizationProgress, durableAttemptRoot, evaluationCutoffUtc, workspace.Run));
+            progress, optimizationProgress, durableAttemptRoot, evaluationCutoffUtc, workspace.Run, baseStrategy));
     }
 
     /// <summary>Reuses prepared market state and evaluates one bounded parameter combination at a time.</summary>
     private async Task<OptimizationResult> OptimizeCoreAsync(string optimizationConfigPath, CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress, IProgress<OptimizationProgress>? optimizationProgress,
-        string? durableAttemptRoot, DateTimeOffset? evaluationCutoffUtc, BacktestRunConfig scopedRun)
+        string? durableAttemptRoot, DateTimeOffset? evaluationCutoffUtc, BacktestRunConfig scopedRun, StrategyDefinition baseStrategy)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
-        var baseStrategy = yamlReader.ReadStrategy(config.BaseStrategyPath);
         var backtestConfig = scopedRun;
 
         var permutationCount = ValidateConfiguration(config, backtestConfig);

@@ -110,4 +110,11 @@ public sealed record MonthlyRunResult(StrategyReference Strategy, string CohortN
     decimal? MaxDrawdownPct = null, string? StrategyAlias = null, string? StrategyName = null,
     decimal? RealizedNetProfit = null, decimal? UnrealizedProfit = null, decimal? Fees = null,
     decimal? ClosingCash = null, decimal? ClosingPositionValue = null, decimal? GrossExposurePct = null,
-    int? OpenPositions = null, int? FilledCandidates = null, int? FillCount = null);
+    int? OpenPositions = null, int? FilledCandidates = null, int? FillCount = null,
+    MonthlyRunBenchmark? Benchmark = null);
+
+/// <summary>One price-only benchmark month, alongside the strategy month with the same run boundaries.</summary>
+public sealed record MonthlyRunBenchmark(string Ticker, decimal? ReturnPct, string Basis, string OpeningBasis,
+    string? UnavailableReason, string? PriceAdjustmentPolicy = null, DateTimeOffset? PeriodStartUtc = null,
+    DateTimeOffset? PeriodEndUtc = null, decimal? OpeningPrice = null, decimal? ClosingPrice = null,
+    DateTimeOffset? OpeningTimestampUtc = null, DateTimeOffset? ClosingTimestampUtc = null);

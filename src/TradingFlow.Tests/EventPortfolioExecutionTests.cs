@@ -139,6 +139,10 @@ public sealed partial class EventPortfolioExecutionTests
             Frame(300, Trade("A", 300, 9.5m, 10000)));
         var trade = Assert.Single(outcome.Trades);
         Assert.Equal("stop_loss", trade.ExitReason);
+        Assert.Equal("source_execution_event", trade.EntryFillTiming!.Basis);
+        Assert.Equal(trade.EntryTimestamp, trade.EntryFillTiming.EconomicTimestampUtc);
+        Assert.Equal(trade.ExitTimestamp, trade.ExitFillTiming!.EconomicTimestampUtc);
+        Assert.Equal(trade.ExitTimestamp, trade.ExitFillTiming.AvailableAtUtc);
         Assert.Equal(10m, trade.EntryPrice);
         Assert.Equal(9.5m, trade.ExitPrice);
         Assert.Empty(outcome.UnavailableReasons);

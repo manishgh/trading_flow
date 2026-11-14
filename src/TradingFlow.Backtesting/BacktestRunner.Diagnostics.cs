@@ -587,6 +587,7 @@ public sealed partial class BacktestRunner
             executionEvidence, accounting);
     }
 
+    // Replays the actual portfolio and supplies its authoritative daily calendar to the fill reporting projection.
     private static PortfolioBuildOutcome BuildPortfolioTradesCore(
         PortfolioConfig portfolio,
         IReadOnlyList<BacktestCandidateTrade> candidates,
@@ -603,7 +604,7 @@ public sealed partial class BacktestRunner
             : null;
         var execution = new ChronologicalBacktestExecutionCoordinator(
             portfolio, marketBars, executionEvidence: executionEvidence, holdingRules: holdingRules,
-            decisionHour: DecisionHourInputs(candidates, accounting));
+            decisionHour: DecisionHourInputs(candidates, accounting), fillSchedules: accounting?.Sessions);
 
         foreach (var entryGroup in candidates
                      .OrderBy(candidate => candidate.EntryTimestamp.ToUniversalTime())

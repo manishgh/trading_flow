@@ -15,6 +15,7 @@ public sealed record RuntimeHostedServiceOptions(
 /// </summary>
 public static class RuntimeHostedServiceRegistration
 {
+    // Register runtime ownership ahead of the services that create orders or journal broker state.
     public static IServiceCollection AddTradingFlowRuntimeHostedServices(
         this IServiceCollection services,
         RuntimeHostedServiceOptions options)
@@ -30,10 +31,13 @@ public static class RuntimeHostedServiceRegistration
             return services;
         }
 
-        // Hosted services stop in reverse registration order. Register shutdown
-        // first so all producers and journal writers stop before the final broker
-        // drain and SQLite checkpoint execute.
-        if (options.Enabled) services.AddHostedService<ExecutionShutdownHostedService>();
+        // Reverse shutdown order keeps the host run owned through the final broker drain.
+        if (options.Enabled)
+        {
+            services.AddSingleton<TradingFlow.Data.Orders.SqliteProductionHostRunRepository>();
+            services.AddHostedService<ProductionHostRunService>();
+            services.AddHostedService<ExecutionShutdownHostedService>();
+        }
         if (options.Enabled) services.AddHostedService<BrokerAccountValidationHostedService>();
         services.AddHostedService(serviceProvider =>
             serviceProvider.GetRequiredService<NewsFeedService>());

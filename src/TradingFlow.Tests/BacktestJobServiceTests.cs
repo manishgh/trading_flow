@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -67,6 +68,44 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         Assert.Equal("queued", started.Status);
         Assert.Equal(0, executor.ExecutionCount);
         Assert.Equal("queued", (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.Status);
+    }
+
+    // A fresh worker rereads availability before calling its executor, even for a job queued under the previous setting.
+    [Fact]
+    public async Task ParkedStrategy_RefusesNewAndPreviouslyQueuedBacktestsBeforeExecutorStarts()
+    {
+        var manifestPath = Path.Combine(testRoot, "configs", "strategy-catalog.json");
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!;
+        var rotation = manifest["strategies"]!.AsArray()
+            .Single(item => item!["strategyId"]!.GetValue<string>() == "etf.rotation-12-1")!;
+        rotation["enabled"] = true;
+        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+        var run = (await File.ReadAllTextAsync(configPath))
+            .Replace("  provider: alpaca", "  provider: csv", StringComparison.Ordinal)
+            .Replace("strategies:", "strategies:\n  - strategies/etf-rotation-12-1.bt-v1.yaml", StringComparison.Ordinal);
+        await File.WriteAllTextAsync(configPath, run);
+        var reader = new SimpleYamlReader();
+        var executor = new ImmediateBacktestExecutor();
+        var enabled = new BacktestJobService(executor, repository, reader, BacktestJobServiceOptions.Default,
+            new StrategyArtifactCatalog(testRoot, manifestPath, reader));
+        var queued = await enabled.StartAsync("queued-before-disable", configPath);
+        var captured = await repository.GetJobAsync(queued.JobId, default);
+
+        rotation["enabled"] = false;
+        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+        var parked = new BacktestJobService(executor, repository, reader, BacktestJobServiceOptions.Default,
+            new StrategyArtifactCatalog(testRoot, manifestPath, reader));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            parked.StartAsync("disabled-at-submission", configPath));
+        Assert.Contains("parked for later standalone research", error.Message, StringComparison.Ordinal);
+        Assert.Single(await repository.GetJobsAsync("backtest", default));
+
+        Assert.True(await ProcessOneAsync(parked));
+        var failed = Assert.IsType<PersistedJob>(await repository.GetJobAsync(queued.JobId, default));
+        Assert.Equal("failed", failed.Status);
+        Assert.Contains("parked for later standalone research", parked.Get(queued.JobId)!.ErrorMessage, StringComparison.Ordinal);
+        Assert.Equal(captured!.RequestJson, failed.RequestJson);
+        Assert.Equal(0, executor.ExecutionCount);
     }
 
     /// <summary>Exercise the real backtest handler and lease queue under the paused allow-list without activating other handlers.</summary>
@@ -461,7 +500,7 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
             .Replace("  starting_capital: 10000", "  starting_capital: 1000", StringComparison.Ordinal)
             .Replace("\nstrategies:", "\nstrategies:\n  - " + fixture.Config.Strategies[0].Replace('\\', '/'), StringComparison.Ordinal);
         await File.WriteAllTextAsync(configPath, text);
-        var executor = new ResultBacktestExecutor(fixture.Result);
+        var executor = new ResultBacktestExecutor(MonthlyRunResultWriterTests.WithBenchmark(fixture.Result));
         var service = CreateService(executor);
         var started = await service.StartAsync("Volatile group 1", configPath);
 
@@ -475,7 +514,14 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         Assert.All(completed.Result!.StrategyResults, strategy => Assert.Empty(strategy.CompletedTrades));
         Assert.Equal(10m, completed.MonthlyResults[0].ReturnPct);
         Assert.Equal(-10m, completed.MonthlyResults[1].ReturnPct);
+        Assert.Equal(5m, completed.MonthlyResults[0].Benchmark!.ReturnPct);
+        Assert.Null(completed.MonthlyResults[1].Benchmark!.ReturnPct);
+        Assert.Null(completed.Result.Validation.Benchmark.BenchmarkReturnPct);
         Assert.All(completed.MonthlyResults, row => Assert.Equal("Volatile group 1", row.CohortName));
+        using var apiJson = JsonDocument.Parse(JsonSerializer.Serialize(completed, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var benchmark = apiJson.RootElement.GetProperty("monthlyResults")[0].GetProperty("benchmark");
+        Assert.Equal(5m, benchmark.GetProperty("returnPct").GetDecimal());
+        Assert.Equal("first_evaluation_session_open", benchmark.GetProperty("openingBasis").GetString());
         Assert.True(File.Exists(Path.ChangeExtension(completed.Result.ResultPath, ".monthly.json")));
 
         var reloaded = CreateService(executor);

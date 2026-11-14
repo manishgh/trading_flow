@@ -152,6 +152,21 @@
                     </article>
                 }
             </div>
+            @if (Model.DisabledResearchStrategies is { Count: > 0 } disabled)
+            {
+                <details class="lab-strategy-details">
+                    <summary>Disabled research strategies</summary>
+                    <ul>
+                        @foreach (var strategy in disabled)
+                        {
+                            <li>
+                                <strong>@StrategyLabel(strategy.Artifact.ResolvedStrategy.StrategyName)</strong>
+                                <span>@strategy.Reason</span>
+                            </li>
+                        }
+                    </ul>
+                </details>
+            }
             <p class="note">
                 Select at least one strategy. A run with no strategy produces no evidence.
             </p>

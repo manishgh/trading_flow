@@ -85,6 +85,7 @@ public sealed class BacktestJobService : IDurableJobHandler
     private readonly SimpleYamlReader yamlReader;
     private readonly BacktestJobServiceOptions options;
     private readonly ILogger<BacktestJobService> logger;
+    private readonly StrategyRunArtifactValidator strategyValidator;
     private readonly MonthlyRunResultWriter monthlyResults;
 
     /// <summary>Use the existing durable worker and immutable strategy validator for execution and monthly publication.</summary>
@@ -101,7 +102,8 @@ public sealed class BacktestJobService : IDurableJobHandler
         this.yamlReader = yamlReader;
         this.options = ValidateOptions(options);
         this.logger = logger ?? NullLogger<BacktestJobService>.Instance;
-        monthlyResults = new MonthlyRunResultWriter(new StrategyRunArtifactValidator(yamlReader, strategyArtifacts));
+        strategyValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
+        monthlyResults = new MonthlyRunResultWriter(strategyValidator);
     }
 
     public string JobType => "backtest";
@@ -131,6 +133,7 @@ public sealed class BacktestJobService : IDurableJobHandler
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         var fullConfigPath = Path.GetFullPath(configPath);
         var runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+        RequireEnabledStrategies(runConfig);
         var admittedAt = DateTimeOffset.UtcNow;
         using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, runConfig.Engine);
         var job = new MutableBacktestJob(Guid.NewGuid(), runName, fullConfigPath, admittedAt);
@@ -158,6 +161,7 @@ public sealed class BacktestJobService : IDurableJobHandler
             {
                 runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
                 request.EnsureContains(ResolveInputs(fullConfigPath, runConfig, evidenceScope));
+                RequireEnabledStrategies(runConfig);
             }
             var persisted = new PersistedJob
             {
@@ -252,6 +256,7 @@ public sealed class BacktestJobService : IDurableJobHandler
         var request = DurableFileJobRequest.Deserialize(context.Job.RequestJson);
         using var inputLease = request.AcquireVerifiedReadLease();
         var capturedRun = yamlReader.ReadBacktestRun(context.Job.ConfigPath);
+        RequireEnabledStrategies(capturedRun);
         using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, capturedRun.Engine);
         var job = jobs.GetOrAdd(
             context.Job.Id,
@@ -302,6 +307,13 @@ public sealed class BacktestJobService : IDurableJobHandler
         return DurableJobCompletion.Completed(
             JsonSerializer.Serialize(completedSnapshot, JsonOptions),
             result.ResultPath);
+    }
+
+    // Applies current catalog availability to submissions and worker starts before market-data preparation.
+    private void RequireEnabledStrategies(BacktestRunConfig run)
+    {
+        foreach (var path in run.Strategies)
+            strategyValidator.RequireEnabledForExecution(path);
     }
 
     /// <summary>Retains all ordinary captured-input checks while reusing only this attempt's exact diagnostic graph.</summary>
@@ -392,8 +404,13 @@ public sealed class BacktestJobService : IDurableJobHandler
         }
     }
 
+    // Keep window-wide benchmark comparisons in the immutable audit result, with monthly values in the job view.
     private BacktestResult ProjectResultForUi(BacktestResult result) => result with
     {
+        Validation = result.Validation with
+        {
+            Benchmark = result.Validation.Benchmark with { BenchmarkReturnPct = null, StrategyComparisons = [] }
+        },
         CompletedTrades = result.CompletedTrades.TakeLast(options.RetainedRecentTrades).ToArray(),
         StrategyResults = result.StrategyResults
             .Select(strategy => strategy with { CompletedTrades = Array.Empty<BacktestTrade>() })

@@ -134,6 +134,13 @@ public sealed class OrderDispatchRunInactiveException(Guid intentId) : InvalidOp
     public Guid IntentId { get; } = intentId;
 }
 
+public sealed class PaperEntryDispatchBlockedException(
+    Guid intentId, string reasonCode, string reason) : InvalidOperationException(
+        $"Paper intent {intentId:N} cannot start broker submission: {reason}")
+{
+    public string ReasonCode { get; } = reasonCode;
+}
+
 public sealed class OrderDispatchUnsupportedHorizonException(Guid intentId) : InvalidOperationException(
     $"Intent {intentId:N} has no supported swing risk reservation; a new entry submission is prohibited.")
 {

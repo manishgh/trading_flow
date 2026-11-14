@@ -1,22 +1,30 @@
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Domain.Market;
 
 namespace TradingFlow.Backtesting;
 
 public sealed class BacktestValidator
 {
+    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+
+    /// <summary>Summarizes the run using the evaluation window already resolved for its prepared bars.</summary>
     public BacktestValidationReport Validate(
         BacktestRunConfig config,
         IReadOnlyCollection<OhlcvBar> allBars,
-        IReadOnlyCollection<OhlcvBar> benchmarkBars,
-        IReadOnlyCollection<StrategyBacktestResult> strategyResults)
+        PreparedBacktestMarket market,
+        IReadOnlyCollection<StrategyBacktestResult> strategyResults,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? sessions)
     {
         return new BacktestValidationReport(
             BuildOutOfSample(config, strategyResults),
             BuildWalkForward(config, strategyResults),
-            BuildBenchmark(config, benchmarkBars, strategyResults),
+            PriceOnlyBenchmark.Build(config.Validation.Benchmark, market.BenchmarkBars,
+                market.EvaluationStart, market.WindowEnd, sessions, strategyResults, market.SourceProvenance),
             BuildDataQuality(config, allBars),
-            BuildBiasRisk(config));
+            BuildBiasRisk(config, market.PriceBasis ?? MarketPriceBasis.FromBars(
+                market.MarketState.TickerStates.Values.SelectMany(state =>
+                    state.BarsByTimeframe.Values.SelectMany(bars => bars)), market.SourceProvenance)));
     }
 
     private static OutOfSampleValidation BuildOutOfSample(
@@ -98,36 +106,6 @@ public sealed class BacktestValidator
         return windows;
     }
 
-    private static BenchmarkValidation BuildBenchmark(
-        BacktestRunConfig config,
-        IReadOnlyCollection<OhlcvBar> benchmarkBars,
-        IReadOnlyCollection<StrategyBacktestResult> strategyResults)
-    {
-        if (!config.Validation.Benchmark.Enabled)
-        {
-            return new BenchmarkValidation(false, String.Empty, null, Array.Empty<StrategyBenchmarkComparison>());
-        }
-
-        var orderedBenchmarkBars = benchmarkBars.OrderBy(x => x.Timestamp).ToArray();
-        decimal? benchmarkReturnPct = null;
-        if (orderedBenchmarkBars.Length >= 2 && orderedBenchmarkBars[0].Close > 0)
-        {
-            benchmarkReturnPct = ((orderedBenchmarkBars[^1].Close - orderedBenchmarkBars[0].Close) / orderedBenchmarkBars[0].Close) * 100m;
-            benchmarkReturnPct = Decimal.Round(benchmarkReturnPct.Value, 4);
-        }
-
-        var comparisons = strategyResults.Select(strategy =>
-            new StrategyBenchmarkComparison(
-                strategy.StrategyId,
-                strategy.StrategyName,
-                strategy.Source,
-                strategy.TotalReturnPct,
-                benchmarkReturnPct is null ? null : Decimal.Round(strategy.TotalReturnPct - benchmarkReturnPct.Value, 4)))
-            .ToArray();
-
-        return new BenchmarkValidation(true, config.Validation.Benchmark.Ticker, benchmarkReturnPct, comparisons);
-    }
-
     private static DataQualityValidation BuildDataQuality(BacktestRunConfig config, IReadOnlyCollection<OhlcvBar> allBars)
     {
         if (!config.Validation.DataQuality.Enabled)
@@ -178,43 +156,54 @@ public sealed class BacktestValidator
             warnings);
     }
 
-    private static BiasRiskValidation BuildBiasRisk(BacktestRunConfig config)
+    // Report the symbols' resolved source and the actual price labels on the prepared observations.
+    internal static BiasRiskValidation BuildBiasRisk(BacktestRunConfig config, MarketPriceBasis prices)
     {
+        var universe = config.Universe;
+        var reporting = config.Validation.BiasRisk;
+        var researchScreen = reporting.ResolvedScreenManifestSha256 is not null;
+        var historicalScreen = universe?.IsHistoricalScreener == true;
+        var resolvedSnapshot = universe is { IsResolvedSnapshot: true } && !String.IsNullOrWhiteSpace(universe.ResolvedSource);
+        var source = researchScreen ? "research_screen" : historicalScreen ? HistoricalSource(universe!) :
+            resolvedSnapshot ? universe!.ResolvedSource : "static_config";
+        var name = researchScreen ? reporting.ResolvedScreenName :
+            resolvedSnapshot && source.Contains("wishlist", StringComparison.OrdinalIgnoreCase) ? universe!.WishlistName : null;
+        var method = researchScreen ? "published_daily_membership" : universe?.DailyRanking is not null ? "daily_ranking" :
+            universe?.DailyEligibility is not null ? "daily_eligibility" : null;
+        var asOf = historicalScreen ? reporting.UniverseAsOfDate : resolvedSnapshot && !researchScreen && universe!.ResolvedAtUtc is { } observed
+            ? DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(observed, NewYork).DateTime) : (DateOnly?)null;
+        var staticSource = source == "static_config" || source.Contains("wishlist", StringComparison.OrdinalIgnoreCase);
+        var currentScreener = source.Contains("finviz", StringComparison.OrdinalIgnoreCase);
+        var missingAsOf = !researchScreen && asOf is null;
+
         var warnings = new List<string>();
-        var staticUniverse = config.Validation.BiasRisk.UniverseSource.Equals("static_config", StringComparison.OrdinalIgnoreCase);
-        var currentScreenerUniverse = config.Validation.BiasRisk.UniverseSource.Contains(
-            "finviz",
-            StringComparison.OrdinalIgnoreCase);
-        var missingAsOfDate = config.Validation.BiasRisk.UniverseAsOfDate is null;
-        var rawSubDailyPolicy = config.Validation.BiasRisk.PriceAdjustmentPolicy.Contains("raw", StringComparison.OrdinalIgnoreCase);
+        if (staticSource)
+            warnings.Add("The configured or saved symbol list can introduce survivorship bias without historical membership evidence.");
+        if (currentScreener)
+            warnings.Add("Finviz supplies a current screener export. Archived point-in-time membership is required for promotion.");
+        if (researchScreen)
+            warnings.Add("The published screen supplies dated membership. Its manifest alone does not establish historical issuer and delisting coverage.");
+        if (missingAsOf)
+            warnings.Add("No observed date is recorded for the selected universe.");
+        if (prices.HasRawDaily)
+            warnings.Add("The inputs include raw daily bars. Splits or dividends can affect price comparisons.");
+        if (prices.HasRawSubDaily)
+            warnings.Add("The inputs include raw sub-daily bars. Splits or dividends can affect price comparisons.");
+        if (prices.HasUnknown)
+            warnings.Add("The price adjustment basis is unavailable for some or all prepared bars.");
 
-        if (staticUniverse)
-        {
-            warnings.Add("Universe source is static_config; this can introduce survivorship bias unless the ticker list is reconstructed as-of the backtest date.");
-        }
+        return new(source, asOf, prices.Policy, staticSource || currentScreener || missingAsOf || researchScreen,
+            prices.HasRawDaily || prices.HasRawSubDaily || prices.HasUnknown, warnings, name,
+            reporting.ResolvedScreenManifestSha256, method);
+    }
 
-        if (currentScreenerUniverse)
-        {
-            warnings.Add("Finviz supplies a current screener export, not historical membership. The run is diagnostic and cannot be promoted without archived point-in-time provider snapshots.");
-        }
-
-        if (missingAsOfDate)
-        {
-            warnings.Add("Universe as-of date is not configured.");
-        }
-
-        if (rawSubDailyPolicy)
-        {
-            warnings.Add("Price adjustment policy uses raw sub-daily bars; validate split/dividend handling before comparing long historical windows.");
-        }
-
-        return new BiasRiskValidation(
-            config.Validation.BiasRisk.UniverseSource,
-            config.Validation.BiasRisk.UniverseAsOfDate,
-            config.Validation.BiasRisk.PriceAdjustmentPolicy,
-            staticUniverse || currentScreenerUniverse || missingAsOfDate,
-            rawSubDailyPolicy,
-            warnings);
+    // Describe the actual candidate-pool source, including the frequency of membership changes.
+    private static string HistoricalSource(UniverseConfig universe)
+    {
+        var source = UniverseConfig.HistoricalScreenerMode;
+        if (universe.UsesFinvizScreen) source += universe.MergesCuratedAndFinviz ? "/curated+finviz" : "/finviz";
+        if (universe.IsPerDayRescreen) source += "/per_day";
+        return source;
     }
 
     private static TradePartitionResult SummarizeTrades(IReadOnlyCollection<BacktestTrade> trades, decimal startingCapital)

@@ -575,9 +575,9 @@ public sealed class SqliteStrategyPromotionRegistry :
                 "Paper-experiment supersession requires the same strategy family under a different semantic version.");
         }
 
-        if (!experimentArtifacts.IsRegistered(replacementIdentity))
+        if (!experimentArtifacts.IsAvailableForAuthorization(replacementIdentity))
         {
-            throw new InvalidOperationException("The replacement paper-experiment artifact is not registered.");
+            throw new InvalidOperationException("The replacement paper-experiment artifact must be registered with an enabled source.");
         }
 
         await using var connection = await OpenAsync(cancellationToken);
@@ -694,10 +694,10 @@ public sealed class SqliteStrategyPromotionRegistry :
 
         if (status == StrategyPromotionDecisionStatus.Accepted)
         {
-            if (!experimentArtifacts.IsRegistered(identity))
+            if (!experimentArtifacts.IsAvailableForAuthorization(identity))
             {
                 throw new InvalidOperationException(
-                    "Paper-experiment authorization requires an exact immutable experiment artifact.");
+                    "Paper-experiment authorization requires an exact immutable experiment artifact with an enabled source.");
             }
 
             var existingHead = await ReadAuthorizationHeadAsync(
@@ -1252,6 +1252,7 @@ public sealed class SqliteStrategyPromotionRegistry :
         }
     }
 
+    // Accepted promotions require an available exact source and retain the existing ordered governance prerequisites.
     private async Task ValidateAcceptedPrerequisitesAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -1295,6 +1296,13 @@ public sealed class SqliteStrategyPromotionRegistry :
             throw new InvalidOperationException(
                 $"Strategy identity '{decision.StrategyId}@{decision.SemanticVersion}' already has a non-terminal " +
                 $"{decision.AuthorizedAuthorization} authorization in decision '{existingGrant}'.");
+        }
+
+        if (decision.AuthorizedAuthorization is StrategyExecutionAuthorization.PaperShadow or StrategyExecutionAuthorization.Validated &&
+            !experimentArtifacts.IsAvailableForAuthorization(decision.ArtifactIdentity))
+        {
+            throw new InvalidOperationException(
+                "Promotion requires an active paper-experiment grant for the exact registered artifact with an enabled source.");
         }
 
         if (decision.AuthorizedAuthorization == StrategyExecutionAuthorization.PaperShadow)

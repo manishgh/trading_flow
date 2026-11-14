@@ -177,7 +177,8 @@ public sealed partial class BacktestRunner
     /// the same membership as the in-run ranking (members per session, ranked lists, known from 09:35 New York) and publishes
     /// each stock's member days with the manifest and ranked-list fingerprints.
     /// </summary>
-    private async Task<UniverseMembership> ResolveRankedMembershipAsync(BacktestRunConfig run, RankedMembershipReference ranked,
+    private async Task<(UniverseMembership Membership, string Name, string ManifestSha256)> ResolveRankedMembershipAsync(
+        BacktestRunConfig run, RankedMembershipReference ranked,
         IReadOnlyList<StrategyDefinition> strategies, CancellationToken cancellationToken, IProgress<BacktestProgress>? progress)
     {
         var screen = TradingFlow.Engine.Universe.PublishedResearchScreen.Read(Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
@@ -199,7 +200,7 @@ public sealed partial class BacktestRunner
             JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         progress?.Report(BacktestProgress.StageOnly("resolved_universe",
             $"Ranked list {screen.Name}: {eligibleDays.Count(pair => pair.Value.Length > 0)} of {run.Tickers.Count} stock(s) selected on at least one session."));
-        return membership;
+        return (membership, screen.Name, screen.ManifestSha256);
     }
 
     /// <summary>

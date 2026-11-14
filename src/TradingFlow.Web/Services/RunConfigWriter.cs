@@ -72,12 +72,13 @@ public sealed class RunConfigWriter
             Directory.Delete(strategyRoot);
     }
 
-    /// <summary>Freezes selected portfolio, strategy-compatible execution assumptions and required market-data intervals.</summary>
+    /// <summary>Checks selected research availability before freezing the portfolio and generating strategy snapshots.</summary>
     public string WriteBacktestConfig(BacktestRunRequest request)
     {
         var baseConfig = ResolveBacktestDataRoots(request.ResolvedProfile ?? yamlReader.ReadBacktestRun(request.BaseConfigPath));
         var selectedStrategies = request.StrategyPaths
             .Select(strategyArtifacts.RequireSourcePath)
+            .Select(strategyArtifacts.RequireEnabled)
             .Select(artifact => artifact.ResolvedStrategy)
             .ToArray();
         baseConfig = BacktestExecutionProfileResolver.Resolve(baseConfig, selectedStrategies, request.ExecutionReplayPolicyId);
@@ -364,6 +365,7 @@ public sealed class RunConfigWriter
         int? maxConcurrentPositions = null)
     {
         ArgumentNullException.ThrowIfNull(strategyArtifact);
+        strategyArtifacts.RequireEnabled(strategyArtifact);
         if (maxConcurrentPositions is <= 0)
             throw new InvalidOperationException("The central open-position limit must be positive.");
         var authorized = selectionMode switch
@@ -641,6 +643,7 @@ public sealed class RunConfigWriter
         AppendTickerList(yaml, "earnings_tickers", normalizedSource.Contains("earnings", StringComparison.Ordinal) ? selected : []);
     }
 
+    // Derives a registered experiment and requests its grant only while the canonical source is enabled.
     public StrategyArtifact RegisterPaperExperiment(
         string sourceStrategyPath,
         string semanticVersion,
@@ -659,7 +662,7 @@ public sealed class RunConfigWriter
             throw new ArgumentException("Paper-experiment registration time must be UTC.", nameof(requestedAtUtc));
         }
 
-        var source = strategyArtifacts.RequireSourcePath(sourceStrategyPath);
+        var source = strategyArtifacts.RequireEnabled(strategyArtifacts.RequireSourcePath(sourceStrategyPath));
         var resolved = strategyOverride is null
             ? source.ResolvedStrategy
             : ApplyOverride(source.ResolvedStrategy, strategyOverride);

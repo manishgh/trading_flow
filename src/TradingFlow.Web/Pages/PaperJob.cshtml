@@ -17,6 +17,8 @@
 
             const statusEl = document.getElementById('jobStatus');
             const startedAtEl = document.getElementById('startedAt');
+            const errorEl = document.getElementById('paperRunError');
+            const healthEl = document.getElementById('paperPipelineHealth');
             const marketDataFeedEl = document.getElementById('marketDataFeed');
             const metricsLastRefreshEl = document.getElementById('metricsLastRefresh');
             const eventsEl = document.getElementById('recentEvents');
@@ -47,6 +49,7 @@
                     .replaceAll("'", '&#039;');
             }
 
+            // Refresh persistent errors and entry-stop status alongside broker and run views.
             async function refreshSnapshot() {
                 let data;
                 try {
@@ -66,6 +69,14 @@
 
                 if (startedAtEl) {
                     startedAtEl.textContent = data.startedAt;
+                }
+                if (errorEl) {
+                    errorEl.textContent = data.errorMessage ?? '';
+                    errorEl.hidden = !data.errorMessage;
+                }
+                if (healthEl) {
+                    healthEl.textContent = data.pipelineHealth ?? '';
+                    healthEl.hidden = !data.pipelineHealth;
                 }
 
                 if (marketDataFeedEl) {
@@ -130,7 +141,7 @@
                     updateProfiler(data.profiler);
                 }
 
-                if (data.status !== 'queued' && data.status !== 'running') {
+                if (!['queued', 'running', 'cancelling'].includes(data.status)) {
                     window.clearInterval(window.tradingFlowPaperJobRefresh);
                 }
             }
@@ -286,12 +297,9 @@ else
     <div class="grid two">
         <section class="panel">
             <h2>Status: <span id="jobStatus" class="status @Model.Job.Status">@Model.Job.Status</span></h2>
-            @if (!string.IsNullOrEmpty(Model.Job.ErrorMessage))
-            {
-                <div class="alert alert-danger">
-                    <strong>Error:</strong> @Model.Job.ErrorMessage
-                </div>
-            }
+            <div id="paperRunError" class="alert alert-danger" role="status" hidden="@(String.IsNullOrEmpty(Model.Job.ErrorMessage))">@Model.Job.ErrorMessage</div>
+            @{ var pipelineHealth = Model.FormatPipelineHealth(Model.Job.PaperPipelineHealth); }
+            <div id="paperPipelineHealth" class="alert alert-danger" role="status" hidden="@(String.IsNullOrEmpty(pipelineHealth))">@pipelineHealth</div>
             <p><strong>Config:</strong> @Model.Job.ConfigPath</p>
             <p><strong>Started:</strong> <span id="startedAt">@(Model.Job.StartedAt is null ? "Queued" : Model.FormatLocal(Model.Job.StartedAt.Value))</span> <span class="muted">@Model.LocalTimeZoneLabel</span></p>
             <div class="mt-md mb-md">

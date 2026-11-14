@@ -97,6 +97,10 @@ public sealed record UniverseConfig(
     // Per-session members read from a published research screen's ranked list instead of being recomputed in the run.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] RankedMembershipReference? RankedMembership = null)
 {
+    // Caption captured with a resolved selection; the selected ticker roster remains the input.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? WishlistName { get; init; }
+
     /// <summary>Completed daily sessions the screen reads before a decision day: the eligibility rules' needs, or the legacy look-back.</summary>
     public int ScreenLookbackSessions => DailyEligibility?.PriorSessionsNeeded ?? Math.Max(LookbackDays, 1);
 
@@ -205,7 +209,15 @@ public sealed record DataQualityConfig(
 public sealed record BiasRiskConfig(
     string UniverseSource,
     DateOnly? UniverseAsOfDate,
-    string PriceAdjustmentPolicy);
+    string PriceAdjustmentPolicy)
+{
+    // Runtime-only identity resolved from the verified screen manifest, separate from frozen profile settings.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ResolvedScreenName { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ResolvedScreenManifestSha256 { get; init; }
+}
 
 public sealed record ExecutionConfig(
     string Router,

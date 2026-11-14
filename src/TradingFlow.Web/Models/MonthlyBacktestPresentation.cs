@@ -17,6 +17,18 @@ public static class MonthlyBacktestPresentation
                 ? NativeDailySessionLedger.ExecutionSessionDate(timestamp)
                 : NativeDailySessionLedger.SourceSessionDate(timestamp);
 
+    // Use the explicit source date when present. Legacy artifacts use the original ledger convention.
+    internal static DateOnly ExitSessionDate(BacktestTrade trade, string? valuationBasis, string? executionTimingPolicy = null) =>
+        trade.ExitFillTiming?.SourceSessionDate ?? SourceSessionDate(trade.ExitTimestamp, valuationBasis, executionTimingPolicy);
+
+    // A modeled point has a clock time. Range touches have a source date, and older artifacts have a replay stamp.
+    internal static string FillTimeLabel(BacktestFillTiming? timing, DateTimeOffset replayTimestamp) => timing switch
+    {
+        { EconomicTimestampUtc: { } instant } => instant.ToUniversalTime().ToString("dd MMM HH:mm 'UTC'", CultureInfo.InvariantCulture),
+        { SourceSessionDate: var session } => session.ToString("dd MMM", CultureInfo.InvariantCulture) + " NY · time unavailable",
+        _ => replayTimestamp.ToUniversalTime().ToString("dd MMM HH:mm 'UTC'", CultureInfo.InvariantCulture) + " (saved replay stamp)"
+    };
+
     // Publish the engine's reconciled source-session book; monthly costs/profit are changes in cumulative observations.
     public static IReadOnlyList<MonthlyRunResult> FromPortfolioState(StrategyBacktestResult strategy,
         AuthorizedRuntimeStrategy runtime, string runName, string cohortName, DateTimeOffset start, DateTimeOffset end)
@@ -36,7 +48,7 @@ public static class MonthlyBacktestPresentation
         var identity = new StrategyReference(runtime.Identity.StrategyId, runtime.Identity.SemanticVersion, runtime.Identity.ContentSha256);
         // The session a completed trade's exit belongs to, by the strategy's valuation basis and timing.
         DateOnly ExitSession(BacktestTrade trade) =>
-            SourceSessionDate(trade.ExitTimestamp, state.ValuationBasis, runtime.AdmissionProfile.ExecutionTimingPolicy);
+            ExitSessionDate(trade, state.ValuationBasis, runtime.AdmissionProfile.ExecutionTimingPolicy);
         var rows = new List<MonthlyRunResult>();
         var opening = strategy.StartingCapital;
         var previousRealized = 0m;
@@ -96,12 +108,12 @@ public static class MonthlyBacktestPresentation
             Math.Abs(strategy.StartingCapital + strategy.CompletedTrades.Sum(trade => trade.NetProfit) - strategy.EndingCapital) > .01m)
             throw new InvalidOperationException("Complete, reconciled strategy trades are required; a trimmed UI summary cannot provide monthly returns.");
         var zone=TimeZoneInfo.FindSystemTimeZoneById(runtime.Definition.Session.ExchangeTimezone);
-        // Attribute old realized records using the same native daily availability-to-session policy (decision-hour fills: their own session).
-        DateOnly SourceDate(DateTimeOffset receipt)=>SourceSessionDate(receipt, NativeDailySessionLedger.ValuationBasis,
+        // Use explicit fill sessions, with the same native ledger convention for legacy realized records.
+        DateOnly SourceDate(BacktestTrade trade)=>ExitSessionDate(trade, NativeDailySessionLedger.ValuationBasis,
             runtime.AdmissionProfile.ExecutionTimingPolicy);
         var first=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start,zone).DateTime);
         var last=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(end.AddTicks(-1),zone).DateTime);
-        var byDate=strategy.CompletedTrades.GroupBy(trade=>SourceDate(trade.ExitTimestamp)).ToDictionary(group=>group.Key,group=>group.Sum(trade=>trade.NetProfit));
+        var byDate=strategy.CompletedTrades.GroupBy(trade=>SourceDate(trade)).ToDictionary(group=>group.Key,group=>group.Sum(trade=>trade.NetProfit));
         if(byDate.Keys.Any(date=>date<first||date>last))throw new InvalidOperationException("Completed trades exceed declared monthly period.");
         var dates=Enumerable.Range(0,last.DayNumber-first.DayNumber+1).Select(n=>first.AddDays(n)).ToArray();
         var equity=strategy.StartingCapital;var points=new List<StrategySessionEquity>();
@@ -111,7 +123,7 @@ public static class MonthlyBacktestPresentation
             runName,"independent_strategy","realized_closed_trade_equity",strategy.StartingCapital,first,last,points,dates);
         var equityByDate = points.ToDictionary(point => point.SessionDate, point => point.Equity);
         return rows.Select(row=>new MonthlyBacktestRow(strategy.StrategyId,strategy.StrategyName,row,
-            strategy.CompletedTrades.Count(trade=>SourceDate(trade.ExitTimestamp)>=row.PeriodStart&&SourceDate(trade.ExitTimestamp)<=row.PeriodEnd),
+            strategy.CompletedTrades.Count(trade=>SourceDate(trade)>=row.PeriodStart&&SourceDate(trade)<=row.PeriodEnd),
             row.PeriodStart == first ? strategy.StartingCapital : equityByDate[row.PeriodStart.AddDays(-1)],
             equityByDate[row.PeriodEnd])).ToArray();
     }

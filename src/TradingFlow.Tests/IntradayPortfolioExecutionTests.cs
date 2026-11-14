@@ -80,6 +80,11 @@ public sealed partial class IntradayPortfolioExecutionTests
         Assert.Equal(Start.AddMinutes(20), trade.EntryTimestamp);
         Assert.Equal(Start.AddMinutes(25), trade.ExitTimestamp);
         Assert.Equal(99.5m, trade.ExitPrice);
+        Assert.Equal(("source_bar_open", Start.AddMinutes(20), Start.AddMinutes(25)),
+            (trade.EntryFillTiming!.Basis, trade.EntryFillTiming.EconomicTimestampUtc!.Value, trade.EntryFillTiming.AvailableAtUtc));
+        Assert.Equal("source_bar_range", trade.ExitFillTiming!.Basis);
+        Assert.Null(trade.ExitFillTiming.EconomicTimestampUtc);
+        Assert.Equal(Start.AddMinutes(25), trade.ExitFillTiming.AvailableAtUtc);
     }
 
     // Invalid source clocks, a future receipt or a substituted candle stop cannot enter the replay ledger.

@@ -3,6 +3,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TradingFlow.Data.Context;
+using TradingFlow.Data.Discovery;
+using TradingFlow.Data.Jobs;
+using TradingFlow.Domain.Discovery;
+using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Research;
 using TradingFlow.Data.Orders;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
@@ -765,6 +770,179 @@ public sealed class SqliteDurabilityTests
         broker.Verify(client => client.SubmitOrderAsync(
             It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
         Assert.Equal(OrderState.Intent, (await events.GetCurrentAsync(reserved.Intent.ClientOrderId))!.State);
+    }
+
+    // A stop committed after dispatch obtains ownership still fences its first POST.
+    // A broker-confirmed order can be adopted even when the stop was just latched.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DispatchAsync_PaperStopDuringBrokerLookupFencesFirstPostButAllowsAdoption(bool adopt)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var jobs = new SqliteJobRepository(factory);
+        var run = CreateRun(Guid.NewGuid());
+        var lease = await StartPaperAttemptAsync(jobs, run);
+        var clock = new FixedTimeProvider(CandidateReservationTime);
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        var reserved = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        var broker = CreateDispatchBroker(reserved, brokerOrder: null, "unused");
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(reserved.ClientOrderId, It.IsAny<CancellationToken>()))
+            .Returns(async (string _, CancellationToken token) =>
+            {
+                var stopped = DateTimeOffset.UtcNow;
+                Assert.True(await jobs.SavePaperEntryStopSnapshotAsync(run.RunId, lease.LeaseToken, "{}", stopped, stopped, token));
+                return adopt ? CreateMatchingBrokerOrder(reserved, "existing-at-broker", "new") : null;
+            });
+
+        var dispatcher = CreateDispatcher(intents, events, clock);
+        if (adopt)
+        {
+            Assert.Equal("existing-at-broker", (await dispatcher.DispatchAsync(reserved.IntentId, broker.Object)).BrokerOrderId);
+        }
+        else
+        {
+            var blocked = await Assert.ThrowsAsync<PaperEntryDispatchBlockedException>(() =>
+                dispatcher.DispatchAsync(reserved.IntentId, broker.Object));
+            Assert.Equal("paper_pipeline_entries_stopped", blocked.ReasonCode);
+        }
+
+        var stored = await intents.GetByIntentIdAsync(reserved.IntentId);
+        Assert.NotNull(stored);
+        Assert.Equal(0, stored.DispatchAttemptCount);
+        Assert.Equal(adopt ? OrderState.Acked : OrderState.Expired, (await events.GetCurrentAsync(reserved.ClientOrderId))!.State);
+        broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Recovery may settle a zero-POST intent but cannot submit it for an abandoned owner.
+    // An unrelated live paper job still dispatches normally.
+    [Theory]
+    [InlineData("expired")]
+    [InlineData("released")]
+    [InlineData("cancelled")]
+    public async Task RecoverPendingAsync_PaperEntryRequiresItsOwnUncancelledLease(string ownerState)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var jobs = new SqliteJobRepository(factory);
+        var run = CreateRun(Guid.NewGuid());
+        var lease = await StartPaperAttemptAsync(jobs, run);
+        var peer = CreateRun(Guid.NewGuid());
+        await StartPaperAttemptAsync(jobs, peer);
+        var clock = new FixedTimeProvider(CandidateReservationTime);
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        var reserved = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        var live = (await intents.ReserveAsync(peer, CreateReservation(Guid.NewGuid(), "AAPL"))).Intent;
+        var submitted = await events.TransitionAsync(new OrderTransitionRequest(
+            reserved.ClientOrderId, OrderState.Intent, OrderState.Submitted, "engine",
+            CandidateReservationTime, PayloadJson: reserved.RequestJson));
+        Assert.True(submitted.Applied);
+        switch (ownerState)
+        {
+            case "expired":
+                await using (var context = factory.CreateDbContext())
+                {
+                    await context.Jobs.Where(job => job.Id == run.RunId).ExecuteUpdateAsync(update =>
+                        update.SetProperty(job => job.LeaseExpiresAtUtcTicks, 0L));
+                }
+                break;
+            case "released":
+                await jobs.ReleaseLeaseAsync(run.RunId, lease.LeaseToken, default);
+                break;
+            case "cancelled":
+                Assert.True(await jobs.RequestCancellationAsync(run.RunId, DateTimeOffset.UtcNow, default));
+                break;
+        }
+
+        var broker = CreateDispatchBroker(live, brokerOrder: null, "live-peer-entry");
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(reserved.ClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ActiveBrokerOrder?)null);
+        var dispatcher = CreateDispatcher(intents, events, clock);
+
+        Assert.Equal(1, await dispatcher.RecoverPendingAsync(broker.Object));
+        Assert.Equal(OrderState.Expired, (await events.GetCurrentAsync(reserved.ClientOrderId))!.State);
+        Assert.Equal(OrderState.Acked, (await events.GetCurrentAsync(live.ClientOrderId))!.State);
+        Assert.Equal(0, (await intents.GetByIntentIdAsync(reserved.IntentId))!.DispatchAttemptCount);
+        broker.Verify(client => client.SubmitOrderAsync(It.Is<BrokerEntryOrder>(entry => entry.Order.Ticker == "MSFT"),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // The same valid setup remains alive while its discovery membership can expire independently.
+    [Theory]
+    [InlineData("live")]
+    [InlineData("expired")]
+    [InlineData("removed")]
+    public async Task RecoverPendingAsync_PaperDiscoveryRequiresCurrentTriggeredMembership(string sourceState)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var run = CreateRun(Guid.NewGuid());
+        var now = DateTimeOffset.UtcNow;
+        var discovery = new SqliteDiscoveryRepository(factory);
+        await discovery.CommitSnapshotAsync(new DiscoverySnapshotRequest(run.RunId, Guid.NewGuid(),
+            DiscoverySourceKinds.Wishlist, "sql-test", "swing", now.AddSeconds(-1), now.AddMinutes(5), 0, [new("MSFT")]));
+        var aggregate = Assert.Single(await discovery.GetActiveAsync(run.RunId, now));
+        var evidence = System.Text.Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(new
+        {
+            discovery = new { aggregate.AggregateId, AggregateVersion = aggregate.Version }
+        }));
+        var candidate = Guid.NewGuid();
+        var hash = new string('f', 64);
+        await SeedTriggeredCandidateAsync(options, run, candidate, "MSFT", hash, now.AddHours(1), evidence);
+        await StartPaperAttemptAsync(new SqliteJobRepository(factory), run);
+
+        var clock = new FixedTimeProvider(CandidateReservationTime);
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        var reserved = (await intents.ReserveAsync(run,
+            CreateCandidateReservation(Guid.NewGuid(), candidate, "MSFT", hash))).Intent;
+        if (sourceState == "removed")
+        {
+            await discovery.CommitSnapshotAsync(new DiscoverySnapshotRequest(run.RunId, Guid.NewGuid(),
+                DiscoverySourceKinds.Wishlist, "sql-test", "swing", now, now.AddMinutes(5), 1, []));
+        }
+        else if (sourceState == "expired")
+        {
+            // Advance just this source's deadline without changing the candidate's setup expiry.
+            await using var context = factory.CreateDbContext();
+            await context.DiscoverySourceMemberships.Where(source => source.AggregateId == aggregate.AggregateId)
+                .ExecuteUpdateAsync(update => update.SetProperty(source => source.ExpiresAtUtc, now.AddSeconds(-1)));
+        }
+
+        var broker = CreateDispatchBroker(reserved, brokerOrder: null, "fresh-membership-entry");
+        var dispatcher = CreateDispatcher(intents, events, clock);
+
+        var shouldPost = sourceState == "live";
+        Assert.Equal(shouldPost ? 1 : 0, await dispatcher.RecoverPendingAsync(broker.Object));
+        Assert.Equal(shouldPost ? OrderState.Acked : OrderState.Expired, (await events.GetCurrentAsync(reserved.ClientOrderId))!.State);
+        broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
+            shouldPost ? Times.Once() : Times.Never());
+    }
+
+    // Register a paper run with the same lifecycle and lease APIs used by production.
+    private static async Task<DurableJobLease> StartPaperAttemptAsync(SqliteJobRepository jobs, ProductionRun run)
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.True(await jobs.TryEnqueueAsync(new PersistedJob
+        {
+            Id = run.RunId,
+            JobType = "paper",
+            RunName = $"dispatch-fixture-{run.RunId:N}",
+            CreatedAt = now
+        }, 10, default));
+        var lease = await jobs.TryAcquireAsync(run.RunId, "dispatch-test-worker", now, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(lease);
+        Assert.NotNull(await jobs.StartPaperRunAsync(run, lease.LeaseToken, default));
+        return lease;
     }
 
     [Fact]
@@ -3668,12 +3846,15 @@ public sealed class SqliteDurabilityTests
             RequestJson = $"{{\"symbol\":\"{symbol}\",\"protectionRevision\":{intentId.GetHashCode()}}}"
         };
 
+    // Insert real candidate and trigger journal rows with optional live dispatch evidence.
     private static async Task SeedTriggeredCandidateAsync(
         DbContextOptions<TradingFlowDbContext> options,
         ProductionRun run,
         Guid candidateId,
         string symbol,
-        string semanticHash)
+        string semanticHash,
+        DateTimeOffset? expiresAtUtc = null,
+        string? evidenceJson = null)
     {
         await using var context = new TradingFlowDbContext(options);
         await new TradingFlowDatabaseInitializer().InitializeAsync(context);
@@ -3697,7 +3878,7 @@ public sealed class SqliteDurabilityTests
             DiscoveryWindowEndUtc = new DateTimeOffset(2026, 7, 21, 14, 29, 0, TimeSpan.Zero),
             State = StrategyCandidateState.Triggered,
             Version = 4,
-            ExpiresAtUtc = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero),
+            ExpiresAtUtc = expiresAtUtc ?? new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero),
             SemanticDecisionSha256 = semanticHash,
             RejectReasonsJson = "[]",
             RunId = run.RunId,
@@ -3715,7 +3896,7 @@ public sealed class SqliteDurabilityTests
             ReasonCode = "test_trigger_satisfied",
             Source = "test",
             SemanticDecisionSha256 = semanticHash,
-            EvidenceJson = $"{{\"symbol\":\"{symbol}\",\"decision\":\"triggered\"}}",
+            EvidenceJson = evidenceJson ?? $"{{\"symbol\":\"{symbol}\",\"decision\":\"triggered\"}}",
             RunId = run.RunId,
             SchemaVersion = run.SchemaVersion,
             ConfigHash = run.ConfigHash,

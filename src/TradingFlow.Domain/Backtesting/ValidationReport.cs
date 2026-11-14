@@ -45,7 +45,23 @@ public sealed record BenchmarkValidation(
     bool Enabled,
     string Ticker,
     decimal? BenchmarkReturnPct,
-    IReadOnlyList<StrategyBenchmarkComparison> StrategyComparisons);
+    IReadOnlyList<StrategyBenchmarkComparison> StrategyComparisons,
+    string? Basis = null,
+    string? UnavailableReason = null,
+    IReadOnlyList<MonthlyBenchmarkValidation>? Months = null,
+    DateTimeOffset? EvaluationStartUtc = null,
+    DateTimeOffset? EvaluationEndUtc = null,
+    string? PriceAdjustmentPolicy = null,
+    decimal? OpeningPrice = null,
+    decimal? ClosingPrice = null,
+    DateTimeOffset? OpeningTimestampUtc = null,
+    DateTimeOffset? ClosingTimestampUtc = null);
+
+/// <summary>Price change over one New York source-session month within the declared test interval.</summary>
+public sealed record MonthlyBenchmarkValidation(string Month, decimal? ReturnPct, string OpeningBasis,
+    string? UnavailableReason, DateTimeOffset PeriodStartUtc, DateTimeOffset PeriodEndUtc,
+    decimal? OpeningPrice, decimal? ClosingPrice, DateTimeOffset? OpeningTimestampUtc = null,
+    DateTimeOffset? ClosingTimestampUtc = null);
 
 public sealed record StrategyBenchmarkComparison(
     string StrategyId,
@@ -68,4 +84,7 @@ public sealed record BiasRiskValidation(
     string PriceAdjustmentPolicy,
     bool SurvivorshipBiasWarning,
     bool CorporateActionAdjustmentWarning,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    string? UniverseName = null,
+    string? UniverseManifestSha256 = null,
+    string? UniverseSelectionMethod = null);

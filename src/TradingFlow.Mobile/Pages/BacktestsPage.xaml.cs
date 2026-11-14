@@ -583,9 +583,11 @@ public partial class BacktestsPage : ContentPage
         }
         foreach (var month in selectedJob.MonthlyResults)
         {
+            var benchmark = MonthlyBenchmarkPresentation.Lines(month.Benchmark);
             var performance = month.ReturnPct is { } value ? $"{value:0.00}%" : $"unavailable: {month.UnavailableReason}";
             StrategyGroupsStack.Add(new Label { Text = $"{month.Strategy.StrategyId} {month.Strategy.SemanticVersion} · {month.CohortName} · {month.Month}" +
                 $"{(month.PartialMonth ? " (partial month)" : "")}\n{performance} · {ValuationLabel(month.ValuationBasis)}" +
+                (benchmark.Count > 0 ? "\n" + String.Join("\n", benchmark) : String.Empty) +
                 $"\nOpening equity: {month.OpeningEquity?.ToString("C2") ?? "Unavailable"} · Closing equity: {month.ClosingEquity?.ToString("C2") ?? "Unavailable"}" +
                 $"\nDrawdown: {month.MaxDrawdownPct?.ToString("0.00") ?? "Unavailable"}% · Closed trades: {month.ClosedTrades?.ToString() ?? "Unavailable"}" +
                 $"\nMonthly realized net: {month.RealizedNetProfit?.ToString("C2") ?? "Unavailable"} · Unrealized at month end: {month.UnrealizedProfit?.ToString("C2") ?? "Unavailable"}" +

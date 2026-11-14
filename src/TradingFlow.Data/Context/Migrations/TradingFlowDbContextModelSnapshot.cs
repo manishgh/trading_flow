@@ -2153,6 +2153,18 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("finished_at_utc");
 
+                    b.Property<long?>("HostLeaseExpiresAtUtcTicks")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("host_lease_expires_at_utc_ticks");
+
+                    b.Property<DateTimeOffset?>("PaperEntriesStoppedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("paper_entries_stopped_at_utc");
+
+                    b.Property<Guid?>("PaperJobLeaseToken")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("paper_job_lease_token");
+
                     b.Property<string>("Profile")
                         .IsRequired()
                         .HasMaxLength(20)

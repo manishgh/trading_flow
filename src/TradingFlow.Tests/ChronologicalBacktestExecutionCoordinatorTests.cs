@@ -7,6 +7,7 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Risk;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Execution;
 using Xunit;
 
@@ -50,6 +51,10 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
         Assert.Equal(12m, trade.ExitPrice);
         Assert.Equal(Start.AddMinutes(5), trade.EntryTimestamp);
         Assert.Equal(Start.AddMinutes(20), trade.ExitTimestamp);
+        Assert.Equal(Start, trade.EntryFillTiming!.EconomicTimestampUtc);
+        Assert.Equal("source_bar_open", trade.EntryFillTiming.Basis);
+        Assert.Null(trade.ExitFillTiming!.EconomicTimestampUtc);
+        Assert.Equal("source_bar_range", trade.ExitFillTiming.Basis);
         Assert.Equal(0m, trade.Fees);
         Assert.NotEmpty(evidence.Events);
         Assert.All(evidence.Events, item => Assert.Equal("portfolio_execution", item.EvidenceScope));
@@ -379,7 +384,48 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
         Assert.Equal(Start, Assert.Single(request.Commands).KnownAtUtc);
 
         coordinator.Complete();
-        Assert.Single(coordinator.CompletedTrades);
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal(Start, trade.EntryFillTiming!.EconomicTimestampUtc);
+        Assert.Equal(Start.AddMinutes(5), trade.EntryFillTiming.ProcessingTimestampUtc);
+        Assert.Equal(delayedAvailability, trade.EntryFillTiming.AvailableAtUtc);
+    }
+
+    // A daily market fill is modeled at the source session's regular open and retains the bar-completion receipt.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DailyMarketTrade_PublishesCalendarOpenAcrossDstAndKeepsLegacyReceipts(bool hasCalendar)
+    {
+        var entryBarStart = new DateTimeOffset(2017, 2, 1, 5, 0, 0, TimeSpan.Zero);
+        var exitBarStart = new DateTimeOffset(2017, 4, 3, 4, 0, 0, TimeSpan.Zero);
+        var entryDate = new DateOnly(2017, 2, 1);
+        var exitDate = new DateOnly(2017, 4, 3);
+        var dates = new[] { entryDate, exitDate }.ToDictionary(date => date, MarketSessionSchedule.RegularDay);
+        var strategy = Strategy() with { Timeframe = "1d", Execution = new("1d", 0m) };
+        var candidate = Candidate("daily-time", 0, 5) with
+        {
+            EntryTimestamp = entryBarStart, ExitTimestamp = exitBarStart, ExitReason = "technical_exit"
+        };
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct: 100m),
+            [Bar(0, 10m, 1_000m) with { Timestamp = entryBarStart, Timeframe = "1d" },
+                Bar(5, 11m, 1_000m) with { Timestamp = exitBarStart, Timeframe = "1d" }],
+            fillSchedules: hasCalendar ? dates : null);
+        Assert.True(coordinator.TrySchedule(new(candidate, strategy, 100), out var reason), reason);
+        coordinator.Complete();
+
+        var trade = Assert.Single(coordinator.CompletedTrades);
+        Assert.Equal((100, 10m, 11m, 100m), (trade.ShareQuantity, trade.EntryPrice, trade.ExitPrice, trade.NetProfit));
+        Assert.Equal(entryBarStart.AddDays(1), trade.EntryTimestamp);
+        Assert.Equal(exitBarStart.AddDays(1), trade.ExitTimestamp);
+        Assert.Equal(trade.EntryTimestamp, trade.EntryFillTiming!.ProcessingTimestampUtc);
+        Assert.Equal(trade.EntryTimestamp, trade.EntryFillTiming.AvailableAtUtc);
+        Assert.Equal((entryDate, exitDate), (trade.EntryFillTiming.SourceSessionDate, trade.ExitFillTiming!.SourceSessionDate));
+        Assert.Equal(hasCalendar ? entryBarStart.AddHours(9.5) : (DateTimeOffset?)null, trade.EntryFillTiming.EconomicTimestampUtc);
+        Assert.Equal(hasCalendar ? exitBarStart.AddHours(9.5) : (DateTimeOffset?)null, trade.ExitFillTiming.EconomicTimestampUtc);
+        Assert.Equal(hasCalendar ? "regular_session_open" : "daily_session_schedule_unavailable", trade.EntryFillTiming.Basis);
+        using var serialized = JsonDocument.Parse(JsonSerializer.Serialize(trade));
+        Assert.Equal("execution_processing_stamp", serialized.RootElement.GetProperty("LegacyTimestampBasis").GetString());
+        Assert.Equal(trade, JsonSerializer.Deserialize<BacktestTrade>(serialized.RootElement.GetRawText()));
     }
 
     [Fact]

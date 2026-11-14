@@ -304,6 +304,29 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
         Assert.Empty(await isolated.GetDecisionHistoryAsync());
     }
 
+    // Even with the preceding authorizations already stored, a parked source cannot receive a new accepted promotion.
+    [Theory]
+    [InlineData(StrategyExecutionAuthorization.PaperShadow)]
+    [InlineData(StrategyExecutionAuthorization.Validated)]
+    public async Task ParkedExperiment_CannotReceiveAdditionalAuthorization(StrategyExecutionAuthorization authorization)
+    {
+        if (authorization == StrategyExecutionAuthorization.Validated)
+        {
+            var shadow = Decision("shadow-before-park", StrategyPromotionDecisionStatus.Accepted);
+            await registry.RegisterDecisionAsync(shadow, shadow.ApprovedBy);
+        }
+        var previous = await registry.GetActiveGrantsAsync();
+        var parked = NewRegistry(StrategyPromotionRegistryOpenMode.OpenExisting, new ParkedExperiment());
+        var next = Decision("promotion-after-park", StrategyPromotionDecisionStatus.Accepted, authorizedAuthorization: authorization);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            parked.RegisterDecisionAsync(next, next.ApprovedBy));
+
+        Assert.Contains("enabled source", error.Message, StringComparison.Ordinal);
+        Assert.Equal(previous, await parked.GetActiveGrantsAsync());
+        Assert.DoesNotContain(await parked.GetDecisionHistoryAsync(), item => item.DecisionId == next.DecisionId);
+    }
+
     [Fact]
     public async Task ValidatedAuthorization_DependsOnActivePaperShadowGrant()
     {
@@ -684,8 +707,10 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
         Assert.Empty(await reopened.GetActiveDecisionsAsync());
     }
 
+    // Opens the same synthetic governance store against the requested current experiment availability.
     private SqliteStrategyPromotionRegistry NewRegistry(
-        StrategyPromotionRegistryOpenMode mode) =>
+        StrategyPromotionRegistryOpenMode mode,
+        IStrategyExperimentArtifactCatalog? experiments = null) =>
         new(
             new StrategyPromotionRegistryOptions(
                 Path.Combine(rootPath, "promotions.db"),
@@ -694,7 +719,7 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
             catalog,
             store,
             new ConfiguredPromotionPrincipalAuthorizer(["governor@example.test"]),
-            RegisteredExperiments.Instance);
+            experiments ?? RegisteredExperiments.Instance);
 
     private StrategyPromotionDecision Decision(
         string decisionId,
@@ -838,6 +863,15 @@ public sealed class SqliteStrategyPromotionRegistryTests : IAsyncLifetime
         public static RegisteredExperiments Instance { get; } = new();
 
         public bool IsRegistered(StrategyArtifactIdentity identity) => true;
+    }
+
+    private sealed class ParkedExperiment : IStrategyExperimentArtifactCatalog
+    {
+        // Registration and prior grant history survive the operational disable.
+        public bool IsRegistered(StrategyArtifactIdentity identity) => true;
+
+        // A parked source cannot authorize additional work.
+        public bool IsAvailableForAuthorization(StrategyArtifactIdentity identity) => false;
     }
 
     private sealed class NoRegisteredExperiments : IStrategyExperimentArtifactCatalog

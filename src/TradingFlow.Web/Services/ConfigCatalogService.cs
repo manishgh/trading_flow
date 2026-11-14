@@ -63,7 +63,15 @@ public sealed partial class ConfigCatalogService
     public IReadOnlyList<RunConfigSummary> GetPaperConfigs() =>
         GetRunConfigs(paths.PaperConfigsRoot);
 
-    /// <summary>Offers intraday artifacts only to backtests; operational selection retains its daily-only restriction.</summary>
+    /// <summary>Shows disabled research and its reason alongside the selectable strategies in Strategy Lab.</summary>
+    public IReadOnlyList<(StrategyArtifact Artifact, string Reason)> GetDisabledResearchStrategies() =>
+        strategyArtifacts.GetSnapshot().ExecutableArtifacts
+            .Select(artifact => (Artifact: artifact, Reason: strategyArtifacts.GetDisabledReason(artifact)))
+            .Where(item => item.Reason is not null)
+            .Select(item => (item.Artifact, item.Reason!))
+            .ToArray();
+
+    /// <summary>Offers enabled artifacts, including registered experiments, under the existing timeframe and grant rules.</summary>
     public async Task<IReadOnlyList<StrategyOption>> GetStrategiesAsync(
         StrategySelectionMode mode,
         CancellationToken cancellationToken = default)
@@ -81,7 +89,9 @@ public sealed partial class ConfigCatalogService
             .Where(grant => grant.Authorization == StrategyExecutionAuthorization.Validated)
             .Select(grant => grant.Identity)
             .ToArray();
-        var registeredExperiments = experimentArtifacts.List();
+        var registeredExperiments = experimentArtifacts.List()
+            .Where(artifact => strategyArtifacts.GetDisabledReason(artifact) is null)
+            .ToArray();
         var selected = mode == StrategySelectionMode.RunPaperExperiment
             ? registeredExperiments
                 .Where(artifact => paperExperiment.Contains(artifact.Identity))
@@ -118,6 +128,7 @@ public sealed partial class ConfigCatalogService
             .ToArray();
     }
 
+    // Identifies an explicitly selected, disabled canonical source before applying the existing selection rules.
     public async Task<StrategyOption> RequireSelectableAsync(
         StrategySelectionMode mode,
         string strategyPath,
@@ -125,6 +136,8 @@ public sealed partial class ConfigCatalogService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(strategyPath);
         var fullPath = Path.GetFullPath(strategyPath);
+        if (strategyArtifacts.FindSourcePath(fullPath) is { } canonical)
+            strategyArtifacts.RequireEnabled(canonical);
         return (await GetStrategiesAsync(mode, cancellationToken))
             .SingleOrDefault(strategy => Path.GetFullPath(strategy.Path).Equals(
                 fullPath,
@@ -132,12 +145,17 @@ public sealed partial class ConfigCatalogService
             ?? throw new InvalidOperationException($"Strategy '{strategyPath}' is not selectable for {mode}.");
     }
 
+    // Checks current availability at paper job start while retaining separate historical and recovery reads.
     public async Task RequireAuthorizedPaperRunSnapshotAsync(
         string strategyPath,
         CancellationToken cancellationToken = default)
     {
         var manifest = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts)
             .ValidatePaperSnapshot(strategyPath);
+        strategyArtifacts.RequireEnabledIfKnown(manifest.Identity);
+        var source = experimentArtifacts.List().SingleOrDefault(artifact => artifact.Identity == manifest.SourceIdentity)
+            ?? strategyArtifacts.RequireExact(manifest.SourceIdentity);
+        strategyArtifacts.RequireEnabled(source);
         var authorized = await GetStrategiesAsync(manifest.SelectionMode, cancellationToken);
         if (!authorized.Any(option => option.Identity == manifest.Identity))
         {

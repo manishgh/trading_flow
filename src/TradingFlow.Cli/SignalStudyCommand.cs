@@ -116,10 +116,10 @@ public static class SignalStudyCommand
     {
         var path = Path.GetFullPath(file);
         var reader = new SimpleYamlReader();
-        var strategy = reader.ReadStrategy(path);
-        SignalStudyOutcomes.RequireSupported(strategy);
         var repository = RepositoryRoot(path);
         var catalog = new StrategyArtifactCatalog(repository, Path.Combine(repository, "configs", "strategy-catalog.json"), reader);
+        var strategy = new StrategyRunArtifactValidator(reader, catalog).ReadResearchDefinition(path);
+        SignalStudyOutcomes.RequireSupported(strategy);
         var runtime = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(strategy, catalog);
         var timing = runtime.AdmissionProfile.ExecutionTimingPolicy;
         if (timing == ExecutionRules.DecisionHourAsTradedTimingPolicy ||

@@ -19,6 +19,10 @@ public sealed class BacktestsModel : PageModel
     private readonly TradingFlow.Web.Services.Desk.DeskSources stockSources;
     public IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource> StockSources { get; private set; } = [];
 
+    // Supplies the read-only list without making disabled paths available for selection.
+    public IReadOnlyList<(StrategyArtifact Artifact, string Reason)> DisabledResearchStrategies =>
+        catalog.GetDisabledResearchStrategies();
+
     public BacktestsModel(
         ConfigCatalogService catalog,
         OptimizationJobService optJobs,
@@ -99,7 +103,7 @@ public sealed class BacktestsModel : PageModel
     public IReadOnlyList<BacktestTrade> TradesForSelectedMonth(StrategyBacktestResult strategy)
     {
         return (SelectedJob?.Result?.CompletedTrades ?? []).Where(trade => trade.StrategyId == strategy.StrategyId &&
-            MonthlyBacktestPresentation.SourceSessionDate(trade.ExitTimestamp, strategy.PortfolioState?.ValuationBasis)
+            MonthlyBacktestPresentation.ExitSessionDate(trade, strategy.PortfolioState?.ValuationBasis)
                 .ToString("yyyy-MM",System.Globalization.CultureInfo.InvariantCulture) == SelectedMonth).ToArray();
     }
 

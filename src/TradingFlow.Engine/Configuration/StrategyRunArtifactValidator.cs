@@ -31,6 +31,54 @@ public sealed class StrategyRunArtifactValidator(
     public StrategyDefinition ReadAndValidatePaper(string strategyPath)
         => ReadAndValidatePaperArtifact(strategyPath).Definition;
 
+    // Checks current source availability before a new backtest or diagnostic consumes an immutable strategy.
+    public AuthorizedRuntimeStrategy ReadAndAuthorizeRuntimeArtifact(string strategyPath, StrategySelectionMode requiredMode)
+    {
+        RequireEnabledForExecution(strategyPath);
+        return ReadAndValidateRuntimeArtifact(strategyPath, requiredMode);
+    }
+
+    // Preflights declared catalog lineage before creating jobs or preparing data. Returns false for ad hoc YAML.
+    public bool RequireEnabledForExecution(string strategyPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyPath);
+        var fullPath = Path.GetFullPath(strategyPath);
+        var canonical = strategyArtifacts.FindSourcePath(fullPath);
+        if (canonical is not null)
+            strategyArtifacts.RequireEnabled(canonical);
+
+        var manifestPath = fullPath + ".artifact.json";
+        if (File.Exists(manifestPath))
+        {
+            var manifest = DeserializeManifest(manifestPath);
+            strategyArtifacts.RequireEnabledIfKnown(manifest.Identity);
+            var source = strategyArtifacts.RequireEnabled(strategyArtifacts.RequireExact(manifest.SourceIdentity));
+            if (manifest.Identity.StrategyId != source.Identity.StrategyId)
+                throw new InvalidDataException($"Strategy snapshot '{fullPath}' does not preserve its catalog source strategy family.");
+            return true;
+        }
+
+        if (StrategyExperimentArtifactStore.FindManifestForStrategyDocument(fullPath) is { } registrationPath)
+        {
+            var registration = StrategyExperimentArtifactStore.ReadManifest(registrationPath);
+            strategyArtifacts.RequireEnabledIfKnown(registration.Identity);
+            strategyArtifacts.RequireEnabled(strategyArtifacts.RequireExact(registration.SourceIdentity));
+            return true;
+        }
+        return canonical is not null;
+    }
+
+    // Reads the legacy research tools' raw inputs while honoring declared lineage and exact known catalog content.
+    public StrategyDefinition ReadResearchDefinition(string strategyPath)
+    {
+        var declaredSource = RequireEnabledForExecution(strategyPath);
+        var definition = yamlReader.ReadStrategy(strategyPath);
+        if (!declaredSource)
+            strategyArtifacts.RequireEnabledIfKnown(definition);
+        return definition;
+    }
+
+    // Reads immutable strategy evidence for historical displays and audits independently of current availability.
     public AuthorizedRuntimeStrategy ReadAndValidateRuntimeArtifact(
         string strategyPath,
         StrategySelectionMode requiredMode)

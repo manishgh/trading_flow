@@ -30,6 +30,7 @@ internal static class BacktestDecisionTiming
         return requested;
     }
 
+    // Keep the backtest's end-of-session-day expiry using the shared session lookup.
     public static DateTimeOffset ResolveExpiry(DateTimeOffset available, string timeframe, SessionRules session,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules)
     {
@@ -38,17 +39,24 @@ internal static class BacktestDecisionTiming
         if (session.IsContinuousMarket || timeframe != "1d" || schedules is null) return available.Add(duration);
         var zone = TimeZoneInfo.FindSystemTimeZoneById(session.ExchangeTimezone);
         var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(available, zone).DateTime);
-        MarketSessionSchedule? next = null;
-        for (var offset = 0; offset < 31; offset++)
-        {
-            var date = day.AddDays(offset);
-            if (!schedules.TryGetValue(date, out var known) || known.TradeDate != date)
-                throw new InvalidOperationException($"Authoritative exchange calendar missing {date}; setup expiry is unavailable.");
-            if (known.IsTradingDay) { next = known; break; }
-        }
-        if (next is null) throw new InvalidOperationException("No authoritative next exchange session for setup expiry.");
+        var next = ResolveScheduledSession(day, schedules);
         // Daily bars become available at the next exchange midnight. One scheduled session is allowed.
         var local = next.TradeDate.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
         return new DateTimeOffset(local, zone.GetUtcOffset(local)).ToUniversalTime();
+    }
+
+    // An absent date does not prove the exchange was closed, even if later dates are present.
+    public static MarketSessionSchedule ResolveScheduledSession(
+        DateOnly first, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules)
+    {
+        for (var offset = 0; offset < 31; offset++)
+        {
+            var date = first.AddDays(offset);
+            if (!schedules.TryGetValue(date, out var known) || known.TradeDate != date)
+                throw new InvalidOperationException($"Authoritative exchange calendar missing {date}; setup expiry is unavailable.");
+            if (known.IsTradingDay)
+                return known;
+        }
+        throw new InvalidOperationException("No authoritative next exchange session for setup expiry.");
     }
 }

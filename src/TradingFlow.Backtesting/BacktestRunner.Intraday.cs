@@ -83,7 +83,7 @@ public sealed partial class BacktestRunner
             single.AverageDailyReturnPct, single.TradingDayCount, unified.MaxDrawdownPct, null,
             evaluationBars.Length, candidates.Length, unified.AcceptedTradeCount, unified.RejectedTradeCount,
             unified.WinningTradeCount, unified.LosingTradeCount, strategyResults, tickerResults,
-            _validator.Validate(run, evaluationBars, preparedMarket.BenchmarkBars, strategyResults),
+            _validator.Validate(run, evaluationBars, preparedMarket, strategyResults, sessions),
             complete ? outcome.Trades : [], BuildDiagnostics([strategy], strategyResults,
                 batches.Select(batch => batch.Diagnostics).ToArray()), [], Array.Empty<FinalizedOrder>(), unified,
             new UniversePromotionEligibilityValidator().Validate(promotionEvidence),

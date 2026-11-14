@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using TradingFlow.Backtesting;
@@ -142,6 +142,10 @@ public sealed class ResearchScreenRunTests
         var result = await runner.RunAsync(run, [runtime.Definition], DateTimeOffset.UtcNow, Path.Combine(run.ResultsRoot, "result.json"), default,
             preparedDataReference: reference);
 
+        Assert.Equal("all", result.Validation.BiasRisk.PriceAdjustmentPolicy);
+        Assert.Equal("research_screen", result.Validation.BiasRisk.UniverseSource);
+        Assert.Equal(screen.Name, result.Validation.BiasRisk.UniverseName);
+        Assert.Equal(screen.ManifestSha256, result.Validation.BiasRisk.UniverseManifestSha256);
         verify(result, root.Path);
     }
 

@@ -1,3 +1,4 @@
+using TradingFlow.Backtesting;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Strategies;
 
@@ -161,7 +162,8 @@ public sealed record BacktestJobSnapshot(
     IReadOnlyList<TradingFlow.Contracts.V1.MonthlyRunResult>? MonthlyResults = null,
     string? MonthlyUnavailableReason = null,
     TradingFlow.Contracts.V1.BacktestCohortExecution? Cohort = null,
-    PreparedMarketDataSummary? PreparedMarketData = null);
+    PreparedMarketDataSummary? PreparedMarketData = null,
+    LivePipelineHealth? PaperPipelineHealth = null);
 
 public sealed record BacktestStrategyRunGroup(
     string StrategyName,

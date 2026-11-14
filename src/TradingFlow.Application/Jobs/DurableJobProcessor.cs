@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Persistence;
 
 namespace TradingFlow.Application.Jobs;
 
@@ -113,6 +114,20 @@ public sealed class DurableJobExecutionContext
 
         Volatile.Write(ref latestSnapshotJson, snapshotJson);
     }
+
+    // Publish the job health and the dispatch fence as one lease-checked durable update.
+    public async Task SavePaperEntryStopSnapshotAsync(
+        string snapshotJson, DateTimeOffset stoppedAtUtc, CancellationToken cancellationToken)
+    {
+        var lifecycle = repository as IPaperRunLifecycleRepository
+            ?? throw new InvalidOperationException("Paper entry-stop persistence is unavailable.");
+        if (!await lifecycle.SavePaperEntryStopSnapshotAsync(
+                Job.Id, LeaseToken, snapshotJson, stoppedAtUtc, TimeProvider.GetUtcNow(), cancellationToken))
+        {
+            throw new DurableJobLeaseLostException(Job.Id);
+        }
+        Volatile.Write(ref latestSnapshotJson, snapshotJson);
+    }
 }
 
 public sealed class DurableJobLeaseLostException(Guid jobId)
@@ -156,6 +171,7 @@ public sealed class DurableJobProcessor
         }
     }
 
+    // Verify recovery and execution under one renewable lease before publishing a terminal result.
     public async Task<bool> ProcessNextAsync(
         string ownerId,
         IDurableJobHandler handler,
@@ -231,7 +247,7 @@ public sealed class DurableJobProcessor
                         new DurableJobCompletion(
                             "interrupted",
                             context.LatestSnapshotJson,
-                            ErrorMessage: $"Broker-exposure recovery failed: {exception.Message}"),
+                            ErrorMessage: $"Paper job recovery failed: {exception.Message}"),
                         CancellationToken.None);
                     return true;
                 }

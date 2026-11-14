@@ -31,16 +31,40 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
         return report;
     }
 
-    /// <summary>Reuse reconciled native-daily accounting; missing event valuations produce nulls with an explanation.</summary>
+    /// <summary>Pairs each strategy month with the benchmark from the same resolved execution window.</summary>
     public MonthlyRunResultReport Create(BacktestRunConfig config, BacktestResult result,
         DateTimeOffset evaluationCutoffUtc, string cohortName, IReadOnlyList<StrategyReference>? expectedStrategies = null)
     {
-        var end = config.TimeWindow.End ?? evaluationCutoffUtc;
-        var start = config.TimeWindow.Start ?? (config.TimeWindow.Type == "rolling"
-            ? end.AddDays(-config.TimeWindow.LookbackDays) : (DateTimeOffset?)null);
+        var benchmark = result.Validation.Benchmark;
+        var end = benchmark.EvaluationEndUtc ?? config.TimeWindow.End ?? evaluationCutoffUtc;
+        var start = benchmark.EvaluationStartUtc ?? config.TimeWindow.Start ??
+            (config.TimeWindow.Type.Equals("rolling", StringComparison.OrdinalIgnoreCase)
+                ? end.AddDays(-config.TimeWindow.LookbackDays) : (DateTimeOffset?)null);
         if (start is null || end <= start)
             return new([], "A frozen start and later end are required to calculate monthly results.");
 
+        var report = CreateCore(config, result, start.Value, end, cohortName, expectedStrategies);
+        if (!benchmark.Enabled || benchmark.Months is not { } months || benchmark.Basis is not { } basis)
+            return report;
+        var monthById = months.ToDictionary(month => month.Month, StringComparer.Ordinal);
+        return report with
+        {
+            Results = report.Results.Select(row =>
+            {
+                var month = monthById.GetValueOrDefault(row.Month);
+                return row with { Benchmark = new(benchmark.Ticker, month?.ReturnPct, basis,
+                    month?.OpeningBasis ?? "unavailable", month?.UnavailableReason ??
+                    (month is null ? "The benchmark does not cover this source-session month." : null),
+                    benchmark.PriceAdjustmentPolicy, month?.PeriodStartUtc, month?.PeriodEndUtc,
+                    month?.OpeningPrice, month?.ClosingPrice, month?.OpeningTimestampUtc, month?.ClosingTimestampUtc) };
+            }).ToArray()
+        };
+    }
+
+    /// <summary>Reuse reconciled native-daily accounting; missing event valuations produce nulls with an explanation.</summary>
+    private MonthlyRunResultReport CreateCore(BacktestRunConfig config, BacktestResult result,
+        DateTimeOffset start, DateTimeOffset end, string cohortName, IReadOnlyList<StrategyReference>? expectedStrategies)
+    {
         var references = expectedStrategies ?? [];
         IReadOnlyList<AuthorizedRuntimeStrategy> runtimes;
         try
@@ -55,7 +79,7 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
         }
         catch (Exception error) when (IsEvidenceFailure(error))
         {
-            return Unavailable(references, cohortName, start.Value, end, "unavailable", error.Message);
+            return Unavailable(references, cohortName, start, end, "unavailable", error.Message);
         }
 
         if (ExecutionReplayPolicy.IsEventPortfolio(config.Engine.ExecutionReplayPolicyId))
@@ -63,20 +87,20 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
             try
             {
                 if (runtimes.Count != 1) throw new InvalidDataException("SIP monthly results require one exact strategy/cohort portfolio.");
-                return EventMonthlyRunResults.Create(config, result, runtimes[0], cohortName, start.Value, end);
+                return EventMonthlyRunResults.Create(config, result, runtimes[0], cohortName, start, end);
             }
             catch (Exception error) when (IsEvidenceFailure(error))
             {
-                return Unavailable(references, cohortName, start.Value, end, EventMonthlyRunResults.ValuationBasis, error.Message);
+                return Unavailable(references, cohortName, start, end, EventMonthlyRunResults.ValuationBasis, error.Message);
             }
         }
         if (config.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(config.Engine.ExecutionReplayPolicyId))
         {
             var reason = "This replay policy does not supply verified native-daily exit timestamps or monthly event valuations.";
-            return Unavailable(references, cohortName, start.Value, end, "unavailable", reason);
+            return Unavailable(references, cohortName, start, end, "unavailable", reason);
         }
         if (!result.EconomicResultsComplete && result.StrategyResults.All(strategy => strategy.PortfolioState is null))
-            return Unavailable(references, cohortName, start.Value, end, "realized_closed_trade_equity",
+            return Unavailable(references, cohortName, start, end, "realized_closed_trade_equity",
                 "The execution has incomplete trade or position evidence; monthly returns cannot be calculated.");
 
         var values = new List<MonthlyRunResult>();
@@ -95,17 +119,17 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
                         strategy.PortfolioState.UnavailableFromSession is null &&
                         !strategy.PortfolioState.Sessions.Any(session => session.Equity is null || session.UnavailableReason is not null))
                         throw new InvalidDataException("Incomplete execution evidence has no verified first affected session; all monthly values are withheld.");
-                    values.AddRange(MonthlyBacktestPresentation.FromPortfolioState(strategy, runtime, config.RunName, cohortName, start.Value, end));
+                    values.AddRange(MonthlyBacktestPresentation.FromPortfolioState(strategy, runtime, config.RunName, cohortName, start, end));
                     continue;
                 }
-                foreach (var row in MonthlyBacktestPresentation.FromCompletedTrades(strategy, runtime, config.RunName, start.Value, end))
+                foreach (var row in MonthlyBacktestPresentation.FromCompletedTrades(strategy, runtime, config.RunName, start, end))
                     values.Add(new(reference, cohortName, row.Month.Month, row.OpeningEquity, row.ClosingEquity,
                         row.Month.ReturnPct, row.ClosedTrades, row.Month.ValuationBasis, row.Month.PartialPeriod, null,
                         row.Month.CloseDrawdownPct, row.AliasId, row.Name));
             }
             catch (Exception error) when (IsEvidenceFailure(error))
             {
-                values.AddRange(Unavailable([reference], cohortName, start.Value, end,
+                values.AddRange(Unavailable([reference], cohortName, start, end,
                     result.StrategyResults.FirstOrDefault(item => item.StrategyId == runtime.Definition.StrategyId)?.PortfolioState?.ValuationBasis
                         ?? "realized_closed_trade_equity", error.Message).Results);
             }

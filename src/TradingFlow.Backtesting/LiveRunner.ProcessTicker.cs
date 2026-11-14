@@ -15,12 +15,14 @@ using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Risk;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Engine.Indicators;
 
 namespace TradingFlow.Backtesting;
 
 // Per-ticker live processing (LiveRunner partial split).
 public sealed partial class LiveRunner
 {
+    // Process chart and exit decisions before checking this run’s entry health and current membership.
     private async Task ProcessTickerLiveAsync(
         BacktestRunConfig run,
         StrategyDefinition[] strategies,
@@ -32,6 +34,8 @@ public sealed partial class LiveRunner
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         IReadOnlyCollection<BrokerPosition> openPositions,
         bool brokerStateConfirmedForOrderDecisions,
+        bool entriesStopped,
+        Lazy<Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?>> decisionCalendar,
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
@@ -178,7 +182,7 @@ public sealed partial class LiveRunner
                 openPositions,
                 cancellationToken,
                 progress);
-            if (technicalExitHandled)
+            if (technicalExitHandled || entriesStopped || !HasEntryMembership(run, ticker, discoveryAggregate, now))
             {
                 continue;
             }
@@ -234,7 +238,13 @@ public sealed partial class LiveRunner
 
             var decisionTimestamp = now;
             var setupAvailableAtUtc = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-            var candidateExpiresAtUtc = setupAvailableAtUtc.Add(ParseTimeframe(strategy.Timeframe));
+            var candidateExpiresAtUtc = PaperDecisionCalendar.ResolveExpiry(
+                setupAvailableAtUtc, strategy, await decisionCalendar.Value);
+            if (candidateExpiresAtUtc <= setupAvailableAtUtc)
+            {
+                continue;
+            }
+
             var sourceDiscovery = discoveryAggregate is null
                 ? StrategyDecisionRequestAssembler.CreateConfiguredLiveDiscovery(
                     _executionRunContext.RunId,
@@ -245,9 +255,7 @@ public sealed partial class LiveRunner
             var discovery = sourceDiscovery with
             {
                 IsPersisted = false,
-                ExpiresAtUtc = sourceDiscovery.ExpiresAtUtc < candidateExpiresAtUtc
-                    ? sourceDiscovery.ExpiresAtUtc
-                    : candidateExpiresAtUtc
+                ExpiresAtUtc = candidateExpiresAtUtc
             };
             var universeEvidence = new StrategyEligibilityEvidence(
                 discovery.IsActive,
@@ -309,6 +317,12 @@ public sealed partial class LiveRunner
                     ticker, now, completedBarsByTimeframe.ToDictionary(pair => pair.Key,
                         pair => (IReadOnlyList<OhlcvBar>)pair.Value, StringComparer.OrdinalIgnoreCase), run.Mode,
                     cancellationToken));
+            // Source membership may expire while loading regime or decision context.
+            if (!HasEntryMembership(run, ticker, discoveryAggregate, _timeProvider.GetUtcNow()))
+            {
+                continue;
+            }
+
             var persistedDecision = await _candidateDecisions.EvaluateAsync(
                 CreateProductionRun(_executionRunContext),
                 decisionRequest,
@@ -444,6 +458,13 @@ public sealed partial class LiveRunner
                                     "Order submission is not armed because the durable submission service or execution provenance is unavailable.");
                             }
 
+                            var submissionTime = _timeProvider.GetUtcNow();
+                            if (submissionTime >= candidateExpiresAtUtc ||
+                                !HasEntryMembership(run, ticker, discoveryAggregate, submissionTime))
+                            {
+                                continue;
+                            }
+
                             progress?.Report($"Submitting Bracket Order: {shares} shares of {ticker}...");
                             var intentId = OrderIntentIdFactory.Create(
                                 _executionRunContext.RunId,
@@ -489,6 +510,10 @@ public sealed partial class LiveRunner
                             progress?.Report(successMsg);
                             _auditor.LogEvent(ticker, strategy.StrategyName, DateTimeOffset.UtcNow, ExecutionState.BracketOrderSubmitted, successMsg);
 
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            throw;
                         }
                         catch (Exception ex)
                         {
@@ -547,7 +572,8 @@ public sealed partial class LiveRunner
         }
     }
 
-    private static ProductionRun CreateProductionRun(ExecutionRunContext context) => new()
+    // The exact same row is checked at startup and when candidate evidence is journaled.
+    internal static ProductionRun CreateProductionRun(ExecutionRunContext context) => new()
     {
         RunId = context.RunId,
         SchemaVersion = 1,
@@ -559,6 +585,14 @@ public sealed partial class LiveRunner
         UniverseSnapshotId = context.UniverseSnapshotId,
         DecisionRunId = context.DecisionRunId
     };
+
+    // A symbol retained for broker exposure has no automatic entry membership.
+    private bool HasEntryMembership(
+        BacktestRunConfig run, string ticker, ActiveDiscoveryAggregate? aggregate, DateTimeOffset asOfUtc) =>
+        _discoverySession is null
+            ? run.Tickers.Contains(ticker, StringComparer.OrdinalIgnoreCase)
+            : aggregate is not null && aggregate.Sources.Any(source =>
+                !source.IsDiagnostic && source.ObservedAtUtc <= asOfUtc && source.ExpiresAtUtc > asOfUtc);
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
         String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)

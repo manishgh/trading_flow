@@ -12,6 +12,8 @@ using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Strategies;
 
 namespace TradingFlow.Tests;
@@ -216,20 +218,26 @@ public class LiveRunnerIntegrationTests
                     requestedTickers.Enqueue(ticker);
                     return YieldBars(CreateFiveMinuteBars(ticker), token);
                 });
-            var discovery = new ScriptedLiveDiscoverySession([["AAPL"], ["MSFT"], ["MSFT"]]);
+            var start = new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            var clock = new MutableTimeProvider(start);
+            var discovery = new ScriptedLiveDiscoverySession([["AAPL"], ["MSFT"], ["MSFT"]], clock);
             var runner = CreateRunner(
                 provider.Object,
                 lockService: null,
                 discoverySession: discovery,
+                timeProvider: clock,
                 iterationInterval: TimeSpan.FromMilliseconds(10));
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var completedIterations = 0;
             var progress = new InlineProgress(message =>
             {
-                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal) &&
-                    Interlocked.Increment(ref completedIterations) >= 3)
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
                 {
-                    cts.Cancel();
+                    clock.Set(clock.GetUtcNow().AddMinutes(1));
+                    if (Interlocked.Increment(ref completedIterations) >= 3)
+                    {
+                        cts.Cancel();
+                    }
                 }
             });
 
@@ -391,6 +399,7 @@ public class LiveRunnerIntegrationTests
         }
     }
 
+    // A failed ticker contributes to run health while another ticker still writes its chart.
     [Fact]
     public async Task RunAsync_ContinuesOtherTickerPipelines_WhenOneTickerHasNoSourceBars()
     {
@@ -419,12 +428,18 @@ public class LiveRunnerIntegrationTests
                 .Setup(x => x.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
                 .Returns(Task.CompletedTask);
 
+            LivePipelineHealth? health = null;
             var runner = CreateRunner(
                 provider.Object,
                 lockService: null,
                 auditRepo,
                 timeProvider: new FixedTimeProvider(
-                    new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)));
+                    new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)),
+                publishPipelineHealth: (updated, _) =>
+                {
+                    health = updated;
+                    return Task.CompletedTask;
+                });
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -445,11 +460,15 @@ public class LiveRunnerIntegrationTests
                 File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")),
                 "AAPL should still produce live metrics even when SIVEF has no source bars.");
 
+            Assert.NotNull(health);
+            Assert.Equal(1, health.FailureCount);
+            Assert.Equal(1, health.ConsecutiveFailingPolls);
+
             auditRepo.Verify(
                 x => x.SaveAuditAsync(
                     It.Is<DecisionAuditRecord>(record =>
                         record.Ticker == "SIVEF" &&
-                        record.Decision == "Rejected" &&
+                        record.Decision == "Failed" &&
                         record.RejectionReason != null &&
                         record.RejectionReason.StartsWith("ticker_pipeline_failed", StringComparison.Ordinal)),
                     It.IsAny<CancellationToken>()),
@@ -459,6 +478,123 @@ public class LiveRunnerIntegrationTests
         {
             TryDeleteDirectory(resultsRoot);
         }
+    }
+
+    // A 15-minute warm-up renews membership independently of the one-session setup deadline.
+    [Theory]
+    [InlineData("renewed", 15)]
+    [InlineData("removed", 15)]
+    [InlineData("removed", 2)]
+    [InlineData("refresh-failed", 15)]
+    public async Task RunAsync_RechecksSourceAfterLongWarmup(string outcome, int warmupMinutes)
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var started = new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            var clock = new MutableTimeProvider(started);
+            IReadOnlyList<string> refreshed = outcome == "removed" ? [] : ["AAPL"];
+            var discovery = new ScriptedLiveDiscoverySession(
+                [["AAPL"], refreshed], clock, failAfterFirst: outcome == "refresh-failed");
+            var provider = new Mock<IMarketDataProvider>();
+            provider.Setup(source => source.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                {
+                    clock.Set(started.AddMinutes(warmupMinutes));
+                    return YieldBars(CreateFiveMinuteBars(tickers.Single()), token);
+                });
+            var candidates = new MemoryCandidateRepository();
+            var runner = CreateRunner(provider.Object, lockService: null, discoverySession: discovery,
+                timeProvider: clock, candidateRepository: candidates);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var progress = new InlineProgress(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                    cancellation.Cancel();
+            });
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")],
+                cancellation,
+                progress);
+
+            Assert.Equal(2, discovery.RefreshCount);
+            if (outcome == "renewed")
+            {
+                var candidate = Assert.Single(candidates.Records);
+                Assert.NotEqual(StrategyCandidateState.Expired, candidate.State);
+                Assert.Equal(started.AddMinutes(warmupMinutes), candidate.RevalidatedAtUtc);
+                Assert.Equal(new DateTimeOffset(2026, 8, 26, 20, 0, 0, TimeSpan.Zero), candidate.ExpiresAtUtc);
+            }
+            else
+            {
+                Assert.Empty(candidates.Records);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // Restored health blocks entry work even when market evidence and source membership recover.
+    [Fact]
+    public async Task RunAsync_LatchedPipelineStopPreventsNewCandidateEvaluation()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            var recorder = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var provider = CreateRecordingProvider(recorder);
+            var candidates = new MemoryCandidateRepository();
+            var runner = CreateRunner(provider.Object, lockService: null,
+                timeProvider: new FixedTimeProvider(now), candidateRepository: candidates,
+                initialPipelineHealth: new LivePipelineHealth(EntriesStoppedAtUtc: now.AddMinutes(-3)));
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var progress = new InlineProgress(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                    cancellation.Cancel();
+            });
+
+            await RunUntilCancelledAsync(runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")], cancellation, progress);
+            Assert.Contains("AAPL", recorder);
+            Assert.True(File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")));
+            Assert.Empty(candidates.Records);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // Freeze the actual next NYSE close across weekends, DST, a holiday and an early close.
+    [Theory]
+    [InlineData(10, 31, 11, 2, 16, 21)]
+    [InlineData(11, 26, 11, 27, 13, 18)]
+    public void PaperDecisionCalendar_UsesNextScheduledClose(
+        int setupMonth, int setupDay, int sessionMonth, int sessionDay, int closeLocalHour, int closeUtcHour)
+    {
+        var first = new DateOnly(2026, setupMonth, setupDay);
+        var session = new DateOnly(2026, sessionMonth, sessionDay);
+        var schedules = Enumerable.Range(first.DayNumber, session.DayNumber - first.DayNumber)
+            .Select(DateOnly.FromDayNumber)
+            .ToDictionary(day => day, MarketSessionSchedule.Closed);
+        schedules[session] = new MarketSessionSchedule(session, true, new TimeOnly(9, 30), new TimeOnly(closeLocalHour, 0));
+        var available = new DateTimeOffset(2026, setupMonth, setupDay, 5, 0, 0, TimeSpan.Zero);
+        var strategy = CreateStrategy("1d", "5m");
+        var expected = new DateTimeOffset(2026, sessionMonth, sessionDay, closeUtcHour, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal(expected, PaperDecisionCalendar.ResolveExpiry(available, strategy, schedules));
+        Assert.Throws<InvalidOperationException>(() => PaperDecisionCalendar.ResolveExpiry(available, strategy, null));
+        schedules.Remove(first);
+        Assert.Throws<InvalidOperationException>(() => PaperDecisionCalendar.ResolveExpiry(available, strategy, schedules));
     }
 
     [Fact]
@@ -855,6 +991,7 @@ public class LiveRunnerIntegrationTests
         }
     }
 
+    // A runtime entry stop and another ticker's stream failure leave the exposed ticker's exit available.
     [Fact]
     public async Task RunAsync_SubmitsTechnicalExitClose_ForActiveStrategyPosition()
     {
@@ -951,6 +1088,15 @@ public class LiveRunnerIntegrationTests
                 .Callback<DecisionAuditRecord, CancellationToken>((record, _) => audits.Add(record))
                 .Returns(Task.CompletedTask);
 
+            var streams = new Mock<IMarketStateSnapshotProvider>();
+            streams.Setup(source => source.GetTickerStateAsync(
+                    "BROKE", It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<int>(),
+                    It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("Synthetic stream read failure."));
+            streams.Setup(source => source.GetTickerStateAsync(
+                    "MXL", It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<int>(),
+                    It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((TickerMarketState?)null);
             var runner = CreateRunner(
                 provider.Object,
                 lockService: null,
@@ -959,7 +1105,10 @@ public class LiveRunnerIntegrationTests
                 orderSubmissionService: submissions.Object,
                 orderIntentRepository: journal.Intents.Object,
                 orderEventRepository: journal.Events.Object,
-                positionLedgerRepository: journal.Positions.Object);
+                positionLedgerRepository: journal.Positions.Object,
+                marketStateSnapshots: streams.Object,
+                initialPipelineHealth: new LivePipelineHealth(
+                    EntriesStoppedAtUtc: new DateTimeOffset(2026, 8, 26, 19, 0, 0, TimeSpan.Zero)));
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -971,7 +1120,7 @@ public class LiveRunnerIntegrationTests
 
             await RunUntilCancelledAsync(
                 runner,
-                CreateRunConfig(resultsRoot, ["MXL"], ["5m"], workerCount: 2, derivedSource: "5m", dryRun: false, allowLiveOrders: true),
+                CreateRunConfig(resultsRoot, ["MXL", "BROKE"], ["5m"], workerCount: 2, derivedSource: "5m", dryRun: false, allowLiveOrders: true),
                 [CreateStrategy(
                     primaryTimeframe: "1d",
                     executionTimeframe: "5m",
@@ -1278,6 +1427,7 @@ public class LiveRunnerIntegrationTests
         return new FilledPositionJournal(intents, events, positions);
     }
 
+    // Supply an authoritative synthetic exchange schedule while keeping market bars test-owned.
     private static LiveRunner CreateRunner(
         IMarketDataProvider provider,
         ITickerLockService? lockService,
@@ -1291,7 +1441,11 @@ public class LiveRunnerIntegrationTests
         TimeSpan? iterationInterval = null,
         IOrderIntentRepository? orderIntentRepository = null,
         IOrderEventRepository? orderEventRepository = null,
-        IPositionLedgerRepository? positionLedgerRepository = null)
+        IPositionLedgerRepository? positionLedgerRepository = null,
+        ICandidateRepository? candidateRepository = null,
+        LivePipelineHealth? initialPipelineHealth = null,
+        Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null,
+        IMarketStateSnapshotProvider? marketStateSnapshots = null)
     {
         var auditRepo = auditRepoMock ?? new Mock<IDecisionAuditRepository>();
         if (auditRepoMock is null)
@@ -1302,7 +1456,7 @@ public class LiveRunnerIntegrationTests
         }
 
         return new LiveRunner(
-            provider,
+            new CalendarFixtureProvider(provider),
             catalystProvider,
             brokerClient,
             lockService,
@@ -1320,10 +1474,13 @@ public class LiveRunnerIntegrationTests
                 new DateTimeOffset(2026, 7, 21, 13, 0, 0, TimeSpan.Zero)),
             orderLifecycleService: orderLifecycleService,
             discoverySession: discoverySession,
-            candidateRepository: new MemoryCandidateRepository(),
+            marketStateSnapshots: marketStateSnapshots,
+            candidateRepository: candidateRepository ?? new MemoryCandidateRepository(),
             timeProvider: timeProvider ?? new FixedTimeProvider(
-                new DateTimeOffset(2026, 8, 26, 21, 31, 0, TimeSpan.Zero)),
-            iterationInterval: iterationInterval);
+                new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero)),
+            iterationInterval: iterationInterval,
+            initialPipelineHealth: initialPipelineHealth,
+            publishPipelineHealth: publishPipelineHealth);
     }
 
     private sealed record FilledPositionJournal(
@@ -1402,6 +1559,17 @@ public class LiveRunnerIntegrationTests
         private readonly object sync = new();
         private readonly Dictionary<Guid, CandidateRecord> candidates = [];
         private readonly Dictionary<Guid, List<CandidateTransitionRecord>> transitions = [];
+
+        public IReadOnlyList<CandidateRecord> Records
+        {
+            get
+            {
+                lock (sync)
+                {
+                    return candidates.Values.ToArray();
+                }
+            }
+        }
 
         public Task<CandidateRecord> UpsertDiscoveryAsync(
             ProductionRun run,
@@ -1498,22 +1666,63 @@ public class LiveRunnerIntegrationTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private sealed class ScriptedLiveDiscoverySession(IEnumerable<IReadOnlyList<string>> snapshots)
+    private sealed class CalendarFixtureProvider(IMarketDataProvider provider) : IMarketDataProvider, IMarketSessionScheduleProvider
+    {
+        // The underlying fixture still supplies all market observations.
+        public IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+            IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> timeframes,
+            DateTimeOffset start, DateTimeOffset end, CancellationToken cancellationToken) =>
+            provider.GetBarsAsync(tickers, timeframes, start, end, cancellationToken);
+
+        // Existing live integration scenarios use ordinary weekday fixture sessions.
+        public Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
+            DateOnly startDateInclusive, DateOnly endDateInclusive, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var schedules = Enumerable.Range(startDateInclusive.DayNumber, endDateInclusive.DayNumber - startDateInclusive.DayNumber + 1)
+                .Select(DateOnly.FromDayNumber)
+                .ToDictionary(day => day, day => day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
+                    ? MarketSessionSchedule.Closed(day)
+                    : MarketSessionSchedule.RegularDay(day));
+            return Task.FromResult<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>>(schedules);
+        }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset current) : TimeProvider
+    {
+        private long ticks = current.UtcTicks;
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+        public void Set(DateTimeOffset value) => Interlocked.Exchange(ref ticks, value.UtcTicks);
+    }
+
+    private sealed class ScriptedLiveDiscoverySession(
+        IEnumerable<IReadOnlyList<string>> snapshots, TimeProvider? clock = null, bool failAfterFirst = false)
         : ILiveDiscoverySession
     {
         private readonly Queue<IReadOnlyList<string>> snapshots = new(snapshots);
         private HashSet<string> current = new(StringComparer.Ordinal);
+        private DiscoveryUniverseSnapshot? previous;
+        private DateTimeOffset nextRefresh;
 
         public Guid ScopeId { get; } = Guid.NewGuid();
         public int RefreshCount { get; private set; }
 
+        // Match the one-minute source schedule while allowing any number of reads between captures.
         public Task<DiscoveryUniverseSnapshot> RefreshAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var now = clock?.GetUtcNow() ?? new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            if (previous is not null && now < nextRefresh)
+            {
+                return Task.FromResult(previous with { ResolvedAtUtc = now, Added = [], Dropped = [] });
+            }
             RefreshCount++;
+            if (failAfterFirst && RefreshCount > 1)
+            {
+                throw new InvalidOperationException("Synthetic source refresh failure.");
+            }
             var next = (snapshots.Count > 0 ? snapshots.Dequeue() : current.ToArray())
                 .ToHashSet(StringComparer.Ordinal);
-            var now = DateTimeOffset.UtcNow;
             var members = next.Select(symbol => new ActiveDiscoveryAggregate(
                 Guid.NewGuid(),
                 ScopeId,
@@ -1523,7 +1732,9 @@ public class LiveRunnerIntegrationTests
                 now,
                 now.AddMinutes(3),
                 RefreshCount,
-                [])).ToArray();
+                [new DiscoverySourceEvidence(
+                    DiscoverySourceKinds.Wishlist, "test-list", now, now.AddMinutes(3), "{}",
+                    Guid.NewGuid(), RefreshCount, null, false, null, new string('a', 64))])).ToArray();
             var result = new DiscoveryUniverseSnapshot(
                 ScopeId,
                 now,
@@ -1531,6 +1742,8 @@ public class LiveRunnerIntegrationTests
                 next.Except(current, StringComparer.Ordinal).ToArray(),
                 current.Except(next, StringComparer.Ordinal).ToArray());
             current = next;
+            previous = result;
+            nextRefresh = now.AddMinutes(1);
             return Task.FromResult(result);
         }
 

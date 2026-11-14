@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -68,8 +69,10 @@ public sealed class PaperJobService : IDurableJobHandler
     private readonly IDurableJobRepository durableJobs;
     private readonly IPaperJobRecoveryService? recoveryService;
     private readonly PaperJobServiceOptions jobOptions;
+    private readonly IPaperRunLifecycleRepository? runLifecycle;
     private int retentionPruned;
 
+    // Compose the paper worker and its lease-fenced journal without starting runtime work.
     public PaperJobService(
         SimpleYamlReader yamlReader,
         IServiceScopeFactory scopeFactory,
@@ -95,7 +98,8 @@ public sealed class PaperJobService : IDurableJobHandler
         TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null,
         IDurableJobRepository? durableJobs = null,
         IPaperJobRecoveryService? recoveryService = null,
-        PaperJobServiceOptions? jobOptions = null)
+        PaperJobServiceOptions? jobOptions = null,
+        IPaperRunLifecycleRepository? runLifecycle = null)
     {
         this.yamlReader = yamlReader;
         _ = alpacaCredentials;
@@ -121,6 +125,7 @@ public sealed class PaperJobService : IDurableJobHandler
         this.candidateRepository = candidateRepository;
         this.durableJobs = durableJobs ?? ResolveDurableRepository(scopeFactory);
         this.recoveryService = recoveryService;
+        this.runLifecycle = runLifecycle ?? this.durableJobs as IPaperRunLifecycleRepository;
         this.jobOptions = (jobOptions ?? PaperJobServiceOptions.Default).Validate();
     }
 
@@ -492,20 +497,61 @@ public sealed class PaperJobService : IDurableJobHandler
         return jobs.TryGetValue(jobId, out var job) ? job.ToSnapshot() : null;
     }
 
+    // Identify an incompatible run first and reconcile broker protection independently.
     public async Task RecoverAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
         var request = DurableFileJobRequest.Deserialize(persisted.RequestJson);
         using var inputLease = request.AcquireVerifiedReadLease();
         var run = yamlReader.ReadBacktestRun(persisted.ConfigPath);
         request.EnsureContains([persisted.ConfigPath, .. run.Strategies]);
-        if (recoveryService is null)
+        Exception? preflightFailure = null;
+        try
+        {
+            await ValidateRecoveredRunAsync(persisted, request, run, cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            preflightFailure = exception;
+        }
+
+        try
+        {
+            var recovery = recoveryService ?? throw new InvalidOperationException(
+                "Paper recovery requires the broker reconciliation service.");
+            await recovery.RecoverAsync(persisted, cancellationToken);
+        }
+        catch (Exception exception) when (preflightFailure is not null && !cancellationToken.IsCancellationRequested)
         {
             throw new InvalidOperationException(
-                "Paper recovery requires the broker reconciliation service.");
+                $"{preflightFailure.Message} Broker protection recovery also failed: {exception.Message}",
+                new AggregateException(preflightFailure, exception));
         }
-        await recoveryService.RecoverAsync(persisted, cancellationToken);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (preflightFailure is not null)
+        {
+            ExceptionDispatchInfo.Throw(preflightFailure);
+        }
     }
 
+    // A cancelling job reconciles exposure before stopping without reopening a run.
+    private async Task ValidateRecoveredRunAsync(
+        PersistedJob persisted, DurableFileJobRequest request, BacktestRunConfig run,
+        CancellationToken cancellationToken)
+    {
+        if (runLifecycle is not null && persisted.CancellationRequestedAtUtc is null)
+        {
+            var logicalRun = runtimeFactory.ResolveRunPaths(run);
+            var strategies = logicalRun.Strategies
+                .Select(configCatalog.ReadAndValidatePaperSnapshot)
+                .Select(strategy => strategy.Definition)
+                .ToArray();
+            var execution = CreateExecutionRunContext(persisted, request, logicalRun, strategies);
+            await runLifecycle.ValidatePaperRunAsync(LiveRunner.CreateProductionRun(execution), cancellationToken);
+        }
+    }
+
+    // Validate and register the frozen run before creating provider clients or processing any ticker.
     public async Task<DurableJobCompletion> ExecuteAsync(
         DurableJobExecutionContext context,
         CancellationToken cancellationToken)
@@ -519,13 +565,17 @@ public sealed class PaperJobService : IDurableJobHandler
                     context.Job.RunName,
                     context.Job.ConfigPath,
                     context.Job.CreatedAt));
+            if (context.Job.SnapshotJson is { } storedSnapshot)
+            {
+                var restored = JsonSerializer.Deserialize<BacktestJobSnapshot>(storedSnapshot, JsonOptions);
+                if (restored is not null)
+                {
+                    job.ApplySnapshot(restored);
+                }
+            }
             job.Status = "running";
             job.StartedAt ??= context.Job.StartedAt ?? DateTimeOffset.UtcNow;
             job.Report("starting", "Paper durable worker started.", null, 0, 0);
-            await context.SaveSnapshotAsync(
-                JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
-                cancellationToken);
-
             var logicalRunConfig = runtimeFactory.ResolveRunPaths(yamlReader.ReadBacktestRun(job.ConfigPath));
             request.EnsureContains([job.ConfigPath, .. logicalRunConfig.Strategies]);
             foreach (var strategyPath in logicalRunConfig.Strategies)
@@ -547,29 +597,39 @@ public sealed class PaperJobService : IDurableJobHandler
                     strategy.Definition,
                     strategy.Manifest.AdmissionProfile))
                 .ToArray();
-            var executionRunContext = ExecutionRunContextFactory.Create(
-                job.JobId,
-                logicalRunConfig.Mode,
-                new { Run = logicalRunConfig, Strategies = strategies },
-                job.StartedAt ?? DateTimeOffset.UtcNow) with
+            var executionRunContext = CreateExecutionRunContext(context.Job, request, logicalRunConfig, strategies);
+            var lifecycle = runLifecycle ?? throw new InvalidOperationException("Paper run lifecycle persistence is not configured.");
+            var requestedRun = LiveRunner.CreateProductionRun(executionRunContext);
+            var restoredHealth = job.ToSnapshot().PaperPipelineHealth;
+            requestedRun.PaperEntriesStoppedAtUtc = restoredHealth?.EntriesStoppedAtUtc;
+            var ownedRun = await lifecycle.StartPaperRunAsync(requestedRun, context.LeaseToken, cancellationToken);
+            if (ownedRun is null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new DurableJobLeaseLostException(job.JobId);
+            }
+            if (ownedRun.PaperEntriesStoppedAtUtc is { } journalStop && restoredHealth?.EntriesStoppedAtUtc != journalStop)
+            {
+                job.SetPipelineHealth((restoredHealth ?? new LivePipelineHealth()) with
                 {
-                    UniverseSnapshotId = request.Workflow?.Provenance.UniverseSnapshotId ?? Guid.Empty,
-                    DecisionRunId = request.Workflow?.Provenance.DecisionRunId,
-                    Profile = request.Workflow?.Provenance.Mode ?? logicalRunConfig.Mode
-                };
+                    EntriesStoppedAtUtc = journalStop,
+                    EntryStopReason = restoredHealth?.EntryStopReason ?? "Entry stop restored from the run journal."
+                });
+            }
+
             var runConfig = ScopeAttemptArtifacts(
                 logicalRunConfig,
                 job.JobId,
                 context.LeaseToken);
             job.ArtifactDirectory = Path.GetFullPath(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
-            await context.SaveSnapshotAsync(JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), cancellationToken);
+            await PersistPaperSnapshotAsync(context, job.ToSnapshot(), cancellationToken);
             ClearLiveChartSnapshots(runConfig);
             Directory.CreateDirectory(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
 
             var provider = runtimeFactory.CreateProvider(runConfig);
             var newsProvider = runtimeFactory.CreateNewsProvider(runConfig);
             var brokerClient = runtimeFactory.CreateBrokerClient(runConfig);
-            if (runConfig.Discovery is { Enabled: true } && discoverySessionFactory is null)
+            if (discoverySessionFactory is null)
             {
                 throw new InvalidOperationException("Durable discovery is enabled but no discovery session factory is registered.");
             }
@@ -580,7 +640,27 @@ public sealed class PaperJobService : IDurableJobHandler
                     "Paper trading supports swing strategies only. Every strategy must use a daily setup timeframe.");
             }
 
-            await using var discoverySession = discoverySessionFactory?.Create(job.JobId, runConfig, "swing");
+            await using var discoverySession = discoverySessionFactory.Create(job.JobId, runConfig, "swing");
+            using var snapshotLock = new SemaphoreSlim(1);
+
+            // Serialize periodic writes with health updates so a stale progress write
+            // cannot replace the snapshot that latched the entry stop.
+            async Task SaveSnapshotAsync(CancellationToken token, LivePipelineHealth? health = null)
+            {
+                await snapshotLock.WaitAsync(token);
+                try
+                {
+                    if (health is not null)
+                    {
+                        job.SetPipelineHealth(health);
+                    }
+                    await PersistPaperSnapshotAsync(context, job.ToSnapshot(), token);
+                }
+                finally
+                {
+                    snapshotLock.Release();
+                }
+            }
 
             var runner = new LiveRunner(
                 provider,
@@ -599,7 +679,10 @@ public sealed class PaperJobService : IDurableJobHandler
                 orderLifecycleService,
                 discoverySession,
                 marketStateSnapshots,
-                candidateRepository);
+                candidateRepository,
+                timeProvider: context.TimeProvider,
+                initialPipelineHealth: job.ToSnapshot().PaperPipelineHealth,
+                publishPipelineHealth: (health, token) => SaveSnapshotAsync(token, health));
 
             var progress = new Progress<string>(msg =>
             {
@@ -607,26 +690,63 @@ public sealed class PaperJobService : IDurableJobHandler
             });
 
             using var profilerScope = TradingFlow.Domain.Logging.ApiProfiler.BeginScope(runConfig.RunName);
-            var runTask = runner.RunAsync(runConfig, runtimeStrategies, cancellationToken, progress);
-            while (!runTask.IsCompleted)
+            using var runnerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var runTask = runner.RunAsync(runConfig, runtimeStrategies, runnerCancellation.Token, progress);
+            try
             {
-                var delay = Task.Delay(jobOptions.SnapshotInterval, cancellationToken);
-                if (await Task.WhenAny(runTask, delay) == runTask)
+                while (await Task.WhenAny(runTask, Task.Delay(jobOptions.SnapshotInterval, runnerCancellation.Token)) != runTask)
                 {
-                    break;
+                    await SaveSnapshotAsync(runnerCancellation.Token);
                 }
-
-                await context.SaveSnapshotAsync(
-                    JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
-                    cancellationToken);
+                await runTask;
             }
-            await runTask;
+            finally
+            {
+                // The lease may be lost during a snapshot write. Drain entry and
+                // exit work before letting the durable worker release ownership.
+                runnerCancellation.Cancel();
+                if (!runTask.IsCompleted)
+                {
+                    try
+                    {
+                        await runTask;
+                    }
+                    catch (OperationCanceledException) when (runnerCancellation.IsCancellationRequested)
+                    {
+                    }
+                }
+            }
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = job.ToTerminalSnapshot("completed", DateTimeOffset.UtcNow, null);
             return DurableJobCompletion.Completed(
                 JsonSerializer.Serialize(snapshot, JsonOptions),
                 Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
     }
+
+    // Choose the journal transaction from the snapshot itself so every stopped
+    // snapshot is published atomically with its entry fence.
+    internal static Task PersistPaperSnapshotAsync(
+        DurableJobExecutionContext context, BacktestJobSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        var serialized = JsonSerializer.Serialize(snapshot, JsonOptions);
+        return snapshot.PaperPipelineHealth?.EntriesStoppedAtUtc is { } stopped
+            ? context.SavePaperEntryStopSnapshotAsync(serialized, stopped, cancellationToken)
+            : context.SaveSnapshotAsync(serialized, cancellationToken);
+    }
+
+    // Both recovery and startup derive exactly the identity used by existing candidate rows.
+    private static ExecutionRunContext CreateExecutionRunContext(
+        PersistedJob job,
+        DurableFileJobRequest request,
+        BacktestRunConfig logicalRun,
+        StrategyDefinition[] strategies) =>
+        ExecutionRunContextFactory.Create(job.Id, logicalRun.Mode, new { Run = logicalRun, Strategies = strategies },
+            job.StartedAt ?? job.CreatedAt) with
+        {
+            UniverseSnapshotId = request.Workflow?.Provenance.UniverseSnapshotId ?? Guid.Empty,
+            DecisionRunId = request.Workflow?.Provenance.DecisionRunId,
+            Profile = request.Workflow?.Provenance.Mode ?? logicalRun.Mode
+        };
 
     public async Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
@@ -802,6 +922,17 @@ public sealed class PaperJobService : IDurableJobHandler
         public DateTimeOffset? FinishedAt { get; set; }
         public string? ErrorMessage { get; set; }
         public string? ArtifactDirectory { get; set; }
+        private LivePipelineHealth? pipelineHealth;
+
+        // A health update persists independently of the rolling progress-event buffer.
+        public void SetPipelineHealth(LivePipelineHealth health)
+        {
+            lock (stateLock)
+            {
+                pipelineHealth = health;
+            }
+        }
+
         public string CurrentStage { get; private set; } = "queued";
         public int CompletedTickerCount { get; private set; }
         public int TotalTickerCount { get; private set; }
@@ -828,11 +959,13 @@ public sealed class PaperJobService : IDurableJobHandler
             }
         }
 
+        // Restore the entry stop and poll streak alongside the existing progress projection.
         public void ApplySnapshot(BacktestJobSnapshot snapshot)
         {
             lock (stateLock)
             {
                 ArtifactDirectory = snapshot.ArtifactDirectory;
+                pipelineHealth = snapshot.PaperPipelineHealth;
                 CurrentStage = snapshot.CurrentStage;
                 CompletedTickerCount = snapshot.CompletedTickerCount;
                 TotalTickerCount = snapshot.TotalTickerCount;
@@ -847,6 +980,7 @@ public sealed class PaperJobService : IDurableJobHandler
         public BacktestJobSnapshot ToSnapshot() =>
             ToTerminalSnapshot(Status, FinishedAt, ErrorMessage);
 
+        // Keep health visible after both terminal publication and a worker restart.
         public BacktestJobSnapshot ToTerminalSnapshot(
             string status,
             DateTimeOffset? finishedAt,
@@ -856,7 +990,8 @@ public sealed class PaperJobService : IDurableJobHandler
             {
                 return new BacktestJobSnapshot(
                     JobId, RunName, ConfigPath, status, CreatedAt, StartedAt, finishedAt, error,
-                    CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null, ArtifactDirectory: ArtifactDirectory);
+                    CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null,
+                    ArtifactDirectory: ArtifactDirectory, PaperPipelineHealth: pipelineHealth);
             }
         }
     }

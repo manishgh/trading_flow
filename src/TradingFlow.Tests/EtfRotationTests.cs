@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using TradingFlow.Backtesting;
 using TradingFlow.Cli;
 using TradingFlow.Domain.Backtesting;
@@ -86,6 +87,13 @@ public sealed class EtfRotationTests
         Assert.True(result.EconomicResultsComplete);
         var sold = Assert.Single(result.CompletedTrades);
         Assert.Equal(("CCC", BacktestRunner.OffListExitReason), (sold.Ticker, sold.ExitReason));
+        Assert.Equal(Midnight(new(2026, 7, 1)).AddHours(9.5), sold.EntryFillTiming!.EconomicTimestampUtc);
+        Assert.Equal(Midnight(Swap).AddHours(9.5), sold.ExitFillTiming!.EconomicTimestampUtc);
+        Assert.Equal(("research_screen", "screen", "raw"), (result.Validation.BiasRisk.UniverseSource,
+            result.Validation.BiasRisk.UniverseName, result.Validation.BiasRisk.PriceAdjustmentPolicy));
+        Assert.True(result.Validation.BiasRisk.SurvivorshipBiasWarning);
+        Assert.Contains(result.Validation.BiasRisk.Warnings, warning => warning.Contains("delisting coverage", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Validation.BiasRisk.Warnings, warning => warning.Contains("sub-daily", StringComparison.Ordinal));
         Assert.Equal(new Dictionary<string, DateOnly> { ["AAA"] = new(2026, 7, 1), ["BBB"] = new(2026, 7, 1), ["CCC"] = new(2026, 7, 1), ["DDD"] = Swap },
             EntrySessions(result));
         var exit = Assert.Single(result.PortfolioState!.Fills, fill => !fill.IsEntry);
@@ -145,10 +153,17 @@ public sealed class EtfRotationTests
         using var root = new TemporaryFolder();
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
-        var validated = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(
+        // Enable the recipe only in this synthetic test's separate manifest; leave the operator catalog parked.
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(
+            File.ReadAllText(Path.Combine(repo, "configs", "strategy-catalog.json")))!;
+        var rotation = manifest["strategies"]!.AsArray()
+            .Single(item => item!["strategyId"]!.GetValue<string>() == "etf.rotation-12-1")!;
+        rotation["enabled"] = true;
+        var manifestPath = Path.Combine(root.Path, "strategy-catalog.json");
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var catalog = new StrategyArtifactCatalog(repo, manifestPath, reader);
+        var runtime = new StrategyRunArtifactValidator(reader, catalog).ReadAndAuthorizeRuntimeArtifact(
             Path.Combine(repo, "configs", "backtest", "strategies", "etf-rotation-12-1.bt-v1.yaml"), StrategySelectionMode.Backtest);
-        var runtime = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition, catalog);
         var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "etf-rotation-profile.yaml"));
         var screen = await PublishListAsync(Path.Combine(root.Path, "screen"));
         var start = Midnight(new(2026, 7, 1));
@@ -158,11 +173,17 @@ public sealed class EtfRotationTests
             RawRoot = Path.Combine(root.Path, "raw"), NormalizedRoot = Path.Combine(root.Path, "normalized"), ResultsRoot = Path.Combine(root.Path, "results"),
             Portfolio = portfolio(profile.Portfolio),
             TimeWindow = profile.TimeWindow with { Type = "fixed", Start = start, End = Midnight(new(2026, 10, 31)) },
-            Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode, ResolvedSource = "research_screen",
-                SelectedSourceTickers = Pool, ResolvedAtUtc = start, RankedMembership = new(screen.ManifestPath, screen.ManifestSha256) }
+            Universe = UniverseConfig.StaticUniverse with { Mode = UniverseConfig.ResolvedSnapshotMode, ResolvedSource = "wishlist",
+                WishlistName = "retired profile list", SelectedSourceTickers = Pool, ResolvedAtUtc = start,
+                RankedMembership = new(screen.ManifestPath, screen.ManifestSha256) }
         };
         var runner = new BacktestRunner(reader, catalog, marketDataProviderFactory: _ => new FixtureProvider());
-        return await runner.RunValidatedAsync(run, [runtime], DateTimeOffset.UtcNow, Path.Combine(run.ResultsRoot, "result.json"), default);
+        var result = await runner.RunValidatedAsync(run, [runtime], DateTimeOffset.UtcNow, Path.Combine(run.ResultsRoot, "result.json"), default);
+        Assert.Equal(screen.ManifestSha256, result.Validation.BiasRisk.UniverseManifestSha256);
+        var completedTradesPath = Path.ChangeExtension(result.ResultPath, ".unified-completed-trades.json");
+        var published = JsonSerializer.Deserialize<BacktestTrade[]>(await File.ReadAllTextAsync(completedTradesPath));
+        Assert.Equal(result.UnifiedPortfolio!.CompletedTrades, published);
+        return result;
     }
 
     // The list: AAA, BBB and CCC on every session from 1 June 2026 to 31 July 2026, then AAA, BBB and DDD.

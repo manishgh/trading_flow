@@ -174,8 +174,10 @@ These rules apply to every Codex/agent session in this repository.
   against the shared implementation with focused parity tests; never change fill or risk
   semantics merely to make a backtest run faster.
 
-- Every implementation checkpoint needs a plan/requirements review and an independent
-  code/design review. Use focused, non-forked agent prompts; at most two reviewers
+- Every implementation checkpoint needs two separate independent reviewers: one for the plan
+  and execution against it, and a different reviewer for code and design. Neither implements
+  the checkpoint. Record findings, resolutions and test evidence in the tracking plan before
+  marking it complete. Use focused, non-forked agent prompts; at most two reviewers
   active, and close each agent immediately after recording its findings.
 - Run heavyweight verification one job at a time. Track owned process IDs and stop
   completed test/build/browser processes. At completion stop task-owned Web/ngrok

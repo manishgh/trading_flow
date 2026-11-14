@@ -87,23 +87,15 @@ public sealed class OptimizationJobService : IDurableJobHandler
         var optimization = yamlReader.ReadOptimizationConfig(fullConfigPath);
         var backtest = yamlReader.ReadBacktestRun(optimization.BacktestConfigPath);
         StrategyOptimizer.ValidateConfiguration(optimization, backtest);
-        var request = DurableFileJobRequest.Capture([
-            fullConfigPath,
-            optimization.BaseStrategyPath,
-            optimization.BacktestConfigPath,
-            .. backtest.Strategies
-        ]);
+        _ = backtestRunner.ReadResearchStrategy(optimization.BaseStrategyPath);
+        var request = DurableFileJobRequest.Capture(ResolveInputs(fullConfigPath, optimization, backtest));
         using (request.AcquireVerifiedReadLease())
         {
             optimization = yamlReader.ReadOptimizationConfig(fullConfigPath);
             backtest = yamlReader.ReadBacktestRun(optimization.BacktestConfigPath);
             StrategyOptimizer.ValidateConfiguration(optimization, backtest);
-            request.EnsureContains([
-                fullConfigPath,
-                optimization.BaseStrategyPath,
-                optimization.BacktestConfigPath,
-                .. backtest.Strategies
-            ]);
+            request.EnsureContains(ResolveInputs(fullConfigPath, optimization, backtest));
+            _ = backtestRunner.ReadResearchStrategy(optimization.BaseStrategyPath);
         }
         var job = new MutableOptimizationJob(Guid.NewGuid(), runName, fullConfigPath, DateTimeOffset.UtcNow);
         var persisted = new PersistedJob
@@ -125,6 +117,22 @@ public sealed class OptimizationJobService : IDurableJobHandler
 
         jobs[job.JobId] = job;
         return job.ToSnapshot();
+    }
+
+    // Captures a generated base strategy's immutable sidecar with the other optimization inputs.
+    private static IEnumerable<string> ResolveInputs(string configPath, OptimizationConfig optimization,
+        TradingFlow.Domain.Backtesting.BacktestRunConfig backtest)
+    {
+        yield return configPath;
+        yield return optimization.BacktestConfigPath;
+        yield return optimization.BaseStrategyPath;
+        var manifestPath = optimization.BaseStrategyPath + ".artifact.json";
+        if (File.Exists(manifestPath))
+            yield return manifestPath;
+        if (StrategyExperimentArtifactStore.FindManifestForStrategyDocument(optimization.BaseStrategyPath) is { } experimentManifest)
+            yield return experimentManifest;
+        foreach (var path in backtest.Strategies)
+            yield return path;
     }
 
     public IReadOnlyList<OptimizationJobSnapshot> List() => jobs.Values
@@ -177,12 +185,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
         var optimizationProgress = new InlineProgress<OptimizationProgress>(job.ReportOptimization);
         var config = yamlReader.ReadOptimizationConfig(job.ConfigPath);
         var backtestConfig = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
-        request.EnsureContains([
-            job.ConfigPath,
-            config.BaseStrategyPath,
-            config.BacktestConfigPath,
-            .. backtestConfig.Strategies
-        ]);
+        request.EnsureContains(ResolveInputs(job.ConfigPath, config, backtestConfig));
         var attemptRoot = Path.Combine(
             backtestConfig.ResultsRoot,
             ".durable-attempts",

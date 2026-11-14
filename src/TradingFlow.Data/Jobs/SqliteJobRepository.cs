@@ -5,11 +5,12 @@ using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Data.Context;
 
 namespace TradingFlow.Data.Jobs;
 
-public sealed class SqliteJobRepository : IDurableJobRepository
+public sealed partial class SqliteJobRepository : IDurableJobRepository, IPaperRunLifecycleRepository
 {
     private readonly IDbContextFactory<TradingFlowDbContext> _contextFactory;
 
@@ -232,6 +233,7 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         return updated == 1;
     }
 
+    // Retain the snapshot only while this worker owns a live job lease.
     public async Task<bool> SaveSnapshotAsync(
         Guid id,
         Guid leaseToken,
@@ -241,6 +243,14 @@ public sealed class SqliteJobRepository : IDurableJobRepository
     {
         ArgumentNullException.ThrowIfNull(snapshotJson);
         using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await SaveSnapshotCoreAsync(context, id, leaseToken, snapshotJson, heartbeatAtUtc, cancellationToken);
+    }
+
+    // Reuse one publication fence for normal progress and the atomic paper entry stop.
+    private static async Task<bool> SaveSnapshotCoreAsync(
+        TradingFlowDbContext context, Guid id, Guid leaseToken, string snapshotJson, DateTimeOffset heartbeatAtUtc,
+        CancellationToken cancellationToken)
+    {
         var updated = await context.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE "Jobs"
             SET "SnapshotJson" = {snapshotJson},
@@ -254,6 +264,7 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         return updated == 1;
     }
 
+    // Publish terminal status and close the paper run under the same lease fence and transaction.
     public async Task<bool> CompleteAsync(
         Guid id,
         Guid leaseToken,
@@ -270,6 +281,7 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         }
 
         using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var requireNoCancellation = status.Equals("completed", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         var updated = await context.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE "Jobs"
@@ -289,16 +301,23 @@ public sealed class SqliteJobRepository : IDurableJobRepository
                     CAST((julianday('now') - 1721425.5) * 864000000000 AS INTEGER)
               AND ({requireNoCancellation} = 0 OR "CancellationRequestedAtUtc" IS NULL);
             """, cancellationToken);
+        if (updated == 1)
+        {
+            await ClosePaperRunAsync(context, id, status, finishedAtUtc, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
         return updated == 1;
     }
 
+    // Release only this attempt and close its run after the handler has drained.
     public async Task ReleaseLeaseAsync(
         Guid id,
         Guid leaseToken,
         CancellationToken cancellationToken)
     {
         using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
-        await context.Jobs
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var updated = await context.Jobs
             .Where(job => job.Id == id && job.LeaseToken == leaseToken)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(job => job.LeaseOwner, (string?)null)
@@ -306,6 +325,12 @@ public sealed class SqliteJobRepository : IDurableJobRepository
                 .SetProperty(job => job.LeaseExpiresAtUtc, (DateTimeOffset?)null)
                 .SetProperty(job => job.LeaseExpiresAtUtcTicks, (long?)null),
                 cancellationToken);
+        if (updated == 1)
+        {
+            var now = await ProductionRunPersistence.ReadDatabaseTimeAsync(context, cancellationToken);
+            await ClosePaperRunAsync(context, id, "stopped", now, cancellationToken, onlyRunning: true);
+        }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task PruneTerminalJobsOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken)
@@ -332,6 +357,7 @@ public sealed class SqliteJobRepository : IDurableJobRepository
             status.Equals("interrupted", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Atomic takeover first closes a prior paper attempt whose lease is absent or expired.
     private static async Task<DurableJobLease?> TryAcquireCoreAsync(
         TradingFlowDbContext context,
         Guid id,
@@ -340,6 +366,7 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         TimeSpan leaseDuration,
         CancellationToken cancellationToken)
     {
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var leaseToken = Guid.NewGuid();
         var databaseNowTicks = await context.Database
             .SqlQueryRaw<long>(
@@ -372,6 +399,11 @@ public sealed class SqliteJobRepository : IDurableJobRepository
         }
 
         var job = await context.Jobs.AsNoTracking().SingleAsync(candidate => candidate.Id == id, cancellationToken);
+        if (job.AttemptCount > 1)
+        {
+            await ClosePaperRunAsync(context, id, "interrupted", databaseNowUtc, cancellationToken, onlyRunning: true);
+        }
+        await transaction.CommitAsync(cancellationToken);
         return new DurableJobLease(job, leaseToken, job.LeaseExpiresAtUtc ?? leaseExpiresAtUtc);
     }
 

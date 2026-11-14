@@ -2,6 +2,7 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Market;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Risk;
 using TradingFlow.Engine.Execution;
 using System.Text.Json;
@@ -33,6 +34,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     private readonly HashSet<string> _knownIdentities = new(StringComparer.Ordinal);
     private readonly IExecutionEventSink? _executionEvidence;
     private readonly HoldingDataRules? _holdingRules;
+    private readonly IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? _fillSchedules;
     private readonly Dictionary<string, DateOnly> _lastDailySessionBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private int _nextHoldingSession;
     private readonly Dictionary<DateOnly, int> _holdingSessionIndex = [];
@@ -57,19 +59,22 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     // its last real close before a split or when its bars never resume; null keeps the original behaviour exactly.
     // decisionHour: the schedules and symbols of decision-hour candidates, whose unresolved windows (DecisionHourDailyBars)
     // join the bar stream for resting orders; null (every other run) adds nothing.
+    // Fill schedules are reporting evidence for native daily opens and closes, separate from replay admission.
     public ChronologicalBacktestExecutionCoordinator(
         PortfolioConfig portfolio,
         IReadOnlyCollection<OhlcvBar> marketBars,
         IDeterministicExecutionSimulator? simulator = null,
         IExecutionEventSink? executionEvidence = null,
         HoldingDataRules? holdingRules = null,
-        DecisionHourExecution? decisionHour = null)
+        DecisionHourExecution? decisionHour = null,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? fillSchedules = null)
     {
         _portfolio = portfolio;
         _simulator = simulator ?? new DeterministicExecutionSimulator();
         _executionEvidence = executionEvidence;
         _holdingRules = holdingRules;
         _decisionHour = decisionHour;
+        _fillSchedules = fillSchedules ?? holdingRules?.Schedules ?? decisionHour?.Schedules;
         for (var index = 0; index < (holdingRules?.Sessions.Count ?? 0); index++) _holdingSessionIndex[holdingRules!.Sessions[index]] = index;
         if (holdingRules is { Sessions.Count: > 0 })
             foreach (var bar in marketBars.Where(bar => bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase)))
@@ -408,7 +413,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 policy));
             _state = step.State;
             AppendExecutionEvidence(step.Events);
-            ApplyEvents(step.Events, bar);
+            ApplyEvents(step.Events, bar, timelineBar.AvailableAtUtc);
             if (_windowKinds.TryGetValue((symbol, timelineBar.StartUtc), out var windowKind))
                 CountProtectiveFills(step.Events, windowKind, bar.Open);
             FinalizeTerminalTrackers();
@@ -443,7 +448,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             commands, SlicePolicy(symbol, filled)));
         _state = step.State;
         AppendExecutionEvidence(step.Events);
-        ApplyEvents(step.Events, bar.Bar);
+        ApplyEvents(step.Events, bar.Bar, bar.AvailableAtUtc);
         CountProtectiveFills(step.Events, "fill_bar", null);
         FinalizeTerminalTrackers();
     }
@@ -533,7 +538,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         var last = _lastBarsBySymbol[symbol];
         ForceExitAt(symbol, holdings, new ExecutionMarketSlice(symbol, last.EndUtc.AddTicks(-1), last.EndUtc, last.AvailableAtUtc, 0,
             IsCompleted: true, last.Bar.Close, last.Bar.Close, last.Bar.Close, last.Bar.Close, last.Bar.Volume), last.Bar,
-            "forced_last_close_exit_not_filled");
+            "forced_last_close_exit_not_filled", priceAtClose: true);
     }
 
     // Sub-daily holdings (decision-hour timing) whose next session is a split's ex-date are sold (or covered) at the open of
@@ -549,7 +554,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         var open = bar.Bar.Open;
         var end = bar.StartUtc.AddTicks(1);
         ForceExitAt(symbol, holdings, new ExecutionMarketSlice(symbol, bar.StartUtc, end, end, 0, IsCompleted: true,
-            open, open, open, open, bar.Bar.Volume), bar.Bar, "forced_split_exit_not_filled");
+            open, open, open, open, bar.Bar.Volume), bar.Bar, "forced_split_exit_not_filled", priceAtClose: false);
     }
 
     // True when the bar starting at barStart is the last-hour bar (DecisionHourDailyBars) of a session whose next trading
@@ -568,9 +573,9 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     // Run the forced exits of the given holdings on one price-point slice through the shared simulator: working entry, exit and
     // protective orders are cancelled first and a market order closes the rest. No participation cap applies, as the position
     // must close; impact keeps the configured rate per unit of participation, so a larger exit costs proportionally more. A
-    // holding still open afterwards fails with failureReason.
+    // holding still open afterwards fails with failureReason. The pricing point is used only in reporting.
     private void ForceExitAt(string symbol, IReadOnlyList<(ExecutionTracker Tracker, string Reason)> holdings,
-        ExecutionMarketSlice slice, OhlcvBar source, string failureReason)
+        ExecutionMarketSlice slice, OhlcvBar source, string failureReason, bool priceAtClose)
     {
         var commands = new List<SimulatedOrderCommand>();
         foreach (var (tracker, reason) in holdings) AddForcedExit(tracker, reason, slice.StartUtc, commands);
@@ -587,7 +592,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         var step = _simulator.Advance(new ExecutionStepRequest(_state, slice with { SourceSequence = sequence }, commands, policy));
         _state = step.State;
         AppendExecutionEvidence(step.Events);
-        ApplyEvents(step.Events, source);
+        ApplyEvents(step.Events, source, slice.AvailableAtUtc, priceAtClose);
         FinalizeTerminalTrackers();
         foreach (var tracker in trackers.Where(t => !t.IsTerminal)) Fail(tracker, failureReason);
         _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
@@ -926,7 +931,9 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         exitReason.Equals("trailing_stop", StringComparison.OrdinalIgnoreCase) ||
         exitReason.StartsWith("stop_loss", StringComparison.OrdinalIgnoreCase);
 
-    private void ApplyEvents(IReadOnlyCollection<SimulatedExecutionEvent> events, OhlcvBar bar)
+    // Keep original simulator stamps for book logic and attach reporting evidence to each actual fill.
+    private void ApplyEvents(IReadOnlyCollection<SimulatedExecutionEvent> events, OhlcvBar bar,
+        DateTimeOffset availableAtUtc, bool priceAtClose = false)
     {
         foreach (var executionEvent in events.Where(item => item.LastFillQuantity > 0))
         {
@@ -936,8 +943,10 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 continue;
             }
 
+            var timing = DescribeFill(tracker, executionEvent, bar, availableAtUtc, priceAtClose);
             if (executionEvent.ClientOrderId.Equals(tracker.EntryClientOrderId, StringComparison.Ordinal))
             {
+                tracker.EntryTiming ??= timing;
                 tracker.EntryFilledQuantity += executionEvent.LastFillQuantity;
                 tracker.EntryFilledNotional += executionEvent.LastFillQuantity * executionEvent.FillPrice!.Value;
                 tracker.EntryLiquidityVolume += bar.Volume;
@@ -950,6 +959,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 tracker.ExitFilledQuantity += executionEvent.LastFillQuantity;
                 tracker.ExitFilledNotional += executionEvent.LastFillQuantity * executionEvent.FillPrice!.Value;
                 tracker.LastExitFillUtc = executionEvent.OccurredAtUtc;
+                tracker.ExitTiming = timing;
             }
 
             tracker.ExecutionFees += executionEvent.Fees;
@@ -960,10 +970,41 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 executionEvent.ClientOrderId == tracker.EntryClientOrderId, executionEvent.LastFillQuantity,
                 executionEvent.FillPrice!.Value, executionEvent.Fees, executionEvent.OccurredAtUtc,
                 NativeDailySessionLedger.FillSessionDate(executionEvent.OccurredAtUtc, fillTimeframe, NativeDailySessionLedger.ValuationBasis))
-                { FillTimeframe = fillTimeframe });
+                { FillTimeframe = fillTimeframe, FillTiming = timing });
         }
     }
 
+    // Market orders use a modeled point. The audit exposes stop and limit fills as range evidence.
+    // A protective price that looks like an opening gap needs explicit simulator price-reference evidence to establish its time.
+    private BacktestFillTiming DescribeFill(ExecutionTracker tracker, SimulatedExecutionEvent fill, OhlcvBar bar,
+        DateTimeOffset availableAtUtc, bool priceAtClose)
+    {
+        var session = SessionOf(bar.Timestamp);
+        var processing = fill.OccurredAtUtc;
+        if (!_state.KnownOrderContracts.TryGetValue(fill.ClientOrderId, out var order))
+            return new(session, null, "execution_order_basis_unavailable", processing, availableAtUtc);
+        if (order.OrderType != SimulatedOrderType.Market)
+            return new(session, null, "source_bar_range", processing, availableAtUtc);
+        if (!TimeframeParser.IsDailyOrHigher(bar.Timeframe))
+        {
+            var point = priceAtClose ? bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe)) : bar.Timestamp;
+            return new(session, point.ToUniversalTime(), priceAtClose ? "source_bar_close" : "source_bar_open",
+                processing, availableAtUtc);
+        }
+        var exchange = tracker.Plan.Strategy.Session;
+        if (TimeframeParser.Parse(bar.Timeframe) != TimeSpan.FromDays(1) || exchange.IsContinuousMarket ||
+            exchange.ExchangeTimezone != "America/New_York" || _fillSchedules is null ||
+            !_fillSchedules.TryGetValue(session, out var schedule) || !schedule.IsTradingDay ||
+            schedule.TradeDate != session || schedule.RegularClose <= schedule.RegularOpen)
+            return new(session, null, "daily_session_schedule_unavailable", processing, availableAtUtc);
+
+        var localPoint = session.ToDateTime(priceAtClose ? schedule.RegularClose : schedule.RegularOpen);
+        var timestamp = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(localPoint, NewYork), TimeSpan.Zero);
+        return new(session, timestamp, priceAtClose ? "regular_session_close" : "regular_session_open",
+            processing, availableAtUtc);
+    }
+
+    // Publishes first entry and last exit timing beside the original stamps used by validation and audit.
     private void FinalizeTerminalTrackers()
     {
         foreach (var tracker in _active
@@ -1007,7 +1048,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                     : "partial_fill_remainder_canceled",
                 Decimal.Round(participation, 6),
                 candidate.StrategyId,
-                candidate.CandidateId));
+                candidate.CandidateId)
+            {
+                EntryFillTiming = tracker.EntryTiming,
+                ExitFillTiming = tracker.ExitTiming
+            });
         }
     }
 
@@ -1240,6 +1285,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public decimal ExitFilledNotional { get; set; }
         public decimal ExecutionFees { get; set; }
         public DateTimeOffset? FirstEntryFillUtc { get; set; }
+        public BacktestFillTiming? EntryTiming { get; set; }
+        public BacktestFillTiming? ExitTiming { get; set; }
         public DateTimeOffset? LastExitFillUtc { get; set; }
         public string? FilledExitReason { get; private set; }
 

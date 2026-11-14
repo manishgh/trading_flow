@@ -31,6 +31,7 @@ public sealed class PaperDiscoverySessionFactory(
     TimeProvider timeProvider,
     ILoggerFactory loggerFactory) : IPaperDiscoverySessionFactory
 {
+    // Build runtime sources that validate current membership using their configured refresh and TTL.
     public ILiveDiscoverySession Create(Guid scopeId, BacktestRunConfig run, string horizon)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -43,13 +44,10 @@ public sealed class PaperDiscoverySessionFactory(
             if (config.WishlistId is { } wishlistId)
             {
                 sources.Add(new WishlistDiscoverySource(
-                    scopeId,
                     wishlistId,
-                    config.WishlistTickers,
                     horizon,
                     refresh,
                     ttl,
-                    repository,
                     wishlists,
                     timeProvider));
             }
@@ -57,14 +55,11 @@ public sealed class PaperDiscoverySessionFactory(
             if (!String.IsNullOrWhiteSpace(config.FinvizQuery))
             {
                 sources.Add(new FinvizDiscoverySource(
-                    scopeId,
                     config.FinvizQuery,
-                    config.FinvizTickers,
                     horizon,
                     refresh,
                     ttl,
                     config.WishlistId,
-                    repository,
                     screener,
                     timeProvider));
             }
@@ -255,13 +250,10 @@ internal sealed class ConfiguredDiscoverySource(
 }
 
 internal sealed class WishlistDiscoverySource(
-    Guid scopeId,
     Guid wishlistId,
-    IReadOnlyList<string> initialSymbols,
     string horizon,
     TimeSpan refreshInterval,
     TimeSpan timeToLive,
-    IDiscoveryRepository repository,
     IWishlistRepository wishlists,
     TimeProvider timeProvider)
     : DiscoverySourceBase(
@@ -272,37 +264,24 @@ internal sealed class WishlistDiscoverySource(
         timeToLive,
         timeProvider)
 {
+    // A persisted list can change after a preview. Only a fresh read can renew membership.
     public override async Task<DiscoveryCapture> CaptureAsync(CancellationToken cancellationToken)
     {
-        var observedAt = TimeProvider.GetUtcNow();
-        if (initialSymbols.Count > 0 && await repository.GetSourceVersionAsync(
-                scopeId,
-                SourceKind,
-                SourceKey,
-                cancellationToken) == 0)
-        {
-            return Capture(observedAt, initialSymbols, rawReference: $"wishlist:{wishlistId}:run-start");
-        }
-
-        var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken)
-            ?? throw new InvalidOperationException($"Wishlist {wishlistId} no longer exists.");
+        var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
         return Capture(
-            observedAt,
-            wishlist.Items.Where(item => item.Active).Select(item => item.Ticker),
-            providerTimestampUtc: wishlist.UpdatedAtUtc,
+            TimeProvider.GetUtcNow(),
+            wishlist?.Items.Where(item => item.Active).Select(item => item.Ticker) ?? [],
+            providerTimestampUtc: wishlist?.UpdatedAtUtc,
             rawReference: $"wishlist:{wishlistId}");
     }
 }
 
 internal sealed class FinvizDiscoverySource(
-    Guid scopeId,
     string query,
-    IReadOnlyList<string> initialSymbols,
     string horizon,
     TimeSpan refreshInterval,
     TimeSpan timeToLive,
     Guid? wishlistId,
-    IDiscoveryRepository repository,
     IScreenerSnapshotSource screener,
     TimeProvider timeProvider)
     : DiscoverySourceBase(
@@ -313,16 +292,9 @@ internal sealed class FinvizDiscoverySource(
         timeToLive,
         timeProvider)
 {
+    // A failed Finviz read leaves only still-fresh prior observations in the session.
     public override async Task<DiscoveryCapture> CaptureAsync(CancellationToken cancellationToken)
     {
-        var observedAt = TimeProvider.GetUtcNow();
-        var mayUseRunStartFallback = initialSymbols.Count > 0 &&
-            await repository.GetSourceVersionAsync(
-                scopeId,
-                SourceKind,
-                SourceKey,
-                cancellationToken) == 0;
-
         if (!Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -336,14 +308,6 @@ internal sealed class FinvizDiscoverySource(
             cancellationToken);
         if (!result.Succeeded)
         {
-            if (mayUseRunStartFallback)
-            {
-                return Capture(
-                    observedAt,
-                    initialSymbols,
-                    rawReference: $"finviz:{SourceKey}:run-start-fallback");
-            }
-
             throw new InvalidOperationException(result.Error ?? "Finviz discovery refresh failed.");
         }
 

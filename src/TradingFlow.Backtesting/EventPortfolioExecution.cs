@@ -22,6 +22,8 @@ public sealed record EventPortfolioReplayOutcome(IReadOnlyList<BacktestTrade> Tr
 /// <summary>One cash ledger and shared book per portfolio; scenarios share source reading, never capital.</summary>
 public static partial class EventPortfolioExecution
 {
+    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+
     /// <summary>Consume verified source once and advance each independently funded scenario through the same frames.</summary>
     public static async Task<IReadOnlyList<EventPortfolioReplayOutcome>> ReplayManyAsync(
         IReadOnlyList<EventPortfolioReplayRequest> requests, IAsyncEnumerable<SipPortfolioExecutionFrame> source,
@@ -458,12 +460,22 @@ public static partial class EventPortfolioExecution
             var gross = (intent.ExitNotional - intent.EntryNotional) * (intent.Long ? 1 : -1);
             var reason = intent.LastExitOrderId == intent.StopId ? "stop_loss" :
                 intent.LastExitOrderId == intent.TargetId ? "take_profit" : c.ExitReason;
-            return new(c.Ticker, c.StrategyName, c.Direction,
-                ExecutionEventTime.ToUtc(intent.FirstEntryAt!.Value), ExecutionEventTime.ToUtc(intent.LastExitAt!.Value),
+            var entryAt = ExecutionEventTime.ToUtc(intent.FirstEntryAt!.Value);
+            var exitAt = ExecutionEventTime.ToUtc(intent.LastExitAt!.Value);
+            return new(c.Ticker, c.StrategyName, c.Direction, entryAt, exitAt,
                 quantity, entry, exit, c.StopLossPrice, c.TakeProfitPrice, reason, gross, intent.Fees,
                 gross - intent.Fees, intent.Quantity, quantity < intent.Quantity ? "partial_fill" : "filled",
-                StrategyId: c.StrategyId, CandidateId: c.CandidateId);
+                StrategyId: c.StrategyId, CandidateId: c.CandidateId)
+            {
+                EntryFillTiming = DescribeEventFill(entryAt),
+                ExitFillTiming = DescribeEventFill(exitAt)
+            };
         }
+
+        // The physical-event path only accepts fills with a zero-delay receipt, so both clocks share the event instant.
+        private static BacktestFillTiming DescribeEventFill(DateTimeOffset timestamp) =>
+            new(DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, NewYork).DateTime), timestamp,
+                "source_execution_event", timestamp, timestamp);
 
         /// <summary>Resolve every route/exposure and date missing evidence from its first required decision, never source end.</summary>
         public EventPortfolioReplayOutcome Complete()

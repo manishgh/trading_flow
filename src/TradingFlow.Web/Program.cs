@@ -671,6 +671,8 @@ builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IJobRepository>(services =
     services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());
 builder.Services.AddSingleton<TradingFlow.Domain.Jobs.IDurableJobRepository>(services =>
     services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());
+builder.Services.AddSingleton<TradingFlow.Domain.Persistence.IPaperRunLifecycleRepository>(services =>
+    services.GetRequiredService<TradingFlow.Data.Jobs.SqliteJobRepository>());
 builder.Services.AddSingleton<IReadOnlyDictionary<string, TradingFlow.Application.Jobs.DurableJobWorkerOptions>>(services =>
 {
     var backtests = services.GetRequiredService<BacktestJobServiceOptions>();

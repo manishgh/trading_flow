@@ -249,7 +249,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
         return new OrderDispatchLease(intent, state, token, leaseExpiresAtUtc);
     }
 
-    /// <summary>Fence the first broker attempt against current account limits and evidence before recording dispatch ownership.</summary>
+    /// <summary>Fence the first broker attempt against paper ownership, discovery and current account limits under one write lock.</summary>
     public async Task<OrderIntentRecord> RecordDispatchAttemptAsync(
         Guid intentId,
         Guid leaseToken,
@@ -325,7 +325,10 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
                     : new OrderDispatchUnsupportedHorizonException(intentId);
             }
             if (intent.DispatchAttemptCount == 0)
+            {
+                await RequirePaperEntryDispatchAsync(context, intent, cancellationToken);
                 await RequireCurrentEntryCapacityAsync(context, intent, nowUtc, cancellationToken);
+            }
         }
 
         if (intent.Kind == OrderIntentKind.ProtectiveStop &&

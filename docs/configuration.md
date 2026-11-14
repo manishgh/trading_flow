@@ -119,6 +119,32 @@ Every executable strategy must:
 - use completed-bar decisions and next executable-bar fills;
 - define a pre-fill stop that satisfies account-risk policy.
 
+### Disabling a strategy for new work
+
+Set `"enabled": false` and a non-blank `"disabledReason"` on the exact entry in
+`configs/strategy-catalog.json`. The current sector-rotation entry includes these fields.
+
+```json
+"enabled": false,
+"disabledReason": "Sector rotation is parked for later standalone research."
+```
+
+Restart the Web host to apply a change to the catalog it has loaded. The next CLI
+invocation reads the updated catalog. Strategy Lab shows the reason under **Disabled
+research strategies**. New selections and queued starts refuse the disabled strategy
+and snapshots and registered experiments that name it in their source lineage.
+A catalog edit does not stop a strategy loop already running in the current process.
+After a restart, a disabled paper job cannot resume its strategy loop, including
+its automatic technical exits. Broker reconciliation, broker-native protection,
+and manual risk-reducing exits remain available. This switch is not an exit-only
+mode for a strategy managing open positions.
+
+Set `"enabled": true` or remove the field to restore eligibility under the existing
+rules. Historical artifacts and results retain their identity and hashes. The
+catalog edit preserves lifecycle and grant records. Sector rotation remains a
+research strategy when enabled, and paper or live use still requires the separate
+authorization process.
+
 ## Portfolio And Risk
 
 Portfolio configuration owns account-level controls such as starting capital,

@@ -16,7 +16,7 @@ public sealed class DeskStrategyAssessmentService(
     IMemoryCache cache,
     TimeProvider clock)
 {
-    /// <summary>Lists catalog strategies and the most recent recorded strategy/run combinations.</summary>
+    /// <summary>Lists enabled choices for current checks while retaining the recent recorded strategy/run choices.</summary>
     public async Task<IReadOnlyList<StockStrategyChoice>> ChoicesAsync(CancellationToken token)
     {
         await using var db = await databases.CreateDbContextAsync(token);
@@ -42,7 +42,7 @@ public sealed class DeskStrategyAssessmentService(
             return new StockStrategyChoice(item.RunId, identity,
                 artifact?.ResolvedStrategy.StrategyName ?? identity.StrategyId, item.Profile, item.StartedAtUtc);
         }).ToList();
-        foreach (var artifact in artifacts)
+        foreach (var artifact in artifacts.Where(item => catalog.GetDisabledReason(item) is null))
         {
             var identity = new StrategyReference(artifact.Identity.StrategyId, artifact.Identity.SemanticVersion, artifact.Identity.ContentSha256);
             choices.Insert(0, new(null, identity, artifact.ResolvedStrategy.StrategyName, "current", null));

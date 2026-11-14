@@ -6,6 +6,7 @@ using TradingFlow.Web.Services;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Audit;
+using TradingFlow.Backtesting;
 
 namespace TradingFlow.Web.Pages;
 
@@ -67,6 +68,7 @@ public sealed class PaperJobModel : PageModel
         }).ToList();
     }
 
+    // Project durable worker status and pipeline health for the auto-refreshing run page.
     public async Task<IActionResult> OnGetSnapshotAsync(Guid id)
     {
         var job = jobs.Get(id);
@@ -122,6 +124,7 @@ public sealed class PaperJobModel : PageModel
             success = true,
             status = job.Status,
             errorMessage = job.ErrorMessage,
+            pipelineHealth = FormatPipelineHealth(job.PaperPipelineHealth),
             startedAt = job.StartedAt is null ? "Queued" : FormatLocal(job.StartedAt.Value),
             refreshedAt = FormatLocal(DateTimeOffset.UtcNow),
             marketDataFeed = ResolveMarketDataFeedLabel(job),
@@ -182,6 +185,27 @@ public sealed class PaperJobModel : PageModel
     {
         await jobs.ClosePositionAsync(id, ticker);
         return RedirectToPage(new { id });
+    }
+
+    // Explain polling failures even after routine progress has rolled past their log entries.
+    public string? FormatPipelineHealth(LivePipelineHealth? health)
+    {
+        if (health is null || health.FailureCount == 0 && !health.EntriesStopped)
+        {
+            return null;
+        }
+
+        var last = health.LastFailureAtUtc is { } timestamp ? FormatLocal(timestamp) : "unknown time";
+        var details = health.FailureCount == 0
+            ? String.Empty
+            : $"{health.FailureCount} pipeline failure(s). Latest at {last}. {health.LastFailure}";
+        if (health.EntriesStoppedAtUtc is { } stopped)
+        {
+            return $"New entries stopped at {FormatLocal(stopped)}. {health.EntryStopReason} {details}".TrimEnd();
+        }
+        return health.FailingSinceUtc is { } failing
+            ? $"Pipeline failing since {FormatLocal(failing)}. {details}"
+            : details;
     }
 
     public string FormatLocal(DateTimeOffset timestamp)

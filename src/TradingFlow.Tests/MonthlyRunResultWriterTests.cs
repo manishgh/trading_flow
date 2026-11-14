@@ -103,7 +103,7 @@ public sealed class MonthlyRunResultWriterTests
         Directory.CreateDirectory(root);
         try
         {
-            var result = fixture.Result with { ResultPath = Path.Combine(root, "result.json") };
+            var result = WithBenchmark(fixture.Result) with { ResultPath = Path.Combine(root, "result.json") };
             var cohort = new BacktestCohortExecution(47, "Volatile group 1", fixture.Config.Tickers,
                 fixture.Config.Portfolio.StartingCapital, fixture.Identity);
             var report = await fixture.Writer.WriteAsync(fixture.Config, result, fixture.Config.TimeWindow.End!.Value,
@@ -113,6 +113,20 @@ public sealed class MonthlyRunResultWriterTests
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
             Assert.NotNull(stored);
             Assert.Equal(report.Results, stored.Results);
+            Assert.Collection(stored.Results,
+                january =>
+                {
+                    Assert.True(january.PartialMonth);
+                    Assert.Equal(("SPY", 5m, "raw"), (january.Benchmark!.Ticker,
+                        january.Benchmark.ReturnPct!.Value, january.Benchmark.PriceAdjustmentPolicy));
+                    Assert.Equal(fixture.Config.TimeWindow.Start, january.Benchmark.PeriodStartUtc);
+                },
+                february =>
+                {
+                    Assert.True(february.PartialMonth);
+                    Assert.Null(february.Benchmark!.ReturnPct);
+                    Assert.Equal("Completed benchmark closing price unavailable.", february.Benchmark.UnavailableReason);
+                });
             Assert.Equal(fixture.Config.Portfolio.StartingCapital, stored.StartingCapital);
             Assert.NotNull(stored.Cohort);
             Assert.Equal(cohort.PlanId, stored.Cohort.PlanId);
@@ -162,6 +176,24 @@ public sealed class MonthlyRunResultWriterTests
             0, 2, 2, 0, 1, 1, [strategy], [], validation, trades, [], [], []);
         return (new(validator), config, result,
             new(runtime.Identity.StrategyId, runtime.Identity.SemanticVersion, runtime.Identity.ContentSha256));
+    }
+
+    // Adds available and unavailable benchmark months to exercise the persisted job and standalone reports.
+    internal static BacktestResult WithBenchmark(BacktestResult result)
+    {
+        var february = new DateTimeOffset(2026, 2, 1, 5, 0, 0, TimeSpan.Zero);
+        return result with
+        {
+            Validation = result.Validation with
+            {
+                Benchmark = new(true, "SPY", 6m, [], "price_only_regular_session", null,
+                    [
+                        new("2026-01", 5m, "first_evaluation_session_open", null, result.StartedAt, february, 100m, 105m),
+                        new("2026-02", null, "prior_month_final_session_close", "Completed benchmark closing price unavailable.",
+                            february, result.FinishedAt, 105m, null)
+                    ], result.StartedAt, result.FinishedAt, "raw")
+            }
+        };
     }
 
     // Profit values are already net of costs; receipt time maps to the previous New York daily source session.

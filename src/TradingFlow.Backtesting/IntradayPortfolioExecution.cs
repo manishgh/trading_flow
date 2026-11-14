@@ -91,6 +91,8 @@ public static partial class IntradayPortfolioExecution
         public string? ExitReason { get; set; }
         public DateTimeOffset? EntryAt { get; set; }
         public DateTimeOffset? ExitAt { get; set; }
+        public BacktestFillTiming? EntryTiming { get; set; }
+        public BacktestFillTiming? ExitTiming { get; set; }
         public DateTimeOffset? LastFillAt { get; set; }
         public decimal? Mark { get; set; }
         public DateTimeOffset? MarkAt { get; set; }
@@ -684,13 +686,14 @@ public static partial class IntradayPortfolioExecution
                 new(bar.Timestamp, bar.Open, bar.High, bar.Low, bar.Close, bar.Volume), policy, limit, stop));
         }
 
-        /// <summary>Apply actual fill cash, directional accounting and per-side fixed/regulatory fees once.</summary>
+        /// <summary>Apply actual fill accounting once and retain the existing source interval's modeled timing.</summary>
         private void Account(Intent intent, ExecutionSimulationResult fill, bool entry, DateTimeOffset at, string reason,
             DateTimeOffset sourceIntervalStartUtc, string executionPhase)
         {
             if (intent.LastFillAt is { } last && at < last || !entry && (intent.EntryAt is not { } first || at < first))
                 throw new InvalidDataException("An actual fill cannot precede its parent entry or a previously observed fill; clocks must never be clamped.");
             intent.LastFillAt = at;
+            var timing = DescribeFill(sourceIntervalStartUtc, at, executionPhase);
             var sequence = checked(++executionSequence);
             var price = fill.AverageFillPrice!.Value;
             var quantity = fill.FilledQuantity;
@@ -712,6 +715,7 @@ public static partial class IntradayPortfolioExecution
                 intent.LastEntryFillPrice = price;
                 intent.EntryNotional += quantity * price;
                 intent.EntryAt ??= at;
+                intent.EntryTiming ??= timing;
                 intent.EntryTaf += taf;
             }
             else
@@ -720,10 +724,11 @@ public static partial class IntradayPortfolioExecution
                 intent.Exited += quantity;
                 intent.ExitNotional += quantity * price;
                 intent.ExitAt = at;
+                intent.ExitTiming = timing;
                 intent.ExitTaf += taf;
             }
             fills.Add(new(intent.Candidate.CandidateId, intent.Candidate.StrategyId, intent.Candidate.Ticker,
-                buy, entry, quantity, price, fill.Fees, at, Date(at)));
+                buy, entry, quantity, price, fill.Fees, at, Date(at)) { FillTiming = timing });
             intent.RecordIntervalFill(sourceIntervalStartUtc, quantity);
             var remaining = entry ? intent.Requested - intent.Entered : intent.Open;
             var suffix = entry ? "entry" : reason == "take_profit" ? "target" : reason.Contains("stop", StringComparison.Ordinal) ? "stop" : "session-exit";
@@ -742,6 +747,21 @@ public static partial class IntradayPortfolioExecution
                     ? ";diagnostic_lagged_completed_bar_volume_capacity;no_current_bar_volume_used"
                     : ";retrospective_bar_participation_assumption"), quantity, price, intent.Stop, intent.Target)
                 { SourceIntervalStartUtc = sourceIntervalStartUtc, ExecutionPhase = executionPhase, ExecutionSequence = sequence });
+        }
+
+        // Fills found during replay of a completed interval become available at interval end.
+        // Scheduled liquidation has its own point clock. Range touches have no exact economic time.
+        private BacktestFillTiming DescribeFill(DateTimeOffset intervalStart, DateTimeOffset stamp, string phase)
+        {
+            var basis = phase switch
+            {
+                "opening_entry" or "opening_entry_lagged_liquidity" or "opening_protection" or "scheduled_opening_liquidation" => "source_bar_open",
+                "session_close_auction" => "regular_session_close",
+                _ => "source_bar_range"
+            };
+            var available = phase == "scheduled_opening_liquidation" ? stamp : intervalStart.AddMinutes(5);
+            return new(Date(intervalStart), basis == "source_bar_range" ? null : stamp.ToUniversalTime(), basis,
+                stamp.ToUniversalTime(), available.ToUniversalTime());
         }
 
         /// <summary>Estimate both-side slippage and actual/frozen fees for the approved cost-covered stop offset.</summary>
@@ -810,7 +830,7 @@ public static partial class IntradayPortfolioExecution
             Emit(intent, at, "entry_remainder_canceled", reason, intent.Requested - intent.Entered);
         }
 
-        /// <summary>Retire a resolved intent and record directional PnL without adding short proceeds to economic equity.</summary>
+        /// <summary>Retire a resolved intent and publish directional PnL with first-entry and last-exit evidence.</summary>
         private void Resolve(Intent intent, DateTimeOffset at)
         {
             if (intent.Pending || intent.Open > 0) return;
@@ -830,7 +850,11 @@ public static partial class IntradayPortfolioExecution
                 intent.EntryAt!.Value, intent.ExitAt!.Value, intent.Entered, entryPrice, exitPrice,
                 intent.InitialStop, intent.InitialTarget, intent.ExitReason!, gross, fees, Decimal.Round(gross - fees, 4),
                 intent.Requested, intent.Entered < intent.Requested ? "partial_fill_remainder_canceled" : "filled",
-                StrategyId: intent.Candidate.StrategyId, CandidateId: intent.Candidate.CandidateId);
+                StrategyId: intent.Candidate.StrategyId, CandidateId: intent.Candidate.CandidateId)
+            {
+                EntryFillTiming = intent.EntryTiming,
+                ExitFillTiming = intent.ExitTiming
+            };
             trades.Add(trade);
         }
 

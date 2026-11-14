@@ -10,19 +10,12 @@ namespace TradingFlow.Tests;
 
 public sealed class DiscoverySourceAdapterTests
 {
+    // Runtime screening retains the exact provider observation and symbol metadata.
     [Fact]
     public async Task FinvizSource_PreservesVendorRvolAndProviderProvenanceAsDiscoveryMetadata()
     {
         var syncedAt = Utc(2026, 8, 27, 14, 0);
         var providerTimestamp = syncedAt.AddSeconds(-2);
-        var repository = new Mock<IDiscoveryRepository>(MockBehavior.Strict);
-        repository
-            .Setup(value => value.GetSourceVersionAsync(
-                It.IsAny<Guid>(),
-                DiscoverySourceKinds.Finviz,
-                "v=111&f=sh_relvol_o2",
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(0);
         var screener = new Mock<IScreenerSnapshotSource>(MockBehavior.Strict);
         screener
             .Setup(source => source.PreviewAsync(
@@ -49,14 +42,11 @@ public sealed class DiscoverySourceAdapterTests
                 RawReference = "finviz:v=111&f=sh_relvol_o2|raw-archive:finviz-snapshot-42"
             });
         var source = new FinvizDiscoverySource(
-            Guid.NewGuid(),
             "v=111&f=sh_relvol_o2",
-            ["STALE"],
             "swing",
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(3),
             null,
-            repository.Object,
             screener.Object,
             new FixedTimeProvider(syncedAt));
 
@@ -72,8 +62,23 @@ public sealed class DiscoverySourceAdapterTests
         var poet = Assert.Single(capture.Symbols, item => item.Symbol == "POET");
         using var poetMetadata = JsonDocument.Parse(poet.MetadataJson);
         Assert.Equal(JsonValueKind.Null, poetMetadata.RootElement.GetProperty("vendor_reported_rvol").ValueKind);
-        repository.VerifyAll();
         screener.VerifyAll();
+    }
+
+    // Startup cannot assign a new observation timestamp to a frozen preview during a provider failure.
+    [Fact]
+    public async Task FinvizSource_ProviderFailureDoesNotProduceAnObservation()
+    {
+        var now = Utc(2026, 8, 27, 14, 0);
+        var screener = new Mock<IScreenerSnapshotSource>(MockBehavior.Strict);
+        screener.Setup(source => source.PreviewAsync("test-query", ScreenerScope.Swing, null, default))
+            .ReturnsAsync(ScreenerSyncResult.Failed(ScreenerScope.Swing, "Test", "test-query", "Provider unavailable"));
+        var source = new FinvizDiscoverySource(
+            "test-query", "swing", TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(3), null, screener.Object,
+            new FixedTimeProvider(now));
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => source.CaptureAsync(default));
+        Assert.Equal("Provider unavailable", failure.Message);
     }
 
     [Fact]

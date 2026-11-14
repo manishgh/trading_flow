@@ -2,6 +2,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using TradingFlow.Application.Jobs;
+using TradingFlow.Backtesting;
+using TradingFlow.Domain.Persistence;
+using TradingFlow.Web.Models;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Services;
@@ -169,6 +172,116 @@ public sealed class PaperJobServiceTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // A changed build remains the primary terminal cause even when the independently attempted recovery also fails.
+    [Fact]
+    public async Task RecoveryWorker_PublishesSingleProvenanceMismatchAndAttemptsBrokerProtection()
+    {
+        var lifecycle = new Mock<IPaperRunLifecycleRepository>(MockBehavior.Strict);
+        var recovery = new Mock<IPaperJobRecoveryService>(MockBehavior.Strict);
+        var service = CreateService(recovery.Object, lifecycle.Object);
+        var persisted = CreatePersisted(Guid.NewGuid(), "running");
+        var run = new SimpleYamlReader().ReadBacktestRun(configPath);
+        persisted.RequestJson = DurableFileJobRequest.Capture([configPath, .. run.Strategies]).Serialize();
+        persisted.AttemptCount = 2;
+        var leaseToken = Guid.NewGuid();
+        SetOwnedLease(persisted, leaseToken);
+
+        var sequence = new MockSequence();
+        lifecycle.InSequence(sequence).Setup(candidate => candidate.ValidatePaperRunAsync(
+                It.Is<ProductionRun>(requested => requested.RunId == persisted.Id), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Stored build and current build have different provenance."));
+        recovery.InSequence(sequence).Setup(candidate => candidate.RecoverAsync(
+                persisted, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Synthetic broker timeout."));
+
+        var worker = new DurableJobProcessor(repository.Object);
+        Assert.True(await worker.ProcessNextAsync("test-owner", service, DurableJobWorkerOptions.Default, default));
+
+        Assert.Equal("interrupted", persisted.Status);
+        Assert.NotNull(persisted.ErrorMessage);
+        Assert.Contains("different provenance. Broker protection recovery also failed: Synthetic broker timeout.", persisted.ErrorMessage);
+        Assert.Equal(persisted.ErrorMessage, service.Get(persisted.Id)?.ErrorMessage);
+        lifecycle.Verify(candidate => candidate.ValidatePaperRunAsync(
+            It.IsAny<ProductionRun>(), It.IsAny<CancellationToken>()), Times.Once);
+        recovery.Verify(candidate => candidate.RecoverAsync(persisted, It.IsAny<CancellationToken>()), Times.Once);
+        lifecycle.Verify(candidate => candidate.StartPaperRunAsync(
+            It.IsAny<ProductionRun>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        repository.Verify(candidate => candidate.CompleteAsync(
+            persisted.Id, leaseToken, "interrupted", null, null, persisted.ErrorMessage,
+            It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // A routine progress snapshot carrying a stop uses the same atomic route as the health transition.
+    [Fact]
+    public async Task PaperSnapshots_AlwaysPersistStoppedHealthWithItsFence()
+    {
+        var lifecycle = repository.As<IPaperRunLifecycleRepository>();
+        var persisted = CreatePersisted(Guid.NewGuid(), "running");
+        var leaseToken = Guid.NewGuid();
+        SetOwnedLease(persisted, leaseToken);
+        var stoppedAt = DateTimeOffset.UtcNow;
+        var writes = new List<string>();
+        repository.Setup(candidate => candidate.SaveSnapshotAsync(
+                persisted.Id, leaseToken, It.IsAny<string>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, Guid, string, DateTimeOffset, CancellationToken>((_, _, json, _, _) =>
+            {
+                Assert.DoesNotContain("\"entriesStopped\":true", json);
+                writes.Add("progress");
+            })
+            .ReturnsAsync(true);
+        lifecycle.Setup(candidate => candidate.SavePaperEntryStopSnapshotAsync(
+                persisted.Id, leaseToken, It.IsAny<string>(), stoppedAt, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, Guid, string, DateTimeOffset, DateTimeOffset, CancellationToken>((_, _, json, _, _, _) =>
+            {
+                Assert.Contains("\"entriesStopped\":true", json);
+                writes.Add("atomic stop");
+            })
+            .ReturnsAsync(true);
+
+        var snapshot = new BacktestJobSnapshot(
+            persisted.Id, persisted.RunName, persisted.ConfigPath, "running", persisted.CreatedAt, persisted.StartedAt,
+            null, null, "running", 0, 0, [], null);
+        var handler = new Mock<IDurableJobHandler>();
+        handler.SetupGet(candidate => candidate.JobType).Returns("paper");
+        handler.Setup(candidate => candidate.ExecuteAsync(It.IsAny<DurableJobExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Returns(async (DurableJobExecutionContext context, CancellationToken token) =>
+            {
+                await PaperJobService.PersistPaperSnapshotAsync(context, snapshot, token);
+                var stopped = snapshot with { PaperPipelineHealth = new LivePipelineHealth(3, 3, EntriesStoppedAtUtc: stoppedAt) };
+                await PaperJobService.PersistPaperSnapshotAsync(context, stopped, token);
+                await PaperJobService.PersistPaperSnapshotAsync(context, stopped with { CompletedTickerCount = 10 }, token);
+                return DurableJobCompletion.Completed(context.LatestSnapshotJson, null);
+            });
+
+        Assert.True(await new DurableJobProcessor(repository.Object).ProcessNextAsync(
+            "test-owner", handler.Object, DurableJobWorkerOptions.Default, default));
+
+        Assert.Equal(["progress", "atomic stop", "atomic stop"], writes);
+        Assert.Contains("\"entriesStopped\":true", persisted.SnapshotJson);
+    }
+
+    // Keep the worker orchestration real while capturing its durable publications in the fixture.
+    private void SetOwnedLease(PersistedJob persisted, Guid token)
+    {
+        repository.Setup(candidate => candidate.TryAcquireNextAsync(
+                persisted.JobType, It.IsAny<string>(), It.IsAny<DateTimeOffset>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DurableJobLease(persisted, token, DateTimeOffset.UtcNow.AddMinutes(1)));
+        repository.Setup(candidate => candidate.GetJobAsync(persisted.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(persisted);
+        repository.Setup(candidate => candidate.CompleteAsync(
+                persisted.Id, token, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
+                It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, Guid, string, string?, string?, string?, DateTimeOffset, CancellationToken>(
+                (_, _, status, snapshot, _, error, finished, _) =>
+                {
+                    persisted.Status = status;
+                    persisted.SnapshotJson = snapshot;
+                    persisted.ErrorMessage = error;
+                    persisted.FinishedAt = finished;
+                })
+            .ReturnsAsync(true);
+    }
+
     [Fact]
     public void ScopeAttemptArtifacts_IsolatesConcurrentAndRecoveredPaperAttempts()
     {
@@ -189,7 +302,9 @@ public sealed class PaperJobServiceTests
         Assert.Contains(firstLease.ToString("N"), first.ResultsRoot, StringComparison.OrdinalIgnoreCase);
     }
 
-    private PaperJobService CreateService(IPaperJobRecoveryService? recoveryService = null)
+    // Compose a paper handler using only synthetic recovery and lease persistence.
+    private PaperJobService CreateService(
+        IPaperJobRecoveryService? recoveryService = null, IPaperRunLifecycleRepository? lifecycle = null)
     {
         var credentials = new AlpacaCredentialProvider(new ConfigurationBuilder().Build());
         var repositoryRoot = TestRepository.FindRoot();
@@ -217,7 +332,8 @@ public sealed class PaperJobServiceTests
             new ProjectPaths(repositoryRoot),
             configCatalog: configCatalog,
             durableJobs: repository.Object,
-            recoveryService: recoveryService);
+            recoveryService: recoveryService,
+            runLifecycle: lifecycle);
     }
 
     private PersistedJob CreatePersisted(Guid id, string status) => new()

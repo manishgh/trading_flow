@@ -5,6 +5,24 @@ using TradingFlow.Engine.Configuration;
 namespace TradingFlow.Tests;
 public sealed class MonthlyBacktestPresentationTests
 {
+    // The Backtests detail uses the economic time, keeps a range touch date-only, and labels old replay stamps.
+    [Fact]
+    public void TradeTimingPresentation_DistinguishesModeledPointRangeAndLegacyReceipt()
+    {
+        var session = new DateOnly(2017, 1, 31);
+        var opened = new DateTimeOffset(2017, 1, 31, 14, 30, 0, TimeSpan.Zero);
+        var receipt = new DateTimeOffset(2017, 2, 1, 5, 0, 0, TimeSpan.Zero);
+        var timing = new BacktestFillTiming(session, opened, "regular_session_open", receipt, receipt);
+        Assert.Equal("31 Jan 14:30 UTC", MonthlyBacktestPresentation.FillTimeLabel(timing, receipt));
+        Assert.Equal("31 Jan NY · time unavailable", MonthlyBacktestPresentation.FillTimeLabel(
+            timing with { EconomicTimestampUtc = null, Basis = "source_bar_range" }, receipt));
+        Assert.Equal("01 Feb 05:00 UTC (saved replay stamp)", MonthlyBacktestPresentation.FillTimeLabel(null, receipt));
+
+        var trade = new BacktestTrade("ETF", "Test", "long", opened.AddDays(-1), receipt, 1, 99, 100, 0, 0,
+            "scheduled", 1, 0, 1) { ExitFillTiming = timing };
+        Assert.Equal(session, MonthlyBacktestPresentation.ExitSessionDate(trade, null));
+    }
+
     /// <summary>An actual first-of-month day exit belongs to that month in both monthly totals and the shared drilldown date.</summary>
     [Fact]
     public void DayExitOnOctoberFirst_RemainsInOctoberAndCarriesPriorMonthEquity()

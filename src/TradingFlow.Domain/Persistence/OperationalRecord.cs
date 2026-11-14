@@ -19,4 +19,13 @@ public sealed class ProductionRun : OperationalRecord
     public string Status { get; set; } = string.Empty;
     public DateTimeOffset StartedAtUtc { get; set; }
     public DateTimeOffset? FinishedAtUtc { get; set; }
+
+    // Present only on host-owned reconciliation runs; legacy and manual rows carry no inferred owner.
+    public long? HostLeaseExpiresAtUtcTicks { get; set; }
+
+    // Paper job attempts own the run through the exact lease that opened it.
+    public Guid? PaperJobLeaseToken { get; set; }
+
+    // A pipeline stop is sticky for the run and enforced at the first broker POST.
+    public DateTimeOffset? PaperEntriesStoppedAtUtc { get; set; }
 }

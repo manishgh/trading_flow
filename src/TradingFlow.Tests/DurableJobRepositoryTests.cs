@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.Jobs;
+using TradingFlow.Data.Orders;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Jobs;
 
 namespace TradingFlow.Tests;
@@ -270,6 +272,204 @@ public sealed class DurableJobRepositoryTests : IAsyncLifetime
         Assert.False(snapshotSaved);
         Assert.False(renewed);
     }
+
+    // The durable lease alone authorizes state changes for this exact paper run.
+    [Fact]
+    public async Task PaperRunLifecycle_OnlyCurrentLeaseCanReopenOrFinishAfterCrash()
+    {
+        var repository = new SqliteJobRepository(factory);
+        var job = CreateJob();
+        job.JobType = "paper";
+        Assert.True(await repository.TryEnqueueAsync(job, 10, default));
+        var first = await repository.TryAcquireAsync(job.Id, "first-worker", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(first);
+        var production = CreatePaperRun(job.Id);
+        Assert.NotNull(await repository.StartPaperRunAsync(production, first.LeaseToken, default));
+        var original = await ReadRunAsync(job.Id);
+        Assert.Equal("running", original.Status);
+
+        var other = CreatePaperRun(Guid.NewGuid());
+        await using (var db = factory.CreateDbContext())
+        {
+            db.ProductionRuns.Add(other);
+            await db.SaveChangesAsync();
+            await db.Jobs.Where(item => item.Id == job.Id).ExecuteUpdateAsync(update => update
+                .SetProperty(item => item.LeaseExpiresAtUtcTicks, 0L));
+        }
+
+        var recovered = await repository.TryAcquireAsync(job.Id, "next-worker", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(recovered);
+        var abandoned = await ReadRunAsync(job.Id);
+        Assert.Equal("interrupted", abandoned.Status);
+        Assert.NotNull(abandoned.FinishedAtUtc);
+        Assert.Null(await repository.StartPaperRunAsync(CreatePaperRun(job.Id), first.LeaseToken, default));
+        Assert.False(await repository.CompleteAsync(job.Id, first.LeaseToken, "failed", null, null, "stale owner", DateTimeOffset.UtcNow, default));
+
+        var compatible = CreatePaperRun(job.Id);
+        Assert.NotNull(await repository.StartPaperRunAsync(compatible, recovered.LeaseToken, default));
+        var reopened = await ReadRunAsync(job.Id);
+        Assert.Equal(original.StartedAtUtc, reopened.StartedAtUtc);
+        Assert.Null(reopened.FinishedAtUtc);
+
+        Assert.True(await repository.RequestCancellationAsync(job.Id, DateTimeOffset.UtcNow, default));
+        Assert.True(await repository.CompleteAsync(job.Id, recovered.LeaseToken, "cancelled", null, null, null, DateTimeOffset.UtcNow, default));
+        Assert.Equal("cancelled", (await ReadRunAsync(job.Id)).Status);
+        Assert.NotNull((await ReadRunAsync(job.Id)).FinishedAtUtc);
+        Assert.Equal("running", (await ReadRunAsync(other.RunId)).Status);
+    }
+
+    // A normal host stop releases the lease and closes the row; the same provenance can resume later.
+    [Fact]
+    public async Task PaperRunLifecycle_ShutdownClosesRunWithNoChangeToItsProvenance()
+    {
+        var repository = new SqliteJobRepository(factory);
+        var job = CreateJob();
+        job.JobType = "paper";
+        Assert.True(await repository.TryEnqueueAsync(job, 10, default));
+        var lease = await repository.TryAcquireAsync(job.Id, "worker", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(lease);
+        Assert.NotNull(await repository.StartPaperRunAsync(CreatePaperRun(job.Id), lease.LeaseToken, default));
+        await repository.ReleaseLeaseAsync(job.Id, lease.LeaseToken, default);
+
+        var run = await ReadRunAsync(job.Id);
+        Assert.Equal("stopped", run.Status);
+        Assert.NotNull(run.FinishedAtUtc);
+        Assert.Equal(CreatePaperRun(job.Id).CodeVersion, run.CodeVersion);
+        Assert.Null((await repository.GetJobAsync(job.Id, default))?.LeaseToken);
+    }
+
+    // All stored identity fields remain exact after a rejected restart.
+    [Theory]
+    [InlineData("build")]
+    [InlineData("config")]
+    [InlineData("universe")]
+    [InlineData("decision")]
+    [InlineData("started")]
+    public async Task PaperRunLifecycle_ConflictingStartupDoesNotRewriteStoredRun(string changedField)
+    {
+        var repository = new SqliteJobRepository(factory);
+        var job = CreateJob();
+        job.JobType = "paper";
+        Assert.True(await repository.TryEnqueueAsync(job, 10, default));
+        var lease = await repository.TryAcquireAsync(job.Id, "worker", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(lease);
+        var original = CreatePaperRun(job.Id);
+        Assert.NotNull(await repository.StartPaperRunAsync(original, lease.LeaseToken, default));
+        var changed = CreatePaperRun(job.Id);
+        switch (changedField)
+        {
+            case "build": changed.CodeVersion = new string('c', 40); break;
+            case "config": changed.ConfigHash = new string('d', 64); break;
+            case "universe": changed.UniverseSnapshotId = Guid.NewGuid(); break;
+            case "decision": changed.DecisionRunId = Guid.NewGuid(); break;
+            case "started": changed.StartedAtUtc = changed.StartedAtUtc.AddDays(1); break;
+        }
+
+        var preflight = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.ValidatePaperRunAsync(changed, default));
+        var registration = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.StartPaperRunAsync(changed, lease.LeaseToken, default));
+        Assert.Equal(preflight.Message, registration.Message);
+        Assert.Contains("different provenance", preflight.Message, StringComparison.Ordinal);
+
+        var stored = await ReadRunAsync(job.Id);
+        Assert.Equal(original.CodeVersion, stored.CodeVersion);
+        Assert.Equal(original.ConfigHash, stored.ConfigHash);
+        Assert.Equal(original.UniverseSnapshotId, stored.UniverseSnapshotId);
+        Assert.Equal(original.DecisionRunId, stored.DecisionRunId);
+        Assert.Equal(original.StartedAtUtc, stored.StartedAtUtc);
+    }
+
+    // A cancellation recorded before startup prevents registration under the otherwise current lease.
+    [Fact]
+    public async Task PaperRunLifecycle_CancellationFencesRunStartup()
+    {
+        var repository = new SqliteJobRepository(factory);
+        var job = CreateJob();
+        job.JobType = "paper";
+        Assert.True(await repository.TryEnqueueAsync(job, 10, default));
+        var lease = await repository.TryAcquireAsync(job.Id, "worker", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(lease);
+        Assert.True(await repository.RequestCancellationAsync(job.Id, DateTimeOffset.UtcNow, default));
+        Assert.Null(await repository.StartPaperRunAsync(CreatePaperRun(job.Id), lease.LeaseToken, default));
+        await using var db = factory.CreateDbContext();
+        Assert.False(await db.ProductionRuns.AnyAsync(run => run.RunId == job.Id));
+    }
+
+    // A terminal health snapshot and its entry fence survive release and compatible retry together.
+    [Fact]
+    public async Task PaperRunLifecycle_EntryStopSurvivesACompatibleRestart()
+    {
+        var repository = new SqliteJobRepository(factory);
+        var job = CreateJob();
+        job.JobType = "paper";
+        Assert.True(await repository.TryEnqueueAsync(job, 10, default));
+        var first = await repository.TryAcquireAsync(job.Id, "first", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(first);
+        Assert.NotNull(await repository.StartPaperRunAsync(CreatePaperRun(job.Id), first.LeaseToken, default));
+        const string snapshot = "{\"paperPipelineHealth\":{\"entriesStopped\":true}}";
+        var stopped = DateTimeOffset.UtcNow;
+        Assert.True(await repository.SavePaperEntryStopSnapshotAsync(job.Id, first.LeaseToken, snapshot, stopped, stopped, default));
+        await repository.ReleaseLeaseAsync(job.Id, first.LeaseToken, default);
+
+        var second = await repository.TryAcquireAsync(job.Id, "second", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(second);
+        Assert.Equal("stopped", (await ReadRunAsync(job.Id)).Status);
+        Assert.Equal(snapshot, second.Job.SnapshotJson);
+        Assert.NotNull(await repository.StartPaperRunAsync(CreatePaperRun(job.Id), second.LeaseToken, default));
+
+        var reopened = await ReadRunAsync(job.Id);
+        Assert.Equal("running", reopened.Status);
+        Assert.Equal(stopped, reopened.PaperEntriesStoppedAtUtc);
+        Assert.Equal(second.LeaseToken, reopened.PaperJobLeaseToken);
+        Assert.False(await repository.SavePaperEntryStopSnapshotAsync(job.Id, first.LeaseToken, "{}", stopped.AddSeconds(1), stopped, default));
+        Assert.Equal(snapshot, (await repository.GetJobAsync(job.Id, default))?.SnapshotJson);
+    }
+
+    // Restart reconciles only marked, expired host rows. Shutdown affects just the current host ID.
+    [Fact]
+    public async Task HostRunLifecycle_LeavesLiveHostsAndUnclassifiedRowsUntouched()
+    {
+        var repository = new SqliteProductionHostRunRepository(factory);
+        var expired = CreatePaperRun(Guid.NewGuid());
+        expired.HostLeaseExpiresAtUtcTicks = 1;
+        var active = CreatePaperRun(Guid.NewGuid());
+        var unclassified = CreatePaperRun(Guid.NewGuid());
+        await using (var db = factory.CreateDbContext())
+        {
+            db.ProductionRuns.AddRange(expired, unclassified);
+            await db.SaveChangesAsync();
+        }
+        await repository.StartAsync(active, TimeSpan.FromMinutes(1), default);
+        var secondHost = CreatePaperRun(Guid.NewGuid());
+        await repository.StartAsync(secondHost, TimeSpan.FromMinutes(1), default);
+        Assert.Equal("interrupted", (await ReadRunAsync(expired.RunId)).Status);
+        Assert.NotNull((await ReadRunAsync(expired.RunId)).FinishedAtUtc);
+        Assert.False(await repository.RenewAsync(expired.RunId, TimeSpan.FromMinutes(1), default));
+
+        await repository.StopAsync(secondHost.RunId, default);
+        Assert.Equal("stopped", (await ReadRunAsync(secondHost.RunId)).Status);
+        Assert.NotNull((await ReadRunAsync(secondHost.RunId)).FinishedAtUtc);
+        Assert.Equal("running", (await ReadRunAsync(active.RunId)).Status);
+        Assert.Equal("running", (await ReadRunAsync(unclassified.RunId)).Status);
+        Assert.Null((await ReadRunAsync(unclassified.RunId)).FinishedAtUtc);
+    }
+
+    // Read the committed row with a separate connection to expose transaction and ownership defects.
+    private async Task<ProductionRun> ReadRunAsync(Guid id)
+    {
+        await using var context = factory.CreateDbContext();
+        return await context.ProductionRuns.AsNoTracking().SingleAsync(run => run.RunId == id);
+    }
+
+    // Use one explicit immutable identity for all lifecycle transitions of an owned test run.
+    private static ProductionRun CreatePaperRun(Guid id) => new()
+    {
+        RunId = id,
+        Profile = "paper",
+        Status = "running",
+        ConfigHash = new string('a', 64),
+        CodeVersion = new string('b', 40),
+        StartedAtUtc = new DateTimeOffset(2026, 8, 27, 14, 0, 0, TimeSpan.Zero)
+    };
 
     private static PersistedJob CreateJob() => new()
     {

@@ -96,6 +96,7 @@ public sealed class ProductionCompositionTests
         }
     }
 
+    // Ensure run ownership is acquired before producers and remains live through the last broker reconciliation.
     [Fact]
     public void RuntimeComposition_ContainsNoAutonomousPrototypeTradingOrAdvisoryServices()
     {
@@ -123,11 +124,13 @@ public sealed class ProductionCompositionTests
             typeof(AlpacaMarketStateStreamService),
             typeof(AlpacaOrderSynchronizationHostedService),
             typeof(OrderDispatchRecoveryHostedService),
+            typeof(ProductionHostRunService),
             typeof(ExecutionShutdownHostedService)
         }.OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
 
         Assert.Equal(expectedTypes, actualTypes);
-        Assert.Equal(typeof(ExecutionShutdownHostedService), hostedTypesInRegistrationOrder[0]);
+        Assert.Equal(typeof(ProductionHostRunService), hostedTypesInRegistrationOrder[0]);
+        Assert.Equal(typeof(ExecutionShutdownHostedService), hostedTypesInRegistrationOrder[1]);
         Assert.True(
             Array.IndexOf(hostedTypesInRegistrationOrder, typeof(AlpacaOrderSynchronizationHostedService)) > 0,
             "Order synchronization must stop before execution shutdown performs the final journal checkpoint.");

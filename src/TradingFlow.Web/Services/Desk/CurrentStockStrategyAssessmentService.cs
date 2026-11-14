@@ -44,7 +44,7 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
         }
         var stamp = await authorization.StampAsync(owner, token)
             ?? throw new UnauthorizedAccessException("Sign in again before requesting strategy checks.");
-        await identities.RequireSwingStrategyAsync(normalized.Strategy, "diagnostic_replay", token);
+        await RequireCurrentStrategyAsync(normalized.Strategy, token);
         await ResolveSourcesAsync(normalized.Source, token);
         var profile = profiles.DefaultPaperConfig()?.Config
             ?? throw new InvalidOperationException("No default paper profile is available to supply the existing data-feed and warm-up settings.");
@@ -61,6 +61,16 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
             throw new InvalidOperationException("The configured observation queue is full. Wait for an active job to finish or cancel it.");
         }
         return View(job, work);
+    }
+
+    // Rechecks exact source availability before enqueue and before collecting any data for a queued assessment.
+    private async Task<StrategyArtifact> RequireCurrentStrategyAsync(StrategyReference strategy, CancellationToken token)
+    {
+        var artifact = artifacts.RequireExact(new(strategy.StrategyId, strategy.SemanticVersion,
+            strategy.ContentSha256.ToLowerInvariant()));
+        artifacts.RequireEnabled(artifact);
+        await identities.RequireSwingStrategyAsync(strategy, "diagnostic_replay", token);
+        return artifact;
     }
 
     /// <summary>Returns only this operator's observation, with expired evidence clearly identified at read time.</summary>
@@ -95,9 +105,7 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
             work.RequestSha256 != PreparationJson.Hash(work.Request))
             throw new InvalidDataException("The frozen strategy request or effective profile hash does not match its stored contents.");
         await RequireAuthorizationAsync(work, token);
-        await identities.RequireSwingStrategyAsync(work.Request.Strategy, "diagnostic_replay", token);
-        var artifact = artifacts.RequireExact(new(work.Request.Strategy.StrategyId,
-            work.Request.Strategy.SemanticVersion, work.Request.Strategy.ContentSha256));
+        var artifact = await RequireCurrentStrategyAsync(work.Request.Strategy, token);
         var runtime = new AuthorizedRuntimeStrategy(artifact.Identity, StrategySelectionMode.DiagnosticReplay,
             artifact.ResolvedStrategy, artifact.AdmissionProfile);
         var batch = await evidence.LoadAsync(work.Profile, runtime, work.Request.Symbols, token);

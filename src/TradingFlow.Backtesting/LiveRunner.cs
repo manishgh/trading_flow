@@ -38,7 +38,9 @@ public sealed partial class LiveRunner(
     TradingFlow.Domain.Persistence.ICandidateRepository? candidateRepository = null,
     TimeProvider? timeProvider = null,
     TimeSpan? iterationInterval = null,
-    IStrategyDecisionContextProvider? decisionContextProvider = null)
+    IStrategyDecisionContextProvider? decisionContextProvider = null,
+    LivePipelineHealth? initialPipelineHealth = null,
+    Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null)
 {
     private readonly IStrategyDecisionContextProvider? _configuredDecisionContextProvider = decisionContextProvider;
     private IStrategyDecisionContextProvider? _decisionContextProvider;
@@ -102,7 +104,7 @@ public sealed partial class LiveRunner(
             progress);
     }
 
-    /// <summary>Validates supported strategies before starting provider or broker work for this run.</summary>
+    /// <summary>Polls authorized swing strategies and records pipeline health between completed batches.</summary>
     private async Task RunCoreAsync(
         BacktestRunConfig run,
         StrategyDefinition[] strategies,
@@ -133,6 +135,8 @@ public sealed partial class LiveRunner(
         var catalystStreamer = new CatalystStreamer(catalystProvider);
 
         var pollingInterval = _iterationInterval;
+        var pipelineHealth = initialPipelineHealth ?? new LivePipelineHealth();
+        var decisionCalendar = new PaperDecisionCalendar(provider, ResolveExchangeTimezone(strategies));
 
         var configuredTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         var lastDiscoveryTickers = new HashSet<string>(configuredTickers, StringComparer.OrdinalIgnoreCase);
@@ -354,6 +358,8 @@ public sealed partial class LiveRunner(
                 }
             }
 
+            var pipelineFailures = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase);
             try
             {
                 var iterationTickers = new HashSet<string>(discoveryTickers, StringComparer.OrdinalIgnoreCase);
@@ -371,77 +377,27 @@ public sealed partial class LiveRunner(
                 var processed = 0;
                 var total = iterationTickers.Count;
                 var activeTickerSnapshot = activeExposureTickers.ToArray();
-                var requiredTimeframes = ResolveRequiredTimeframes(run, strategies);
-                var requestedIntervals = run.Intervals
-                    .Where(x => !String.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
+                var (preparedStates, fallbackFailures) = await PrepareMarketStatesAsync(
+                    run, strategies, iterationTickers, start, end, progress, cancellationToken);
 
-                if (requestedIntervals.Length == 0)
+                // Refresh sources due after warm-up even when the older observation
+                // has TTL left, while retaining the original batch for exits.
+                if (_discoverySession is not null)
                 {
-                    requestedIntervals = requiredTimeframes;
-                }
-
-                var preparedStates = new System.Collections.Concurrent.ConcurrentDictionary<string, TickerMarketState>(
-                    StringComparer.OrdinalIgnoreCase);
-                var unresolvedTickers = new System.Collections.Concurrent.ConcurrentBag<string>();
-                await Parallel.ForEachAsync(
-                    iterationTickers,
-                    new ParallelOptions
+                    try
                     {
-                        MaxDegreeOfParallelism = ResolveWorkerCount(run.Engine.WorkerCount),
-                        CancellationToken = cancellationToken
-                    },
-                    async (ticker, token) =>
-                    {
-                        var streamed = _marketStateSnapshots is null
-                            ? null
-                            : await _marketStateSnapshots.GetTickerStateAsync(
-                                ticker,
-                                requiredTimeframes,
-                                run.Engine.IndicatorWarmupBars,
-                                end,
-                                token);
-                        if (streamed is null)
-                        {
-                            unresolvedTickers.Add(ticker);
-                        }
-                        else
-                        {
-                            preparedStates[ticker] = streamed;
-                        }
-                    });
-
-                var fallbackFailures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (!unresolvedTickers.IsEmpty)
-                {
-                    var fallback = await _candlePipeline.RunAsync(
-                        new CandlePipelineRequest(
-                            unresolvedTickers.ToArray(),
-                            requestedIntervals,
-                            requiredTimeframes,
-                            run.DerivedTimeframes.Source,
-                            start,
-                            end,
-                            run.Engine.BoundedCapacity,
-                            run.Engine.WorkerCount,
-                            IncludeExtendedHours: true,
-                            ResolveExchangeTimezone(strategies),
-                            CreateCandleStoreContext(run)),
-                        provider,
-                        cancellationToken,
-                        new Progress<string>(message => progress?.Report(message)));
-                    foreach (var (ticker, state) in fallback.TickerStates)
-                    {
-                        preparedStates[ticker] = state;
+                        var refreshed = await _discoverySession.RefreshAsync(cancellationToken);
+                        lastDiscoveryMembers = refreshed.Members.ToDictionary(member => member.Symbol, StringComparer.OrdinalIgnoreCase);
+                        lastDiscoveryTickers = refreshed.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
                     }
-
-                    foreach (var (ticker, failure) in fallback.Failures)
+                    catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                     {
-                        fallbackFailures[ticker] = failure;
+                        lastDiscoveryMembers.Clear();
+                        logger.LogWarning(exception, "Discovery revalidation failed for {RunName}; membership is unavailable for this poll.", run.RunName);
                     }
                 }
 
+                var calendar = decisionCalendar.ForPoll(end, cancellationToken);
                 await Parallel.ForEachAsync(
                     iterationTickers,
                     new ParallelOptions
@@ -454,29 +410,32 @@ public sealed partial class LiveRunner(
                         try
                         {
                             progress?.Report($"Processing prepared market state for {ticker}");
+                            var marketFailure = fallbackFailures.GetValueOrDefault(ticker);
                             if (!preparedStates.TryGetValue(ticker, out var tickerState))
                             {
-                                var reason = fallbackFailures.TryGetValue(ticker, out var failure)
-                                    ? failure
-                                    : $"No prepared market state was produced for ticker {ticker}.";
-                                throw new InvalidOperationException(reason);
+                                throw new InvalidOperationException(marketFailure ??
+                                    $"No prepared market state was produced for ticker {ticker}.");
                             }
 
-                             await ProcessTickerLiveAsync(
-                                 run,
-                                 strategies,
-                                 ticker,
-                                 tickerState,
-                                 catalystStreamer,
-                                 lastDiscoveryMembers.TryGetValue(ticker, out var discoveryMember)
-                                     ? discoveryMember
-                                     : null,
-                                 activeTickerSnapshot,
+                            await ProcessTickerLiveAsync(
+                                run,
+                                strategies,
+                                ticker,
+                                tickerState,
+                                catalystStreamer,
+                                lastDiscoveryMembers.GetValueOrDefault(ticker),
+                                activeTickerSnapshot,
                                 openOrdersSnapshot,
                                 openPositionsSnapshot,
                                 brokerStateConfirmedForOrderDecisions,
+                                pipelineHealth.EntriesStopped || marketFailure is not null,
+                                calendar,
                                 token,
                                 progress);
+                            if (marketFailure is not null)
+                            {
+                                throw new InvalidOperationException(marketFailure);
+                            }
                         }
                         catch (OperationCanceledException) when (token.IsCancellationRequested)
                         {
@@ -484,6 +443,7 @@ public sealed partial class LiveRunner(
                         }
                         catch (Exception ex)
                         {
+                            pipelineFailures[ticker] = ex.Message;
                             logger.LogWarning(ex, "Ticker pipeline failed for {Ticker}; continuing with other tickers.", ticker);
                             progress?.Report($"Ticker {ticker} failed: {ex.Message}");
                             await SaveTickerPipelineFailureAuditsAsync(run, strategies, ticker, ex.Message, token);
@@ -495,10 +455,31 @@ public sealed partial class LiveRunner(
                         }
                     });
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
+                pipelineFailures[""] = ex.Message;
                 logger.LogError(ex, "Error in LiveRunner iteration");
                 progress?.Report($"Error processing {run.RunName}: {ex.Message}");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var updatedHealth = pipelineHealth.RecordPoll(pipelineFailures, end);
+            if (updatedHealth != pipelineHealth)
+            {
+                if (publishPipelineHealth is not null)
+                {
+                    await publishPipelineHealth(updatedHealth, cancellationToken);
+                }
+                if (updatedHealth.EntriesStopped && !pipelineHealth.EntriesStopped)
+                {
+                    logger.LogError("New entries stopped for {RunName} after {FailedPolls} consecutive failing polls.",
+                        run.RunName, updatedHealth.ConsecutiveFailingPolls);
+                }
+                pipelineHealth = updatedHealth;
             }
 
             logger.LogInformation("LiveRunner iteration finished. Waiting {PollingInterval}...", pollingInterval);
