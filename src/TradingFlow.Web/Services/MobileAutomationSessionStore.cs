@@ -22,7 +22,8 @@ public sealed class MobileAutomationSessionStore
 
     public MobileAutomationSessionStore(ProjectPaths paths, IArtifactWriter artifactWriter)
     {
-        filePath = Path.Combine(paths.RepositoryRoot, "data", "runtime", "mobile", "automation-sessions.json");
+        // The configured data folder (TradingFlow:DataRoot or TRADINGFLOW_DATA_ROOT), not a fixed repository path.
+        filePath = Path.Combine(paths.DataRoot, "runtime", "mobile", "automation-sessions.json");
         this.artifactWriter = artifactWriter;
     }
 

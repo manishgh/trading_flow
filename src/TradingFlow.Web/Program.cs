@@ -112,7 +112,10 @@ var repositoryRoot = ResolveRepositoryRoot(builder.Environment.ContentRootPath);
 var dataRoot = RuntimeDataRootResolver.Resolve(
     repositoryRoot,
     uiTestMode,
-    Environment.GetEnvironmentVariable("TRADINGFLOW_DATA_ROOT"));
+    RuntimeDataRootResolver.SelectConfigured(
+        Environment.GetEnvironmentVariable("TRADINGFLOW_DATA_ROOT"),
+        builder.Configuration[RuntimeDataRootResolver.DataRootSettingKey],
+        uiTestMode));
 var cacheRoot = uiTestMode
     ? Path.Combine(dataRoot, "cache")
     : ResolveRootFromEnvironment("TRADINGFLOW_CACHE_ROOT", Path.Combine(dataRoot, "cache"));

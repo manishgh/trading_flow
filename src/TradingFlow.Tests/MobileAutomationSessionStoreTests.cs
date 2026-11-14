@@ -65,6 +65,30 @@ public sealed class MobileAutomationSessionStoreTests
         }
     }
 
+    // Sessions live under the configured data folder (which may be another drive), never under the repository's own data.
+    [Fact]
+    public async Task SaveAsync_WritesUnderTheConfiguredDataFolder()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var repository = Path.Combine(root, "repository");
+            var dataRoot = Path.Combine(root, "elsewhere", "data");
+            var store = new MobileAutomationSessionStore(
+                new ProjectPaths(repository, dataRoot, Path.Combine(dataRoot, "cache")),
+                AtomicFileArtifactWriter.Instance);
+
+            await store.SaveAsync(new[] { CreateSnapshot(Guid.NewGuid(), "completed", DateTimeOffset.UtcNow.AddHours(-1)) });
+
+            Assert.True(File.Exists(Path.Combine(dataRoot, "runtime", "mobile", "automation-sessions.json")));
+            Assert.False(Directory.Exists(Path.Combine(repository, "data")));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Fact]
     public async Task SaveAsync_DropsTerminalSessionsOlderThanTwoDays()
     {

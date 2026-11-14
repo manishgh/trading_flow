@@ -53,4 +53,32 @@ public sealed class RuntimeDataRootResolverTests
             Path.GetFullPath(isolatedData),
             RuntimeDataRootResolver.Resolve(repositoryRoot, true, isolatedData));
     }
+
+    // The environment variable wins, then the TradingFlow:DataRoot setting, then nothing (the repository default).
+    [Theory]
+    [InlineData("V:\\from-variable", "V:\\from-setting", false, "V:\\from-variable")]
+    [InlineData(null, "V:\\from-setting", false, "V:\\from-setting")]
+    [InlineData("  ", "V:\\from-setting", false, "V:\\from-setting")]
+    [InlineData(null, null, false, null)]
+    public void SelectConfigured_PrefersTheVariableThenTheSetting(string? variable, string? setting, bool uiTest, string? expected) =>
+        Assert.Equal(expected, RuntimeDataRootResolver.SelectConfigured(variable, setting, uiTest));
+
+    // A local settings file can never point a UI test at the operator's data; tests pass their root through the variable.
+    [Fact]
+    public void SelectConfigured_IgnoresTheSettingInUiTestMode()
+    {
+        Assert.Null(RuntimeDataRootResolver.SelectConfigured(null, "V:\\operator-data", uiTestMode: true));
+        Assert.Equal("isolated", RuntimeDataRootResolver.SelectConfigured("isolated", "V:\\operator-data", uiTestMode: true));
+    }
+
+    // A relative configured folder is taken from the repository folder, not from the process's current folder.
+    [Fact]
+    public void RelativeDataRoot_IsResolvedFromTheRepositoryFolder()
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), "trading-flow-repository");
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(repositoryRoot, "..", "shared-data")),
+            RuntimeDataRootResolver.Resolve(repositoryRoot, false, Path.Combine("..", "shared-data")));
+    }
 }
