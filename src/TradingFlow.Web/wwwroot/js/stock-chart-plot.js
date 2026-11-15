@@ -27,6 +27,12 @@
         return index >= 0 && milliseconds < bars[index].endMs ? index : -1;
     }
 
+    // Weekly markers use the assigned exchange week, including its holidays and after-close events.
+    function eventCandleIndex(bars, event, interval) {
+        if (interval !== '1w') return candleIndex(bars, Date.parse(event.eventAtUtc));
+        return event.weeklySessionDate ? bars.findIndex(bar => bar.sessionDate === event.weeklySessionDate) : -1;
+    }
+
     // Read workspace theme tokens for the canvas, including the colour-blind theme.
     function palette(element) {
         const css = getComputedStyle(element);
@@ -393,7 +399,11 @@
             },
             localization: {
                 // Show the linked crosshair label in the same exchange time as the axis.
-                timeFormatter: time => localTime.format(new Date(time * 1000)) + ' NY'
+                timeFormatter(time) {
+                    const bar = model.interval === '1w' ? model.bars.find(item => item.time === time) : null;
+                    if (bar) return bar.sessionDate + ' – ' + bar.weekly.lastSessionDate;
+                    return localTime.format(new Date(time * 1000)) + ' NY';
+                }
             },
             handleScroll: { vertTouchDrag: false, mouseWheel: false }
         });
@@ -411,12 +421,12 @@
 
         scale.subscribeSizeChange(clearCrosshair);
 
-        // Plot news and earnings only in matching candle intervals. The list keeps every original event.
+        // Plot news and earnings at their matching candle while preserving each event's actual time in details.
         function paintMarkers() {
             const shapes = [];
             for (const event of model.events) {
                 if (!model.layers[event.kind]) continue;
-                const index = candleIndex(model.bars, Date.parse(event.eventAtUtc));
+                const index = eventCandleIndex(model.bars, event, model.interval);
                 if (index < 0) continue;
                 shapes.push({
                     time: model.bars[index].startMs / 1000, id: event.id, position: 'aboveBar',
@@ -535,7 +545,7 @@
             scrollToLatest();
         }
 
-        // Rebuild the bounded plotted data and preserve a manually panned or prepended time range.
+        // Fit the initial weekly page and preserve a manually panned or prepended time range.
         function setData(data, retainPosition) {
             clearCrosshair();
             const oldBars = model.bars;
@@ -563,8 +573,8 @@
             if (!model.bars.length) return;
             const wasAtLatest = range && range.to >= oldBars.at(-1)?.plotIndex;
             if ((!wasAtLatest || retainPosition) && preserveRange(scale, oldBars, model.bars, range)) return;
-            scale.applyOptions({ timeVisible: data.interval !== '1d' });
-            if (model.bars.length < 65 && !oldBars.length) {
+            scale.applyOptions({ timeVisible: !['1d', '1w'].includes(data.interval) });
+            if (!oldBars.length && (data.interval === '1w' || model.bars.length < 65)) {
                 scale.setVisibleLogicalRange({ from: -.5, to: model.timeline.length + 2 });
             } else scrollToLatest();
         }
@@ -643,5 +653,5 @@
         };
     }
 
-    window.TradingFlowStockChartPlot = { createPlot, candleIndex, reconstructedAtClose };
+    window.TradingFlowStockChartPlot = { createPlot, candleIndex, eventCandleIndex, reconstructedAtClose };
 })();

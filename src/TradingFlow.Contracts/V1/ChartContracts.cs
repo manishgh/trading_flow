@@ -15,7 +15,16 @@ public sealed record ChartSeriesEvidence(
     string? SourceGeneration,
     bool Reconstructed,
     IReadOnlyList<string> Notes,
-    IReadOnlyList<DateTimeOffset> BasisBreaks);
+    IReadOnlyList<DateTimeOffset> BasisBreaks,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ChartWeeklyPageEvidence? Weekly = null);
+
+public sealed record ChartWeeklyPageEvidence(
+    DateTimeOffset? EvaluatedFromUtc,
+    string SourceRevision,
+    bool Pending,
+    IReadOnlyList<ChartWeeklyGap> Gaps);
+
+public sealed record ChartWeeklyGap(DateOnly WeekOf, string Reason);
 
 public sealed record ChartCandle(
     DateTimeOffset StartUtc,
@@ -31,7 +40,16 @@ public sealed record ChartCandle(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? KnownAtUtc,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? RetrievedAtUtc,
     DateTimeOffset AvailableAtUtc,
-    string CompletionState = "completed");
+    string CompletionState = "completed",
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ChartWeeklyCandleEvidence? Weekly = null);
+
+public sealed record ChartWeeklyCandleEvidence(DateOnly LastSessionDate, IReadOnlyList<ChartWeeklyInputEvidence> Constituents);
+
+public sealed record ChartWeeklyInputEvidence(
+    DateOnly SessionDate,
+    string SourceKind,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? KnownAtUtc,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? RetrievedAtUtc);
 
 public sealed record ChartZone(
     string Id,
@@ -69,7 +87,8 @@ public sealed record ChartMarker(
     string? Detail,
     string Source,
     string? Url = null,
-    bool IsEstimate = false);
+    bool IsEstimate = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateOnly? WeeklySessionDate = null);
 
 // Values are column-major and share the snapshot's bar indices. Availability runs are [index, count, UTC milliseconds].
 public sealed record ChartIndicatorSeries(

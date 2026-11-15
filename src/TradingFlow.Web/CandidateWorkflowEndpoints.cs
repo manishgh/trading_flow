@@ -18,7 +18,7 @@ public static class CandidateWorkflowEndpoints
             {
                 return Results.Ok(await workflow.PreviewAsync(request, cancellationToken));
             }
-            catch (InvalidOperationException exception)
+            catch (Exception exception) when (exception is InvalidOperationException or InvalidDataException)
             {
                 return Results.BadRequest(new ApiErrorResponse(
                     ContractVersions.VersionOne,

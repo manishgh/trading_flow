@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
@@ -343,7 +344,7 @@ public sealed class RunConfigWriter
         }
     }
 
-    /// <summary>Freezes an authorized paper strategy and source membership, applying the central account holding limit when supplied.</summary>
+    /// <summary>Freezes the launch stocks and identifies which reviewed sources the durable worker may refresh.</summary>
     public string SaveTempConfig(
         string baseConfigPath,
         IEnumerable<string> tickers,
@@ -362,7 +363,8 @@ public sealed class RunConfigWriter
         IEnumerable<string>? selectedSourceTickers = null,
         IEnumerable<string>? resolvedScreenerTickers = null,
         Guid? universeSnapshotId = null,
-        int? maxConcurrentPositions = null)
+        int? maxConcurrentPositions = null,
+        string? paperMembershipMode = null)
     {
         ArgumentNullException.ThrowIfNull(strategyArtifact);
         strategyArtifacts.RequireEnabled(strategyArtifact);
@@ -481,6 +483,7 @@ public sealed class RunConfigWriter
             {
                 newYaml.AppendLine("  mode: resolved_snapshot");
                 if (universeSnapshotId is { } snapshotId) newYaml.AppendLine($"  snapshot_id: {snapshotId}");
+                if (paperMembershipMode is not null) newYaml.AppendLine($"  membership_mode: {QuoteYaml(paperMembershipMode)}");
                 newYaml.AppendLine($"  source: {universeSource}");
                 if (wishlistId is not null)
                 {
@@ -576,17 +579,16 @@ public sealed class RunConfigWriter
 
         newYaml.AppendLine();
         newYaml.AppendLine("screener:");
-        // Operational discovery is resolved before admission. Keeping this
-        // disabled prevents the live runner from changing the frozen universe.
+        // The configured screener is separate from the durable run-scoped source refresh below.
         newYaml.AppendLine("  enabled: false");
         newYaml.AppendLine("  provider: finviz");
         newYaml.AppendLine("  filters: []");
 
         AppendDiscoveryRuntime(
             newYaml,
-            wishlistId,
+            paperMembershipMode == PaperMembershipModes.FixedAtLaunch ? null : wishlistId,
             universeSource,
-            resolvedScreenerQuery,
+            paperMembershipMode == PaperMembershipModes.FixedAtLaunch ? null : resolvedScreenerQuery,
             selectedSourceTickers ?? tickers,
             resolvedScreenerTickers ?? []);
 
@@ -1086,6 +1088,13 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  timeframe: {strategy.Execution.Timeframe}");
         yaml.AppendLine($"  slippage_bps: {strategy.Execution.SlippageBps.ToString(CultureInfo.InvariantCulture)}");
         if (strategy.Execution.OpeningGapPolicy is { } openingGapPolicy) yaml.AppendLine($"  opening_gap_policy: {openingGapPolicy}");
+        if (strategy.Execution.EntryWindow is { } entryWindow)
+        {
+            yaml.AppendLine("  entry_window:");
+            yaml.AppendLine($"    policy: {entryWindow.Policy}");
+            yaml.AppendLine($"    version: {entryWindow.Version.ToString(CultureInfo.InvariantCulture)}");
+            yaml.AppendLine($"    grace_seconds: {entryWindow.GraceSeconds.ToString(CultureInfo.InvariantCulture)}");
+        }
         var confirmation = strategy.Execution.EffectiveConfirmation;
         yaml.AppendLine("  confirmation:");
         yaml.AppendLine($"    enabled: {confirmation.Enabled.ToString().ToLowerInvariant()}");
@@ -1165,6 +1174,15 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  precommitted_liquidation_source_utc: {liquidation.ToString("O", CultureInfo.InvariantCulture)}");
         if (engine.ExecutionReplayPolicyId is { } policy)
             yaml.AppendLine($"  execution_replay_policy_id: {RunYamlScalar(policy, "engine.execution_replay_policy_id")}");
+        if (engine.AccountLossReplay is { } accountLoss)
+        {
+            yaml.AppendLine("  account_loss_replay:");
+            yaml.AppendLine($"    enabled: {accountLoss.Enabled.ToString().ToLowerInvariant()}");
+            yaml.AppendLine($"    policy_id: {RunYamlScalar(accountLoss.PolicyId, "engine.account_loss_replay.policy_id")}");
+            yaml.AppendLine($"    daily_pct: {accountLoss.Limits.DailyPct.ToString(CultureInfo.InvariantCulture)}");
+            yaml.AppendLine($"    weekly_pct: {accountLoss.Limits.WeeklyPct.ToString(CultureInfo.InvariantCulture)}");
+            yaml.AppendLine($"    peak_to_trough_pct: {accountLoss.Limits.PeakToTroughPct.ToString(CultureInfo.InvariantCulture)}");
+        }
         if (engine.ExecutionSourceManifestPath is { } executionSource)
         {
             if (!Path.IsPathFullyQualified(executionSource))

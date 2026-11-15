@@ -130,6 +130,8 @@ public sealed partial class MobileAutomationService
             paths.ResolveRepositoryPath(request.StrategyPath),
             cancellationToken);
         var strategy = selectedStrategy.Definition;
+        var entryMode = NormalizeEntryMode(request.EntryMode);
+        RequireSupportedEntryWindow(strategy, entryMode);
         if (!TimeframeParser.IsDailyOrHigher(strategy.Timeframe))
         {
             throw new InvalidOperationException(
@@ -161,7 +163,6 @@ public sealed partial class MobileAutomationService
             throw new InvalidOperationException("Unable to register the reserved automation session.");
         }
 
-        var entryMode = NormalizeEntryMode(request.EntryMode);
         session.Report("queued", $"Queued {request.Source} automation for {normalizedTicker}. EntryMode={entryMode}.");
         try
         {
@@ -312,6 +313,7 @@ public sealed partial class MobileAutomationService
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            RequireSupportedEntryWindow(strategy, entryMode);
             session.Update(current =>
             {
                 current.Status = "starting";

@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
 <header class="stock-chart-page-head">
     <h1>@(valid ? $"{symbol} chart" : "Stock chart")</h1>
-    <a asp-page="/Desk" asp-route-env="@(Request.Query["env"].ToString())" class="btn btn-secondary">Back to Desk</a>
+    <a asp-page="/Desk" asp-route-env="@(Request.Query["env"].ToString())" class="btn btn-secondary" data-desk-return>← Back to Desk</a>
 </header>
 @if (valid)
 {

@@ -20,6 +20,12 @@ public sealed record PaperOrderExecutionDetail(OrderIntentRecord Intent, string 
     public decimal? WeightedFillPrice => UnitFillQuantity > 0 ? Fills.Sum(fill => fill.Price * fill.Quantity) / UnitFillQuantity : null;
     public TimeSpan? DecisionToFirstAttempt => PaperExecutionComparison.Elapsed(Admission?.DecisionAtUtc, FirstPrePostAtUtc);
 
+    // Read only bounded persisted evidence; an absent or malformed clock remains explicitly unavailable.
+    public OrderEntryWindowEvidence? ReadEntryWindow()
+    {
+        return OrderEntryWindowEvidence.Read(Admission?.EntryWindowJson);
+    }
+
     private bool HasAdmissionComparison =>
         PaperExecutionComparison.Elapsed(Admission?.QuoteProviderTimestampUtc, Admission?.QuoteObservedAtUtc) is not null &&
         PaperExecutionComparison.Elapsed(Admission?.QuoteObservedAtUtc, FirstPrePostAtUtc) is not null;

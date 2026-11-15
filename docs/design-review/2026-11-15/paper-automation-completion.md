@@ -1,8 +1,8 @@
 # Paper automation: remaining execution contracts
 
-15 November 2026. Independently reviewed concrete proposal awaiting user approval. No new strategy, source mutation, runtime enablement, broker order, economic study or data download is authorized by writing this design. Monday's separately approved AAPL test remains unchanged. These are shared mechanisms; they do not make a research strategy eligible to trade.
+15 November 2026. Independently reviewed design explicitly approved by the user on 15 November 2026. Implementation is in progress. No new strategy, source mutation, runtime enablement, broker order, economic study or data download is authorized by writing this design. Monday's separately approved AAPL test remains unchanged. These are shared mechanisms; they do not make a research strategy eligible to trade.
 
-Independent review: separate A plan/execution and B code/design reviewers accepted this packet for presentation after the recorded corrections. This is proposed software scope, not implementation or execution approval. The research definitions in the closure inventory remain preliminary and outside this implementation package.
+Independent review: separate A plan/execution and B code/design reviewers accepted this packet for presentation after the recorded corrections. The subsequent user approval authorizes this software scope; it grants no new strategy execution or economic run. The research definitions in the closure inventory remain preliminary and outside this implementation package.
 
 ## P1 — Explicit source refresh for normal Web paper runs
 
@@ -58,4 +58,4 @@ A linked remainder can still fill during review. Alpaca's documented linked-orde
 
 ## Execution and approval boundary
 
-P1, P2 and P3 require explicit approval of this design before adding code, per AGENTS.md. Deliver as separate reviewed commits with focused builds, safety/causality tests and shared UI tests; one heavyweight job at a time. Published app stays paused in its separate binary folder while the isolated checkout is edited. Defer operator installations/restarts until Monday's scheduled capture and authorized paper test finish or reach a documented flat abort. Reviewers A and B do not implement. Installing software does not authorize an automated strategy, a new source list or an economic run. The approved Monday AAPL plumbing test remains separate and needs no repeated approval for its unchanged sequence.
+P1, P2 and P3 received explicit user approval after separate reviews. Deliver as separate reviewed commits with focused builds, safety/causality tests and shared UI tests; one heavyweight job at a time. Published app stays paused in its separate binary folder while the isolated checkout is edited. Defer operator installations/restarts until Monday's scheduled capture and authorized paper test finish or reach a documented flat abort. Reviewers A and B do not implement. Installing software does not authorize an automated strategy, a new source list or an economic run. The approved Monday AAPL plumbing test remains separate and needs no repeated approval for its unchanged sequence.

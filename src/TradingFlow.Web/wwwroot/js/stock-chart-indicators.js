@@ -89,12 +89,14 @@
 
     // Give candles and studies identical page ownership: newer observed gaps remain gaps instead of being backfilled.
     function pageRanges(latest, older) {
-        let boundary = Date.parse(latest.bars[0]?.startUtc);
+        // A gap in weekly history still owns its evaluated page interval.
+        const startOf = page => Date.parse(page.evidence?.weekly?.evaluatedFromUtc || page.bars[0]?.startUtc);
+        let boundary = startOf(latest);
         if (!Number.isFinite(boundary)) boundary = Infinity;
         const ranges = [{ page: latest, before: Infinity, historical: false }];
-        for (const page of [...older].sort((a, b) => Date.parse(b.bars[0]?.startUtc) - Date.parse(a.bars[0]?.startUtc))) {
+        for (const page of [...older].sort((a, b) => startOf(b) - startOf(a))) {
             ranges.push({ page, before: boundary, historical: true });
-            const start = Date.parse(page.bars[0]?.startUtc);
+            const start = startOf(page);
             if (Number.isFinite(start)) boundary = Math.min(boundary, start);
         }
         return ranges;
@@ -164,6 +166,7 @@
         let current = [];
         let mobilePane = '';
         let panePinned = false;
+        let selectionInterval;
 
         // Add one accessible option for each fixed indicator under its measurement group.
         function fillCatalog() {
@@ -194,6 +197,7 @@
 
         // Show the existing study to replace when its family is already selected or the pane limit is full.
         function refreshPicker() {
+            if (get('interval').value === '1w') return;
             const next = proposed();
             const picked = selected.map(study);
             const equivalent = picked.find(item => sameStudy(item, next, get('interval').value));
@@ -213,6 +217,11 @@
 
         // Reflect the mobile pane selection even if a study has too little evidence to plot.
         function refreshPanes() {
+            if (get('interval').value === '1w') {
+                get('pane-control').hidden = true;
+                paneChanged(null);
+                return;
+            }
             const panes = selected.map(study).filter(item => item.display === 'pane');
             if (!panePinned || !panes.some(item => item.token === mobilePane)) {
                 mobilePane = panes.find(item => current.find(series => series.token === item.token)?.points.size)?.token || panes[0]?.token || '';
@@ -226,6 +235,11 @@
         // Render stable focus and expanded evidence across subsequent live chart snapshots.
         function render() {
             const list = get('studies');
+            if (get('interval').value === '1w') {
+                list.hidden = true;
+                refreshPanes();
+                return;
+            }
             const focused = document.activeElement?.closest('[data-chart-study-row]');
             const focusToken = focused?.dataset.chartStudyRow;
             const focusRemove = document.activeElement?.matches('[data-chart-study-remove]');
@@ -287,11 +301,12 @@
         // Restore finite settings and preserve the visible selection order independently of the wire order.
         function restore(tokens, preset) {
             const interval = get('interval').value;
+            selectionInterval = interval === '1w' ? undefined : interval;
             selected = normalize(tokens, interval);
             current = [];
             mobilePane = '';
             panePinned = false;
-            const matchesInterval = preset === 'swing' ? interval === '1d' : interval !== '1d';
+            const matchesInterval = interval === '1w' || (preset === 'swing' ? interval === '1d' : interval !== '1d');
             const hasPreset = Object.hasOwn(presets, preset) && matchesInterval && [...selected].sort().join() === [...presets[preset]].sort().join();
             if (hasPreset) selected = [...presets[preset]];
             get('preset').value = hasPreset ? preset : 'custom';
@@ -345,9 +360,14 @@
         return {
             restore,
             readouts,
-            // Resolve overlapping sources when the display changes between intraday and daily candles.
+            // Suspend the existing studies on weekly candles and restore their calculations on return.
             intervalChanged() {
-                restore(selected, get('preset').value);
+                const interval = get('interval').value;
+                if (interval !== '1w' && interval !== selectionInterval) restore(selected, get('preset').value);
+                else {
+                    refreshPicker();
+                    render();
+                }
             },
             // Return chart tokens in selection order for browser preferences and visible colors.
             tokens: () => [...selected],

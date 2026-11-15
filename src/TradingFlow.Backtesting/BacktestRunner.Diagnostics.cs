@@ -170,6 +170,7 @@ public sealed partial class BacktestRunner
             .ThenByDescending(x => x.AcceptedTradeCount)
             .First();
     }
+    // Replay each independent strategy book with its own clock and capital, reusing the equivalent single-strategy outcome.
     private static IReadOnlyList<StrategyBacktestResult> BuildStrategyResults(
         PortfolioConfig portfolio,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -179,7 +180,8 @@ public sealed partial class BacktestRunner
         UniverseMembership? universeMembership = null,
         IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null,
         PortfolioBuildOutcome? eventOutcome = null,
-        NativeDailyAccountingContext? accounting = null)
+        NativeDailyAccountingContext? accounting = null,
+        BacktestAccountLossInputs? accountLoss = null)
     {
         return strategies
             .Select(strategy =>
@@ -195,14 +197,14 @@ public sealed partial class BacktestRunner
                 var portfolioOutcome = eventOutcome is not null
                     ? new PortfolioBuildOutcome(eventOutcome.Trades.Where(x => x.StrategyId == strategy.StrategyId).ToArray(),
                         eventOutcome.AdmissionAudit, eventOutcome.ExecutionFailures.Where(x => x.StrategyId == strategy.StrategyId).ToArray())
-                        { State = eventOutcome.State }
+                        { State = eventOutcome.State, AccountLoss = eventOutcome.AccountLoss }
                     : BuildPortfolioTradesWithAudit(
                     portfolio,
                     strategy,
                     strategyCandidates,
                     universeMembership,
                     regimeCalendar,
-                    allBars, accounting);
+                    allBars, accounting, accountLoss);
                 var diagnosticsTarget = candidateDiagnostics.FirstOrDefault(diagnostic =>
                     diagnostic.StrategyId.Equals(strategy.StrategyId, StringComparison.OrdinalIgnoreCase));
                 diagnosticsTarget?.MergeRejections(portfolioOutcome.AdmissionAudit);
@@ -241,11 +243,12 @@ public sealed partial class BacktestRunner
                     economicResultsComplete ? trades.Count(x => x.NetProfit < 0) : 0,
                     economicResultsComplete || state is not null ? trades : Array.Empty<BacktestTrade>(),
                     portfolioOutcome.ExecutionFailures,
-                    economicResultsComplete) { PortfolioState = state };
+                    economicResultsComplete) { PortfolioState = state, AccountLoss = portfolioOutcome.AccountLoss };
             })
             .ToArray();
     }
 
+    // Project the unified portfolio with its own account-loss observations when sampling was enabled.
     private static UnifiedPortfolioBacktestResult BuildUnifiedPortfolioResult(
         PortfolioConfig portfolio,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -293,7 +296,7 @@ public sealed partial class BacktestRunner
             portfolioOutcome.AdmissionAudit.RejectionCounts,
             portfolioOutcome.AdmissionAudit.RejectionExamples,
             portfolioOutcome.ExecutionFailures,
-            economicResultsComplete) { PortfolioState = state };
+            economicResultsComplete) { PortfolioState = state, AccountLoss = portfolioOutcome.AccountLoss };
     }
 
     private static IReadOnlyList<StrategyDiagnosticReport> BuildDiagnostics(
@@ -520,6 +523,7 @@ public sealed partial class BacktestRunner
             regimeCalendar).Trades;
     }
 
+    // Replay a single strategy using the same chronological book and optional account-loss policy as the unified result.
     private static PortfolioBuildOutcome BuildPortfolioTradesWithAudit(
         PortfolioConfig portfolio,
         StrategyDefinition strategy,
@@ -527,7 +531,8 @@ public sealed partial class BacktestRunner
         UniverseMembership? universeMembership = null,
         RegimeCalendar? regimeCalendar = null,
         IReadOnlyCollection<OhlcvBar>? marketBars = null,
-        NativeDailyAccountingContext? accounting = null)
+        NativeDailyAccountingContext? accounting = null,
+        BacktestAccountLossInputs? accountLoss = null)
     {
         return BuildPortfolioTradesCore(
             portfolio,
@@ -535,7 +540,7 @@ public sealed partial class BacktestRunner
             _ => strategy,
             universeMembership,
             _ => regimeCalendar,
-            marketBars ?? BuildSyntheticExecutionBars(candidates, _ => strategy), accounting: accounting);
+            marketBars ?? BuildSyntheticExecutionBars(candidates, _ => strategy), accounting: accounting, accountLoss: accountLoss);
     }
 
     private static IReadOnlyList<BacktestTrade> BuildUnifiedPortfolioTrades(
@@ -553,6 +558,7 @@ public sealed partial class BacktestRunner
             regimeCalendars).Trades;
     }
 
+    // Pool all strategies in one account and preserve the enabled loss policy across their common admission order.
     private static PortfolioBuildOutcome BuildUnifiedPortfolioTradesWithAudit(
         PortfolioConfig portfolio,
         IReadOnlyCollection<StrategyDefinition> strategies,
@@ -561,7 +567,8 @@ public sealed partial class BacktestRunner
         IReadOnlyDictionary<string, RegimeCalendar>? regimeCalendars = null,
         IReadOnlyCollection<OhlcvBar>? marketBars = null,
         IExecutionEventSink? executionEvidence = null,
-        NativeDailyAccountingContext? accounting = null)
+        NativeDailyAccountingContext? accounting = null,
+        BacktestAccountLossInputs? accountLoss = null)
     {
         var strategiesById = strategies.ToDictionary(
             strategy => strategy.StrategyId,
@@ -584,10 +591,10 @@ public sealed partial class BacktestRunner
                     ? strategy
                     : throw new InvalidOperationException(
                         $"Candidate references unknown strategy ID '{candidate.StrategyId}'.")),
-            executionEvidence, accounting);
+            executionEvidence, accounting, accountLoss);
     }
 
-    // Replays the actual portfolio and supplies its authoritative daily calendar to the fill reporting projection.
+    // Advance the actual portfolio to each admission time, then apply the calendar-backed loss gate before reserving capital.
     private static PortfolioBuildOutcome BuildPortfolioTradesCore(
         PortfolioConfig portfolio,
         IReadOnlyList<BacktestCandidateTrade> candidates,
@@ -596,7 +603,8 @@ public sealed partial class BacktestRunner
         Func<StrategyDefinition, RegimeCalendar?> resolveRegimeCalendar,
         IReadOnlyCollection<OhlcvBar> marketBars,
         IExecutionEventSink? executionEvidence = null,
-        NativeDailyAccountingContext? accounting = null)
+        NativeDailyAccountingContext? accounting = null,
+        BacktestAccountLossInputs? accountLoss = null)
     {
         var admissionAudit = new PortfolioAdmissionAudit();
         var holdingRules = accounting is { ResearchScreenHoldingRules: true }
@@ -604,7 +612,7 @@ public sealed partial class BacktestRunner
             : null;
         var execution = new ChronologicalBacktestExecutionCoordinator(
             portfolio, marketBars, executionEvidence: executionEvidence, holdingRules: holdingRules,
-            decisionHour: DecisionHourInputs(candidates, accounting), fillSchedules: accounting?.Sessions);
+            decisionHour: DecisionHourInputs(candidates, accounting), fillSchedules: accounting?.Sessions, accountLoss: accountLoss);
 
         foreach (var entryGroup in candidates
                      .OrderBy(candidate => candidate.EntryTimestamp.ToUniversalTime())
@@ -619,6 +627,13 @@ public sealed partial class BacktestRunner
                      .GroupBy(candidate => candidate.EntryTimestamp.ToUniversalTime()))
         {
             execution.AdvanceThrough(entryGroup.Key);
+            if (execution.AccountLossRefusalAt(entryGroup.Key) is { } lossRefusal)
+            {
+                foreach (var candidate in entryGroup)
+                    admissionAudit.Reject(candidate, lossRefusal.Code, lossRefusal.Detail);
+                if (execution.Failures.Count > 0) break;
+                continue;
+            }
             if (execution.Failures.Count > 0) break;
             foreach (var candidate in entryGroup)
             {
@@ -736,6 +751,7 @@ public sealed partial class BacktestRunner
             admissionAudit,
             execution.Failures)
         {
+            AccountLoss = execution.AccountLossSummary,
             State = accounting is null ? null
                 : BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting),
             DecisionHourCounts = execution.DecisionHourCounts
@@ -943,6 +959,7 @@ internal sealed record PortfolioBuildOutcome(
 {
     public EventPortfolioReplayOutcome? EventReplay { get; init; }
     public BacktestPortfolioState? State { get; init; }
+    public BacktestAccountLossBookSummary? AccountLoss { get; init; }
 
     // Decision-hour execution counts (resting-order touches, fill-bar exits, cancelled remainders, ex-date-eve refusals).
     public IReadOnlyDictionary<string, int> DecisionHourCounts { get; init; } = new Dictionary<string, int>();

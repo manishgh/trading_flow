@@ -63,6 +63,13 @@
                 <label><input type="radio" name="UniverseSource" value="screener" checked="@(Model.UniverseSource == "screener")" /><span>Finviz screen</span></label>
                 <label><input type="radio" name="UniverseSource" value="both" checked="@(Model.UniverseSource == "both")" /><span>Both</span></label>
             </fieldset>
+            <div>
+                <label for="PaperMembershipMode">Stock membership</label>
+                <select name="PaperMembershipMode" id="PaperMembershipMode">
+                    <option value="fixed_at_launch" selected>Fixed at launch</option>
+                    <option value="refresh_selected_sources">Refresh selected sources</option>
+                </select>
+            </div>
             <div data-source-part="wishlist">
                 <label for="WishlistId">Stock group</label>
                 <select name="WishlistId" id="WishlistId" onchange="window.location='?wishlistId=' + encodeURIComponent(this.value) + '&paperExecutionMode=' + encodeURIComponent(document.getElementById('PaperExecutionMode')?.value || 'shadow') + '&strategyPath=' + encodeURIComponent(document.getElementById('SelectedStrategyDropdown')?.value || '')">
@@ -181,9 +188,11 @@
 
     <div class="paper-start-bar">
         <p class="muted" id="PaperRunSummary" data-blocked="@(startBlockedReason is not null ? "true" : "false")">@(startBlockedReason ?? "")</p>
-        <button type="submit" asp-page-handler="RunLive" class="button go"
+        <div data-paper-stock-review hidden aria-live="polite"></div>
+        <button type="submit" asp-page-handler="RunLive" class="button go" data-paper-action="preview"
                 disabled="@(Model.Strategies.Count == 0)"
-                aria-describedby="PaperRunSummary">Start strategy run</button>
+                aria-describedby="PaperRunSummary">Preview stocks</button>
+        <button type="submit" asp-page-handler="RunLive" class="button go" data-paper-action="start" hidden>Start strategy run</button>
     </div>
 </form>
 

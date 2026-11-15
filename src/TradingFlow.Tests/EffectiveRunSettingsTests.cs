@@ -11,6 +11,39 @@ namespace TradingFlow.Tests;
 
 public sealed class EffectiveRunSettingsTests
 {
+    // A generated run binds its profile's exact thresholds and permits no cadence override.
+    [Fact]
+    public async Task AccountLossReplaySettingsRoundTripAndUnsupportedSelectionsRefuse()
+    {
+        using var fixture = await Fixture.CreateAsync(ExecutionReplayPolicy.DailyRthFiveMinuteV1);
+        var profile = await File.ReadAllTextAsync(fixture.ProfilePath);
+        var yaml = profile.Replace("engine:\n", $"""
+            engine:
+              account_loss_replay:
+                enabled: true
+                policy_id: {BacktestAccountLossReplayConfig.FiveMinutePolicyId}
+                daily_pct: 2
+                weekly_pct: 4
+                peak_to_trough_pct: 10
+
+            """, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(fixture.ProfilePath, yaml);
+        var frozen = fixture.Reader.ReadBacktestRun(fixture.ProfilePath);
+        var accountLoss = Assert.IsType<BacktestAccountLossReplayConfig>(frozen.Engine.AccountLossReplay);
+        Assert.True(accountLoss.Enabled);
+        var generated = fixture.Writer.WriteBacktestConfig(fixture.Request);
+        Assert.Equal(accountLoss, fixture.Reader.ReadBacktestRun(generated).Engine.AccountLossReplay);
+        var report = BacktestAccountLossReplayReport.From(accountLoss);
+        Assert.True(report.Applied);
+        Assert.Equal(300, report.MaximumSnapshotAgeSeconds);
+        Assert.Equal(BacktestAccountLossReplayConfig.InitialAnchorBasis, report.InitialAnchorBasis);
+        Assert.False(BacktestAccountLossReplayReport.From(null).Applied);
+        Assert.Contains("require", Assert.Throws<InvalidOperationException>(() => fixture.Writer.WriteBacktestConfig(
+            fixture.Request with { ExecutionReplayPolicyId = ExecutionReplayPolicy.DailyRthSipPortfolioV1 })).Message);
+        await File.WriteAllTextAsync(fixture.ProfilePath, yaml.Replace("    daily_pct: 2", "    daily_pct: 2\n    sample_seconds: 60", StringComparison.Ordinal));
+        Assert.Contains("sample_seconds", Assert.Throws<InvalidOperationException>(() => fixture.Reader.ReadBacktestRun(fixture.ProfilePath)).Message);
+    }
+
     /// <summary>The preserved previous-session strategy shares runtime-root calendar coverage between review and generation.</summary>
     [Theory]
     [InlineData(false)]

@@ -8,6 +8,8 @@ namespace TradingFlow.Tests;
 
 public sealed class FinvizClientTests : IDisposable
 {
+    private const string MembershipHeader = "No.,Ticker,Company,Sector,Industry,Country,Market Cap,P/E,Price,Change,Volume";
+    private const string MembershipRow = "1,MSFT,Microsoft,Technology,Software,USA,345,25,100,1%,2000";
     private readonly string archiveRoot = Path.Combine(
         Path.GetTempPath(),
         "trading-flow-finviz-archive-tests",
@@ -15,6 +17,42 @@ public sealed class FinvizClientTests : IDisposable
 
     private IRawArchiveWriter CreateArchiveWriter() =>
         new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot));
+
+    // Only the complete, structurally valid archived response can supply bounded stock membership.
+    [Theory]
+    [InlineData("complete")]
+    [InlineData("header-only")]
+    [InlineData("malformed")]
+    [InlineData("duplicate")]
+    [InlineData("truncated")]
+    [InlineData("partial-http")]
+    public async Task BoundedMembership_RequiresCompleteReceiptAndValidNonemptyRows(string shape)
+    {
+        var payload = shape switch
+        {
+            "header-only" => MembershipHeader + "\n",
+            "malformed" => MembershipHeader + "\n" + MembershipRow + "\n2,NVDA,Too few columns\n",
+            "duplicate" => MembershipHeader + "\n" + MembershipRow + "\n" + MembershipRow + "\n",
+            _ => MembershipHeader + "\n" + MembershipRow + "\n"
+        };
+        var handler = new CsvHandler(payload, shape == "partial-http" ? HttpStatusCode.PartialContent : HttpStatusCode.OK,
+            declaredLength: shape == "truncated" ? Encoding.UTF8.GetByteCount(payload) + 10 : null);
+        using var client = new FinvizClient(new HttpClient(handler), new(new Uri("https://finviz.com"), "fixture"), CreateArchiveWriter());
+        var query = FinvizClient.CanonicalizeScheduledSelection("https://finviz.com/screener.ashx?v=111&auth=discard&f=sh_relvol_o2");
+        Assert.Equal("f=sh_relvol_o2", query);
+        if (shape == "complete")
+        {
+            var result = await client.GetBoundedMembershipAsync(query, TimeProvider.System);
+            Assert.Equal("MSFT", Assert.Single(result.Rows).Ticker);
+            Assert.StartsWith("raw-archive:", result.RawReference, StringComparison.Ordinal);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => client.GetBoundedMembershipAsync(query, TimeProvider.System));
+        }
+        Assert.Equal("/export?f=sh_relvol_o2&auth=fixture", handler.LastRequestPathAndQuery);
+        Assert.Single(Directory.EnumerateFiles(archiveRoot, "*paper_membership_csv.csv.manifest.json", SearchOption.AllDirectories));
+    }
 
     [Fact]
     public async Task OverviewExportRetainsCompanySectorAndExplicitCapMillionsWithoutInventingRvol()
@@ -370,12 +408,14 @@ No.,Ticker,Company,Rel Volume
 
     private sealed class CsvHandler(
         string csv,
-        HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
+        HttpStatusCode statusCode = HttpStatusCode.OK,
+        long? declaredLength = null) : HttpMessageHandler
     {
         public byte[] ResponseBytes { get; } = Encoding.UTF8.GetBytes(csv);
 
         public string? LastRequestPathAndQuery { get; private set; }
 
+        // Simulate a transport length mismatch without any outbound network traffic.
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequestPathAndQuery = request.RequestUri?.PathAndQuery;
@@ -383,7 +423,8 @@ No.,Ticker,Company,Rel Volume
             {
                 Content = new ByteArrayContent(ResponseBytes)
                 {
-                    Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/csv") { CharSet = "utf-8" } }
+                    Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/csv") { CharSet = "utf-8" },
+                        ContentLength = declaredLength ?? ResponseBytes.Length }
                 }
             });
         }

@@ -2,29 +2,45 @@
 .watch-desk-shell{max-width:none!important;padding:28px 32px!important;width:100%;box-sizing:border-box}
 .watch-desk{--watch-line:var(--color-divider,#d9dcd8);--watch-muted:var(--color-neutral-700,#64716b);--watch-panel:var(--color-surface,#fff);color:var(--color-text,#17231e);font-size:14px}
 .watch-desk *{box-sizing:border-box}.watch-desk [hidden]{display:none!important}.watch-desk h1,.watch-desk h2,.watch-desk h3,.watch-desk p{margin:0}.watch-desk button,.watch-desk input,.watch-desk select{font:inherit}.watch-desk button,.watch-desk a,.watch-desk summary{touch-action:manipulation}.watch-desk .btn{justify-content:center;min-height:40px;border-radius:5px}.watch-head{display:flex;justify-content:space-between;gap:24px;align-items:center;margin-bottom:28px}.watch-head h1{font-size:42px;letter-spacing:-1.5px;line-height:1.25;display:flex;gap:14px;align-items:center;margin:5px 0}.watch-head p,.watch-view-head p{color:var(--watch-muted);line-height:1.5}.watch-dot{width:9px;height:9px;border-radius:50%;background:#368269}.watch-head .eyebrow,.watch-kicker{font-size:10px;letter-spacing:1.7px;font-weight:700;color:var(--watch-muted)}.watch-session{display:flex;flex-direction:column;gap:7px;text-align:right;font-size:12px;color:var(--watch-muted)}.watch-session strong{color:var(--color-text);font-size:14px}.watch-session a{color:inherit}.watch-toolbar{display:flex;gap:16px;align-items:end;flex-wrap:wrap}.watch-desk label{display:flex;flex-direction:column;gap:7px;font-size:11px;color:var(--watch-muted);font-weight:600}.watch-desk select,.watch-desk input{height:40px;border:1px solid var(--watch-line);border-radius:5px;padding:8px 12px;background:var(--watch-panel);color:var(--color-text);max-width:100%;min-width:0}.watch-source-label{flex:1.5;min-width:230px}.watch-search-label{flex:1;min-width:150px}.watch-sort-label{min-width:150px}.watch-manage{font-size:12px;padding:12px 0;color:var(--watch-muted)}.watch-import{margin-top:18px;padding:20px;border:1px solid var(--watch-line);display:flex;gap:14px;flex-wrap:wrap;align-items:end;background:var(--watch-panel);border-radius:8px}.watch-import>div{width:100%;line-height:1.7}.watch-import label{flex:1;min-width:200px}.watch-import p{font-size:12px;color:var(--watch-muted)}.watch-view-head{display:flex;justify-content:space-between;align-items:center;margin:28px 0 16px;gap:20px}.watch-view-head h2{font-size:19px;letter-spacing:-.3px}.watch-view-head p{font-size:12px;margin-top:5px}.watch-view-head>span{white-space:nowrap;font-size:12px;color:var(--watch-muted)}.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:20px;align-items:start}.watch-stocks,.watch-detail,.watch-news{border:1px solid var(--watch-line);border-radius:8px;background:var(--watch-panel);min-width:0;overflow:hidden}.watch-table-scroll{overflow:auto}.watch-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;white-space:nowrap;margin:0}.watch-table th{font-size:10px;letter-spacing:.5px;text-transform:uppercase;text-align:left;font-weight:600;color:var(--watch-muted);padding:15px 14px;border-bottom:1px solid var(--watch-line)}.watch-table td{padding:17px 14px;border-bottom:1px solid var(--watch-line);font-size:13px;vertical-align:middle}.watch-table tbody tr:last-child td{border-bottom:0}.watch-table tbody tr:hover,.watch-table tbody tr[data-selected=true]{background:color-mix(in srgb,var(--color-text) 4%,transparent)}.watch-table td:first-child{border-left:3px solid transparent}.watch-table tr[data-selected=true] td:first-child{border-left-color:#368269}.watch-table button{font-weight:700;font-size:14px;border:0;background:none;color:var(--color-text);padding:5px 0;cursor:pointer}.watch-table small{display:block;color:var(--watch-muted);font-size:10px;margin-top:5px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.watch-table strong{font-weight:600}.watch-table-note{font-size:10px;color:var(--watch-muted);padding:14px 17px;border-top:1px solid var(--watch-line)}.watch-empty{padding:64px 24px;text-align:center}.watch-empty strong{font-size:18px}.watch-empty p{margin-top:10px;font-size:13px;color:var(--watch-muted);line-height:1.6}.watch-detail{grid-column:2;grid-row:1 / span 2;padding:24px;position:sticky;top:16px}.watch-detail h2{font-size:27px;margin-top:10px;letter-spacing:-.5px}.watch-detail>p{color:var(--watch-muted);font-size:12px;line-height:1.5;margin-top:5px}.watch-price{margin-top:22px;display:flex;flex-direction:column;gap:6px}.watch-price strong{font-size:30px;letter-spacing:-1px}.watch-price>span{font-size:9px;letter-spacing:1px;color:var(--watch-muted)}.watch-bbo{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px 0 8px}.watch-bbo div{display:flex;flex-direction:column;gap:6px}.watch-bbo small{color:var(--watch-muted);font-size:10px;letter-spacing:1px}.watch-bbo strong{font-size:16px;font-variant-numeric:tabular-nums}.watch-fine{font-size:10px!important;line-height:1.65;color:var(--watch-muted);overflow-wrap:anywhere}.watch-actions{display:flex;gap:8px;margin:18px 0 8px}.watch-actions .btn{flex:1}.watch-detail-block{border-top:1px solid var(--watch-line);margin-top:22px;padding-top:20px}.watch-detail h3{font-size:13px;margin-bottom:15px}.watch-metrics{display:grid;grid-template-columns:1fr auto;gap:10px;margin:0 0 13px;font-size:12px;font-variant-numeric:tabular-nums}.watch-metrics dt{color:var(--watch-muted)}.watch-metrics dd{margin:0;text-align:right;font-weight:600}.watch-news{grid-column:1;padding:24px}.watch-news-head{display:flex;justify-content:space-between;gap:15px;align-items:center;margin-bottom:10px}.watch-news h2{font-size:18px;margin-top:7px}.watch-news article{padding:17px 0;border-bottom:1px solid var(--watch-line)}.watch-news article:last-child{border:0}.watch-news article a,.watch-news article strong{font-size:14px;color:var(--color-text);text-decoration:none;line-height:1.55;font-weight:500}.watch-news article a:hover{text-decoration:underline}.watch-news article small{display:block;color:var(--watch-muted);font-size:10px;margin-top:7px;line-height:1.5}.watch-footer{font-size:11px;color:var(--watch-muted);line-height:1.7;margin:20px 0!important}.watch-footer a{color:inherit;margin-left:8px}.watch-warning{border-left:3px solid #c88d32;background:color-mix(in srgb,#c88d32 8%,transparent);padding:12px 16px;margin-bottom:16px!important;font-size:12px;line-height:1.5}.watch-gain{color:var(--color-gain,#24785a)}.watch-loss{color:var(--color-loss,#ba4938)}.watch-stale{color:#aa6d19}.watch-desk :focus-visible{outline:2px solid #368269;outline-offset:3px}#watch-follow{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:15px}#watch-follow label{flex:1}#watch-follow-status{font-size:11px;width:100%}
-/* A wide workspace shows the list and the selected stock; narrow screens follow DOM order. */
-.workspace-app .watch-desk .watch-grid{grid-template-columns:minmax(0,9fr) minmax(0,11fr)}
+/* Keep desktop news alongside the stock list and let narrow screens follow the document order. */
+.workspace-app .watch-desk .watch-grid{grid-template-columns:minmax(0,7fr) minmax(0,3fr)}
 .watch-grid .watch-stocks{grid-column:1;grid-row:1}
-.watch-grid .watch-detail{grid-column:2;grid-row:1;position:static}
-.watch-grid .watch-news{grid-column:1 / -1;grid-row:2}
-.workspace-app .watch-desk .watch-table-scroll{max-height:none;overflow:visible}
-.workspace-app .watch-desk .watch-table{min-width:0;table-layout:fixed;white-space:normal}
-.workspace-app .watch-desk .watch-table td,.workspace-app .watch-desk .watch-table th{padding:6px 8px;text-align:left;overflow-wrap:anywhere}
+.watch-grid .watch-detail{grid-column:1;grid-row:2;position:static}
+.watch-grid .watch-news{grid-column:2;grid-row:1 / span 2;overflow:auto}
+.workspace-app .watch-desk .watch-table-scroll{max-height:480px;overflow:auto}
+.workspace-app .watch-desk .watch-table{min-width:760px;table-layout:fixed;white-space:normal}
+.workspace-app .watch-desk .watch-table td,.workspace-app .watch-desk .watch-table th{padding:6px;text-align:left;overflow-wrap:anywhere}
+.workspace-app .watch-desk .watch-table th{position:sticky;top:0;z-index:1}
+.watch-stock-col{width:9%}.watch-price-col{width:9%}.watch-trade-col{width:14%}
+.watch-strategy-col{width:11%}.watch-position-col{width:8%}.watch-news-col{width:11%}
+.watch-technical-col{width:16%}.watch-rvol-col{width:6%}.watch-volume-col{width:7%}.watch-action-col{width:9%}
 .watch-table small{margin-top:2px;white-space:normal}
 .watch-table .watch-row-price{font-variant-numeric:tabular-nums}
 .watch-table .watch-symbol-button,.watch-table .watch-row-action{display:block;min-height:44px;text-align:left}
 .watch-table .watch-row-action{font-size:12px;color:var(--color-link,var(--color-text));text-decoration:underline;text-underline-offset:3px}
+.watch-trade-buttons{display:flex;flex-wrap:wrap;gap:4px}
+.workspace-app .watch-desk .watch-trade-buttons button{display:flex;flex:1 1 40px;flex-direction:column;align-items:center;justify-content:center;min-inline-size:max-content;min-height:44px;border:1px solid var(--watch-line);padding:3px 2px;line-height:1.25;white-space:nowrap;overflow-wrap:normal}
+.watch-order-price{font-size:10px}
+.watch-order-price,.watch-news-counts>span{display:block}
+.watch-order-price,.watch-technical{font-variant-numeric:tabular-nums}
+.watch-technical>div{line-height:1.45}
+.watch-technical>div+div{margin-top:2px}
+.watch-technical [data-technical]{white-space:nowrap}
+.watch-trade-buttons button:hover{background:var(--color-neutral-100,var(--watch-panel))}
 .watch-table tbody tr{cursor:pointer}
 .watch-table caption{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.watch-pagination{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;gap:10px;border-top:1px solid var(--watch-line);font-size:11px;color:var(--watch-muted)}
+.watch-pagination{display:flex;align-items:center;justify-content:space-between;padding:5px 10px;gap:10px;border-top:1px solid var(--watch-line);font-size:11px;color:var(--watch-muted)}
+.watch-desk .watch-table-note{padding:7px 10px}
 .watch-focus-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
 .watch-focus-head h2{margin-top:0}
 .watch-focus-price{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-variant-numeric:tabular-nums}
 .watch-focus-price strong{font-size:26px;letter-spacing:-.5px}
 .watch-focus-price small{font-size:12px;color:var(--watch-muted)}
-.watch-focus-trade{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 6px}
-.watch-focus-trade:not(:has(a[href])){display:none}
+.watch-focus-trade{display:flex;flex-wrap:wrap;gap:6px}
 .watch-focus-trade .btn{min-height:44px;font-variant-numeric:tabular-nums}
+.workspace-app .watch-desk .watch-detail #watch-focus-content{display:block}
+.watch-stock-evidence{margin-top:10px}
+.watch-stock-evidence>summary{padding:8px 0;cursor:pointer;font-weight:600}
 .watch-tech{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px;margin:10px 0;font-variant-numeric:tabular-nums}
 .watch-tech div{display:flex;flex-direction:column;gap:4px}
 .watch-tech dt{font-size:10px;color:var(--watch-muted)}
@@ -40,12 +56,34 @@
 .watch-view-switch button{border:0;border-right:1px solid var(--watch-line);background:var(--watch-panel);padding:9px 16px;min-height:44px;cursor:pointer;font-weight:600;color:var(--color-text)}
 .watch-view-switch button:last-child{border-right:0}
 .watch-view-switch button[aria-pressed=true]{background:var(--color-text);color:var(--color-bg)}
-.watch-view-switch span{font-weight:400;opacity:.8}
+.watch-view-switch span{margin-inline-start:3px;font-weight:400;opacity:.8}
 
-@media(max-width:1250px){
+@media(min-width:1151px){
+  .workspace-app .watch-desk .watch-head{margin-bottom:8px}
+  .workspace-app .watch-desk .preparation-summary{margin-bottom:8px;padding:8px 12px}
+  .workspace-app .watch-desk .watch-toolbar{padding:8px 12px;gap:8px}
+  .workspace-app .watch-desk .watch-view-switch{margin-top:8px}
+  .workspace-app .watch-desk .watch-view-head{margin:8px 0}
+  .workspace-app .watch-desk .watch-grid:has(#watch-focus-content:not([hidden])) .watch-table-scroll{max-height:160px}
+  .workspace-app .watch-desk .watch-detail{padding:10px 12px}
+  .workspace-app .watch-desk .watch-table .watch-technical{font-size:11px}
+  .watch-focus-head{align-items:center}
+  .watch-focus-head>div:first-child{flex:1}
+  .watch-focus-trade .btn{min-height:38px}
+  .workspace-app .watch-desk .stock-chart{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 10px;padding:9px 12px}
+  .workspace-app .watch-desk .stock-chart>*{grid-column:1 / -1}
+  .workspace-app .watch-desk .stock-chart-head>div{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 9px}
+  .workspace-app .watch-desk .stock-chart-controls{grid-column:1;margin-top:5px;gap:5px}
+  .workspace-app .watch-desk .stock-chart-study-toolbar{grid-column:2;margin-top:5px;gap:5px}
+  .workspace-app .watch-desk .stock-chart-controls label,.workspace-app .watch-desk .stock-chart-study-toolbar>label{flex-basis:85px;gap:2px}
+  .workspace-app .watch-desk .stock-chart-controls select,.workspace-app .watch-desk .stock-chart-study-toolbar select{height:34px;min-height:34px;padding:4px 6px}
+  .workspace-app .watch-desk .stock-chart-study-toolbar>button,.workspace-app .watch-desk .stock-chart-library>summary{min-height:34px;padding:6px 8px}
+  .workspace-app .watch-desk .stock-chart-plot{height:calc(270px + var(--stock-chart-panes,0) * 100px)}
+}
+@media(max-width:1150px){
   .workspace-app .watch-desk .watch-grid{grid-template-columns:minmax(0,1fr)}
   .watch-grid .watch-detail{grid-column:1;grid-row:2}
-  .watch-grid .watch-news{grid-column:1;grid-row:3}
+  .watch-grid .watch-news{grid-column:1;grid-row:3;position:static}
 }
 @media(max-width:650px){
   .watch-desk-shell{padding:18px 12px!important}
@@ -64,6 +102,8 @@
   .watch-table .watch-row-action{font-size:11px}
   .watch-table .watch-symbol-button{font-size:12px}
   .watch-detail,.watch-news{padding:14px}
+  .watch-focus-head{flex-wrap:wrap;gap:6px}
+  .watch-focus-trade{flex-basis:100%}
   .watch-news-head{align-items:start;flex-wrap:wrap}
   .watch-desk .btn,.watch-desk button,.watch-desk select,.watch-desk input:not([type=checkbox]){min-height:44px}
 }

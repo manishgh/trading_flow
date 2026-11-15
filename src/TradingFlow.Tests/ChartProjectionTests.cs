@@ -14,7 +14,7 @@ using Xunit.Abstractions;
 
 namespace TradingFlow.Tests;
 
-public sealed class ChartProjectionTests(ITestOutputHelper output)
+public sealed partial class ChartProjectionTests(ITestOutputHelper output)
 {
     // The two right-side bars and their receipt clock determine when a pivot can appear.
     [Fact]
@@ -589,9 +589,9 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
         }
     }
 
-    // Use the normal history projector with empty, independent event repositories for level assertions.
+    // Use the normal history projector with empty event repositories and optional stored-candle evidence.
     private static ChartSeriesService MakeLevelTestSeries(IMarketDataProvider provider, TimeProvider clock,
-        AlpacaMarketStateStreamService? stream = null)
+        AlpacaMarketStateStreamService? stream = null, ICandleStore? candles = null)
     {
         var news = new Mock<INewsFeedRepository>();
         news.Setup(repo => repo.QueryAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>()))
@@ -600,7 +600,7 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
         earnings.Setup(repo => repo.GetCalendarAsync(It.IsAny<DateOnly>(), It.IsAny<DateOnly>(),
                 It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<EarningsCalendarEvent>());
-        return new ChartSeriesService(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance,
+        return new ChartSeriesService(new Lazy<IMarketDataProvider>(() => provider), candles ?? NullCandleStore.Instance,
             stream!, StreamingMarketStateOptions.Default, news.Object, earnings.Object, clock, NullLogger<ChartSeriesService>.Instance);
     }
 
@@ -752,9 +752,10 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
         Assert.Equal(expected, key.Context);
     }
 
-    // Weekly and annual candle fabrication and 24-hour equity schedules are unsupported.
+    // Unsupported interval and context combinations cannot change the bounded source selection.
     [Theory]
     [InlineData("1w", "regular", "year")]
+    [InlineData("1w", "extended", "weekly")]
     [InlineData("1d", "extended", "month")]
     [InlineData("5m", "regular", "calendar-month")]
     public void NormalizeRefusesUnsupportedSeries(string interval, string session, string context) =>
@@ -837,7 +838,7 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
         private async Task<HistoricalBarsCapture> CaptureDailyAsync(ChartHistoryFixture calendar, DateTimeOffset start,
             DateTimeOffset end, long cap, CancellationToken token)
         {
-            Assert.Equal(501L, cap);
+            Assert.Equal(500L, cap);
             var bars = new List<OhlcvBar>();
             await foreach (var bar in calendar.GetBarsAsync(["TEST"], ["1d"], start, end, token))
                 bars.Add(bar);
@@ -868,9 +869,13 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
         public int CalendarReads { get; private set; }
         public DateOnly? FailOnce { get; set; }
         public DateOnly? Pivot { get; set; }
+        public DateOnly? RevisedVolume { get; set; }
+        public DateOnly? ConflictingDaily { get; set; }
         public DateOnly? Missing { get; set; }
         public DateOnly? EarlyClose { get; init; }
         public DateOnly? ClosedDate { get; init; }
+        public DateOnly? UnverifiedDate { get; init; }
+        public bool HideAllDaily { get; init; }
         public Task ReleaseFetch { get; init; } = Task.CompletedTask;
 
         // Return deterministic native daily prices while exposing the bounds of each archive acquisition.
@@ -895,10 +900,14 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
             for (var date = ChartBarProjector.NewYorkDate(start); date <= ChartBarProjector.NewYorkDate(end); date = date.AddDays(1))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (date != Missing && date != ClosedDate && date.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+                if (!HideAllDaily && date != Missing && date != ClosedDate &&
+                    date.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
                 {
                     var bar = BarAt(ChartBarProjector.At(date, TimeOnly.MinValue), "1d", 100m).Bar;
-                    yield return date == Pivot ? bar with { High = 110m } : bar;
+                    if (date == Pivot) bar = bar with { High = 110m };
+                    if (date == RevisedVolume) bar = bar with { Volume = 175m };
+                    yield return bar;
+                    if (date == ConflictingDaily) yield return bar with { High = 120m };
                 }
             }
         }
@@ -910,7 +919,7 @@ public sealed class ChartProjectionTests(ITestOutputHelper output)
             CalendarReads++;
             IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar = Enumerable
                 .Range(startDateInclusive.DayNumber, endDateInclusive.DayNumber - startDateInclusive.DayNumber + 1)
-                .Select(DateOnly.FromDayNumber).ToDictionary(date => date,
+                .Select(DateOnly.FromDayNumber).Where(date => date != UnverifiedDate).ToDictionary(date => date,
                     date => date == ClosedDate || date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
                         ? MarketSessionSchedule.Closed(date)
                         : date == EarlyClose

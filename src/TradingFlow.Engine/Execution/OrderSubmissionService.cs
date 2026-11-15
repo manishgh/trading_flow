@@ -148,7 +148,9 @@ public sealed class BrokerCommandRecoveryIncompleteException(
 
 public sealed class OpeningOrderCancellationReviewRequiredException(string clientOrderId, string brokerOrderId)
     : InvalidOperationException(
-        $"Opening order '{clientOrderId}' ({brokerOrderId}) has linked or unverified protection and requires cancellation review.");
+        $"Opening order '{clientOrderId}' ({brokerOrderId}) has linked or unverified protection and requires cancellation review. " +
+        "Its working remainder may still fill. Verify the current position and executable stop coverage before resuming entries; " +
+        "the broker does not provide an atomic cancel-with-continuous-protection operation.");
 
 public interface IOrderCommandService
 {

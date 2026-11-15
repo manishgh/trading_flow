@@ -50,14 +50,16 @@ public sealed partial class ChartSeriesService(
         var interval = key.Interval?.Trim().ToLowerInvariant();
         var session = key.SessionView?.Trim().ToLowerInvariant();
         var context = key.Context?.Trim().ToLowerInvariant();
+        var weekly = interval == "1w";
         if (context == "auto")
         {
-            context = interval == "1d" ? "swing" : "intraday";
+            context = weekly ? "weekly" : interval == "1d" ? "swing" : "intraday";
         }
-        if (!SymbolPattern().IsMatch(symbol) || interval is not ("1m" or "5m" or "15m" or "1d") ||
+        if (!SymbolPattern().IsMatch(symbol) || interval is not ("1m" or "5m" or "15m" or "1d" or "1w") ||
             session is not ("regular" or "extended") ||
+            (weekly && (session != "regular" || context != "weekly" || !String.IsNullOrWhiteSpace(key.Indicators))) ||
             (interval == "1d" && (session != "regular" || context is not ("swing" or "week" or "month" or "year"))) ||
-            (interval != "1d" && context is not ("intraday" or "swing" or "week" or "month" or "year")))
+            (interval is not ("1d" or "1w") && context is not ("intraday" or "swing" or "week" or "month" or "year")))
         {
             throw new ArgumentException("Unsupported symbol, interval, session view or chart context.", nameof(key));
         }
@@ -78,6 +80,10 @@ public sealed partial class ChartSeriesService(
         if (cutoff > requestedAt || cutoff < requestedAt.AddYears(-10))
         {
             throw new ArgumentException("The chart cursor is outside the supported history window.", nameof(beforeUtc));
+        }
+        if (key.Interval == "1w")
+        {
+            return await ReadWeeklyPageAsync(key, cutoff, beforeUtc is not null, requestedAt, token);
         }
 
         var daily = key.Interval == "1d";
@@ -220,6 +226,10 @@ public sealed partial class ChartSeriesService(
         ChartCanonicalSession? canonical, ChartBarProjector projector,
         DateTimeOffset cutoff, DateTimeOffset asOf, bool paged)
     {
+        if (key.Interval == "1w")
+        {
+            return ProjectWeekly(key.Symbol, history, cutoff, asOf);
+        }
         var merged = Merge(history, canonical, key.Symbol);
         var daily = key.Interval == "1d";
         var projected = daily
@@ -541,7 +551,7 @@ public sealed partial class ChartSeriesService(
 
     private sealed record ProjectedChart(
         IReadOnlySet<DateTimeOffset> BasisBreaks, IReadOnlyList<ChartCompletedBar> Visible, IReadOnlyList<ChartZone> Zones,
-        IReadOnlyList<ChartReferenceLevel> Levels, bool IsCovered);
+        IReadOnlyList<ChartReferenceLevel> Levels, bool IsCovered, ChartWeeklyProjection? Weekly = null);
 
     private sealed record MarkerMemo(Task<IReadOnlyList<ChartMarker>> Read, DateTimeOffset Expires);
 

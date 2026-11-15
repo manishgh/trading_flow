@@ -261,7 +261,23 @@ public sealed partial class LiveRunner
                     continue;
                 }
             }
-            var candidateExpiresAtUtc = PaperDecisionCalendar.ResolveExpiry(setupAvailableAtUtc, strategy, schedules);
+            var entryWindow = NextRegularOpenEntryWindow.Resolve(strategy, lastSnapshot.Timestamp, schedules);
+            if (entryWindow is not null)
+            {
+                // Late provider receipt cannot move the opportunity to another session.
+                var received = barsList.LastOrDefault(bar => bar.Timestamp == lastSnapshot.Timestamp)?.KnownAtUtc;
+                if (received > setupAvailableAtUtc) setupAvailableAtUtc = received.Value;
+                if (now >= entryWindow.EndUtc || setupAvailableAtUtc >= entryWindow.EndUtc)
+                {
+                    await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                        new EntryCheck("entry_window", now, entryWindow.EndUtc, SetupDeadlineElapsed: true,
+                            EntryWindow: entryWindow, SetupAvailableAtUtc: setupAvailableAtUtc), cancellationToken);
+                    continue;
+                }
+                if (now < entryWindow.OpenUtc || now < setupAvailableAtUtc) continue;
+            }
+            var candidateExpiresAtUtc = entryWindow?.EndUtc ??
+                PaperDecisionCalendar.ResolveExpiry(setupAvailableAtUtc, strategy, schedules);
             if (candidateExpiresAtUtc <= setupAvailableAtUtc)
             {
                 continue;
@@ -341,6 +357,14 @@ public sealed partial class LiveRunner
                     cancellationToken));
             // Source membership may expire while loading regime or decision context.
             var evaluationTime = _timeProvider.GetUtcNow();
+            if (entryWindow is not null && evaluationTime < entryWindow.OpenUtc) continue;
+            if (entryWindow is not null && !entryWindow.Contains(evaluationTime))
+            {
+                await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                    new EntryCheck("entry_window", evaluationTime, entryWindow.EndUtc, SetupDeadlineElapsed: true,
+                        EntryWindow: entryWindow, SetupAvailableAtUtc: setupAvailableAtUtc), cancellationToken);
+                continue;
+            }
             if (!HasEntryMembership(run, ticker, discoveryAggregate, evaluationTime))
             {
                 await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
@@ -485,12 +509,14 @@ public sealed partial class LiveRunner
                             }
 
                             var submissionTime = _timeProvider.GetUtcNow();
+                            if (entryWindow is not null && submissionTime < entryWindow.OpenUtc) continue;
                             var setupDeadlineElapsed = submissionTime >= candidateExpiresAtUtc;
                             if (setupDeadlineElapsed || !HasEntryMembership(run, ticker, discoveryAggregate, submissionTime))
                             {
                                 await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
-                                    new EntryCheck("before_order_submission", submissionTime, candidateExpiresAtUtc,
-                                        persistedDecision.Candidate.CandidateId, setupDeadlineElapsed),
+                                    new EntryCheck(entryWindow is not null && setupDeadlineElapsed ? "entry_window" : "before_order_submission",
+                                        submissionTime, candidateExpiresAtUtc, persistedDecision.Candidate.CandidateId, setupDeadlineElapsed,
+                                        entryWindow, setupAvailableAtUtc),
                                     cancellationToken);
                                 continue;
                             }
@@ -529,6 +555,13 @@ public sealed partial class LiveRunner
                                     StrategySelectionMode: runtimeStrategy.SelectionMode)
                                 {
                                     DecisionReference = new(canonicalOrderPlan.TriggerReferencePrice, canonicalOrderPlan.TriggeredAtUtc)
+                                    {
+                                        EntryWindow = entryWindow is not null && strategy.Execution.EntryWindow is { } windowPolicy
+                                            ? new(windowPolicy.Policy, windowPolicy.Version, windowPolicy.GraceSeconds,
+                                                lastSnapshot.Timestamp.ToUniversalTime(), setupAvailableAtUtc.ToUniversalTime(),
+                                                strategy.Execution.EffectiveConfirmation.Enabled ? canonicalOrderPlan.TriggeredAtUtc : null,
+                                                entryWindow.OpenUtc, entryWindow.EndUtc) : null
+                                    }
                                 },
                                 _brokerClient,
                                 cancellationToken);
@@ -547,6 +580,23 @@ public sealed partial class LiveRunner
                         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                         {
                             throw;
+                        }
+                        catch (Exception missed) when (entryWindow is not null &&
+                            (missed is OrderDispatchExpiredException or ExpiredCandidateOrderIntentException))
+                        {
+                            await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                                new EntryCheck("entry_window", _timeProvider.GetUtcNow(), entryWindow.EndUtc,
+                                    persistedDecision.Candidate.CandidateId, true, entryWindow, setupAvailableAtUtc),
+                                cancellationToken);
+                        }
+                        catch (PaperEntryDispatchBlockedException refused)
+                        {
+                            // Use the actual durable fence outcome when membership or ownership changed after evaluation.
+                            await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                                new EntryCheck("durable_entry_fence", _timeProvider.GetUtcNow(), candidateExpiresAtUtc,
+                                    persistedDecision.Candidate.CandidateId, EntryWindow: entryWindow,
+                                    SetupAvailableAtUtc: setupAvailableAtUtc, RefusalReason: refused.ReasonCode), cancellationToken);
+                            progress?.Report(refused.Message);
                         }
                         catch (Exception ex)
                         {
@@ -667,7 +717,10 @@ public sealed partial class LiveRunner
         DateTimeOffset CheckedAtUtc,
         DateTimeOffset? CandidateExpiresAtUtc = null,
         Guid? CandidateId = null,
-        bool SetupDeadlineElapsed = false);
+        bool SetupDeadlineElapsed = false,
+        NextRegularOpenEntryWindow? EntryWindow = null,
+        DateTimeOffset? SetupAvailableAtUtc = null,
+        string? RefusalReason = null);
 
     // A single run records the latest skip per symbol, strategy identity and gate.
     private sealed class EntrySkipAudit(
@@ -691,14 +744,14 @@ public sealed partial class LiveRunner
             EntryCheck check,
             CancellationToken cancellationToken)
         {
-            if (repository is null || (!usesDiscovery && !check.SetupDeadlineElapsed))
+            if (repository is null || (!usesDiscovery && !check.SetupDeadlineElapsed && check.RefusalReason is null))
             {
                 return;
             }
 
-            var reason = check.SetupDeadlineElapsed
+            var reason = check.RefusalReason ?? (check.SetupDeadlineElapsed && check.EntryWindow is not null ? "entry_window_missed" : check.SetupDeadlineElapsed
                 ? "paper_setup_deadline_elapsed_before_order_submission"
-                : ResolveMembershipReason(membership, check.CheckedAtUtc);
+                : ResolveMembershipReason(membership, check.CheckedAtUtc));
             var identity = strategies.GetValueOrDefault(strategy)?.Identity;
             var key = (ticker.ToUpperInvariant(), strategy.StrategyId, identity, check.Stage);
             var skip = (setupBarTime, reason);
@@ -719,6 +772,13 @@ public sealed partial class LiveRunner
                     Timestamp = check.CheckedAtUtc.ToUniversalTime(),
                     Decision = "Skipped",
                     RejectionReason = reason,
+                    DeduplicationKey = reason == "entry_window_missed"
+                        ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+                            {
+                                runId, runName, ticker = ticker.ToUpperInvariant(), strategy.StrategyId,
+                                identity, setup = setupBarTime.ToUniversalTime(), reason
+                            })))) : null,
                     SignalJson = JsonSerializer.Serialize(new
                     {
                         runId,
@@ -729,6 +789,9 @@ public sealed partial class LiveRunner
                         checkedAtUtc = check.CheckedAtUtc.ToUniversalTime(),
                         setupBarTimeUtc = setupBarTime.ToUniversalTime(),
                         candidateExpiresAtUtc = check.CandidateExpiresAtUtc,
+                        entryWindow = check.EntryWindow,
+                        entryWindowPolicy = strategy.Execution.EntryWindow,
+                        setupAvailableAtUtc = check.SetupAvailableAtUtc,
                         candidateId = check.CandidateId,
                         membershipRefreshedAtUtc = membership.RefreshedAtUtc,
                         membershipRefreshFailed = membership.RefreshFailed,

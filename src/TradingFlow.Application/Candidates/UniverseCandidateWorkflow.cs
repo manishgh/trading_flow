@@ -24,6 +24,11 @@ public interface IUniverseSourceResolver
         UniverseSourceSelectionRequest source,
         string horizon,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Requires a resolver with strict receipt validation before authorizing a refreshable screen.</summary>
+    Task<UniverseSourceCapture> ResolvePaperAsync(
+        UniverseSourceSelectionRequest source, string membershipMode, CancellationToken cancellationToken = default) =>
+        throw new InvalidOperationException("Reviewed paper stock sources are not available in this host.");
 }
 
 public interface IStrategyIdentityResolver
@@ -59,7 +64,7 @@ public sealed class UniverseDiscoveryService(
     IApplicationEventRepository events,
     TimeProvider timeProvider) : IUniverseDiscoveryService
 {
-    /// <summary>Captures current source membership for the requested research horizon without granting execution authority.</summary>
+    /// <summary>Freezes current evidence and each paper selection before any start can review the union.</summary>
     public async Task<UniversePreviewResponse> PreviewAsync(UniversePreviewRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -69,6 +74,9 @@ public sealed class UniverseDiscoveryService(
             throw new InvalidOperationException("A supported day or swing universe contract and at least one source are required.");
 
         var horizon = request.Horizon.ToLowerInvariant();
+        var paperMode = request.PaperMembershipMode;
+        if (paperMode is not null)
+            ValidatePaperSelection(request, horizon, paperMode);
 
         var startedAt = timeProvider.GetUtcNow().ToUniversalTime();
         if (request.AsOfUtc is { } requested && (requested == default || requested > startedAt))
@@ -79,36 +87,61 @@ public sealed class UniverseDiscoveryService(
         var captures = new List<UniverseSourceCapture>();
         foreach (var selection in request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal)
                      .ThenBy(item => item.SourceKey, StringComparer.Ordinal))
-            captures.Add(await sources.ResolveAsync(selection, horizon, cancellationToken));
+        {
+            captures.Add(paperMode is null
+                ? await sources.ResolveAsync(selection, horizon, cancellationToken)
+                : await sources.ResolvePaperAsync(selection, paperMode, cancellationToken));
+        }
         var resolvedAt = timeProvider.GetUtcNow().ToUniversalTime();
         var cutoff = request.AsOfUtc?.ToUniversalTime() ?? resolvedAt;
         foreach (var capture in captures)
-            ValidateCapture(capture, cutoff, resolvedAt);
+            ValidateCapture(capture, cutoff, resolvedAt, paperMode is not null);
         if (captures.Select(item => (item.SourceKind, item.SourceKey)).Distinct().Count() != captures.Count)
             throw new InvalidOperationException("A universe source may only be selected once.");
 
         var snapshotId = Guid.NewGuid();
+        var paperSources = new List<PaperMembershipSource>();
         foreach (var capture in captures)
         {
-            await repository.CommitSnapshotAsync(new DiscoverySnapshotRequest(
+            var commit = await repository.CommitSnapshotAsync(new DiscoverySnapshotRequest(
                 snapshotId,
                 DeterministicGuid($"{snapshotId:N}\u001f{capture.SourceKind}\u001f{capture.SourceKey}"),
                 capture.SourceKind, capture.SourceKey, horizon, capture.ObservedAtUtc, capture.ExpiresAtUtc,
                 0, capture.Symbols, capture.IsDiagnostic, capture.ProviderTimestampUtc, capture.ProviderReference), cancellationToken);
+            if (paperMode is not null)
+            {
+                var query = capture.SourceKind == DiscoverySourceKinds.Finviz ? capture.SourceKey : null;
+                paperSources.Add(new(commit.SnapshotId, capture.SourceKind, capture.SourceKey,
+                    capture.SourceKind == DiscoverySourceKinds.Wishlist ? Guid.Parse(capture.SourceKey) : null,
+                    query, query is null ? null : Sha256(query), capture.ObservedAtUtc, capture.ExpiresAtUtc,
+                    capture.Symbols.Select(member => member.Symbol).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    capture.ProviderReference, IsBoundedObservation: query is not null));
+            }
         }
         var members = await repository.GetActiveAsync(snapshotId, cutoff, cancellationToken);
         if (members.Count == 0)
             throw new InvalidOperationException("The selected sources produced no unexpired stocks.");
         var response = ToResponse(snapshotId, resolvedAt, members, cutoff, horizon);
+        if (paperMode is not null)
+        {
+            response = response with
+            {
+                ExpiresAtUtc = paperSources.Min(source => source.ExpiresAtUtc),
+                PaperMembership = new(paperMode, paperSources)
+            };
+            response = response with { ContentSha256 = ContentHash(response) };
+        }
         await previews.SaveAsync(new UniversePreviewRecord
         {
             UniverseSnapshotId = snapshotId,
             Horizon = response.Horizon,
-            RequestSha256 = Sha256(JsonSerializer.Serialize(new
-            {
-                horizon, asOfUtc = request.AsOfUtc?.ToUniversalTime(),
-                sources = request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal).ThenBy(item => item.SourceKey, StringComparer.Ordinal)
-            })),
+            RequestSha256 = response.PaperMembership is { } reviewed
+                ? Sha256(JsonSerializer.Serialize(new { horizon, asOfUtc = request.AsOfUtc?.ToUniversalTime(), reviewed }))
+                : Sha256(JsonSerializer.Serialize(new
+                {
+                    horizon, asOfUtc = request.AsOfUtc?.ToUniversalTime(),
+                    sources = request.Sources.OrderBy(item => item.SourceKind, StringComparer.Ordinal).ThenBy(item => item.SourceKey, StringComparer.Ordinal)
+                })),
             ContentSha256 = response.ContentSha256,
             ResolvedAtUtc = response.ResolvedAtUtc,
             ExpiresAtUtc = response.ExpiresAtUtc,
@@ -134,6 +167,7 @@ public sealed class UniverseDiscoveryService(
         return response with { ContentSha256 = ContentHash(response) };
     }
 
+    /// <summary>Includes review selections in the fingerprint while preserving older preview fingerprints.</summary>
     public static string ContentHash(UniversePreviewResponse response) =>
         Sha256(JsonSerializer.Serialize(response with { ContentSha256 = String.Empty }));
 
@@ -160,10 +194,23 @@ public sealed class UniverseDiscoveryService(
         return preview;
     }
 
-    private static void ValidateCapture(UniverseSourceCapture capture, DateTimeOffset cutoff, DateTimeOffset now)
+    /// <summary>Accepts only one explicitly selected editable group and one Finviz query for operational review.</summary>
+    private static void ValidatePaperSelection(UniversePreviewRequest request, string horizon, string paperMode)
+    {
+        var kinds = request.Sources.Select(source => source.SourceKind?.Trim().ToLowerInvariant()).ToArray();
+        if (horizon != "swing" || request.AsOfUtc is not null ||
+            paperMode is not (PaperMembershipModes.FixedAtLaunch or PaperMembershipModes.RefreshSelectedSources) ||
+            kinds.Any(kind => kind is not (DiscoverySourceKinds.Wishlist or DiscoverySourceKinds.Finviz)) ||
+            kinds.Distinct(StringComparer.Ordinal).Count() != kinds.Length)
+            throw new InvalidOperationException("Paper stock review requires an explicit membership mode and one selected stock group, Finviz screen or both.");
+    }
+
+    /// <summary>Rejects missing, future or stale evidence before it can be written into the launch receipt.</summary>
+    private static void ValidateCapture(UniverseSourceCapture capture, DateTimeOffset cutoff, DateTimeOffset now, bool paperReview)
     {
         if (!DiscoverySourceKinds.All.Contains(capture.SourceKind) || String.IsNullOrWhiteSpace(capture.SourceKey) ||
-            capture.Symbols is null || capture.Symbols.Count == 0)
+            capture.Symbols is null || !paperReview && capture.Symbols.Count == 0 ||
+            paperReview && capture.IsDiagnostic)
             throw new InvalidOperationException("Universe source identity and symbols are required.");
         if (capture.ObservedAtUtc == default || capture.ObservedAtUtc.Offset != TimeSpan.Zero ||
             capture.ExpiresAtUtc.Offset != TimeSpan.Zero || capture.ProviderTimestampUtc is { Offset: var offset } && offset != TimeSpan.Zero)

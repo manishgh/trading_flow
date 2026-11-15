@@ -11,14 +11,14 @@
 }
 @if (!environment.IsEnabled)
 {
-    <partial name="_EnvironmentLock" model="environment" />
+    <div data-order-review-unavailable><partial name="_EnvironmentLock" model="environment" /></div>
     return;
 }
 @{ var restrictions = TradingFlow.Web.Services.WorkspaceStatusService.DescribeRestrictions(Runtime.TradingMutationsPaused, Admission.GetSnapshot());
    var isExit = Request.Query["side"].FirstOrDefault() == "sell"; }
 @if (Runtime.TradingMutationsPaused)
 {
-    <section class="panel">
+    <section class="panel" data-order-review-unavailable>
         <h1>Order review unavailable</h1>
         <p role="status">@restrictions.Exit</p>
         <a asp-page="/RunningTrades" target="@(embedded ? "_top" : null)">View positions and protection</a>

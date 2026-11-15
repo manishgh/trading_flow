@@ -26,7 +26,7 @@ public sealed class NativeEconomicClaimSuppressionTests
         var results = (IReadOnlyList<StrategyBacktestResult>)method.Invoke(null,
             [new PortfolioConfig(10000,1,25,2,0,0,1,true), new[] {strategy,other},
                 Array.Empty<BacktestCandidateTrade>(), Array.Empty<OhlcvBar>(), Array.Empty<StrategyCandidateDiagnostics>(),
-                null,null,null,context])!;
+                null,null,null,context,null])!;
         Assert.Equal(2, results.Count);
         Assert.All(results, result =>
         {
@@ -53,7 +53,7 @@ public sealed class NativeEconomicClaimSuppressionTests
         var method=typeof(BacktestRunner).GetMethod("BuildUnifiedPortfolioTradesWithAudit",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static)!;
         var outcome=(PortfolioBuildOutcome)method.Invoke(null,
             [new PortfolioConfig(10000,100,100,1,0,0,1,true,MaxBarParticipationPct:10),new[]{strategy},new[]{first,second},
-                null,null,bars,null,accounting])!;
+                null,null,bars,null,accounting,null])!;
         Assert.Single(outcome.ExecutionFailures);
         Assert.Single(outcome.AdmissionAudit.RejectionCounts);
         Assert.True(outcome.AdmissionAudit.RejectionCounts.ContainsKey("portfolio_max_concurrent_positions_reached"));

@@ -8,9 +8,16 @@ public sealed class ChartHistoryCursor(IDataProtectionProvider protection, TimeP
 {
     private readonly IDataProtector protector = protection.CreateProtector("TradingFlow.ChartHistory.v1");
     private sealed record Payload(string User, ChartSeriesKey Key, DateTimeOffset Before, DateTimeOffset Expires);
+
     // Bind the opaque cursor to the exact operator, symbol, interval, session and context.
-    public string? Create(string user, ChartSeriesKey key, DateTimeOffset? before) => before is null ? null :
-        protector.Protect(JsonSerializer.Serialize(new Payload(user, key, before.Value, clock.GetUtcNow().AddMinutes(15))));
+    public string? Create(string user, ChartSeriesKey key, DateTimeOffset? before)
+    {
+        if (before is null) return null;
+        if (key.Interval == "1w" && !ChartHistorySource.IsWeeklyCursorBoundary(before.Value))
+            throw new ArgumentException("Weekly history requires an exchange session date boundary.", nameof(before));
+        return protector.Protect(JsonSerializer.Serialize(new Payload(user, key, before.Value, clock.GetUtcNow().AddMinutes(15))));
+    }
+
     // Untrusted or expired cursors cannot widen the source read or cross chart contexts.
     public DateTimeOffset Read(string value, string user, ChartSeriesKey key)
     {

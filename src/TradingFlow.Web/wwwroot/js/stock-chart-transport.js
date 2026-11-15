@@ -9,7 +9,8 @@
 
     // Compare the normalized server identity with the exact active chart selection.
     function sameKey(actual, selected) {
-        const context = selected.context === 'auto' ? (selected.interval === '1d' ? 'swing' : 'intraday') : selected.context;
+        const auto = { '1d': 'swing', '1w': 'weekly' };
+        const context = selected.context === 'auto' ? auto[selected.interval] || 'intraday' : selected.context;
         return actual?.symbol === selected.symbol && actual.interval === selected.interval &&
             actual.sessionView === selected.sessionView && actual.context === context && actual.indicators === selected.indicators;
     }
@@ -40,15 +41,34 @@
         });
     }
 
+    // Keep the weekly aggregation and page ownership bounded before using its dates or daily receipt details.
+    function validWeekly(snapshot) {
+        const evidence = snapshot.evidence.weekly;
+        if (snapshot.zones.length || snapshot.levels.length) return false;
+        if (!evidence) return snapshot.bars.length === 0 && !snapshot.historyCursor;
+        if (!Array.isArray(evidence.gaps) || (snapshot.historyCursor && !Number.isFinite(Date.parse(evidence.evaluatedFromUtc)))) return false;
+        const literalDate = /^\d{4}-\d{2}-\d{2}$/;
+        let constituents = 0;
+        return snapshot.bars.every(bar => {
+            const weekly = bar?.weekly;
+            if (!literalDate.test(bar?.sessionDate) || !literalDate.test(weekly?.lastSessionDate) ||
+                !Array.isArray(weekly?.constituents) || !weekly.constituents.length || weekly.constituents.length > 7) return false;
+            constituents += weekly.constituents.length;
+            return constituents <= 500 && weekly.constituents.every(input =>
+                literalDate.test(input?.sessionDate) && typeof input.sourceKind === 'string');
+        });
+    }
+
     // Validate the version and bounded page shape before any plot is replaced.
     function readSnapshot(text, key) {
         if (encoder.encode(text).length > maxPayloadBytes) throw new Error('Chart response exceeded its size limit.');
         const snapshot = JSON.parse(text);
         const { bars, zones, levels, markers, indicators } = snapshot;
         if (snapshot.contractVersion !== 2 || !sameKey(snapshot.seriesKey, key) || !snapshot.evidence ||
-            !Array.isArray(bars) || bars.length > 500 || !Array.isArray(zones) ||
+            !Array.isArray(bars) || bars.length > (key.interval === '1w' ? 100 : 500) || !Array.isArray(zones) ||
             !Array.isArray(levels) || !Array.isArray(markers) || markers.length > 100 ||
-            !validIndicators(indicators, bars.length, key.indicators)) {
+            !validIndicators(indicators, bars.length, key.indicators) ||
+            (key.interval === '1w' && !validWeekly(snapshot))) {
             throw new Error('Chart data did not match the selected view.');
         }
         return snapshot;

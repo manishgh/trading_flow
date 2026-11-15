@@ -9,6 +9,19 @@ namespace TradingFlow.Backtesting;
 /// <summary>Frozen setup validity; future stock observations never determine its deadline.</summary>
 internal static class BacktestDecisionTiming
 {
+    // Daily source stamps identify sessions, not executable opens; build this index once for the explicit adapter.
+    public static IReadOnlyDictionary<DateTimeOffset, int> IndexEconomicOpens(IReadOnlyList<OhlcvBar> bars,
+        string timezone, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules) =>
+        bars.Select((bar, index) => (Open: FineExecutionTiming.SessionOpen(bar.Timestamp, timezone, schedules), Index: index))
+            .ToDictionary(item => item.Open, item => item.Index);
+
+    // This adapter models an opening command only. A later receipt never moves it to another slice/session.
+    public static int FindWindowEntryIndex(TradingFlow.Engine.Execution.NextRegularOpenEntryWindow window,
+        DateTimeOffset triggeredAtUtc, DateTimeOffset exclusiveExpiry,
+        IReadOnlyDictionary<DateTimeOffset, int> opens, int unavailableIndex) =>
+        triggeredAtUtc <= window.OpenUtc && window.OpenUtc < exclusiveExpiry &&
+        opens.TryGetValue(window.OpenUtc, out var index) ? index : unavailableIndex;
+
     // Report the actual source close separately from the replay's existing availability and receipt clocks.
     public static BacktestExitEvidence DescribeCompletedExit(OhlcvBar source, StrategyDefinition strategy,
         IReadOnlyList<BacktestExitCondition> conditions, IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules)

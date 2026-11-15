@@ -93,9 +93,13 @@ public sealed partial class BacktestRunner
         return (candidate, exitIndex);
     }
 
-    // Refuse strategy/session combinations whose entry, protection or exit semantics this policy cannot replay.
+    // Refuse unevidenced entry, protection, or accounting combinations before execution starts.
     private static void ValidateFineExecutionPolicy(BacktestRunConfig run, StrategyDefinition strategy)
     {
+        if (run.Engine.AccountLossReplay is { Enabled: true } &&
+            (run.Engine.ExecutionReplayPolicyId != ExecutionReplayPolicy.DailyRthFiveMinuteV1 ||
+             strategy.Session.ExchangeTimezone != "America/New_York" || run.Portfolio.StartingCapital <= 0m))
+            throw new InvalidOperationException("Sampled account loss requires a New York regular-session five-minute IOC account with positive starting capital.");
         if (run.Engine.ExecutionReplayPolicyId is not (ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1) ||
             run.Mode != "backtest" || strategy.Timeframe != "1d" || strategy.Execution.Timeframe != "1d" ||
             strategy.Direction != "long" || strategy.EntryRules.EnableShort || strategy.ExitRules.EnableAtrTrailingStop ||

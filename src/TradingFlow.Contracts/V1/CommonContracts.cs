@@ -14,7 +14,11 @@ public sealed record RunProvenance(
     string Mode,
     Guid UniverseSnapshotId,
     Guid? DecisionRunId,
-    IReadOnlyList<StrategyReference> Strategies);
+    IReadOnlyList<StrategyReference> Strategies,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    PaperMembershipReview? PaperMembership = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? UniverseContentSha256 = null);
 
 public sealed record ApiErrorResponse(
     string ContractVersion,

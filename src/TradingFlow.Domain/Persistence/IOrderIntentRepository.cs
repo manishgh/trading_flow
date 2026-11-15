@@ -115,11 +115,13 @@ public sealed class OrderDispatchLeaseLostException(Guid intentId) : InvalidOper
 
 public sealed class OrderDispatchExpiredException(
     Guid intentId,
-    DateTimeOffset expiredAtUtc) : InvalidOperationException(
+    DateTimeOffset expiredAtUtc,
+    OrderEntryWindowEvidence? entryWindow = null) : InvalidOperationException(
         $"Dispatch for intent {intentId:N} expired at {expiredAtUtc:O} before broker submission.")
 {
     public Guid IntentId { get; } = intentId;
     public DateTimeOffset ExpiredAtUtc { get; } = expiredAtUtc;
+    public OrderEntryWindowEvidence? EntryWindow { get; } = entryWindow;
 }
 
 public sealed class OrderDispatchAdoptionRequiredException(Guid intentId) : InvalidOperationException(
@@ -179,12 +181,14 @@ public sealed class CandidateOrderIntentConflictException(
 public sealed class ExpiredCandidateOrderIntentException(
     Guid candidateId,
     Guid requestedIntentId,
-    DateTimeOffset expiredAtUtc) : InvalidOperationException(
+    DateTimeOffset expiredAtUtc,
+    OrderEntryWindowEvidence? entryWindow = null) : InvalidOperationException(
         $"Candidate {candidateId:N} expired at {expiredAtUtc:O} before intent {requestedIntentId:N} could consume it.")
 {
     public Guid CandidateId { get; } = candidateId;
     public Guid RequestedIntentId { get; } = requestedIntentId;
     public DateTimeOffset ExpiredAtUtc { get; } = expiredAtUtc;
+    public OrderEntryWindowEvidence? EntryWindow { get; } = entryWindow;
 }
 
 /// <summary>

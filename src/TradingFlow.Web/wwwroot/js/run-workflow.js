@@ -11,6 +11,8 @@
     const planPicker = form.querySelector('[data-saved-backtest-plan]');
     const startPlanButton = form.querySelector('[data-start-backtest-plan]');
     const savePlanButton = form.querySelector('[data-backtest-action="save"]');
+    const paperStockReview = form.querySelector('[data-paper-stock-review]');
+    const paperStart = form.querySelector('[data-paper-action="start"]');
     let previewed = false;
     if (savePlanButton) savePlanButton.disabled = true;
     const evidencePicker = form.querySelector('[data-evidence-picker]');
@@ -26,6 +28,7 @@
         if (startPlanButton) startPlanButton.disabled = true;
         if (savePlanButton) savePlanButton.disabled = true;
         planPreview?.replaceChildren(); evidenceSummary?.replaceChildren();
+        clearPaperStockReview();
     }
     window.addEventListener('pagehide', leavePage);
     // Browser-history restoration reloads the authenticated server catalog instead of reviving old-account choices.
@@ -34,7 +37,7 @@
     if(preparationKey){
         api('preparation/accepted?key='+encodeURIComponent(preparationKey)).then(review=>{
             const label=document.createElement('p');label.textContent='Accepted preparation snapshot '+review.universeSnapshotId+' · '+review.symbols.join(', ')+' · expires '+new Date(review.expiresAtUtc).toLocaleString()+'. This bound membership replaces the source selectors below.';form.prepend(label);
-            for(const key of ['WishlistId','ScreenerFilter','UniverseSource'])form.querySelectorAll('[name="'+key+'"]').forEach(x=>x.disabled=true);
+            for(const key of ['WishlistId','ScreenerFilter','UniverseSource','PaperMembershipMode'])form.querySelectorAll('[name="'+key+'"]').forEach(x=>x.disabled=true);
         }).catch(error=>{status.textContent=error.message;});
     }
     let busy = false;
@@ -43,6 +46,36 @@
     status.dataset.runWorkflowStatus = "";
     form.append(status);
     const validation = form.querySelector('[data-run-validation]');
+
+    // Reset the confirmation whenever its frozen browser command is discarded.
+    function clearPaperStockReview() {
+        if (!paperStockReview || !paperStart) return;
+        paperStockReview.replaceChildren();
+        paperStockReview.hidden = true;
+        paperStart.hidden = true;
+    }
+
+    // The reviewed union and mode come from the server response that the start command names.
+    function showPaperStockReview(universe) {
+        const review = universe.paperMembership;
+        const summary = document.createElement('p');
+        const mode = review?.mode === 'refresh_selected_sources' ? 'Refresh selected sources' : 'Fixed at launch';
+        const symbols = universe.members?.map(member => member.symbol) ?? universe.symbols;
+        summary.textContent = 'Stock membership · ' + mode + ' · ' + symbols.length + ' stocks at launch';
+        const sourceList = document.createElement('ul');
+        for (const source of review?.sources ?? []) {
+            const item = document.createElement('li');
+            item.textContent = source.isBoundedObservation
+                ? 'Finviz query ' + source.normalizedQuery + ' · ' + source.memberCount + ' stocks in the bounded observation'
+                : 'Stock group · ' + source.memberCount + ' stocks';
+            sourceList.append(item);
+        }
+        const members = document.createElement('p');
+        members.textContent = symbols.join(' · ');
+        paperStockReview.replaceChildren(summary, sourceList, members);
+        paperStockReview.hidden = false;
+        paperStart.hidden = false;
+    }
     function clearValidation() {
         if (!validation) return;
         validation.hidden = true; validation.replaceChildren();
@@ -82,6 +115,7 @@
         if (savePlanButton) savePlanButton.disabled = true;
         if (planPicker) planPicker.value = '';
         planPreview?.replaceChildren();
+        clearPaperStockReview();
         clearValidation();
     }
     form.addEventListener("input", edited);
@@ -273,6 +307,7 @@
             `Precommitted liquidation source UTC: ${settings.precommittedLiquidationSourceUtc ? new Date(settings.precommittedLiquidationSourceUtc).toISOString().slice(0, 19) + 'Z' : 'Not specified'}`
         ];
         if (settings.requiredMarketDataContext) lines.push(`Required market data: ${settings.requiredMarketDataContext}`);
+        if (settings.accountLossReplay) lines.push(`Account-loss limits: ${settings.accountLossReplay}`);
         for (const strategy of settings.strategies) {
             lines.push(`Recipe: ${strategy.name} · ${strategyIdentity(strategy.identity)}`, `Adverse slippage bps: ${strategy.slippageBps}`);
             if (strategy.derivedFromIdentity) lines.push(`Parent: ${strategyIdentity(strategy.derivedFromIdentity)}`);
@@ -408,6 +443,15 @@
         event.preventDefault();
         if (busy) return;
         const savingPlan = kind === 'backtest' && event.submitter?.dataset.backtestAction === 'save';
+        const confirmingPaper = kind === 'paper' && event.submitter?.dataset.paperAction === 'start';
+        if (kind === 'paper' && confirmingPaper && !pending) {
+            status.textContent = 'Preview the selected stocks before starting.';
+            return;
+        }
+        if (kind === 'paper' && !confirmingPaper) {
+            pending = undefined;
+            clearPaperStockReview();
+        }
         if (savingPlan && !previewed) { status.textContent = 'Preview the current fields and resolved costs before saving.'; return; }
         if (kind === 'backtest' && !savingPlan) {
             previewed = false;
@@ -440,9 +484,20 @@
                     if (!choice) throw new Error('Select a wishlist or saved Finviz stock source.');
                     sources.push({ sourceKind: choice.dataset.sourceKind, sourceKey: choice.dataset.sourceKey,
                         wishlistId: choice.dataset.wishlistId || null, query: choice.dataset.query || null });
-                } else if (source !== "screener" && get("WishlistId")) sources.push({ sourceKind: "wishlist", sourceKey: get("WishlistId"), wishlistId: get("WishlistId") });
-                if (kind === "paper" && source !== "wishlist" && get("ScreenerFilter")) sources.push({ sourceKind: "finviz", sourceKey: get("ScreenerFilter"), query: get("ScreenerFilter") });
-                const universe = preparationKey ? await api("preparation/accepted?key="+encodeURIComponent(preparationKey)) : await api("universes/preview", { contractVersion: "1.0", horizon: horizons[0], sources });
+                } else if (!preparationKey) {
+                    if (source !== 'screener') {
+                        if (!get('WishlistId')) throw new Error('Select a stock group.');
+                        sources.push({ sourceKind: 'wishlist', sourceKey: get('WishlistId'), wishlistId: get('WishlistId') });
+                    }
+                    if (source !== 'wishlist') {
+                        if (!get('ScreenerFilter').trim()) throw new Error('Select a Finviz screen or enter a query.');
+                        sources.push({ sourceKind: 'finviz', sourceKey: get('ScreenerFilter'), query: get('ScreenerFilter') });
+                    }
+                }
+                const membershipMode = get('PaperMembershipMode') || 'fixed_at_launch';
+                const universe = preparationKey ? await api("preparation/accepted?key="+encodeURIComponent(preparationKey)) :
+                    await api("universes/preview", { contractVersion: "1.0", horizon: horizons[0], sources,
+                        ...(kind === 'paper' ? { paperMembershipMode: membershipMode } : {}) });
                 if(preparationKey && Date.now()>=Date.parse(universe.expiresAtUtc))throw new Error("Preparation evidence expired. Return to preparation and collect a new review.");
                 const base = {
                     contractVersion: "1.0", runName: get("RunName").trim() || kind + "_" + Date.now(),
@@ -460,7 +515,11 @@
                 } else {
                     pending = { ...base, strategy: identities[0], newsEnabled: data.getAll("NewsEnabled").includes("true"),
                         allowExtendedHoursTrading: data.getAll("AllowExtendedHoursTrading").includes("true"),
-                        entryOrderType: get("EntryOrderType"), timeInForce: get("OrderExpiration"), executionPolicy: "strategy_validated", mode };
+                        entryOrderType: get("EntryOrderType"), timeInForce: get("OrderExpiration"), executionPolicy: "strategy_validated", mode,
+                        ...(!preparationKey ? { paperMembershipMode: universe.paperMembership.mode, universeContentSha256: universe.contentSha256 } : {}) };
+                    showPaperStockReview(universe);
+                    status.textContent = 'Review the stock membership, then start the strategy run.';
+                    return;
                 }
             }
             if (kind === 'backtest') {
@@ -492,6 +551,7 @@
             const result = await api("paper/runs", pending);
             status.textContent = result.runName + ": " + result.status;
             pending = undefined;
+            clearPaperStockReview();
             const link = document.createElement("a");
             link.href = kind === "backtest" ? "/Backtests?jobId=" + result.jobId : "/PaperJob/" + result.jobId;
             link.textContent = " Open run";

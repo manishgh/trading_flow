@@ -22,6 +22,7 @@ public static class BacktestSettingsPresentation
             $"Precommitted liquidation source UTC: {settings.PrecommittedLiquidationSourceUtc?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) ?? "Not specified"}"
         };
         if (settings.RequiredMarketDataContext is { } context) lines.Add($"Required market data: {context}");
+        if (settings.AccountLossReplay is { } loss) lines.Add($"Account-loss limits: {loss}");
         foreach (var strategy in settings.Strategies)
         {
             lines.Add($"Recipe: {strategy.Name} · {Identity(strategy.Identity)}");

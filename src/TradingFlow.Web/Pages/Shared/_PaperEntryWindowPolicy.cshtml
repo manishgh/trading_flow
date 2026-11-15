@@ -1,0 +1,10 @@
+@model TradingFlow.Domain.Strategies.StrategyDefinition
+@if (Model?.Execution.EntryWindow is { } window)
+{
+    <p class="muted" data-entry-window-policy>
+        New entry submissions: next regular session open, within @window.GraceSeconds seconds,
+        ending earlier if the session closes. Late setups are recorded as <code>entry_window_missed</code>.
+        The fill comparison shows each submitted order's exact window in New York, Berlin and UTC.
+        Accepted working orders can fill after the submission deadline.
+    </p>
+}

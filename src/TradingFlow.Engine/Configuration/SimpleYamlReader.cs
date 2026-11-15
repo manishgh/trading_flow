@@ -1,5 +1,6 @@
 using System.Globalization;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Optimization;
@@ -236,7 +237,8 @@ public sealed class SimpleYamlReader
                     OptionalString(map, "execution.confirmation.momentum_filter", "none"),
                     OptionalDecimal(map, "execution.confirmation.min_close_location_value"),
                     OptionalDecimal(map, "execution.confirmation.max_close_location_value")),
-                OptionalNullableString(map, "execution.opening_gap_policy")),
+                OptionalNullableString(map, "execution.opening_gap_policy"),
+                ReadEntryWindow(map)),
             new SessionRules(
                 RequireString(map, "session.exchange_timezone"),
                 RequireInt(map, "session.quiet_minutes_after_open"),
@@ -245,6 +247,7 @@ public sealed class SimpleYamlReader
                 OptionalBool(map, "session.is_continuous_market", false),
                 OptionalBool(map, "session.use_extended_hours", false)),
             ReadRegimeRules(map));
+        strategy.Execution.EntryWindow?.Validate(strategy);
         if (strategy.EntryRules.Sma200RisingLookbackBars < 0 || strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is <= 0)
             throw new InvalidOperationException("SMA200 rise lookback must be nonnegative; breakout volume threshold must be positive.");
         if (strategy.EntryRules.MinBreakoutVolumeVs50DayAverage is not null && !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
@@ -262,6 +265,15 @@ public sealed class SimpleYamlReader
         ValidateScheduledRules(strategy);
         map.ThrowIfUnknownKeys(path);
         return strategy;
+    }
+
+    // A partial window is invalid: neither a policy version nor an economic grace has an implicit default.
+    private static EntryWindowRules? ReadEntryWindow(IReadOnlyDictionary<string, List<string>> map)
+    {
+        if (!map.ContainsKey("execution.entry_window") &&
+            !map.Keys.Any(key => key.StartsWith("execution.entry_window.", StringComparison.Ordinal))) return null;
+        return new(RequireString(map, "execution.entry_window.policy"),
+            RequireInt(map, "execution.entry_window.version"), RequireInt(map, "execution.entry_window.grace_seconds"));
     }
 
     private static RegimeRules? ReadRegimeRules(IReadOnlyDictionary<string, List<string>> map)
@@ -319,6 +331,7 @@ public sealed class SimpleYamlReader
                 OptionalBool(runMap, "engine.allow_late_warmup", false),
                 OptionalDateTimeOffset(runMap, "engine.precommitted_liquidation_source_utc"),
                 OptionalNullableString(runMap, "engine.execution_replay_policy_id")) {
+                    AccountLossReplay = ReadBacktestAccountLossReplay(runMap),
                     EvidenceManifestPath = OptionalNullableString(runMap, "engine.evidence_manifest_path"),
                     EvidenceResearchRoot = OptionalNullableString(runMap, "engine.evidence_research_root"),
                     EvidenceManifestSha256 = OptionalNullableString(runMap, "engine.evidence_manifest_sha256"),
@@ -1013,6 +1026,23 @@ public sealed class SimpleYamlReader
         return Boolean.Parse(RequireString(map, key));
     }
 
+    // Freeze explicit thresholds and the versioned observation basis. Reject cadence overrides and misspelled settings.
+    private static BacktestAccountLossReplayConfig? ReadBacktestAccountLossReplay(IReadOnlyDictionary<string, List<string>> map)
+    {
+        const string path = "engine.account_loss_replay";
+        var keys = map.Keys.Where(key => key.StartsWith(path + ".", StringComparison.Ordinal)).ToArray();
+        if (keys.Length == 0 && !map.ContainsKey(path)) return null;
+        var allowed = new[] { path + ".enabled", path + ".policy_id", path + ".daily_pct", path + ".weekly_pct", path + ".peak_to_trough_pct" };
+        var unknown = keys.Except(allowed, StringComparer.Ordinal).FirstOrDefault();
+        if (unknown is not null) throw new InvalidOperationException($"Unsupported account-loss replay setting: {unknown}.");
+        var settings = new BacktestAccountLossReplayConfig(RequireBool(map, path + ".enabled"),
+            RequireString(map, path + ".policy_id"), new AccountLossLimits(RequireDecimal(map, path + ".daily_pct"),
+                RequireDecimal(map, path + ".weekly_pct"), RequireDecimal(map, path + ".peak_to_trough_pct")));
+        // Web profiles may select the supported replay at start. Validate that combination once the effective run is resolved.
+        settings.Validate(RequireString(map, "mode"), ExecutionReplayPolicy.DailyRthFiveMinuteV1);
+        return settings;
+    }
+
     private static bool OptionalBool(IReadOnlyDictionary<string, List<string>> map, string key, bool fallback)
     {
         return TryGetScalar(map, key, out var value) && !String.IsNullOrWhiteSpace(value)
@@ -1171,6 +1201,7 @@ public sealed class SimpleYamlReader
             "exit_rules.continuation_protection",
             "execution",
             "execution.confirmation",
+            "execution.entry_window",
             "session",
             "regime"
         };

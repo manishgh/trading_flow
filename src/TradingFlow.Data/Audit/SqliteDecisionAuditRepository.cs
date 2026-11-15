@@ -7,9 +7,21 @@ namespace TradingFlow.Data.Audit;
 
 public sealed class SqliteDecisionAuditRepository(IDbContextFactory<TradingFlowDbContext> contextFactory) : IDecisionAuditRepository
 {
+    // Preserve the first keyed observation atomically; ordinary audit records remain append-only.
     public async Task SaveAuditAsync(DecisionAuditRecord record, CancellationToken token)
     {
         await using var context = await contextFactory.CreateDbContextAsync(token);
+        if (record.DeduplicationKey is { } key)
+        {
+            if (key.Length != 64 || key.Any(c => !Uri.IsHexDigit(c)))
+                throw new ArgumentException("Audit deduplication identity must be a SHA-256 digest.", nameof(record));
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "DecisionAudits" ("RunName", "Ticker", "StrategyName", "Timestamp", "Decision", "RejectionReason", "SignalJson", "DeduplicationKey")
+                VALUES ({record.RunName}, {record.Ticker}, {record.StrategyName}, {record.Timestamp}, {record.Decision}, {record.RejectionReason}, {record.SignalJson}, {key})
+                ON CONFLICT("DeduplicationKey") DO NOTHING
+                """, token);
+            return;
+        }
         context.DecisionAudits.Add(record);
         await context.SaveChangesAsync(token);
     }

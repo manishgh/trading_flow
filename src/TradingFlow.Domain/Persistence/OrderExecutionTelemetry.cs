@@ -12,7 +12,34 @@ public sealed record AdmissionOrderQuote(decimal? Bid, decimal? Ask, string Feed
 
 /// <summary>A frozen trigger price and optional separately modeled executable price.</summary>
 public sealed record OrderDecisionReference(decimal TriggerReferencePrice, DateTimeOffset TriggeredAtUtc,
-    decimal? ModeledExecutablePrice = null);
+    decimal? ModeledExecutablePrice = null)
+{
+    /// <summary>Source-bound submission window recorded before reserving the entry.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public OrderEntryWindowEvidence? EntryWindow { get; init; }
+}
+
+/// <summary>Distinct source, receipt/availability, confirmation and economic-open clocks for a bounded entry.</summary>
+public sealed record OrderEntryWindowEvidence(string Policy, int Version, int GraceSeconds,
+    DateTimeOffset SetupSourceUtc, DateTimeOffset SetupAvailableAtUtc, DateTimeOffset? ConfirmationAtUtc,
+    DateTimeOffset IntendedOpenUtc, DateTimeOffset ExclusiveEndUtc)
+{
+    // Unknown or malformed persisted evidence cannot supply a policy label or a guessed execution clock.
+    public static OrderEntryWindowEvidence? Read(string? json)
+    {
+        if (json is not { Length: > 0 and <= 4096 }) return null;
+        try
+        {
+            var value = System.Text.Json.JsonSerializer.Deserialize<OrderEntryWindowEvidence>(json);
+            return value is { Policy: EntryWindowRules.NextRegularOpen, Version: 1, GraceSeconds: > 0 and <= 86400 } &&
+                value.SetupSourceUtc <= value.SetupAvailableAtUtc && value.SetupSourceUtc < value.IntendedOpenUtc &&
+                value.IntendedOpenUtc < value.ExclusiveEndUtc &&
+                value.ExclusiveEndUtc - value.IntendedOpenUtc <= TimeSpan.FromSeconds(value.GraceSeconds)
+                ? value : null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+}
 
 /// <summary>Entry observations stored beside the first winning reservation.</summary>
 public sealed record OrderAdmissionEvidence(AdmissionOrderQuote? Quote, OrderDecisionReference? Decision,
@@ -37,6 +64,7 @@ public sealed class OrderAdmissionTelemetryRecord
     public string? StrategyArtifactId { get; set; }
     public string? StrategyVersion { get; set; }
     public string? StrategyContentSha256 { get; set; }
+    public string? EntryWindowJson { get; set; }
 }
 
 /// <summary>One lease-fenced local broker attempt. The intent supplies its client, run and account identities.</summary>

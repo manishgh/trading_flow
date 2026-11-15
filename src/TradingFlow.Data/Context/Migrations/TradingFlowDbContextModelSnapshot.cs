@@ -381,7 +381,13 @@ namespace TradingFlow.Data.Context.Migrations
                     b.Property<DateTimeOffset>("Timestamp")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DeduplicationKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("DeduplicationKey").IsUnique();
 
                     b.HasIndex("RunName");
 
@@ -1697,6 +1703,8 @@ namespace TradingFlow.Data.Context.Migrations
                     b.Property<string>("StrategyArtifactId").HasColumnType("TEXT");
                     b.Property<string>("StrategyVersion").HasColumnType("TEXT");
                     b.Property<string>("StrategyContentSha256").HasColumnType("TEXT");
+                    b.Property<string>("EntryWindowJson").HasColumnType("TEXT");
+
                     b.HasKey("IntentId");
                     b.ToTable("order_admission_telemetry", (string)null);
                 });

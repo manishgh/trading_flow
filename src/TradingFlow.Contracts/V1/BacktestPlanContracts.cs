@@ -94,7 +94,9 @@ public sealed record BacktestResolvedSettingsResponse(string ConfigurationKey, s
     decimal FixedBuyFee, decimal FixedSellFee, decimal SecFeeRate, decimal FinraTafPerShare, decimal FinraTafCap,
     decimal MaxBarParticipationPct, decimal ImpactBpsAtMaxParticipation, string? ExecutionReplayPolicyId,
     DateTimeOffset? PrecommittedLiquidationSourceUtc, IReadOnlyList<BacktestStrategySettingsResponse> Strategies,
-    string? CutoffPolicy = null, string Horizon = "swing", string? RequiredMarketDataContext = null);
+    string? CutoffPolicy = null, string Horizon = "swing", string? RequiredMarketDataContext = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? AccountLossReplay = null);
 
 public sealed record BacktestStrategySettingsResponse(StrategyReference Identity, string Name, decimal SlippageBps,
     StrategyReference? DerivedFromIdentity, TradingFlow.Contracts.Operator.StrategyAdmissionProfileResponse? AdmissionProfile);

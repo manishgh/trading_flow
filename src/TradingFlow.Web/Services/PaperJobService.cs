@@ -17,6 +17,8 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services.Discovery;
 using TradingFlow.Application.Jobs;
+using TradingFlow.Contracts.V1;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Jobs;
 
 namespace TradingFlow.Web.Services;
@@ -497,6 +499,13 @@ public sealed class PaperJobService : IDurableJobHandler
         return jobs.TryGetValue(jobId, out var job) ? job.ToSnapshot() : null;
     }
 
+    /// <summary>Projects the immutable launch review alongside the worker's current health.</summary>
+    public async Task<PaperMembershipReview?> GetMembershipReviewAsync(Guid jobId, CancellationToken cancellationToken)
+    {
+        var job = await durableJobs.GetJobAsync(jobId, cancellationToken);
+        return job is { JobType: "paper" } ? RunWorkflowService.Project(job).Provenance?.PaperMembership : null;
+    }
+
     // Identify an incompatible run first and reconcile broker protection independently.
     public async Task RecoverAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
@@ -602,6 +611,21 @@ public sealed class PaperJobService : IDurableJobHandler
             var requestedRun = LiveRunner.CreateProductionRun(executionRunContext);
             var restoredHealth = job.ToSnapshot().PaperPipelineHealth;
             requestedRun.PaperEntriesStoppedAtUtc = restoredHealth?.EntriesStoppedAtUtc;
+            if (request.Workflow?.Provenance.PaperMembership?.Mode == PaperMembershipModes.RefreshSelectedSources)
+            {
+                // Store the startup gate under the new job lease before registration can grant entry authority.
+                // The runner clears it only after publishing a current discovery result and any source failures.
+                var health = restoredHealth ?? new LivePipelineHealth();
+                job.SetPipelineHealth(health with
+                {
+                    Discovery = new DiscoveryRefreshHealth(
+                        new DiscoveryRefreshFailure(context.TimeProvider.GetUtcNow().ToUniversalTime(),
+                            "Waiting for current membership from the selected sources."),
+                        health.Discovery?.FailedSources ?? [])
+                });
+                await context.SaveSnapshotAsync(JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), cancellationToken);
+                restoredHealth = job.ToSnapshot().PaperPipelineHealth;
+            }
             var registration = await lifecycle.StartPaperRunAsync(requestedRun, context.LeaseToken, cancellationToken);
             if (registration is null)
             {

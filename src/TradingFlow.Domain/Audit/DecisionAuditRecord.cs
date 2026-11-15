@@ -12,4 +12,7 @@ public sealed record DecisionAuditRecord
     public string Decision { get; init; } = string.Empty; // "Accepted", "Rejected", or neutral evaluation states such as "NoSignal"
     public string? RejectionReason { get; init; }
     public string SignalJson { get; init; } = string.Empty; // Serialized TradeSignal
+    /// <summary>Optional immutable event identity; repeated polling/restarts retain the first audit observation.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? DeduplicationKey { get; init; }
 }

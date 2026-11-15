@@ -274,7 +274,9 @@ public sealed record ExecutionRules(
     decimal SlippageBps,
     ExecutionConfirmationRules? Confirmation = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? OpeningGapPolicy = null)
+    string? OpeningGapPolicy = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    EntryWindowRules? EntryWindow = null)
 {
     /// <summary>Plan from the prior close, keep a trade that opens beyond its stop, and exit it at the next eligible open.</summary>
     public const string KeepAndExitNextOpen = "keep_and_exit_next_open";
@@ -310,6 +312,20 @@ public sealed record ExecutionRules(
         Confirmation ?? ExecutionConfirmationRules.Disabled;
 
     public bool KeepsOpeningGaps() => OpeningGapPolicy == KeepAndExitNextOpen;
+}
+
+/// <summary>Explicit, immutable command deadline; never an implied permission to trade a strategy.</summary>
+public sealed record EntryWindowRules(string Policy, int Version, int GraceSeconds)
+{
+    public const string NextRegularOpen = "next_regular_open_window";
+
+    // Reject unknown versions and non-daily/extended setups instead of silently choosing another clock.
+    public void Validate(StrategyDefinition strategy)
+    {
+        if (Policy != NextRegularOpen || Version != 1 || GraceSeconds <= 0 || GraceSeconds > 86400 ||
+            strategy.Timeframe != "1d" || strategy.Session.IsContinuousMarket || strategy.Session.UseExtendedHours)
+            throw new InvalidOperationException("Entry window requires next_regular_open_window version 1, a positive grace of at most one day and a regular-session daily setup.");
+    }
 }
 
 /// <summary>

@@ -11,7 +11,11 @@ namespace TradingFlow.Web.Services;
 
 /// <summary>Keeps each standalone monthly artifact tied to its original capital and saved strategy/cohort execution.</summary>
 public sealed record MonthlyRunResultReport(IReadOnlyList<MonthlyRunResult> Results, string? UnavailableReason,
-    decimal? StartingCapital = null, BacktestCohortExecution? Cohort = null);
+    decimal? StartingCapital = null, BacktestCohortExecution? Cohort = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestAccountLossReplayReport? AccountLossReplay { get; init; }
+}
 
 /// <summary>Publish compact per-strategy/cohort monthly evidence before full trade collections leave the worker.</summary>
 public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategies)
@@ -25,7 +29,7 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
         CancellationToken token, BacktestCohortExecution? cohort = null)
     {
         var report = Create(config, result, evaluationCutoffUtc, cohortName, expectedStrategies) with
-        { StartingCapital = config.Portfolio.StartingCapital, Cohort = cohort };
+        { StartingCapital = config.Portfolio.StartingCapital, Cohort = cohort, AccountLossReplay = result.AccountLossReplay };
         await AtomicFileArtifactWriter.Instance.WriteTextExclusiveAsync(
             Path.ChangeExtension(result.ResultPath, ".monthly.json"), JsonSerializer.Serialize(report, Json), token);
         return report;

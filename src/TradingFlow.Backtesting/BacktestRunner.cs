@@ -595,7 +595,7 @@ public sealed partial class BacktestRunner(
             strategies,
             preparedMarket.DataStart,
             preparedMarket.WindowEnd,
-            cancellationToken);
+            cancellationToken, preparedMarket.WindowStart);
         // Decision-hour runs read only regular-session hourly bars (the calendar is loaded with the regime calendars above).
         if (strategies.Any(IsDecisionHour))
             (tickerContexts, decisionHourDroppedHourlyBars) = KeepRegularSessionHourlyBars(tickerContexts);
@@ -732,11 +732,16 @@ public sealed partial class BacktestRunner(
                             TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime) : null,
                     ResearchScreenHoldingRules = run.Universe?.RankedMembership is not null,
                     SplitExDates = await ResearchScreenSplitExDatesAsync(run, strategies, cancellationToken) } : null;
+        // Each isolated strategy book and the unified book share calendar inputs but own their capital and loss latches.
+        var lossInputs = run.Engine.AccountLossReplay is { Enabled: true } loss
+            ? new BacktestAccountLossInputs(loss, candidateSessionSchedules
+                ?? throw new InvalidDataException("Sampled account loss requires an authoritative exchange calendar."),
+                preparedMarket.WindowStart, preparedMarket.WindowEnd) : null;
         var eventOutcome = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
             ? await ExecuteEventPortfolioAsync(run, strategies, candidates, allBars,
                 universeMembership, regimeCalendars, portfolioExecutionJournal, cancellationToken)
-            : accounting is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
-                universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting) : null;
+            : accounting is not null || lossInputs is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
+                universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting, lossInputs) : null;
         await PublishDataGapsAsync(run, batches, stoppingBatches, eventOutcome?.Trades ?? [], cancellationToken,
             eventOutcome?.DecisionHourCounts);
         if (eventOutcome?.State is { } nativeState && stoppingBatches.Count > 0)
@@ -766,7 +771,7 @@ public sealed partial class BacktestRunner(
             allBars,
             candidateDiagnostics,
             universeMembership,
-            regimeCalendars, strategies.Length == 1 ? eventOutcome : null, accounting);
+            regimeCalendars, strategies.Length == 1 ? eventOutcome : null, accounting, lossInputs);
         if (!economicResultsComplete)
         {
             strategyResults = strategyResults
@@ -836,6 +841,7 @@ public sealed partial class BacktestRunner(
             PreparedMarketData: preparedData?.Summary ?? preparedMarket.PreparedMarketData)
         {
             PortfolioState = unifiedPortfolio.PortfolioState,
+            AccountLossReplay = BacktestAccountLossReplayReport.From(run.Engine.AccountLossReplay),
             DecisionContextEvidence = frozenEvidence?.Provenance ?? (_decisionContextProvider as FrozenManifestDecisionContextProvider)?.Provenance,
             HistoryEligibility = batches.Where(b => b.HistoryEligibility is not null)
                 .Select(b => b.HistoryEligibility!).OrderBy(h => h.StrategyId).ThenBy(h => h.Ticker).ToArray()
@@ -956,6 +962,11 @@ public sealed partial class BacktestRunner(
     /// <summary>Rejects incompatible run modes and exit policies before collecting or replaying market data.</summary>
     private static void ValidateRun(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
+        foreach (var strategy in strategies) strategy.Execution.EntryWindow?.Validate(strategy);
+        if (strategies.Any(strategy => strategy.Execution.EntryWindow is not null) &&
+            run.Engine.ExecutionReplayPolicyId != ExecutionReplayPolicy.DailyRthFiveMinuteV1)
+            throw new InvalidOperationException("The next-open entry window requires the daily RTH five-minute causal replay adapter.");
+        run.Engine.AccountLossReplay?.Validate(run.Mode, run.Engine.ExecutionReplayPolicyId);
         if (ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
             ValidateIntradayRun(run, strategies);
         else
@@ -1440,12 +1451,29 @@ public sealed partial class BacktestRunner(
             new { Run = CandidateIdentityConfiguration(run), Strategy = runtimeStrategy.Identity, Ticker = snapshots[0].Ticker },
             $"{run.RunName}:{runtimeStrategy.Identity.StrategyId}:{snapshots[0].Ticker}",
             evaluationStart);
+        // Index source receipts once; checking a window must not rescan the complete price history per setup.
+        var setupReceipts = strategy.Execution.EntryWindow is not null
+            ? barsByTimeframe[strategy.Timeframe].ToDictionary(bar => bar.Timestamp, bar => bar.KnownAtUtc)
+            : null;
+        var entryOpenIndices = strategy.Execution.EntryWindow is not null
+            ? BacktestDecisionTiming.IndexEconomicOpens(executionBars, strategy.Session.ExchangeTimezone,
+                candidateSessionSchedules ?? throw new InvalidDataException("Entry window calendar is unavailable."))
+            : null;
 
         for (var i = startIndex; i < snapshots.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = snapshots[i];
             var signalAvailableTimestamp = snapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
+            // Source order is monotonic; provider receipt times are not.
+            if (signalAvailableTimestamp > evaluationEnd) break;
+            var entryWindow = NextRegularOpenEntryWindow.Resolve(strategy, snapshot.Timestamp, candidateSessionSchedules);
+            if (entryWindow is not null)
+            {
+                // Preserve receipt delays only for this explicit policy; never move its source-bound open.
+                var received = setupReceipts!.GetValueOrDefault(snapshot.Timestamp);
+                if (received > signalAvailableTimestamp) signalAvailableTimestamp = received.Value;
+            }
             if (signalAvailableTimestamp < evaluationStart)
             {
                 continue;
@@ -1453,7 +1481,8 @@ public sealed partial class BacktestRunner(
 
             if (signalAvailableTimestamp > evaluationEnd)
             {
-                break;
+                diagnostics.IncrementRejection("entry_window_missed");
+                continue;
             }
 
             if (IsOffDecisionSchedule(strategy, snapshot))
@@ -1463,7 +1492,7 @@ public sealed partial class BacktestRunner(
             }
 
             diagnostics.EvaluatedBarCount++;
-            var discoveryExpiry = BacktestDecisionTiming.ResolveExpiry(
+            var discoveryExpiry = entryWindow?.EndUtc ?? BacktestDecisionTiming.ResolveExpiry(
                 signalAvailableTimestamp, strategy.Timeframe, strategy.Session, candidateSessionSchedules);
             if (discoveryExpiry > evaluationEnd)
             {
@@ -1472,7 +1501,7 @@ public sealed partial class BacktestRunner(
 
             if (discoveryExpiry <= signalAvailableTimestamp)
             {
-                diagnostics.IncrementRejection("candidate_window_not_available");
+                diagnostics.IncrementRejection(entryWindow is not null ? "entry_window_missed" : "candidate_window_not_available");
                 continue;
             }
 
@@ -1556,18 +1585,28 @@ public sealed partial class BacktestRunner(
 
                 var plannedEntryIndex = FindNextValidExecutionBarIndex(
                     executionBars,
-                    FindFirstBarIndexAtOrAfter(executionBars, canonicalOrderPlan.TriggeredAtUtc),
+                    entryWindow is null ? FindFirstBarIndexAtOrAfter(executionBars, canonicalOrderPlan.TriggeredAtUtc)
+                        : BacktestDecisionTiming.FindWindowEntryIndex(entryWindow, canonicalOrderPlan.TriggeredAtUtc, discoveryExpiry,
+                            entryOpenIndices!, executionBars.Count),
                     strategy);
                 if (plannedEntryIndex >= executionBars.Count ||
                     executionBars[plannedEntryIndex].Timestamp >= discoveryExpiry)
                 {
-                    lastReason = "no_next_executable_bar_before_expiry";
+                    lastReason = entryWindow is not null ? "entry_window_missed" : "no_next_executable_bar_before_expiry";
                     break;
                 }
 
                 if (terminal is { } cutoff && executionBars[plannedEntryIndex].Timestamp >= cutoff)
                 {
                     lastReason = "precommitted_terminal_entry_cutoff";
+                    break;
+                }
+
+                if (entryWindow is not null && !entryWindow.Contains(FineExecutionTiming.SessionOpen(
+                        executionBars[plannedEntryIndex].Timestamp, strategy.Session.ExchangeTimezone,
+                        candidateSessionSchedules ?? throw new InvalidDataException("Entry window calendar is unavailable."))))
+                {
+                    lastReason = "entry_window_missed";
                     break;
                 }
 
@@ -1834,7 +1873,7 @@ public sealed partial class BacktestRunner(
                     true,
                     coverage,
                     manifestArtifacts,
-                    TradingFlow.Data.Backtesting.CandidateEvidenceCodec.EncodingId),
+                    TradingFlow.Data.Backtesting.CandidateEvidenceCodec.EncodingId) { AccountLossReplay = result.AccountLossReplay },
                 cancellationToken: token),
             cancellationToken);
         return new BacktestArtifactWriteResult(

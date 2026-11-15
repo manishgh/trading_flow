@@ -18,13 +18,14 @@ public sealed partial class BacktestRunner
     private IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> factorReferenceBars =
         new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
 
-    // Load actual replay source dates for intraday books; other horizons retain their expiry-calendar lookahead.
+    // Load the authoritative calendar once for regime and replay decisions, including the sampled account's initial anchor.
     private async Task<IReadOnlyDictionary<string, RegimeCalendar>> BuildRegimeCalendarsAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
         DateTimeOffset dataStart,
         DateTimeOffset windowEnd,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTimeOffset? evaluationStart = null)
     {
         var calendars = new Dictionary<string, RegimeCalendar>(StringComparer.OrdinalIgnoreCase);
         var active = strategies.Where(strategy => strategy.Regime is { IsActive: true }).ToArray();
@@ -38,7 +39,7 @@ public sealed partial class BacktestRunner
             if (provider is IMarketSessionScheduleProvider scheduleProvider)
             {
                 candidateSessionSchedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
-                    DateOnly.FromDateTime(dataStart.UtcDateTime).AddDays(-1),
+                    BacktestCalendarBounds.CandidateFirstRequiredDate(run, dataStart, evaluationStart ?? dataStart),
                     BacktestCalendarBounds.IntradayLastRequiredDate(run, windowEnd, ResolveExchangeTimezone(strategies))
                         ?? DateOnly.FromDateTime(windowEnd.UtcDateTime).AddDays(10), cancellationToken);
                 if (candidateSessionSchedules.Count == 0)

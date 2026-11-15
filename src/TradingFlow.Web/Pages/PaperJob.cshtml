@@ -1,5 +1,6 @@
 @page "{id:guid}"
 @using TradingFlow.Web.Models
+@using TradingFlow.Contracts.V1
 @model TradingFlow.Web.Pages.PaperJobModel
 @{
     ViewData["Title"] = "Strategy run";
@@ -8,6 +9,30 @@
 @if (Model.Job is { } candidateJob)
 {
     <p class="panel"><a href="/Desk?runId=@candidateJob.JobId">Open this run's signals on the Desk</a></p>
+}
+@if (Model.Job is not null)
+{
+    <section class="panel" aria-label="Stock membership">
+        <p><strong>Stock membership</strong> · @(Model.MembershipReview?.Mode == PaperMembershipModes.RefreshSelectedSources ? "Refresh selected sources" : "Fixed at launch")</p>
+        @if (Model.MembershipReview is { } review)
+        {
+            <ul>
+                @foreach (var source in review.Sources)
+                {
+                    <li>
+                        @if (source.IsBoundedObservation)
+                        {
+                            <span>Finviz query <code>@source.NormalizedQuery</code> · @source.MemberCount stocks in the bounded launch observation</span>
+                        }
+                        else
+                        {
+                            <span>Stock group <code>@source.WishlistId</code> · @source.MemberCount stocks at launch</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
 }
 @section Scripts {
     <script>
@@ -283,6 +308,7 @@
 <div class="section-title">
     <div>
         <h1>Strategy run: @Model.Job?.RunName</h1>
+        <partial name="_PaperEntryWindowPolicy" model="Model.Strategy" />
         <div class="muted">Live execution metrics and signals</div>
     </div>
     <div class="inline-row">

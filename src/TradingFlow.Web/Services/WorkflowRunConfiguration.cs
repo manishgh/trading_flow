@@ -6,6 +6,7 @@ using TradingFlow.Web.Models;
 using System.Security.Cryptography;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Data.Csv;
 
@@ -129,8 +130,13 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
             string.Join(Environment.NewLine, selected.Select(item =>
                 $"{item.Definition.StrategyName}: {ExecutionAssumptionNote(run, item.Definition)}")),
             StrategyHorizonResolver.Resolve(selected[0].Definition),
-            SourceHistoryNote(run, selected[0].Definition));
+            SourceHistoryNote(run, selected[0].Definition), AccountLossAssumption(run.Engine.AccountLossReplay));
     }
+
+    /// <summary>Show the exact configured limits before the immutable profile is accepted.</summary>
+    private static string AccountLossAssumption(BacktestAccountLossReplayConfig? config) => config is { Enabled: true }
+        ? FormattableString.Invariant($"{config.PolicyId}, daily {config.Limits.DailyPct}%, weekly {config.Limits.WeeklyPct}%, peak-to-trough {config.Limits.PeakToTroughPct}%. {BacktestAccountLossReplayConfig.Limitations}")
+        : "Disabled";
 
     /// <summary>Describes the selected server execution contract for each strategy horizon.</summary>
     private static string ExecutionAssumptionNote(BacktestRunConfig run, StrategyDefinition strategy)
@@ -283,20 +289,27 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
         }
     }
 
-    /// <summary>Freeze an authorized paper strategy and the selected universe without changing the configured portfolio limits.</summary>
+    /// <summary>Writes the reviewed source identities without reading the editable sources again at confirmation.</summary>
     public async Task<IReadOnlyList<string>> WriteAsync(StartPaperRunRequest request, UniversePreviewResponse universe, string uniqueName, CancellationToken token)
     {
         var limits = await tradingLimits.GetAsync(request.Mode, token);
         var config = SelectConfig(catalog.GetPaperConfigs(), request.ConfigurationKey);
         var mode = request.Mode == "paper_experiment" ? StrategySelectionMode.RunPaperExperiment : StrategySelectionMode.RunPaperShadow;
         var selected = SelectStrategy(await catalog.GetStrategiesAsync(mode, token), request.Strategy);
-        var wishlist = universe.Members.Where(item => item.Sources.Any(source => source.SourceKind == "wishlist")).Select(item => item.Symbol).ToArray();
-        var screener = universe.Members.Where(item => item.Sources.Any(source => source.SourceKind is "screener" or "finviz")).Select(item => item.Symbol).ToArray();
+        var wishlist = universe.Members.Where(item => item.Sources.Any(source => source.SourceKind == DiscoverySourceKinds.Wishlist)).Select(item => item.Symbol).ToArray();
+        var screener = universe.Members.Where(item => item.Sources.Any(source => source.SourceKind is "screener" or DiscoverySourceKinds.Finviz)).Select(item => item.Symbol).ToArray();
+        var review = universe.PaperMembership;
+        var group = review?.Sources.SingleOrDefault(source => source.SourceKind == DiscoverySourceKinds.Wishlist);
+        var screen = review?.Sources.SingleOrDefault(source => source.SourceKind == DiscoverySourceKinds.Finviz);
+        var hasGroup = group is not null || wishlist.Length > 0;
+        var hasScreen = screen is not null || screener.Length > 0;
         var path = writer.SaveTempConfig(config.Path, universe.Members.Select(item => item.Symbol), selected.Artifact, mode,
-            request.TimeInForce, request.EntryOrderType, request.AllowExtendedHoursTrading, null, uniqueName, request.NewsEnabled,
-            universeSource: screener.Length > 0 ? (wishlist.Length > 0 ? "wishlist+finviz" : "screener") : "wishlist",
+            request.TimeInForce, request.EntryOrderType, request.AllowExtendedHoursTrading, screen?.NormalizedQuery, uniqueName, request.NewsEnabled,
+            wishlistId: group?.WishlistId,
+            universeSource: hasScreen ? (hasGroup ? "wishlist+finviz" : "screener") : "wishlist",
             universeResolvedAtUtc: universe.ResolvedAtUtc, selectedSourceTickers: wishlist, resolvedScreenerTickers: screener,
-            universeSnapshotId: universe.UniverseSnapshotId, maxConcurrentPositions: limits.MaxOpenPositions);
+            universeSnapshotId: universe.UniverseSnapshotId, maxConcurrentPositions: limits.MaxOpenPositions,
+            paperMembershipMode: review?.Mode);
         return [path, .. reader.ReadBacktestRun(path).Strategies];
     }
 

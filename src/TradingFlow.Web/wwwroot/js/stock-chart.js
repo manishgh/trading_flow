@@ -37,6 +37,7 @@
 
     // Format DateOnly in UTC so a provider's literal exchange date never moves across a local midnight.
     function candleCaption(bar, interval) {
+        if (interval === '1w') return bar.sessionDate + ' – ' + bar.weekly.lastSessionDate + ' · Weekly (1w)';
         if (interval !== '1d') return localClocks(bar.startMs) + ' · ' + bar.segment;
         const time = Date.parse(bar.sessionDate);
         return (Number.isFinite(time) ? sessionDate.format(time) : 'Session date unavailable') + ' · Daily';
@@ -135,6 +136,7 @@
         const indicatorLibrary = window.TradingFlowStockChartIndicators;
         const paths = { history: root.dataset.chartHistory, hub: root.dataset.chartHub };
         const controller = new AbortController();
+        const details = get('details');
         const layerFields = [...root.querySelectorAll('[data-chart-layer]')];
         const layers = Object.fromEntries(layerFields.map(input => [input.dataset.chartLayer, input.checked]));
         const hiddenLevels = new Set();
@@ -149,6 +151,7 @@
         let reconstructed = false;
         let shownPane = null;
         let pointerMoved = false;
+        let preservedSession;
 
         // Add handlers whose lifetime is no longer than this chart host.
         function on(node, event, handler) {
@@ -177,9 +180,12 @@
         function refreshSource() {
             const evidence = snapshot?.evidence;
             if (!evidence) return;
-            const evidenceText = [evidence.provider, evidence.feed?.toUpperCase(), evidence.adjustmentPolicy].filter(Boolean);
+            const weekly = key.interval === '1w';
+            const evidenceText = weekly ? ['SIP daily · adjusted']
+                : [evidence.provider, evidence.feed?.toUpperCase(), evidence.adjustmentPolicy].filter(Boolean);
             evidenceText.push(evidence.lastCompletedUtc ? 'Last completed · ' + readAge(evidence.lastCompletedUtc) : 'No completed candle');
-            if (evidence.coverage === 'partial') evidenceText.push('Partial candle coverage');
+            if (evidence.coverage === 'partial') evidenceText.push(weekly ? 'Weekly coverage gaps' : 'Partial candle coverage');
+            if (evidence.weekly?.pending) evidenceText.push('Current week pending');
             if (reconstructed) {
                 evidenceText.push('Reconstructed from retrieved history');
                 if (currentLevels.some(level => level.points?.length)) {
@@ -197,7 +203,7 @@
                 element('span', 'Postmarket', 'stock-chart-late'));
         }
 
-        // Present compact prices and study values for exactly the candle inspected by keyboard or crosshair.
+        // Present compact prices and keep the matching selected study values in the chart details.
         function inspect(start, announce = false) {
             const index = currentBars.findIndex(bar => bar.startMs === start);
             if (index === -1) return;
@@ -228,19 +234,24 @@
             get('prev').disabled = index === 0;
             get('next').disabled = index === currentBars.length - 1;
             get('readout').hidden = false;
-            if (announce) get('inspection').textContent = title + '. ' + [...values, ...measurements]
+            if (announce) get('inspection').textContent = title + '. ' + values
                 .map(([label, value]) => label + ' ' + value).join(', ');
         }
 
-        // Keep the same selected candle and matched studies in the disclosures, with their independent clocks.
+        // Keep the same selected candle and matched studies in the chart details with their independent clocks.
         function renderSelectedEvidence(bar, indicators, latest) {
             get('selected-candle').hidden = !bar;
             fields(get('candle-evidence'), bar ? [
                 ['Start', timestamp(bar.startUtc, true)], ['End', timestamp(bar.endUtc, true)],
-                ['Source', bar.sourceKind?.replaceAll('_', ' ') || 'Unavailable'],
-                ['Original receipt', bar.knownAtUtc ? timestamp(bar.knownAtUtc, true) : 'Original receipt unavailable'],
+                ['Source', bar.weekly ? 'SIP daily · adjusted' : bar.sourceKind?.replaceAll('_', ' ') || 'Unavailable'],
+                [bar.weekly ? 'Latest original daily receipt' : 'Original receipt',
+                    bar.knownAtUtc ? timestamp(bar.knownAtUtc, true) : 'Original receipt unavailable'],
                 ...(bar.retrievedAtUtc ? [['Retrieved', timestamp(bar.retrievedAtUtc, true)]] : []),
-                ['Available', timestamp(bar.availableAtUtc, true)]
+                ['Available', timestamp(bar.availableAtUtc, true)],
+                ...((bar.weekly?.constituents || []).map(input => ['Daily (1d) · ' + input.sessionDate,
+                    [input.sourceKind.replaceAll('_', ' '), input.knownAtUtc ? 'Original receipt ' + timestamp(input.knownAtUtc, true)
+                        : input.retrievedAtUtc ? 'Reconstructed · retrieved ' + timestamp(input.retrievedAtUtc, true)
+                            : 'Original receipt unavailable'].join(' · ')]))
             ] : []);
             const studyEvidence = indicators.flatMap(({ label, available, anchor, revision, reconstructedStudy, observed, historical }) =>
                 available ? [[label, [
@@ -370,19 +381,24 @@
             if (focused) [...get('zones').querySelectorAll('input')].find(input => input.dataset.chartZone === focused)?.focus({ preventScroll: true });
         }
 
-        // Keep stored event timestamps and estimates visible even when no candle contains the event.
+        // Keep event evidence visible and preserve the focused source link across chart snapshots.
         function renderEvents(events) {
+            const list = get('events');
+            const focusedEvent = list.contains(document.activeElement) ? document.activeElement.dataset.chartEvent : null;
+            const weekly = key.interval === '1w';
             const entries = events.map(event => {
                 const row = element('li');
                 const kind = event.kind === 'earnings' ? 'Earnings' : 'News';
-                const matched = plotting.candleIndex(currentBars, Date.parse(event.eventAtUtc)) !== -1;
+                const matched = plotting.eventCandleIndex(currentBars, event, key.interval) !== -1;
                 row.append(element('strong', kind + (event.isEstimate ? ' estimate · ' : ' · ') + event.title),
-                    element('small', [timestamp(event.eventAtUtc), event.source, matched ? '' : 'Outside loaded candle intervals'].filter(Boolean).join(' · ')));
-                if (event.knownAtUtc) row.append(element('small', 'Recorded ' + timestamp(event.knownAtUtc)));
+                    element('small', [timestamp(event.eventAtUtc, weekly), event.source,
+                        matched ? '' : weekly ? 'Outside loaded weeks' : 'Outside loaded candle intervals'].filter(Boolean).join(' · ')));
+                if (event.knownAtUtc) row.append(element('small', 'Recorded ' + timestamp(event.knownAtUtc, weekly)));
                 if (event.detail) row.append(element('p', event.detail));
                 const url = articleUrl(event.url);
                 if (url) {
                     const link = element('a', 'Open source');
+                    link.dataset.chartEvent = event.id;
                     link.href = url;
                     link.target = '_blank';
                     link.rel = 'noopener noreferrer';
@@ -390,13 +406,18 @@
                 }
                 return row;
             });
-            get('events').replaceChildren(...(entries.length ? entries : [element('li', 'No stored news or earnings for this view.')]));
+            list.replaceChildren(...(entries.length ? entries : [element('li', 'No stored news or earnings for this view.')]));
+            if (focusedEvent) {
+                const link = [...list.querySelectorAll('a')].find(item => item.dataset.chartEvent === focusedEvent);
+                (link || get('details-close')).focus({ preventScroll: true });
+            }
             get('event-count').textContent = events.length ? '(' + events.length + ')' : '';
         }
 
         // Show coverage assumptions and independent source clocks without inferring freshness from the WebSocket.
         function renderEvidence() {
             const evidence = snapshot.evidence;
+            const weeks = [snapshot, ...olderPages].map(page => page.evidence.weekly).filter(Boolean);
             fields(get('evidence'), [
                 ['Provider / feed', [evidence.provider, evidence.feed].filter(Boolean).join(' / ')],
                 ['Price basis', evidence.adjustmentPolicy],
@@ -406,6 +427,8 @@
                 ['Last source observation', timestamp(evidence.lastSourceObservedUtc)],
                 ['Chart snapshot', timestamp(snapshot.asOfUtc)],
                 ['Receipt basis', evidence.reconstructed ? 'Reconstructed from retrieved history' : 'See each candle’s original receipt'],
+                ...(evidence.weekly ? [['Daily / calendar revision', evidence.weekly.sourceRevision]] : []),
+                ...weeks.flatMap(week => week.gaps.map(gap => ['Week of ' + gap.weekOf, gap.reason])),
                 ...((evidence.basisBreaks || []).map(time => ['Price-basis break', timestamp(time)])),
                 ...((evidence.notes || []).map(note => ['Source note', note]))
             ]);
@@ -444,7 +467,8 @@
                 reconstructed, studies: selectedStudies, shownPane }, retainPosition);
             const hasBars = currentBars.length > 0;
             get('empty').hidden = hasBars;
-            get('empty').textContent = 'No completed candles for the selected view.';
+            get('empty').textContent = key.interval === '1w'
+                ? 'No completed weeks in the loaded history.' : 'No completed candles for the selected view.';
             get('readout').hidden = !hasBars;
             if (hasBars) {
                 const prior = currentBars.find(bar => bar.startMs === selected);
@@ -489,11 +513,49 @@
             refreshPager();
         }
 
+        // Apply interval-specific controls while retaining the intraday session and structural preferences.
+        function configureInterval(interval) {
+            const weekly = interval === '1w';
+            const daily = interval === '1d';
+            const session = get('session');
+            if (weekly) {
+                preservedSession ??= session.value;
+                session.value = 'regular';
+            } else if (preservedSession !== undefined) {
+                session.value = preservedSession;
+                preservedSession = undefined;
+            }
+            session.disabled = daily || weekly;
+            session.options[0].textContent = daily || weekly ? 'Provider daily' : 'Regular';
+            if (daily) session.value = 'regular';
+            const structure = get('structure');
+            structure.disabled = weekly;
+            structure.querySelector('[value="intraday"]').disabled = daily;
+            if (daily && structure.value === 'intraday') structure.value = 'auto';
+            get('preset').disabled = weekly;
+            get('library').inert = weekly;
+            get('weekly-availability').hidden = !weekly;
+            get('zones').hidden = weekly;
+            get('levels').hidden = weekly;
+            for (const input of layerFields) {
+                if (['sessions', 'support', 'resistance'].includes(input.dataset.chartLayer)) input.disabled = weekly;
+            }
+            const showDaily = !weekly && (daily || structure.value === 'daily');
+            get('lookback-control').hidden = !showDaily;
+            const context = weekly ? 'weekly' : showDaily ? get('lookback').value : structure.value;
+            get('context-label').textContent = weekly ? '' : showDaily
+                ? '1d structure · ' + horizonLabels[context] + ' · Current confirmed zones'
+                : '15m structure · Current confirmed zones';
+            get('context-label').hidden = weekly;
+            return context;
+        }
+
         // Use the active controls to start one observation, keeping the current view until a requested reload succeeds.
         function startSelection(reset = true, reloadEarlier = false) {
             const closed = stop();
             const request = new AbortController();
-            const profile = studies.tokens().sort().join(',');
+            const interval = get('interval').value;
+            const profile = interval === '1w' ? '' : studies.tokens().sort().join(',');
             let profileChanged = !reset && snapshot?.seriesKey.indicators !== profile;
             active = request;
             if (reset) resetSelection();
@@ -507,6 +569,7 @@
                 get('retry').hidden = true;
                 refreshStatus();
             }
+            const context = configureInterval(interval);
             if (!root.dataset.symbol) {
                 stop = () => closed;
                 get('empty').textContent = 'Select a stock to open its chart.';
@@ -515,25 +578,10 @@
                 return;
             }
 
-            const interval = get('interval').value;
-            const daily = interval === '1d';
-            const structureControl = get('structure');
-            const sessionControl = get('session');
-            sessionControl.disabled = daily;
-            sessionControl.options[0].textContent = daily ? 'Provider daily' : 'Regular';
-            if (daily) sessionControl.value = 'regular';
-            const showDaily = daily || structureControl.value === 'daily';
-            structureControl.querySelector('[value="intraday"]').disabled = daily;
-            if (daily && structureControl.value === 'intraday') structureControl.value = 'auto';
-            get('lookback-control').hidden = !showDaily;
-            const context = showDaily ? get('lookback').value : structureControl.value;
-            key = { symbol: root.dataset.symbol, interval, sessionView: daily ? 'regular' : sessionControl.value,
+            key = { symbol: root.dataset.symbol, interval, sessionView: get('session').value,
                 context, indicators: profile };
             refreshPager();
             updateFullLink();
-            get('context-label').textContent = showDaily
-                ? '1d structure · ' + horizonLabels[context] + ' · Current confirmed zones'
-                : '15m structure · Current confirmed zones';
             if (!plotting || !window.LightweightCharts || !transport) {
                 stop = () => closed;
                 get('empty').textContent = 'Chart assets could not load. Reload this page to retry.';
@@ -555,7 +603,7 @@
                 // Apply a fresh baseline only while its exact selection is mounted.
                 snapshot(received, live) {
                     if (active !== request || request.signal.aborted) return;
-                    if (reloadEarlier && received.bars.length) {
+                    if (reloadEarlier && (received.bars.length || received.evidence.weekly?.evaluatedFromUtc)) {
                         reloadEarlier = false;
                         historyExpired = false;
                         olderPages = [];
@@ -619,7 +667,8 @@
                 const prior = currentBars.length;
                 paint(true);
                 const count = currentBars.length - prior;
-                get('history-status').textContent = count > 0 ? count + ' earlier candles loaded' : 'No earlier candles in this page';
+                const unit = key.interval === '1w' ? 'weeks' : 'candles';
+                get('history-status').textContent = count > 0 ? count + ' earlier ' + unit + ' loaded' : 'No earlier ' + unit + ' in this page';
                 if (olderPages.length >= historyPageLimit && page.historyCursor) {
                     get('history-status').textContent += ' · Earlier history limit reached';
                 }
@@ -641,6 +690,7 @@
         function setSymbol(symbol) {
             const normalized = (symbol || '').trim().toUpperCase().replaceAll('.', '-');
             if (root.dataset.symbol === normalized && active) return;
+            details.close();
             root.dataset.symbol = normalized;
             hiddenZones.clear();
             startSelection();
@@ -655,7 +705,8 @@
             url.searchParams.set('interval', key.interval);
             url.searchParams.set('sessionView', key.sessionView);
             url.searchParams.set('chartContext', key.context);
-            url.searchParams.set('indicators', key.indicators);
+            if (key.interval === '1w') url.searchParams.delete('indicators');
+            else url.searchParams.set('indicators', key.indicators);
             url.searchParams.set('preset', get('preset').value);
             full.href = url.href;
             full.setAttribute('aria-label', 'Open full chart for ' + key.symbol);
@@ -665,6 +716,7 @@
         function savePreferences() {
             indicatorLibrary.remember({
                 ...Object.fromEntries(Object.keys(defaults).map(name => [name, get(name).value])),
+                session: preservedSession ?? get('session').value,
                 preset: get('preset').value, indicators: studies.tokens(), layers
             });
         }
@@ -672,7 +724,9 @@
         // Restore supported selections, allowing an explicit full chart URL to override browser defaults.
         function restorePreferences(settings, query = new URLSearchParams()) {
             const context = query.get('chartContext');
-            const params = { interval: query.get('interval'), session: query.get('sessionView') };
+            preservedSession = undefined;
+            const interval = query.get('interval');
+            const params = { interval, session: interval === '1w' ? null : query.get('sessionView') };
             if (Object.hasOwn(horizonLabels, context)) {
                 params.structure = 'daily';
                 params.lookback = context;
@@ -729,6 +783,8 @@
         on(get('retry'), 'click', () => startSelection(!snapshot));
         on(get('older'), 'click', loadEarlier);
         on(get('history-reload'), 'click', () => startSelection(false, true));
+        // Let the browser manage keyboard focus, Escape and return to the details button.
+        on(get('details-open'), 'click', () => details.showModal());
         // Return to the chart's live edge and keep the newly inspected latest candle selected.
         on(get('latest'), 'click', () => {
             pointerMoved = false;
@@ -778,8 +834,9 @@
         if (root.dataset.symbol) startSelection();
         return {
             setSymbol,
-            // Cancel network work and release canvases while the page or selected-stock host is absent.
+            // Close the details and release network work and canvases when the chart host is absent.
             dispose() {
+                details.close();
                 controller.abort();
                 clearInterval(sourceAge);
                 const result = stop();

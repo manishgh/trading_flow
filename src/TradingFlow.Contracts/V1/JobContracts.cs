@@ -33,7 +33,11 @@ public sealed record StartPaperRunRequest(
     string ExecutionPolicy,
     string IdempotencyKey,
     string Mode,
-    string? ConfigurationKey = null);
+    string? ConfigurationKey = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? PaperMembershipMode = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? UniverseContentSha256 = null);
 
 public sealed record CancelJobRequest(string ContractVersion, string Reason);
 

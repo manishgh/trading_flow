@@ -95,10 +95,11 @@ public sealed class SqliteDurabilityTests
 
     // Run the actual journal and paper read path with delayed admission, retries, duplicate fills and two New York months.
     [Theory]
-    [InlineData("paper")]
-    [InlineData("paper_shadow")]
-    [InlineData("paper_experiment")]
-    public async Task PaperExecutionTelemetry_PreservesFirstQuoteAndSeparatesUnitFillsAndBaselines(string profile)
+    [InlineData("paper", false)]
+    [InlineData("paper_shadow", false)]
+    [InlineData("paper_experiment", false)]
+    [InlineData("paper", true)]
+    public async Task PaperExecutionTelemetry_PreservesFirstQuoteAndSeparatesUnitFillsAndBaselines(string profile, bool boundedWindow)
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
@@ -114,7 +115,11 @@ public sealed class SqliteDurabilityTests
         var quote = new AdmissionOrderQuote(99.99m, 100m, "sip", clock.GetUtcNow().AddMilliseconds(-100),
             clock.GetUtcNow(), 500, receipt);
         // Reviewed strategy entry has no caller-supplied decision price; the exact persisted trigger supplies it.
-        var admission = new OrderAdmissionEvidence(quote, null, identity);
+        var window = boundedWindow ? new OrderEntryWindowEvidence("next_regular_open_window", 1, 300,
+            clock.GetUtcNow().AddDays(-1), clock.GetUtcNow().AddHours(-1), null,
+            clock.GetUtcNow(), clock.GetUtcNow().AddMinutes(5)) : null;
+        var admission = new OrderAdmissionEvidence(quote, boundedWindow
+            ? new OrderDecisionReference(999m, clock.GetUtcNow()) { EntryWindow = window } : null, identity);
         var reservation = CreateCandidateReservation(Guid.NewGuid(), candidateId, "MSFT", semanticHash)
             with { AdmissionEvidence = admission };
         await SeedTriggeredCandidateAsync(options, run, candidateId, "MSFT", semanticHash,
@@ -159,6 +164,8 @@ public sealed class SqliteDurabilityTests
         var detail = Assert.Single(result.Orders, order => order.Intent.IntentId == intent.IntentId);
         Assert.Equal(identity, detail.Identity);
         Assert.Equal("receipt-1", detail.Admission!.QuoteReceiptId);
+        Assert.Equal(window, detail.ReadEntryWindow());
+        Assert.Equal(99m, detail.Admission.DecisionPrice);
         Assert.Equal(100m, detail.Admission.Ask);
         Assert.Equal(quote.ObservedAtUtc, detail.Admission.QuoteObservedAtUtc);
         Assert.Equal([1, 2], detail.Attempts.Select(attempt => attempt.AttemptNumber));
@@ -633,8 +640,11 @@ public sealed class SqliteDurabilityTests
             (await intents.GetByIntentIdAsync(reserved.Intent.IntentId))!.DispatchAttemptCount);
     }
 
-    [Fact]
-    public async Task DispatchAsync_ExpiredBeforeFirstPost_TerminalizesAndReleasesRisk()
+    // The exclusive deadline releases reserved risk and retains the exact window in the terminal event.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DispatchAsync_ExpiredBeforeFirstPost_TerminalizesAndReleasesRisk(bool boundedWindow)
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
@@ -643,21 +653,41 @@ public sealed class SqliteDurabilityTests
         var reservationRepository = new SqliteOrderIntentRepository(factory, reservationClock);
         var events = new SqliteOrderEventRepository(factory);
         await InitializeAsync(options);
-        var reserved = await reservationRepository.ReserveAsync(
-            CreateRun(Guid.NewGuid()),
-            CreateReservation(Guid.NewGuid(), "MSFT"));
-        var expiredClock = new MutableTimeProvider(new DateTimeOffset(2026, 7, 21, 14, 36, 0, TimeSpan.Zero));
+        var run = CreateRun(Guid.NewGuid());
+        var reservation = CreateReservation(Guid.NewGuid(), "MSFT");
+        var cutoff = reservation.DispatchExpiresAtUtc!.Value;
+        var window = boundedWindow ? CreateFixtureEntryWindow(cutoff) : null;
+        if (window is not null)
+        {
+            var candidateId = Guid.NewGuid();
+            var hash = new string('a', 64);
+            await SeedTriggeredCandidateAsync(options, run, candidateId, "MSFT", hash, cutoff);
+            reservation = CreateCandidateReservation(reservation.IntentId, candidateId, "MSFT", hash)
+                with { AdmissionEvidence = CreateFixtureEntryWindowAdmission(window) };
+        }
+        var reserved = await reservationRepository.ReserveAsync(run, reservation);
+        var expiredClock = new MutableTimeProvider(cutoff);
         var expiredRepository = new SqliteOrderIntentRepository(factory, expiredClock);
         var broker = CreateDispatchBroker(reserved.Intent, brokerOrder: null, "must-not-submit");
         var dispatcher = CreateDispatcher(expiredRepository, events, expiredClock);
 
-        await Assert.ThrowsAsync<OrderDispatchExpiredException>(() =>
+        var refusal = await Assert.ThrowsAsync<OrderDispatchExpiredException>(() =>
             dispatcher.DispatchAsync(reserved.Intent.IntentId, broker.Object, CancellationToken.None));
 
+        Assert.Equal(cutoff, refusal.ExpiredAtUtc);
+        Assert.Equal(window, refusal.EntryWindow);
         Assert.Equal(OrderState.Expired, (await events.GetCurrentAsync(reserved.Intent.ClientOrderId))!.State);
         Assert.Equal(
             PortfolioRiskReservationState.Released,
             (await expiredRepository.GetRiskReservationByIntentIdAsync(reserved.Intent.IntentId))!.State);
+        Assert.Equal(0, (await expiredRepository.GetByIntentIdAsync(reserved.Intent.IntentId))!.DispatchAttemptCount);
+        await using var verification = new TradingFlowDbContext(options);
+        var terminal = await verification.OrderEvents.Where(row => row.ClientOrderId == reserved.Intent.ClientOrderId)
+            .OrderByDescending(row => row.EventId).FirstAsync();
+        using var payload = System.Text.Json.JsonDocument.Parse(terminal.PayloadJson!);
+        Assert.Equal(boundedWindow ? "entry_window_missed" : "dispatch_expired_before_broker_post",
+            payload.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(window, OrderEntryWindowEvidence.Read(payload.RootElement.GetProperty("entryWindow").GetRawText()));
         broker.Verify(client => client.SubmitOrderAsync(
             It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -1022,17 +1052,22 @@ public sealed class SqliteDurabilityTests
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // The same valid setup remains alive while its discovery membership can expire independently.
+    // A setup can outlive its source membership. Both transactions check the exact source proof.
     [Theory]
-    [InlineData("live")]
-    [InlineData("expired")]
-    [InlineData("removed")]
-    [InlineData("unrelated-alternate")]
-    [InlineData("recorded-alternate")]
-    [InlineData("session-degraded")]
-    [InlineData("legacy-degraded")]
-    [InlineData("recovered")]
-    public async Task RecoverPendingAsync_PaperDiscoveryRequiresCurrentTriggeredMembership(string sourceState)
+    [InlineData("live", false)]
+    [InlineData("expired", false)]
+    [InlineData("removed", false)]
+    [InlineData("unrelated-alternate", false)]
+    [InlineData("recorded-alternate", false)]
+    [InlineData("session-degraded", false)]
+    [InlineData("legacy-degraded", false)]
+    [InlineData("recovered", false)]
+    [InlineData("expired", true)]
+    [InlineData("removed", true)]
+    [InlineData("unrelated-alternate", true)]
+    [InlineData("recorded-alternate", true)]
+    [InlineData("session-degraded", true)]
+    public async Task PaperDiscovery_ReservationAndFirstPostRequireCurrentTriggeredMembership(string sourceState, bool reserveAfterChange)
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
@@ -1069,8 +1104,8 @@ public sealed class SqliteDurabilityTests
         var clock = new FixedTimeProvider(CandidateReservationTime);
         var intents = new SqliteOrderIntentRepository(factory, clock);
         var events = new SqliteOrderEventRepository(factory);
-        var reserved = (await intents.ReserveAsync(run,
-            CreateCandidateReservation(Guid.NewGuid(), candidate, "MSFT", hash))).Intent;
+        var reservation = CreateCandidateReservation(Guid.NewGuid(), candidate, "MSFT", hash);
+        var reserved = reserveAfterChange ? null : (await intents.ReserveAsync(run, reservation)).Intent;
         if (sourceState == "removed")
         {
             await discovery.CommitSnapshotAsync(new DiscoverySnapshotRequest(run.RunId, Guid.NewGuid(),
@@ -1101,10 +1136,21 @@ public sealed class SqliteDurabilityTests
             }
         }
 
+        var shouldPost = sourceState is "live" or "recorded-alternate" or "recovered";
+        if (reserveAfterChange && !shouldPost)
+        {
+            var refused = await Assert.ThrowsAsync<PaperEntryDispatchBlockedException>(() => intents.ReserveAsync(run, reservation));
+            Assert.EndsWith("_before_reservation", refused.ReasonCode, StringComparison.Ordinal);
+            await using var context = factory.CreateDbContext();
+            Assert.Empty(await context.PortfolioRiskReservations.ToArrayAsync());
+            Assert.Empty(await context.OrderIntents.ToArrayAsync());
+            Assert.Equal(StrategyCandidateState.Triggered, (await context.Candidates.SingleAsync()).State);
+            return;
+        }
+
+        reserved ??= (await intents.ReserveAsync(run, reservation)).Intent;
         var broker = CreateDispatchBroker(reserved, brokerOrder: null, "fresh-membership-entry");
         var dispatcher = CreateDispatcher(intents, events, clock);
-
-        var shouldPost = sourceState is "live" or "recorded-alternate" or "recovered";
         Assert.Equal(shouldPost ? 1 : 0, await dispatcher.RecoverPendingAsync(broker.Object));
         Assert.Equal(shouldPost ? OrderState.Acked : OrderState.Expired, (await events.GetCurrentAsync(reserved.ClientOrderId))!.State);
         broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
@@ -3759,8 +3805,11 @@ public sealed class SqliteDurabilityTests
         Assert.False(File.Exists(database.DatabasePath));
     }
 
-    [Fact]
-    public async Task ReserveAsync_ServerClockExpiredCandidate_TerminalizesWithoutIntent()
+    // Expiry at reservation remains pre-intent and journals the window when the deadline matches.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReserveAsync_ServerClockExpiredCandidate_TerminalizesWithoutIntent(bool boundedWindow)
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
@@ -3769,32 +3818,47 @@ public sealed class SqliteDurabilityTests
         var run = CreateRun(Guid.NewGuid());
         var candidateId = Guid.NewGuid();
         var semanticHash = new string('c', 64);
-        await SeedTriggeredCandidateAsync(options, run, candidateId, "MSFT", semanticHash);
-        await using (var context = new TradingFlowDbContext(options))
+        var cutoff = boundedWindow ? CandidateReservationTime : CandidateReservationTime.AddSeconds(-1);
+        await SeedTriggeredCandidateAsync(options, run, candidateId, "MSFT", semanticHash, cutoff);
+        var window = boundedWindow ? CreateFixtureEntryWindow(cutoff) : null;
+        var reservation = CreateCandidateReservation(Guid.NewGuid(), candidateId, "MSFT", semanticHash) with
         {
-            var candidate = await context.Candidates.SingleAsync();
-            candidate.ExpiresAtUtc = CandidateReservationTime.AddSeconds(-1);
-            await context.SaveChangesAsync();
-        }
+            DispatchExpiresAtUtc = cutoff,
+            AdmissionEvidence = window is not null ? CreateFixtureEntryWindowAdmission(window) : null
+        };
 
         var error = await Assert.ThrowsAsync<ExpiredCandidateOrderIntentException>(() =>
-            repository.ReserveAsync(
-                run,
-                CreateCandidateReservation(Guid.NewGuid(), candidateId, "MSFT", semanticHash)));
+            repository.ReserveAsync(run, reservation));
 
         Assert.Equal(candidateId, error.CandidateId);
+        Assert.Equal(cutoff, error.ExpiredAtUtc);
+        Assert.Equal(window, error.EntryWindow);
         await using var verification = new TradingFlowDbContext(options);
         var persisted = await verification.Candidates.AsNoTracking().SingleAsync();
         Assert.Equal(StrategyCandidateState.Expired, persisted.State);
         Assert.Equal(5, persisted.Version);
         Assert.Empty(await verification.OrderIntents.ToArrayAsync());
         Assert.Empty(await verification.OrderEvents.ToArrayAsync());
+        Assert.Empty(await verification.PortfolioRiskReservations.ToArrayAsync());
         var transitions = await verification.CandidateTransitions
             .OrderBy(record => record.Sequence)
             .ToArrayAsync();
         Assert.Equal(2, transitions.Length);
-        Assert.Equal("candidate_expired_before_order_intent", transitions[^1].ReasonCode);
+        Assert.Equal(boundedWindow ? "entry_window_missed" : "candidate_expired_before_order_intent", transitions[^1].ReasonCode);
+        using var payload = System.Text.Json.JsonDocument.Parse(transitions[^1].EvidenceJson);
+        Assert.Equal(window, OrderEntryWindowEvidence.Read(payload.RootElement.GetProperty("entryWindow").GetRawText()));
     }
+
+    // Freeze the independent clocks on the SQLite expiry fixture's known timeline.
+    private static OrderEntryWindowEvidence CreateFixtureEntryWindow(DateTimeOffset cutoff)
+    {
+        var open = cutoff.AddMinutes(-5);
+        return new(EntryWindowRules.NextRegularOpen, 1, 300, open.AddDays(-1), open.AddHours(-1), null, open, cutoff);
+    }
+
+    // Carry the typed evidence into the same journal path as an opted-in strategy.
+    private static OrderAdmissionEvidence CreateFixtureEntryWindowAdmission(OrderEntryWindowEvidence window) =>
+        new(null, new(99m, window.SetupAvailableAtUtc) { EntryWindow = window }, null);
 
     [Fact]
     public async Task ReserveAsync_TriggeredTransitionHashMismatch_RollsBackWithoutIntent()

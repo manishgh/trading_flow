@@ -332,19 +332,43 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
 .stock-chart-study-values {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
     gap: 7px 12px;
-    padding-top: 6px;
-    border-top: 1px solid var(--line);
 }
 
-.stock-chart-details > details {
-    border-top: 1px solid var(--line);
+.stock-chart-details {
+    --chart-details-padding: clamp(12px, 3vw, 20px);
+    box-sizing: border-box;
+    inline-size: min(720px, calc(100% - 24px));
+    max-block-size: calc(100dvh - 24px);
+    padding: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--panel);
+    color: var(--ink);
 }
 
-.stock-chart-details > details > summary {
-    padding: 8px 2px;
-    cursor: pointer;
-    font-weight: 600;
+.stock-chart-details::backdrop { background: rgb(16 24 40 / 55%); }
+
+.stock-chart-details-head {
+    position: sticky;
+    z-index: 1;
+    inset-block-start: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px var(--chart-details-padding);
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
 }
+
+.stock-chart-details-head h2 { margin: 0; font-size: 17px; }
+.stock-chart-details-head form { margin: 0; }
+.stock-chart-detail-section { padding: 12px var(--chart-details-padding); }
+.stock-chart-detail-section:not(:last-child) { border-bottom: 1px solid var(--line); }
+.stock-chart-detail-section:has(> [data-chart-study-values][hidden]) { display: none; }
+.stock-chart-detail-section h3 { margin: 0 0 6px; font-size: 14px; }
 
 .stock-chart-toggles {
     display: flex;
@@ -424,9 +448,8 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
     .stock-chart-navigation .btn,
     .stock-chart-candle-nav .btn,
     .stock-chart-head .btn,
-    .stock-chart-details > details > summary { min-height: 44px; }
+    .stock-chart-details-head .btn { min-height: 44px; }
     .stock-chart-candle-nav .btn { min-width: 44px; }
-    .stock-chart-details > details > summary { box-sizing: border-box; padding-block: 12px; }
     .stock-chart-toggles label { min-height: 36px; }
     .stock-chart-plot { height: calc(clamp(260px, 45vh, 400px) + var(--stock-chart-panes, 0) * 94px); }
     .stock-chart-studies li { min-height: 44px; padding: 12px 45px 8px 8px; }

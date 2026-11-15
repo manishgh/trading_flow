@@ -17,9 +17,10 @@ internal sealed record ChartHistoryBatch(
     DateTimeOffset? DailyReconciledAtUtc,
     DateTimeOffset? CoveredThroughUtc,
     string? Limitation,
-    string? CalendarRevision = null)
+    string? CalendarRevision = null,
+    IReadOnlySet<DateOnly>? DailyConflicts = null)
 {
-    private readonly Lazy<string> rawRevision = new(() => ChartInputRevision.History(Sessions, Bars, Quiet, BasisBreaks));
+    private readonly Lazy<string> rawRevision = new(() => ChartInputRevision.History(Sessions, Bars, Quiet, BasisBreaks, DailyConflicts));
     public string Revision => $"{CalendarRevision}:{rawRevision.Value}";
 }
 
@@ -42,12 +43,42 @@ internal sealed class ChartHistorySource(
     private readonly SemaphoreSlim calendarGate = new(1);
     private (DateOnly Start, DateOnly End, DateTimeOffset Expires, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Calendar)? cachedCalendar;
     private sealed record Entry(Task<ChartHistoryBatch> Load, DateTimeOffset Expires, DateTimeOffset Used);
+    private sealed class PartialCalendarException(IReadOnlyDictionary<DateOnly, MarketSessionSchedule> verified)
+        : Exception("The exchange calendar does not cover every date requested for this chart.")
+    {
+        public IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Verified { get; } = verified;
+    }
+
+    // Weekly history shares the daily cache and starts strictly before its signed session boundary.
+    public async Task<ChartHistoryBatch> ReadWeeklyAsync(
+        string symbol, DateTimeOffset cutoff, bool paged, CancellationToken cancellationToken)
+    {
+        if (paged && !IsWeeklyCursorBoundary(cutoff))
+        {
+            throw new ArgumentException("Weekly history requires an exchange session date boundary.", nameof(cutoff));
+        }
+        var anchor = ChartBarProjector.NewYorkDate(cutoff.AddTicks(-1));
+        try
+        {
+            return await ReadAsync(symbol, true, anchor, cancellationToken);
+        }
+        catch (PartialCalendarException partial) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Use the already verified dates. Weekly projection omits only the weeks with missing schedule proof.
+            return await ReadAsync(symbol, true, anchor, cancellationToken, partial.Verified);
+        }
+    }
+
+    // The boundary is the first scheduled session's New York midnight, including its historical DST offset.
+    internal static bool IsWeeklyCursorBoundary(DateTimeOffset cutoff) =>
+        cutoff == ChartBarProjector.At(ChartBarProjector.NewYorkDate(cutoff), TimeOnly.MinValue);
 
     // Share underlying daily or minute work across display intervals and contexts.
     // Pending loads own a bounded deadline independent of any one subscriber.
-    public Task<ChartHistoryBatch> ReadAsync(string symbol, bool daily, DateOnly anchor, CancellationToken cancellationToken)
+    public Task<ChartHistoryBatch> ReadAsync(string symbol, bool daily, DateOnly anchor, CancellationToken cancellationToken,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? partialCalendar = null)
     {
-        var key = new ChartHistoryKey(symbol, daily, anchor);
+        var key = new ChartHistoryKey(symbol, daily, anchor, partialCalendar is not null);
         var now = clock.GetUtcNow();
         Task<ChartHistoryBatch> load;
         lock (gate)
@@ -59,7 +90,7 @@ internal sealed class ChartHistorySource(
             }
             else
             {
-                var previous = hit?.Load.IsCompletedSuccessfully == true ? hit.Load.Result : MostRecentSeed(symbol, daily, anchor);
+                var previous = hit?.Load.IsCompletedSuccessfully == true ? hit.Load.Result : MostRecentSeed(key);
                 cache.Remove(key);
                 if (cache.Count >= MaximumEntries)
                 {
@@ -72,7 +103,7 @@ internal sealed class ChartHistorySource(
                     cache.Remove(oldest.Key);
                 }
 
-                load = LoadAsync(symbol, daily, anchor, previous);
+                load = LoadAsync(symbol, daily, anchor, previous, partialCalendar);
                 var recent = anchor >= ChartBarProjector.NewYorkDate(now).AddDays(-1);
                 var expires = now.Add(recent ? TimeSpan.FromMinutes(2) : TimeSpan.FromMinutes(15));
                 cache.Add(key, new Entry(load, expires, now));
@@ -102,26 +133,29 @@ internal sealed class ChartHistorySource(
     }
 
     // A forward calendar rollover can reuse a recent completed seed. Never seed an older page from a newer anchor.
-    private ChartHistoryBatch? MostRecentSeed(string symbol, bool daily, DateOnly anchor) =>
-        cache.Where(pair => pair.Key.Symbol == symbol && pair.Key.Daily == daily &&
-                pair.Key.Anchor < anchor && pair.Key.Anchor >= anchor.AddDays(-7) && pair.Value.Load.IsCompletedSuccessfully)
+    private ChartHistoryBatch? MostRecentSeed(ChartHistoryKey key) =>
+        cache.Where(pair => pair.Key.Symbol == key.Symbol && pair.Key.Daily == key.Daily && pair.Key.PartialCalendar == key.PartialCalendar &&
+                pair.Key.Anchor < key.Anchor && pair.Key.Anchor >= key.Anchor.AddDays(-7) && pair.Value.Load.IsCompletedSuccessfully)
             .OrderByDescending(pair => pair.Key.Anchor)
             .Select(pair => pair.Value.Load.Result)
             .FirstOrDefault();
 
     // Load one bounded history batch and retain its retrieval clock when there is no new work.
-    private async Task<ChartHistoryBatch> LoadAsync(string symbol, bool daily, DateOnly anchor, ChartHistoryBatch? previous)
+    private async Task<ChartHistoryBatch> LoadAsync(string symbol, bool daily, DateOnly anchor, ChartHistoryBatch? previous,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? partialCalendar)
     {
         using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         await permits.WaitAsync(budget.Token);
         try
         {
             var asOf = clock.GetUtcNow().ToUniversalTime();
-            var calendar = await LoadCalendarAsync(anchor, asOf, budget.Token);
+            var calendar = partialCalendar ?? await LoadCalendarAsync(anchor, asOf, budget.Token);
             var projector = new ChartBarProjector(calendar);
             var calendarRevision = ChartInputRevision.Calendar(calendar);
-            var eligible = calendar.Where(pair => pair.Key <= anchor && pair.Value.IsTradingDay)
-                .Select(pair => pair.Key).Order().TakeLast(daily ? MaximumDaily : 15).ToArray();
+            var eligible = partialCalendar is null
+                ? calendar.Where(pair => pair.Key <= anchor && pair.Value.IsTradingDay)
+                    .Select(pair => pair.Key).Order().TakeLast(daily ? MaximumDaily : 15).ToArray()
+                : SelectPartialCalendarDates(partialCalendar, anchor);
             if (eligible.Length == 0)
             {
                 return new ChartHistoryBatch(projector, eligible, new Dictionary<DateTimeOffset, ChartSourceBar>(),
@@ -162,7 +196,26 @@ internal sealed class ChartHistorySource(
         }
     }
 
-    // Load stored prices only when refreshing an eligible window. Receipts here do not establish REST pagination coverage.
+    // Count unverified dates against the daily acquisition cap in case the provider returns a candle for one.
+    private static DateOnly[] SelectPartialCalendarDates(IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateOnly anchor)
+    {
+        if (calendar.Count == 0) return [];
+        var dates = new Stack<DateOnly>();
+        var first = calendar.Keys.Min();
+        var slots = MaximumDaily;
+        for (var date = anchor; date >= first && slots > 0; date = date.AddDays(-1))
+        {
+            if (!calendar.TryGetValue(date, out var session)) slots--;
+            else if (session.IsTradingDay)
+            {
+                dates.Push(date);
+                slots--;
+            }
+        }
+        return dates.ToArray();
+    }
+
+    // Load stored prices only for eligible dates. Stored receipts cannot clear a known provider conflict.
     private async Task LoadStoredAsync(string symbol, bool daily, DateOnly first, DateOnly last,
         HistoryRefresh state, DateTimeOffset asOf, CancellationToken cancellationToken)
     {
@@ -176,6 +229,7 @@ internal sealed class ChartHistorySource(
         foreach (var bar in stored.Where(bar => Compatible(bar, symbol, interval)).TakeLast(daily ? MaximumDaily : MaximumMinutes))
         {
             var utc = bar.Timestamp.ToUniversalTime();
+            if (daily && state.DailyConflicts.Contains(ChartBarProjector.NewYorkDate(utc))) continue;
             if (!state.Bars.TryGetValue(utc, out var prior) || bar.KnownAtUtc is { } received && received > prior.AvailableAtUtc)
             {
                 state.Bars[utc] = Source(bar, "shared_store", materialized, TimeSpan.Zero);
@@ -239,7 +293,7 @@ internal sealed class ChartHistorySource(
         public bool IsFull => Start == SessionStart;
     }
 
-    // Reuse an authoritative calendar across symbols, and cover prior-week holiday boundaries.
+    // Verify all civil dates, including the final Sunday for the anchored weekly bucket.
     private async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadCalendarAsync(
         DateOnly anchor, DateTimeOffset now, CancellationToken cancellationToken)
     {
@@ -261,9 +315,10 @@ internal sealed class ChartHistorySource(
             var bufferedEnd = end.AddDays(7);
             var loaded = await source.LoadMarketSessionSchedulesAsync(bufferedStart, bufferedEnd, cancellationToken);
             if (Enumerable.Range(bufferedStart.DayNumber, bufferedEnd.DayNumber - bufferedStart.DayNumber + 1)
-                .Select(DateOnly.FromDayNumber).Any(date => !loaded.TryGetValue(date, out var day) || day.TradeDate != date))
+                .Select(DateOnly.FromDayNumber).Any(date => !loaded.TryGetValue(date, out var day) || !IsVerifiedDate(date, day)))
             {
-                throw new InvalidDataException("The exchange calendar does not cover every date requested for this chart.");
+                throw new PartialCalendarException(loaded.Where(pair => pair.Key >= bufferedStart &&
+                    pair.Key <= bufferedEnd && IsVerifiedDate(pair.Key, pair.Value)).ToDictionary());
             }
 
             cachedCalendar = (bufferedStart, bufferedEnd, now.AddHours(6), loaded);
@@ -275,23 +330,24 @@ internal sealed class ChartHistorySource(
         }
     }
 
+    // Closed dates and a positive-duration regular window are the only usable schedule entries.
+    private static bool IsVerifiedDate(DateOnly date, MarketSessionSchedule day) =>
+        day.TradeDate == date && (!day.IsTradingDay || day.RegularOpen < day.RegularClose);
+
     // Native daily rows use one bounded query for due dates, including an overlap when the latest close arrives.
     private async Task<string?> FetchDailyAsync(string symbol, ChartBarProjector projector,
         DateOnly[] dates, HistoryRefresh state, DateTimeOffset asOf, CancellationToken cancellationToken)
     {
         var start = ChartBarProjector.At(dates[0], TimeOnly.MinValue);
-        var end = ChartBarProjector.At(dates[^1].AddDays(1), TimeOnly.MinValue);
+        var end = ChartBarProjector.At(dates[^1].AddDays(1), TimeOnly.MinValue).AddTicks(-1);
         try
         {
             var loaded = await FetchAsync(symbol, "1d", start, end < asOf ? end : asOf, MaximumDaily, cancellationToken);
             var retrieved = clock.GetUtcNow().ToUniversalTime();
             // Keep completed rows between queued repair dates in the same coherent response.
             // Dropping them would make retained candles look like unverified islands after a revision.
-            var confirmed = loaded.Bars.Where(bar =>
-                    projector.Regular(ChartBarProjector.NewYorkDate(bar.Timestamp)) is { } range &&
-                    range.EndUtc + liveSettlementDelay <= asOf)
-                .ToDictionary(bar => bar.Timestamp);
-            MergeHistory(state.Bars, confirmed, retrieved, state.Breaks);
+            var confirmed = ReadDailyResponse(projector, state, loaded, asOf, retrieved);
+            MergeHistory(state.Bars, confirmed, retrieved, state.Breaks, allowVolumeRevision: true);
             var observed = confirmed.Keys.Select(ChartBarProjector.NewYorkDate).ToHashSet();
             foreach (var date in dates)
             {
@@ -309,6 +365,36 @@ internal sealed class ChartHistorySource(
             logger.LogWarning(exception, "Daily chart history unavailable for {Symbol}.", symbol);
             return "The daily SIP history read did not complete. Showing retained compatible candles.";
         }
+    }
+
+    // Remove only ambiguous confirmed sessions from chart state, and clear a conflict only on a coherent daily response.
+    private Dictionary<DateTimeOffset, OhlcvBar> ReadDailyResponse(ChartBarProjector projector, HistoryRefresh state,
+        RetrievedBars loaded, DateTimeOffset asOf, DateTimeOffset retrieved)
+    {
+        var complete = loaded.Bars.GroupBy(bar => ChartBarProjector.NewYorkDate(bar.Timestamp))
+            .Where(group => projector.Regular(group.Key) is { } range && range.EndUtc + liveSettlementDelay <= asOf);
+        var confirmed = new Dictionary<DateTimeOffset, OhlcvBar>();
+        var conflicts = new HashSet<DateOnly>();
+        foreach (var group in complete)
+        {
+            var rows = group.Take(2).ToArray();
+            if (rows.Length > 1 || loaded.DailyConflicts.Contains(group.Key))
+            {
+                conflicts.Add(group.Key);
+                state.DailyConflicts.Add(group.Key);
+                TrackAcquisition(group.Key, false, retrieved, state.Acquired, state.Retry);
+                continue;
+            }
+            if (state.DailyConflicts.Remove(group.Key))
+                TrackAcquisition(group.Key, true, retrieved, state.Acquired, state.Retry);
+            confirmed.Add(rows[0].Timestamp, rows[0]);
+        }
+        if (conflicts.Count > 0)
+        {
+            foreach (var stamp in state.Bars.Keys.Where(stamp => conflicts.Contains(ChartBarProjector.NewYorkDate(stamp))).ToArray())
+                state.Bars.Remove(stamp);
+        }
+        return confirmed;
     }
 
     // Acquire each planned minute range atomically. Partial pagination never changes visible proof.
@@ -424,9 +510,12 @@ internal sealed class ChartHistorySource(
     {
         var owner = provider.Value;
         var output = new Dictionary<DateTimeOffset, OhlcvBar>();
+        var daily = interval == "1d";
+        var receivedDaily = 0;
+        var dailyConflicts = new HashSet<DateOnly>();
         if (owner is IHistoricalMarketDataEvidenceProvider archive)
         {
-            var capture = await archive.CaptureHistoricalBarsAsync(symbol, interval, start, end, cap + 1L, cancellationToken);
+            var capture = await archive.CaptureHistoricalBarsAsync(symbol, interval, start, end, daily ? cap : cap + 1L, cancellationToken);
             if (!capture.Evidence.PaginationCompleted || capture.Evidence.Responses.Count == 0)
             {
                 throw new InvalidDataException("The chart provider could not prove complete archived pagination.");
@@ -440,33 +529,37 @@ internal sealed class ChartHistorySource(
             var provesOmissions = output.Count > 0 && owner is IMarketDataCompletenessProvider
                 { OmittedSubDailyIntervalsMeanNoQualifyingTrades: true } &&
                 output.Values.All(bar => bar.CoverageVerifiedThroughUtc >= end);
-            return new RetrievedBars(output.Values.ToArray(), true, provesOmissions);
+            return new RetrievedBars(output.Values.ToArray(), true, provesOmissions, dailyConflicts);
         }
 
         await foreach (var bar in owner.GetBarsAsync([symbol], [interval], start, end, cancellationToken))
         {
             Accept(bar);
         }
-        return new RetrievedBars(output.Values.ToArray(), false, false);
+        return new RetrievedBars(output.Values.ToArray(), false, false, dailyConflicts);
 
-        // An inclusive endpoint may return one bar exactly at the chart's exclusive end.
-        // Every candle retained in the page must be unique, compatible and within scope.
+        // Count every daily row before grouping. Localize a duplicate daily timestamp while a duplicate minute breaks its read.
         void Accept(OhlcvBar input)
         {
+            if (daily && ++receivedDaily > cap)
+                throw new InvalidDataException("The chart provider exceeded the daily history row limit.");
             var bar = CanonicalMarketBarValidator.Normalize(input);
             if (bar.Timestamp == end)
             {
                 return;
             }
-            if (!Compatible(bar, symbol, interval) || bar.Timestamp < start || bar.Timestamp > end || output.Count == cap ||
-                !output.TryAdd(bar.Timestamp, bar with { KnownAtUtc = null }))
+            if (!Compatible(bar, symbol, interval) || bar.Timestamp < start || bar.Timestamp > end || output.Count == cap)
             {
                 throw new InvalidDataException("The chart provider returned incompatible or out-of-window candles.");
             }
+            if (output.TryAdd(bar.Timestamp, bar with { KnownAtUtc = null })) return;
+            if (!daily) throw new InvalidDataException("The chart provider returned a duplicate minute candle.");
+            dailyConflicts.Add(ChartBarProjector.NewYorkDate(bar.Timestamp));
         }
     }
 
-    private sealed record RetrievedBars(IReadOnlyList<OhlcvBar> Bars, bool Archived, bool ProvesOmissions);
+    private sealed record RetrievedBars(
+        IReadOnlyList<OhlcvBar> Bars, bool Archived, bool ProvesOmissions, IReadOnlySet<DateOnly> DailyConflicts);
 
     // Own a single bounded refresh's mutable copy and publish it only after acquisition completes.
     private sealed class HistoryRefresh(ChartHistoryBatch? previous, DateOnly firstDate)
@@ -482,6 +575,7 @@ internal sealed class ChartHistorySource(
             .Where(pair => pair.Key >= firstDate).ToDictionary() ?? [];
         public Dictionary<DateOnly, ChartMinuteAcquisition> MinuteAcquisitions { get; } = previous?.MinuteAcquisitions
             .Where(pair => pair.Key >= firstDate).ToDictionary() ?? [];
+        public HashSet<DateOnly> DailyConflicts { get; } = previous?.DailyConflicts?.Where(date => date >= firstDate).ToHashSet() ?? [];
         public DateTimeOffset? DailyReconciledAtUtc { get; set; } = previous?.DailyReconciledAtUtc;
 
         // Report the end of the first contiguous run of scheduled dates. Later verified islands do not bridge an older gap.
@@ -505,21 +599,23 @@ internal sealed class ChartHistorySource(
                 }
             }
             return new ChartHistoryBatch(projector, sessions, Bars, Quiet, Breaks, Acquired, Retry,
-                MinuteAcquisitions, DailyReconciledAtUtc, through, limitation, calendarRevision);
+                MinuteAcquisitions, DailyReconciledAtUtc, through, limitation, calendarRevision, DailyConflicts);
         }
     }
 
     // Prefer one coherent retrieved batch. A mismatch isolates the retained and
     // replacement series instead of authorizing an overlay across their seam.
     private static void MergeHistory(Dictionary<DateTimeOffset, ChartSourceBar> history,
-        IReadOnlyDictionary<DateTimeOffset, OhlcvBar> retrieved, DateTimeOffset retrievedAt, HashSet<DateTimeOffset> breaks)
+        IReadOnlyDictionary<DateTimeOffset, OhlcvBar> retrieved, DateTimeOffset retrievedAt, HashSet<DateTimeOffset> breaks,
+        bool allowVolumeRevision = false)
     {
         if (retrieved.Count == 0)
         {
             return;
         }
         var overlapping = retrieved.Where(item => history.ContainsKey(item.Key)).ToArray();
-        var provenJoin = overlapping.Length > 0 && overlapping.All(item => SamePrices(history[item.Key].Bar, item.Value));
+        var provenJoin = overlapping.Length > 0 && overlapping.All(item => allowVolumeRevision
+            ? SameAdjustedPrices(history[item.Key].Bar, item.Value) : SamePrices(history[item.Key].Bar, item.Value));
         if (!provenJoin)
         {
             var incompatible = overlapping.Length > 0;
@@ -554,8 +650,12 @@ internal sealed class ChartHistorySource(
 
     // Matching labels alone cannot prove a source join.
     internal static bool SamePrices(OhlcvBar left, OhlcvBar right) =>
+        SameAdjustedPrices(left, right) && left.Volume == right.Volume;
+
+    // A matching native daily overlap can prove its price basis even when a later revision changes volume.
+    private static bool SameAdjustedPrices(OhlcvBar left, OhlcvBar right) =>
         left.Open == right.Open && left.High == right.High && left.Low == right.Low &&
-        left.Close == right.Close && left.Volume == right.Volume &&
+        left.Close == right.Close &&
         left.DataFeed.Equals(right.DataFeed, StringComparison.OrdinalIgnoreCase) &&
         left.AdjustmentPolicy.Equals(right.AdjustmentPolicy, StringComparison.OrdinalIgnoreCase);
 

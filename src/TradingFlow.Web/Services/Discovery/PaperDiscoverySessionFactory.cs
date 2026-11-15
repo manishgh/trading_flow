@@ -7,6 +7,7 @@ using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.News;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Finviz;
 using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Services.Discovery;
@@ -55,11 +56,10 @@ public sealed class PaperDiscoverySessionFactory(
             if (!String.IsNullOrWhiteSpace(config.FinvizQuery))
             {
                 sources.Add(new FinvizDiscoverySource(
-                    config.FinvizQuery,
+                    FinvizClient.CanonicalizeScheduledSelection(config.FinvizQuery),
                     horizon,
                     refresh,
                     ttl,
-                    config.WishlistId,
                     screener,
                     timeProvider));
             }
@@ -267,11 +267,12 @@ internal sealed class WishlistDiscoverySource(
     // A persisted list can change after a preview. Only a fresh read can renew membership.
     public override async Task<DiscoveryCapture> CaptureAsync(CancellationToken cancellationToken)
     {
-        var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken);
+        var wishlist = await wishlists.GetByIdAsync(wishlistId, cancellationToken)
+            ?? throw new InvalidOperationException($"Selected stock group {wishlistId:D} was not found.");
         return Capture(
             TimeProvider.GetUtcNow(),
-            wishlist?.Items.Where(item => item.Active).Select(item => item.Ticker) ?? [],
-            providerTimestampUtc: wishlist?.UpdatedAtUtc,
+            wishlist.Items.Where(item => item.Active).Select(item => item.Ticker),
+            providerTimestampUtc: wishlist.UpdatedAtUtc,
             rawReference: $"wishlist:{wishlistId}");
     }
 }
@@ -281,7 +282,6 @@ internal sealed class FinvizDiscoverySource(
     string horizon,
     TimeSpan refreshInterval,
     TimeSpan timeToLive,
-    Guid? wishlistId,
     IScreenerSnapshotSource screener,
     TimeProvider timeProvider)
     : DiscoverySourceBase(
@@ -292,7 +292,7 @@ internal sealed class FinvizDiscoverySource(
         timeToLive,
         timeProvider)
 {
-    // A failed Finviz read leaves only still-fresh prior observations in the session.
+    // Fetch only the frozen selection. A failed receipt grants no new entry authority.
     public override async Task<DiscoveryCapture> CaptureAsync(CancellationToken cancellationToken)
     {
         if (!Horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
@@ -301,15 +301,13 @@ internal sealed class FinvizDiscoverySource(
                 $"Unsupported discovery horizon '{Horizon}'. TradingFlow supports swing discovery only.");
         }
 
-        var result = await screener.PreviewAsync(
-            SourceKey,
-            ScreenerScope.Swing,
-            wishlistId,
-            cancellationToken);
+        var result = await screener.ReadMembershipAsync(SourceKey, resolveSavedScreen: false, cancellationToken);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(result.Error ?? "Finviz discovery refresh failed.");
         }
+        if (result.NormalizedQuery != SourceKey)
+            throw new InvalidOperationException("Finviz membership did not match the reviewed selection.");
 
         var observations = result.SymbolDetails.Count > 0
             ? result.SymbolDetails.Select(item => new DiscoverySymbolObservation(

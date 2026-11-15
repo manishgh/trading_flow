@@ -35,6 +35,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     private readonly IExecutionEventSink? _executionEvidence;
     private readonly HoldingDataRules? _holdingRules;
     private readonly IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? _fillSchedules;
+    private readonly SampledBacktestAccountLoss? _accountLoss;
+    private readonly IEnumerator<AccountLossReplayBoundary>? _lossBoundaries;
+    private readonly Func<string, DateTimeOffset, decimal?> _exactLossMark;
+    private AccountLossReplayBoundary? _nextLossBoundary;
+    private bool _lossExecutionStopped;
     private readonly Dictionary<string, DateOnly> _lastDailySessionBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private int _nextHoldingSession;
     private readonly Dictionary<DateOnly, int> _holdingSessionIndex = [];
@@ -59,7 +64,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     // its last real close before a split or when its bars never resume; null keeps the original behaviour exactly.
     // decisionHour: the schedules and symbols of decision-hour candidates, whose unresolved windows (DecisionHourDailyBars)
     // join the bar stream for resting orders; null (every other run) adds nothing.
-    // Fill schedules are reporting evidence for native daily opens and closes, separate from replay admission.
+    // Fill schedules are reporting evidence. Account loss uses its own authoritative regular-session boundary stream.
     public ChronologicalBacktestExecutionCoordinator(
         PortfolioConfig portfolio,
         IReadOnlyCollection<OhlcvBar> marketBars,
@@ -67,7 +72,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         IExecutionEventSink? executionEvidence = null,
         HoldingDataRules? holdingRules = null,
         DecisionHourExecution? decisionHour = null,
-        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? fillSchedules = null)
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? fillSchedules = null,
+        BacktestAccountLossInputs? accountLoss = null)
     {
         _portfolio = portfolio;
         _simulator = simulator ?? new DeterministicExecutionSimulator();
@@ -75,6 +81,15 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         _holdingRules = holdingRules;
         _decisionHour = decisionHour;
         _fillSchedules = fillSchedules ?? holdingRules?.Schedules ?? decisionHour?.Schedules;
+        _exactLossMark = ExactLossMark;
+        if (accountLoss?.Settings.Enabled == true)
+        {
+            if (decisionHour is not null || holdingRules is not null)
+                throw new InvalidOperationException("Sampled account loss only supports the five-minute IOC replay book.");
+            _accountLoss = new(accountLoss, portfolio.StartingCapital);
+            _lossBoundaries = _accountLoss.Boundaries().GetEnumerator();
+            MoveLossClock();
+        }
         for (var index = 0; index < (holdingRules?.Sessions.Count ?? 0); index++) _holdingSessionIndex[holdingRules!.Sessions[index]] = index;
         if (holdingRules is { Sessions.Count: > 0 })
             foreach (var bar in marketBars.Where(bar => bar.Timeframe.Trim().Equals("1d", StringComparison.OrdinalIgnoreCase)))
@@ -98,6 +113,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     public IReadOnlyList<BacktestTrade> CompletedTrades => _completed;
 
     public IReadOnlyList<BacktestExecutionFailure> Failures => _failures;
+
+    public BacktestAccountLossBookSummary? AccountLossSummary => _accountLoss?.Summary;
+
+    // Used before reserving capacity and again when the simulator issues the opening IOC.
+    public AccountLossReplayRefusal? AccountLossRefusalAt(DateTimeOffset commandUtc) => _accountLoss?.Refusal(commandUtc);
 
     /// <summary>
     /// The live positions as admission sees them: planned cost, the planned exit (for same-open swaps) and the close of the
@@ -127,9 +147,15 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             ? last.Bar.Close
             : null;
 
+    // Advance every causal five-minute risk boundary when enabled, otherwise keep the original bar-driven replay.
     public void AdvanceThrough(DateTimeOffset timestamp)
     {
         var cutoff = timestamp.ToUniversalTime();
+        if (_accountLoss is not null)
+        {
+            AdvanceLossThrough(cutoff);
+            return;
+        }
         if (_active.Count == 0)
         {
             _nextTimelineIndex = FindFirstTimelineBarAfter(cutoff, _nextTimelineIndex);
@@ -145,6 +171,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         ForceExitsThrough(cutoff, inclusive: true);
     }
 
+    // Admit only an evidenced opening plan; an enabled loss replay also requires the supported IOC timing and direction.
     public bool TrySchedule(ChronologicalExecutionPlan plan, out string? rejectionReason)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -155,6 +182,17 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
 
         var entryTimestamp = plan.Candidate.EntryTimestamp.ToUniversalTime();
+        if (_accountLoss is not null)
+        {
+            if (plan.Candidate.ExecutionReplay?.PolicyId != ExecutionReplayPolicy.DailyRthFiveMinuteV1 ||
+                plan.Candidate.Direction != "long" || plan.Strategy.Direction != "long" || plan.Strategy.EntryRules.EnableShort)
+                throw new InvalidOperationException("Sampled account loss only supports long-only five-minute IOC execution plans.");
+            if (AccountLossRefusalAt(entryTimestamp) is { } refusal)
+            {
+                rejectionReason = refusal.Code;
+                return false;
+            }
+        }
         if (plan.Candidate.ExitTimestamp <= plan.Candidate.EntryTimestamp)
         {
             rejectionReason = "same_bar_entry_exit_is_ambiguous";
@@ -226,6 +264,13 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     // A bounded study can retain known open state; the original unbounded completion still requires liquidation.
     public void Complete(DateTimeOffset? cutoffUtc = null)
     {
+        if (_accountLoss is not null)
+        {
+            AdvanceLossThrough(cutoffUtc ?? DateTimeOffset.MaxValue);
+            if (_lossExecutionStopped) return;
+            FinalizeIncompleteTrackers(cutoffUtc);
+            return;
+        }
         if (_active.Count == 0)
         {
             return;
@@ -240,6 +285,12 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
         ForceExitsThrough(DateTimeOffset.MaxValue, inclusive: true);
 
+        FinalizeIncompleteTrackers(cutoffUtc);
+    }
+
+    // Preserve unresolved exposure and never report a study as complete without its required exit evidence.
+    private void FinalizeIncompleteTrackers(DateTimeOffset? cutoffUtc)
+    {
         foreach (var tracker in _active.Where(item => !item.IsTerminal).ToArray())
         {
             if (cutoffUtc is not null && tracker.Plan.Candidate.ExecutionReplay is null) continue;
@@ -323,8 +374,81 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
 
     private bool HasWorkingOrders(ExecutionTracker tracker) => _state.WorkingOrders.Keys.Any(tracker.OwnsOrder);
 
+    // Step all executable symbols before sampling the account. Flat time skips market rows and only advances the calendar.
+    private void AdvanceLossThrough(DateTimeOffset cutoff)
+    {
+        while (!_lossExecutionStopped && _nextLossBoundary is { } boundary && boundary.TimestampUtc <= cutoff)
+        {
+            AdvanceLossBoundary(boundary);
+            if (!_lossExecutionStopped) MoveLossClock();
+        }
+    }
+
+    // The official open has no completed slice. At every other boundary, apply the prior slice for every symbol first.
+    private void AdvanceLossBoundary(AccountLossReplayBoundary boundary)
+    {
+        var timestamp = boundary.TimestampUtc;
+        if (boundary.IsOpen || _active.Count == 0)
+            _nextTimelineIndex = FindFirstTimelineBarAfter(timestamp, _nextTimelineIndex);
+        else
+        {
+            while (_nextTimelineIndex < _timeline.Length && _timeline[_nextTimelineIndex].AvailableAtUtc <= timestamp)
+            {
+                var bar = _timeline[_nextTimelineIndex++];
+                if (bar.AvailableAtUtc == timestamp && bar.EndUtc == timestamp &&
+                    bar.StartUtc == timestamp - BacktestAccountLossReplayConfig.MaximumSnapshotAge &&
+                    bar.Bar.Timeframe.Equals(ExecutionReplayPolicy.Timeframe, StringComparison.OrdinalIgnoreCase))
+                    AdvanceBar(bar);
+            }
+            RecordMissingLossSlices(timestamp);
+        }
+
+        var openingOrdersTerminal = _state.WorkingOrders.Values.All(order => order.Command.IsRiskReducing);
+        _accountLoss!.Observe(boundary, _exactLossMark, openingOrdersTerminal, _failures.Count > 0);
+        if (_active.Any(item => !item.IsTerminal && !item.EntrySubmitted) && AccountLossRefusalAt(timestamp) is { } refusal)
+        {
+            foreach (var tracker in _active.Where(item => !item.IsTerminal && !item.EntrySubmitted))
+                SuppressUnissuedEntry(tracker, timestamp, refusal);
+            _active.RemoveAll(item => item.IsTerminal && !HasWorkingOrders(item));
+        }
+        if (!openingOrdersTerminal)
+        {
+            foreach (var tracker in _active.Where(item => _state.WorkingOrders.ContainsKey(item.EntryClientOrderId)).ToArray())
+                Fail(tracker, "loss_ioc_terminal_unproved");
+        }
+        if (_failures.Count == 0 && openingOrdersTerminal) return;
+
+        // Missing executable coverage leaves later fills unknown. Preserve other valid fills from this same boundary.
+        foreach (var tracker in _active.Where(item => !item.IsTerminal).ToArray())
+            Fail(tracker, "treatment_aborted_after_missing_or_invalid_execution_evidence");
+        _lossExecutionStopped = true;
+    }
+
+    // Missing or late slices cannot be marked or interpreted as no stop touch.
+    private void RecordMissingLossSlices(DateTimeOffset timestamp)
+    {
+        foreach (var tracker in _active.Where(item => !item.IsTerminal).ToArray())
+        {
+            var required = tracker.Plan.Candidate.ExecutionReplay!.RequiredSliceStarts;
+            if (tracker.NextRequiredSlice < required.Count &&
+                required[tracker.NextRequiredSlice] + BacktestAccountLossReplayConfig.MaximumSnapshotAge <= timestamp)
+                Fail(tracker, $"required_execution_slice_missing_or_late:{required[tracker.NextRequiredSlice]:O}");
+        }
+    }
+
+    // Expose the validated close of the just-completed slice only, never an overnight or earlier mark.
+    private decimal? ExactLossMark(string symbol, DateTimeOffset boundaryUtc) =>
+        _lastBarsBySymbol.TryGetValue(NormalizeSymbol(symbol), out var mark) && mark.EndUtc == boundaryUtc &&
+        mark.AvailableAtUtc == boundaryUtc && mark.Bar.Timeframe.Equals(ExecutionReplayPolicy.Timeframe, StringComparison.OrdinalIgnoreCase)
+            ? mark.Bar.Close : null;
+
+    // The enumerator consumes the authoritative calendar in one pass per isolated book.
+    private void MoveLossClock() => _nextLossBoundary = _lossBoundaries!.MoveNext() ? _lossBoundaries.Current : null;
+
+    // Process one symbol's market slice and report only actual fills to the book. Enabled replay validates missing slices after the batch.
     private void AdvanceBar(TimelineBar timelineBar)
     {
+        if (_accountLoss is null)
         foreach (var active in _active.Where(t => !t.IsTerminal && t.Plan.Candidate.ExecutionReplay is not null).ToArray())
         {
             var required = active.Plan.Candidate.ExecutionReplay!.RequiredSliceStarts;
@@ -658,6 +782,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             evidence));
     }
 
+    // Convert already admitted plans into causal commands, with a final loss check before each opening IOC.
     private List<SimulatedOrderCommand> BuildCommands(
         DateTimeOffset timestamp,
         IReadOnlyCollection<ExecutionTracker> trackers)
@@ -681,6 +806,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             if (ExpireSessionMarketOrders(timestamp, tracker, commands)) continue;
             if (!tracker.EntrySubmitted && tracker.Plan.Candidate.EntryTimestamp.ToUniversalTime() <= timestamp)
             {
+                if (AccountLossRefusalAt(timestamp) is { } refusal)
+                {
+                    SuppressUnissuedEntry(tracker, timestamp, refusal);
+                    continue;
+                }
                 tracker.EntrySubmitted = true;
                 commands.Add(new SimulatedOrderCommand(
                     ExecutionCommandKind.Submit,
@@ -774,6 +904,16 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
 
         return commands;
+    }
+
+    // Retire only a plan whose opening command was never issued. Existing fills and protection stay in the book.
+    private void SuppressUnissuedEntry(ExecutionTracker tracker, DateTimeOffset timestamp, AccountLossReplayRefusal refusal)
+    {
+        tracker.IsTerminal = true;
+        _executionEvidence?.Append(new ExecutionEvent(tracker.Plan.Candidate.Ticker,
+            tracker.Plan.Candidate.StrategyName, timestamp, ExecutionState.OrderStateChanged,
+            $"Opening IOC refused: {refusal.Detail}", "portfolio_execution", tracker.Identity,
+            JsonSerializer.Serialize(refusal)));
     }
 
     // Decision-hour market orders are day orders of their session: a remainder still working when a later session's first
@@ -943,6 +1083,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         exitReason.StartsWith("stop_loss", StringComparison.OrdinalIgnoreCase);
 
     // Journal in simulator order, retaining the source intervals for fills whose intrabar time is unavailable.
+    // Apply simulator fills and fees to the trade tracker and the isolated replay cash account.
     private void ApplyEvents(IReadOnlyCollection<SimulatedExecutionEvent> events, OhlcvBar bar,
         DateTimeOffset availableAtUtc, bool priceAtClose = false)
     {
@@ -964,6 +1105,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             AppendExecutionEvidence(executionEvent, tracker, timing);
             if (timing is null)
                 continue;
+
+            _accountLoss?.RecordFill(executionEvent);
 
             if (executionEvent.ClientOrderId.Equals(tracker.EntryClientOrderId, StringComparison.Ordinal))
             {
@@ -1083,6 +1226,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }
     }
 
+    // Preserve unresolved exposure. Sampled replay completes the current symbol batch before propagating the failure.
     private void Fail(ExecutionTracker tracker, string reason)
     {
         if (tracker.IsTerminal)
@@ -1114,7 +1258,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             lastBar?.AvailableAtUtc);
         _failures.Add(failure);
         // Preserve every open exposure when a fine treatment aborts globally.
-        if (tracker.Plan.Candidate.ExecutionReplay is not null)
+        if (_accountLoss is null && tracker.Plan.Candidate.ExecutionReplay is not null)
             foreach (var other in _active.Where(item => !item.IsTerminal).ToArray())
                 Fail(other, "treatment_aborted_after_missing_or_invalid_execution_evidence");
         _executionEvidence?.Append(new ExecutionEvent(

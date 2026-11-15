@@ -1,4 +1,7 @@
 @model string
+@{
+    var detailsTitleId = $"chart-details-{Guid.NewGuid():N}";
+}
 <section class="stock-chart" aria-label="Stock price chart" data-stock-chart data-symbol="@Model"
          data-chart-history="@Url.Content("~/api/v1/charts/history")" data-chart-hub="@Url.Content("~/api/v1/charts/hub")">
     <header class="stock-chart-head">
@@ -19,6 +22,7 @@
                 <option value="5m" selected>5 minutes</option>
                 <option value="15m">15 minutes</option>
                 <option value="1d">1 day</option>
+                <option value="1w">1 week</option>
             </select>
         </label>
         <label>Session
@@ -82,6 +86,7 @@
     <p class="visually-hidden" data-chart-settings-announcement role="status"></p>
     <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
     <p class="stock-chart-context" data-chart-context-label></p>
+    <p class="stock-chart-note" data-chart-weekly-availability hidden>Indicators, price levels and session shading are available on daily or intraday charts.</p>
     <p class="stock-chart-source" data-chart-source></p>
     <ul class="stock-chart-zone-key" data-chart-zone-key aria-label="Current support and resistance zones" hidden></ul>
     <label class="stock-chart-pane-control" data-chart-pane-control hidden>Visible indicator pane
@@ -97,6 +102,7 @@
         <button type="button" class="btn btn-secondary" data-chart-latest disabled>Go to latest</button>
         <button type="button" class="btn btn-secondary" data-chart-history-reload hidden>Reload earlier history</button>
         <button type="button" class="btn btn-secondary" data-chart-retry hidden>Retry chart</button>
+        <button type="button" class="btn btn-secondary" data-chart-details-open aria-haspopup="dialog">Chart details</button>
         <span data-chart-history-status role="status"></span>
     </div>
     <div class="stock-chart-readout" data-chart-readout hidden>
@@ -109,12 +115,21 @@
         </div>
         <p class="visually-hidden" data-chart-inspection role="status"></p>
         <dl class="stock-chart-values" data-chart-values></dl>
-        <dl class="stock-chart-values stock-chart-study-values" data-chart-study-values hidden></dl>
-        <p class="stock-chart-study-history" data-chart-study-history hidden></p>
     </div>
-    <div class="stock-chart-details">
-        <details>
-            <summary>Data evidence</summary>
+    <dialog class="stock-chart-details" data-chart-details aria-labelledby="@detailsTitleId">
+        <header class="stock-chart-details-head">
+            <h2 id="@detailsTitleId">Chart details</h2>
+            <form method="dialog">
+                <button type="submit" class="btn btn-secondary" data-chart-details-close autofocus>Close</button>
+            </form>
+        </header>
+        <section class="stock-chart-detail-section">
+            <h3>Indicator values</h3>
+            <dl class="stock-chart-values stock-chart-study-values" data-chart-study-values hidden></dl>
+            <p class="stock-chart-study-history" data-chart-study-history hidden></p>
+        </section>
+        <section class="stock-chart-detail-section">
+            <h3>Data evidence</h3>
             <div class="stock-chart-evidence-section">
                 <h4>Series</h4>
                 <dl class="stock-chart-evidence" data-chart-evidence></dl>
@@ -127,9 +142,9 @@
                 <h4>Selected indicator evidence</h4>
                 <ul class="stock-chart-detail-list" data-chart-indicator-evidence></ul>
             </div>
-        </details>
-        <details>
-            <summary>Layers &amp; price levels</summary>
+        </section>
+        <section class="stock-chart-detail-section">
+            <h3>Layers &amp; price levels</h3>
             <div class="stock-chart-toggles">
                 <label><input type="checkbox" data-chart-layer="volume" checked /> Volume</label>
                 <label><input type="checkbox" data-chart-layer="sessions" checked /> Extended-hours shading</label>
@@ -144,11 +159,11 @@
                 <h4>Selected candle comparisons</h4>
                 <dl class="stock-chart-evidence" data-chart-distances></dl>
             </div>
-        </details>
-        <details>
-            <summary>News &amp; earnings <span data-chart-event-count></span></summary>
+        </section>
+        <section class="stock-chart-detail-section">
+            <h3>News &amp; earnings <span data-chart-event-count></span></h3>
             <ul class="stock-chart-detail-list" data-chart-events></ul>
-        </details>
-    </div>
+        </section>
+    </dialog>
     <footer class="stock-chart-footer"><a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">Charts by TradingView</a></footer>
 </section>

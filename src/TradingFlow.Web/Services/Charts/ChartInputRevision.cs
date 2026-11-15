@@ -27,7 +27,7 @@ internal static class ChartInputRevision
     // Price, volume, availability, quiet proof and basis seams all participate in derived invalidation.
     public static string History(IReadOnlyList<DateOnly> sessions,
         IReadOnlyDictionary<DateTimeOffset, ChartSourceBar> bars, IReadOnlyDictionary<DateTimeOffset, DateTimeOffset> quiet,
-        IReadOnlySet<DateTimeOffset> breaks) => Digest(writer =>
+        IReadOnlySet<DateTimeOffset> breaks, IReadOnlySet<DateOnly>? dailyConflicts = null) => Digest(writer =>
     {
         writer.Write(sessions.Count);
         foreach (var day in sessions) writer.Write(day.DayNumber);
@@ -47,6 +47,9 @@ internal static class ChartInputRevision
         }
         writer.Write(breaks.Count);
         foreach (var stamp in breaks.Order()) writer.Write(stamp.UtcTicks);
+        writer.Write(dailyConflicts?.Count ?? 0);
+        if (dailyConflicts is not null)
+            foreach (var date in dailyConflicts.Order()) writer.Write(date.DayNumber);
     });
 
     // An accepted canonical correction invalidates chart output even if an archive remains unchanged.

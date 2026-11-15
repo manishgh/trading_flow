@@ -69,6 +69,21 @@
                             <span class="cell-sub">@Time(admission?.DecisionAtUtc)</span>
                             <span class="cell-sub">Modeled executable @Price(admission?.ModeledExecutablePrice)</span>
                             <span class="cell-sub">Limit @Price(order.Intent.LimitPrice)</span>
+                            @if (order.ReadEntryWindow() is { } window)
+                            {
+                                <details><summary>Next-open submission window · @window.GraceSeconds s</summary>
+                                    <span class="cell-sub">Setup source @Time(window.SetupSourceUtc)</span>
+                                    <span class="cell-sub">Setup eligibility clock @Time(window.SetupAvailableAtUtc)</span>
+                                    <span class="cell-sub">Confirmation @Time(window.ConfirmationAtUtc)</span>
+                                    <span class="cell-sub">Intended open @Time(window.IntendedOpenUtc)</span>
+                                    <span class="cell-sub">Submission deadline (exclusive) @Time(window.ExclusiveEndUtc)</span>
+                                    <span class="cell-sub">An accepted working order can fill after this deadline.</span>
+                                </details>
+                            }
+                            else
+                            {
+                                <span class="cell-sub">Next-open window evidence unavailable or not applied</span>
+                            }
                         </td>
                         <td>
                             @if (admission?.QuoteObservedAtUtc is { } observed)

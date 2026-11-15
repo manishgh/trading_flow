@@ -26,6 +26,24 @@ public sealed class AuditPagingTests : IDisposable
     }
 
     // The analyzer must show the skipped entry through its actual database filter and page projection.
+    // Durable identity prevents duplicate missed-window observations across repository instances and polls.
+    [Fact]
+    public async Task KeyedAuditRetainsFirstObservationAfterRestart()
+    {
+        var first = Record("AAA", "2026-11-16T15:00:00Z") with
+        { Decision = "Skipped", RejectionReason = "entry_window_missed", DeduplicationKey = new string('A', 64) };
+        await repository.SaveAuditAsync(first, default);
+        var restarted = new SqliteDecisionAuditRepository(new Factory(options));
+        await restarted.SaveAuditAsync(first with { Timestamp = first.Timestamp.AddMinutes(10), SignalJson = "changed" }, default);
+        var retained = Assert.Single((await repository.QueryAsync("large", new(), default)).Records);
+        Assert.Equal(first.Timestamp, retained.Timestamp);
+        Assert.Equal(first.SignalJson, retained.SignalJson);
+        await restarted.SaveAuditAsync(first with { DeduplicationKey = new string('B', 64) }, default);
+        await restarted.SaveAuditAsync(first with { DeduplicationKey = null }, default);
+        await restarted.SaveAuditAsync(first with { DeduplicationKey = null }, default);
+        Assert.Equal(4, (await repository.QueryAsync("large", new(), default)).TotalMatching);
+    }
+
     [Fact]
     public async Task MembershipSkipReasonReachesAuditPage()
     {

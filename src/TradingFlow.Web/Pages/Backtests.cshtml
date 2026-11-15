@@ -380,6 +380,21 @@
                 <div data-job-evidence-summary></div>
             </section>
         }
+        @if (result?.AccountLossReplay is { } loss)
+        {
+            <section class="lab-panel">
+                <h2 class="section-heading">Account-loss limits</h2>
+                @if (loss.Applied && loss.Settings is { } settings)
+                {
+                    <p>@settings.PolicyId · Daily @(settings.Limits.DailyPct)% · Weekly @(settings.Limits.WeeklyPct)% · Peak-to-trough @(settings.Limits.PeakToTroughPct)%</p>
+                    <p class="note">@loss.Limitations</p>
+                }
+                else
+                {
+                    <p>Disabled for this replay.</p>
+                }
+            </section>
+        }
         @if (Model.Phase == "configure")
         {
             <section class="lab-panel">

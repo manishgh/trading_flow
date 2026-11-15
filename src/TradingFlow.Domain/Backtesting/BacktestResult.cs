@@ -46,6 +46,8 @@ public sealed record BacktestResult(
     PreparedMarketDataSummary? PreparedMarketData = null)
 {
     public BacktestPortfolioState? PortfolioState { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestAccountLossReplayReport? AccountLossReplay { get; init; }
     public IReadOnlyList<BacktestHistoryEligibility> HistoryEligibility { get; init; } = [];
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public DecisionContextEvidenceProvenance? DecisionContextEvidence { get; init; }
@@ -76,7 +78,11 @@ public sealed record BacktestArtifactManifest(
     BacktestArtifactCoverage Coverage,
     IReadOnlyList<BacktestArtifactReference> Artifacts,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? CandidateAuditEncoding = null);
+    string? CandidateAuditEncoding = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestAccountLossReplayReport? AccountLossReplay { get; init; }
+}
 
 public sealed record BacktestArtifactCoverage(
     int ExpectedWorkItemCount,
@@ -153,6 +159,8 @@ public sealed record UnifiedPortfolioBacktestResult(
     bool EconomicResultsComplete = true)
 {
     public BacktestPortfolioState? PortfolioState { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestAccountLossBookSummary? AccountLoss { get; init; }
 }
 
 
@@ -188,6 +196,8 @@ public sealed record StrategyBacktestResult(
     bool EconomicResultsComplete = true)
 {
     public BacktestPortfolioState? PortfolioState { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestAccountLossBookSummary? AccountLoss { get; init; }
 }
 
 public sealed record TickerBacktestResult(

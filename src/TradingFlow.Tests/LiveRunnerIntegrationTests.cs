@@ -878,6 +878,41 @@ public class LiveRunnerIntegrationTests
         }
     }
 
+    // A midday launch records the missed next-open setup once and cannot create or submit a late candidate.
+    [Fact]
+    public async Task RunAsync_NextOpenWindowAuditsMissedSetupOnceBeforeCandidateCreation()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var provider = new Mock<IMarketDataProvider>();
+            provider.Setup(source => source.GetBarsAsync(It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _,
+                    DateTimeOffset _, CancellationToken token) => YieldBars(tickers.SelectMany(CreateFiveMinuteBars), token));
+            var audits = new List<DecisionAuditRecord>();
+            var candidates = new MemoryCandidateRepository();
+            var runner = CreateRunner(provider.Object, null, CaptureDecisionAudits(audits),
+                candidateRepository: candidates, iterationInterval: TimeSpan.FromMilliseconds(1));
+            var strategy = CreateStrategy("1d", "5m");
+            strategy = strategy with { Execution = strategy.Execution with
+                { EntryWindow = new(EntryWindowRules.NextRegularOpen, 1, 300) } };
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await RunUntilCancelledAsync(runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [strategy], cancellation, CancelAfterIterations(cancellation, 2));
+            Assert.Empty(candidates.Records);
+            var missed = Assert.Single(audits, audit => audit.RejectionReason == "entry_window_missed");
+            Assert.Equal(64, missed.DeduplicationKey!.Length);
+            using var payload = JsonDocument.Parse(missed.SignalJson);
+            var window = payload.RootElement.GetProperty("entryWindow");
+            Assert.Equal(DateTimeOffset.Parse("2026-08-26T13:30:00Z"), window.GetProperty("OpenUtc").GetDateTimeOffset());
+            Assert.Equal(DateTimeOffset.Parse("2026-08-26T13:35:00Z"), window.GetProperty("EndUtc").GetDateTimeOffset());
+        }
+        finally { TryDeleteDirectory(resultsRoot); }
+    }
+
     // Freeze the actual next NYSE close across weekends, DST, a holiday and an early close.
     [Theory]
     [InlineData(10, 31, 11, 2, 16, 21)]

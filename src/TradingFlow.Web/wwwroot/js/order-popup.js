@@ -15,9 +15,10 @@
         return JSON.stringify(keys.map(key => url.searchParams.get(key) || (key === 'env' ? 'paper' : key === 'side' ? 'buy' : '')));
     }
 
-    // Only editable tickets may be replaced; uncertain responses retain their original command.
+    // An explicit server refusal has no command to retain; uncertain responses keep their original ticket.
     function canSwitchTicket() {
-        try { return ['editable','resolved'].includes(frame.contentWindow.tradingFlowOrderState?.()); }
+        try { return !!frame.contentDocument?.querySelector('[data-order-review-unavailable]') ||
+            ['editable','resolved'].includes(frame.contentWindow.tradingFlowOrderState?.()); }
         catch { return false; }
     }
 

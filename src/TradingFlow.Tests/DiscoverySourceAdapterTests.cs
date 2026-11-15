@@ -18,15 +18,14 @@ public sealed class DiscoverySourceAdapterTests
         var providerTimestamp = syncedAt.AddSeconds(-2);
         var screener = new Mock<IScreenerSnapshotSource>(MockBehavior.Strict);
         screener
-            .Setup(source => source.PreviewAsync(
-                "v=111&f=sh_relvol_o2",
-                ScreenerScope.Swing,
-                null,
+            .Setup(source => source.ReadMembershipAsync(
+                "f=sh_relvol_o2",
+                false,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ScreenerSyncResult(
                 ScreenerScope.Swing,
                 "relative-volume screen",
-                "v=111&f=sh_relvol_o2",
+                "f=sh_relvol_o2",
                 ["RGTI", "POET"],
                 ["RGTI", "POET"],
                 syncedAt,
@@ -42,11 +41,10 @@ public sealed class DiscoverySourceAdapterTests
                 RawReference = "finviz:v=111&f=sh_relvol_o2|raw-archive:finviz-snapshot-42"
             });
         var source = new FinvizDiscoverySource(
-            "v=111&f=sh_relvol_o2",
+            "f=sh_relvol_o2",
             "swing",
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(3),
-            null,
             screener.Object,
             new FixedTimeProvider(syncedAt));
 
@@ -71,10 +69,10 @@ public sealed class DiscoverySourceAdapterTests
     {
         var now = Utc(2026, 8, 27, 14, 0);
         var screener = new Mock<IScreenerSnapshotSource>(MockBehavior.Strict);
-        screener.Setup(source => source.PreviewAsync("test-query", ScreenerScope.Swing, null, default))
-            .ReturnsAsync(ScreenerSyncResult.Failed(ScreenerScope.Swing, "Test", "test-query", "Provider unavailable"));
+        screener.Setup(source => source.ReadMembershipAsync("f=test-query", false, default))
+            .ReturnsAsync(ScreenerSyncResult.Failed(ScreenerScope.Swing, "Test", "f=test-query", "Provider unavailable"));
         var source = new FinvizDiscoverySource(
-            "test-query", "swing", TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(3), null, screener.Object,
+            "f=test-query", "swing", TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(3), screener.Object,
             new FixedTimeProvider(now));
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => source.CaptureAsync(default));

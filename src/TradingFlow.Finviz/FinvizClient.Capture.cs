@@ -45,7 +45,7 @@ public sealed partial class FinvizClient
 
         var requestUri = ScheduledRequestUri(request.Query);
         var url = $"{requestUri.PathAndQuery}&auth={Uri.EscapeDataString(_options.AuthToken)}";
-        var (response, dispatchedAt, failure) = await TrySendScheduledAsync(url, requestUri, request.DeadlineUtc, clock, cancellationToken);
+        var (response, dispatchedAt, failure) = await TrySendCsvExportAsync(url, requestUri, request.DeadlineUtc, clock, cancellationToken);
         if (response is null)
             return Failure(failure ?? "Finviz did not provide an HTTP response.") with { DispatchedAtUtc = dispatchedAt };
 
@@ -90,7 +90,7 @@ public sealed partial class FinvizClient
     }
 
     // Stamp dispatch after the shared Finviz queue and record profiling without credential-bearing exception strings.
-    private async Task<(HttpResponseMessage? Response, DateTimeOffset? DispatchedAt, string? Failure)> TrySendScheduledAsync(
+    private async Task<(HttpResponseMessage? Response, DateTimeOffset? DispatchedAt, string? Failure)> TrySendCsvExportAsync(
         string url, Uri requestUri, DateTimeOffset deadline, TimeProvider clock, CancellationToken cancellationToken)
     {
         var started = Stopwatch.StartNew();
@@ -297,7 +297,8 @@ public sealed partial class FinvizClient
 
     // Only HTTP 200 and structurally valid CSV can establish a captured export. Row membership remains unverified.
     private static FinvizExportObservation InspectScheduledCsv(
-        FinvizExportObservation observation, byte[] bytes, string? contentType, DateTimeOffset deadlineUtc)
+        FinvizExportObservation observation, byte[] bytes, string? contentType, DateTimeOffset deadlineUtc,
+        List<FinvizScreenerRow>? membershipRows = null)
     {
         if (observation.HttpStatus != (int)HttpStatusCode.OK)
             return observation with { Reason = $"Finviz returned HTTP {observation.HttpStatus}." };
@@ -321,11 +322,14 @@ public sealed partial class FinvizClient
             if (ticker < 0 || normalized.Any(String.IsNullOrEmpty) || normalized.Distinct().Count() != normalized.Length)
                 return observation with { Headers = headers, Reason = "Finviz returned no usable CSV header with a unique Ticker column." };
 
+            var relativeVolume = FindHeaderIndexStrict(normalized, "relvolume", "relativevolume", "relvol", "rvol");
             var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             while (parser.ReadFields() is { } fields)
             {
                 if (fields.Length != normalized.Length || !IsExportTicker(fields[ticker]) || !symbols.Add(fields[ticker].Trim()))
                     return PartialCsv(observation, headers, rows, "Finviz CSV contained an incomplete, invalid or duplicate ticker row.");
+                membershipRows?.Add(new(fields[ticker].Trim().ToUpperInvariant(),
+                    relativeVolume >= 0 ? ParseNullableDecimal(fields[relativeVolume]) : null));
                 rows++;
             }
 

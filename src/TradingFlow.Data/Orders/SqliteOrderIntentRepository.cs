@@ -311,9 +311,13 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
         if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
             intent.DispatchExpiresAtUtc is { } dispatchExpiry && dispatchExpiry <= nowUtc)
         {
-            throw intent.DispatchAttemptCount > 0
-                ? new OrderDispatchAdoptionRequiredException(intentId)
-                : new OrderDispatchExpiredException(intentId, dispatchExpiry);
+            if (intent.DispatchAttemptCount > 0) throw new OrderDispatchAdoptionRequiredException(intentId);
+            var windowJson = await context.Set<OrderAdmissionTelemetryRecord>()
+                .Where(row => row.IntentId == intentId).Select(row => row.EntryWindowJson)
+                .SingleOrDefaultAsync(cancellationToken);
+            var window = OrderEntryWindowEvidence.Read(windowJson);
+            throw new OrderDispatchExpiredException(intentId, dispatchExpiry,
+                window?.ExclusiveEndUtc == dispatchExpiry ? window : null);
         }
 
         if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry)
@@ -330,7 +334,9 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             }
             if (intent.DispatchAttemptCount == 0)
             {
-                await RequirePaperEntryDispatchAsync(context, intent, cancellationToken);
+                await RequirePaperEntryAuthorityAsync(context,
+                    new(intentId, intent.RunId, intent.Kind, intent.CandidateId, intent.CandidateTriggeredVersion, intent.Symbol),
+                    beforePost: true, cancellationToken);
                 await RequireAccountLossPermissionAsync(context, owningRun.Profile, intent.AccountId, intent.SessionDate,
                     intent.IntentId, nowUtc, cancellationToken);
                 await RequireCurrentEntryCapacityAsync(context, intent, nowUtc, cancellationToken);
@@ -592,6 +598,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             cancellationToken);
     }
 
+    /// <summary>Checks paper entry authority, reserves risk and consumes the exact candidate in the same SQLite writer transaction.</summary>
     public async Task<OrderIntentReservationResult> ReserveAsync(
         ProductionRun run,
         OrderIntentReservation reservation,
@@ -720,6 +727,9 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             string? consumptionEvidenceJson = null;
             if (reservation.Kind == OrderIntentKind.OperatorEntry)
             {
+                await RequirePaperEntryAuthorityAsync(context,
+                    new(reservation.IntentId, run.RunId, reservation.Kind, null, null, reservation.Symbol),
+                    beforePost: false, cancellationToken);
                 await ReservePortfolioRiskAsync(
                     context,
                     run,
@@ -779,9 +789,14 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
                     throw new ExpiredCandidateOrderIntentException(
                         candidateId,
                         reservation.IntentId,
-                        candidate.ExpiresAtUtc);
+                        candidate.ExpiresAtUtc,
+                        reservation.AdmissionEvidence?.Decision?.EntryWindow is { } missedWindow &&
+                            missedWindow.ExclusiveEndUtc == candidate.ExpiresAtUtc ? missedWindow : null);
                 }
 
+                await RequirePaperEntryAuthorityAsync(context,
+                    new(reservation.IntentId, run.RunId, reservation.Kind, candidateId, reservation.CandidateExpectedVersion, reservation.Symbol),
+                    beforePost: false, cancellationToken);
                 await ReservePortfolioRiskAsync(
                     context,
                     run,
@@ -895,8 +910,11 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             if (reservation.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
                 reservation.AdmissionEvidence is { } evidence && OperationalTradingLimitProfile.Mode(run.Profile) == "paper")
             {
+                var decision = persistedDecisionReference is { } persisted
+                    ? persisted with { EntryWindow = evidence.Decision?.EntryWindow }
+                    : evidence.Decision;
                 context.Set<OrderAdmissionTelemetryRecord>().Add(CreateAdmissionTelemetry(intent.IntentId,
-                    evidence with { Decision = persistedDecisionReference ?? evidence.Decision }));
+                    evidence with { Decision = decision }));
             }
             context.OrderEvents.Add(new OrderEventRecord
             {
@@ -978,6 +996,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
         DecisionPrice = evidence.Decision?.TriggerReferencePrice,
         DecisionAtUtc = evidence.Decision?.TriggeredAtUtc,
         ModeledExecutablePrice = evidence.Decision?.ModeledExecutablePrice,
+        EntryWindowJson = evidence.Decision?.EntryWindow is { } window ? JsonSerializer.Serialize(window) : null,
         StrategyArtifactId = evidence.StrategyIdentity?.StrategyId,
         StrategyVersion = evidence.StrategyIdentity?.SemanticVersion,
         StrategyContentSha256 = evidence.StrategyIdentity?.ContentSha256
@@ -1554,7 +1573,8 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             PreviousState = StrategyCandidateState.Triggered,
             NewState = StrategyCandidateState.Expired,
             OccurredAtUtc = serverNowUtc,
-            ReasonCode = "candidate_expired_before_order_intent",
+            ReasonCode = reservation.AdmissionEvidence?.Decision?.EntryWindow?.ExclusiveEndUtc == candidate.ExpiresAtUtc
+                ? "entry_window_missed" : "candidate_expired_before_order_intent",
             Source = "order_intent_repository",
             SemanticDecisionSha256 = candidate.SemanticDecisionSha256,
             EvidenceJson = JsonSerializer.Serialize(new
@@ -1563,6 +1583,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
                 reservation.IntentId,
                 expectedVersion = candidate.Version,
                 candidate.ExpiresAtUtc,
+                entryWindow = reservation.AdmissionEvidence?.Decision?.EntryWindow,
                 observedAtUtc = serverNowUtc
             }),
             RunId = run.RunId,

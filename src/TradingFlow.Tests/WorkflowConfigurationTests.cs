@@ -99,6 +99,34 @@ public sealed class WorkflowConfigurationTests
             Assert.Null(parsed.Discovery.WishlistId);
             Assert.True(String.IsNullOrEmpty(parsed.Discovery.FinvizQuery));
             Assert.Contains(preview.UniverseSnapshotId.ToString(), await File.ReadAllTextAsync(files[0]));
+
+            var groupId = Guid.NewGuid();
+            const string query = "f=sh_relvol_o2";
+            PaperMembershipSource[] selections =
+            [
+                new(Guid.NewGuid(), "wishlist", groupId.ToString("D"), groupId, null, null, now, now.AddMinutes(3), 0, null, false),
+                new(Guid.NewGuid(), "finviz", query, null, query, new string('f', 64), now, now.AddMinutes(3), 1, "raw-archive:fixture", true)
+            ];
+            var reviewed = preview with
+            {
+                Members = [preview.Members[1]],
+                PaperMembership = new(PaperMembershipModes.RefreshSelectedSources, selections)
+            };
+            var refresh = await adapter.WriteAsync(paper, reviewed, "reviewed_refresh", default);
+            var refreshConfig = reader.ReadBacktestRun(refresh[0]);
+            Assert.Equal(["AAPL"], refreshConfig.Tickers);
+            Assert.Equal(groupId, refreshConfig.Discovery!.WishlistId);
+            Assert.Empty(refreshConfig.Discovery.WishlistTickers);
+            Assert.Equal(query, refreshConfig.Discovery.FinvizQuery);
+            Assert.Equal(60, refreshConfig.Discovery.RefreshSeconds);
+            Assert.Equal(180, refreshConfig.Discovery.SourceExpirySeconds);
+
+            var fixedRun = await adapter.WriteAsync(paper, reviewed with { PaperMembership = new(PaperMembershipModes.FixedAtLaunch, selections) },
+                "reviewed_fixed", default);
+            var fixedConfig = reader.ReadBacktestRun(fixedRun[0]);
+            Assert.Equal(refreshConfig.Tickers, fixedConfig.Tickers);
+            Assert.Null(fixedConfig.Discovery!.WishlistId);
+            Assert.True(String.IsNullOrWhiteSpace(fixedConfig.Discovery.FinvizQuery));
         }
         finally
         {

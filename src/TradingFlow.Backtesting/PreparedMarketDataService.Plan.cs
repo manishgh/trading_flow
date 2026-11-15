@@ -37,6 +37,7 @@ public sealed partial class PreparedMarketDataService
         {
             if (String.IsNullOrWhiteSpace(book.BookId)) throw new InvalidDataException("Prepared book identity is empty.");
             var run = ResolveRun(book.Run, request.EvaluationCutoffUtc);
+            run.Engine.AccountLossReplay?.Validate(run.Mode, run.Engine.ExecutionReplayPolicyId);
             if (run.Engine.MaxRetainedReplayBars <= 0 || run.TimeWindow.Start is null || run.TimeWindow.End is null ||
                 !run.TimeWindow.Type.Equals("fixed", StringComparison.OrdinalIgnoreCase) || run.TimeWindow.End < run.TimeWindow.Start)
                 throw new InvalidDataException("Prepared book requires ordered fixed UTC bounds and a positive replay bar allowance.");
@@ -108,7 +109,7 @@ public sealed partial class PreparedMarketDataService
                 AddCalendar(DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start, zone).DateTime).AddDays(-1),
                     intradayEnd ?? DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(end, zone).DateTime).AddDays(1));
                 // Pin the same explicit calendar request used by candidate/regime evaluation for every calendar-capable source.
-                AddCalendar(DateOnly.FromDateTime(start.UtcDateTime).AddDays(-1),
+                AddCalendar(BacktestCalendarBounds.CandidateFirstRequiredDate(run, start, run.TimeWindow.Start.Value),
                     intradayEnd ?? DateOnly.FromDateTime(end.UtcDateTime).AddDays(10));
             }
 

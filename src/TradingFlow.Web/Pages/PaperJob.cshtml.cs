@@ -8,6 +8,7 @@ using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Audit;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Backtesting;
+using TradingFlow.Contracts.V1;
 
 namespace TradingFlow.Web.Pages;
 
@@ -40,6 +41,7 @@ public sealed class PaperJobModel : PageModel
     public string LocalTimeZoneLabel => UiDisplayFormatter.LocalTradingTimeZoneLabel;
     public string MarketDataFeedLabel { get; private set; } = "Market data feed: unknown";
     public PaperExecutionComparisonResult? ExecutionComparison { get; private set; }
+    public PaperMembershipReview? MembershipReview { get; private set; }
 
     // Load the durable comparison once on the full detail page alongside the existing run views.
     public async Task OnGetAsync(Guid id)
@@ -51,6 +53,7 @@ public sealed class PaperJobModel : PageModel
 
         if (Job != null)
         {
+            MembershipReview = await jobs.GetMembershipReviewAsync(Job.JobId, HttpContext.RequestAborted);
             ExecutionComparison = await executionComparison.ReadAsync(Job.JobId, HttpContext.RequestAborted);
             try
             {

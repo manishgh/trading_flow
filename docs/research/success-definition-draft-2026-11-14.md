@@ -7,6 +7,12 @@ Factual corrections: 15 November 2026, approved NEXT-1 documentation scope. This
 investment targets or authorize a study, paper order, rotation strategy or live trading. The current paper controls
 use 2% daily, 4% weekly and 10% observed-peak entry stops; the draft risk numbers below do not replace them.
 
+## User-approved current research objective (15 November 2026)
+
+Beat SPY after specified costs, with no larger drawdown, over matching observation dates. The user selected this objective and then explicitly removed dividend accounting from the current scope: focus on stock price gains for swing holdings of roughly a month. Both sides must be labelled **price-only; dividends excluded**. This is an evaluation objective, not permission to activate a strategy or commit real money.
+
+Before each new study, freeze the price basis, cost assumptions, monthly comparisons, drawdown measurement and statistical acceptance method. Dividend-adjusted price data must not be silently described as excluding dividends; use a verified matching price-only basis. No new economic run is authorized here. The personal capital/income targets and numerical proposals below remain unapproved unless separately recorded; current 2%/4%/10% paper safeguards are unchanged.
+
 ## Why this page exists
 
 **What was tested:**

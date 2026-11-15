@@ -16,6 +16,14 @@
         <dt>Evidence issue</dt><dd>@(state.EvidenceIssue ?? "None")</dd>
         <dt>Opening-order review</dt><dd>@(state.CancellationSweepPending ? "Sweep pending" : "No pending sweep"); @(state.CancellationReviews?.Count ?? 0) unresolved orders</dd>
     </dl>
+    @if (state.CancellationReviews is { Count: > 0 })
+    {
+        <p class="warn" data-opening-order-review>
+            A working opening remainder may still fill. New entries remain blocked until recorded fills agree
+            with the current position and verified resting stop coverage, or the account is verified flat for that exposure.
+            Linked or uncertain groups require review: the broker has no atomic cancellation that guarantees continuous protection.
+        </p>
+    }
     <form method="post">
         <input type="hidden" asp-for="ExpectedRevision" />
         <label asp-for="ReviewAction">Reviewed action</label>

@@ -1,10 +1,15 @@
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Market;
+using TradingFlow.Engine.Pipeline;
 
 namespace TradingFlow.Engine.Indicators;
 
 public sealed record ChartTimeRange(DateTimeOffset StartUtc, DateTimeOffset EndUtc);
 public sealed record ChartCoveredMinutes(IReadOnlyList<ChartSourceBar> Bars, DateTimeOffset AvailableAtUtc);
+public sealed record ChartWeeklyWindow(
+    DateOnly Monday, DateOnly FirstSession, DateOnly LastSession, ChartCompletedBar? Candle,
+    IReadOnlyList<ChartSourceBar> Constituents, string? Gap);
+public sealed record ChartWeeklyProjection(IReadOnlyList<ChartWeeklyWindow> Evaluated, bool Pending);
 
 /// <summary>Applies the chart clock, exchange windows and explicit coverage proofs to completed bars.</summary>
 public sealed class ChartBarProjector(IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules)
@@ -17,6 +22,9 @@ public sealed class ChartBarProjector(IReadOnlyDictionary<DateOnly, MarketSessio
     // Map a UTC source timestamp to its New York calendar date without guessing a session.
     public static DateOnly NewYorkDate(DateTimeOffset utc) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(utc, NewYork).DateTime);
+
+    // Apply the exchange's civil Monday boundary even when the first session is a holiday.
+    public static DateOnly WeekStart(DateOnly date) => date.AddDays(-(((int)date.DayOfWeek + 6) % 7));
 
     // Set a verified session boundary using the exchange offset on that date.
     public static DateTimeOffset At(DateOnly date, TimeOnly time)
@@ -109,6 +117,88 @@ public sealed class ChartBarProjector(IReadOnlyDictionary<DateOnly, MarketSessio
         }
         return result;
     }
+
+    // Evaluate only whole exchange weeks inside the daily acquisition, including weeks with unavailable inputs.
+    public ChartWeeklyProjection Weekly(
+        string symbol, IEnumerable<ChartSourceBar> sources, IReadOnlySet<DateTimeOffset> basisBreaks,
+        DateOnly acquiredFrom, DateTimeOffset cutoffUtc, DateTimeOffset asOfUtc, IReadOnlySet<DateOnly>? dailyConflicts = null)
+    {
+        var byDate = sources.ToLookup(source => NewYorkDate(source.Bar.Timestamp));
+        var firstWeek = WeekStart(acquiredFrom);
+        var lastWeek = WeekStart(NewYorkDate(cutoffUtc.AddTicks(-1)));
+        var evaluated = new List<ChartWeeklyWindow>();
+        var pending = false;
+        for (var week = firstWeek; week <= lastWeek; week = week.AddDays(7))
+        {
+            var days = Enumerable.Range(0, 7).Select(week.AddDays)
+                .Select(date => schedules.TryGetValue(date, out var schedule) && schedule.TradeDate == date ? schedule : null)
+                .ToArray();
+            var trading = days.OfType<MarketSessionSchedule>().Where(day => day.IsTradingDay).ToArray();
+            var verified = days.All(day => day is not null) &&
+                trading.All(day => day.RegularOpen < day.RegularClose);
+            if (verified && trading.Length == 0) continue;
+            var first = trading.FirstOrDefault()?.TradeDate ?? week;
+            var last = trading.LastOrDefault()?.TradeDate ?? week.AddDays(6);
+            if (week == firstWeek && (first < acquiredFrom || !verified && week < acquiredFrom)) continue;
+            if (!verified)
+            {
+                evaluated.Add(new ChartWeeklyWindow(week, first, last, null, [], "Exchange schedule is unverified."));
+                continue;
+            }
+            var end = At(last, trading[^1].RegularClose);
+            if (end > cutoffUtc)
+            {
+                pending = true;
+                continue;
+            }
+            evaluated.Add(ProjectWeek(symbol, week, trading, byDate, basisBreaks, end, asOfUtc, dailyConflicts));
+        }
+        return new ChartWeeklyProjection(evaluated, pending);
+    }
+
+    // A break inside a week invalidates its aggregate. A break at its first native candle starts a new basis.
+    private static ChartWeeklyWindow ProjectWeek(
+        string symbol, DateOnly monday, MarketSessionSchedule[] trading,
+        ILookup<DateOnly, ChartSourceBar> byDate, IReadOnlySet<DateTimeOffset> basisBreaks,
+        DateTimeOffset end, DateTimeOffset asOf, IReadOnlySet<DateOnly>? dailyConflicts)
+    {
+        var first = trading[0].TradeDate;
+        var last = trading[^1].TradeDate;
+        var inputs = new List<ChartSourceBar>(trading.Length);
+        foreach (var session in trading)
+        {
+            var rows = byDate[session.TradeDate].Take(2).ToArray();
+            var conflicted = rows.Length > 1 || dailyConflicts?.Contains(session.TradeDate) == true;
+            if (conflicted || rows.Length != 1 || !IsWeeklyInput(rows[0], symbol, asOf))
+            {
+                var issue = conflicted ? "Conflicting" : "Unavailable";
+                return new ChartWeeklyWindow(monday, first, last, null, [],
+                    $"{issue} SIP daily candle for {session.TradeDate:yyyy-MM-dd}.");
+            }
+            inputs.Add(rows[0]);
+        }
+        if (basisBreaks.Any(stamp => stamp > inputs[0].Bar.Timestamp && stamp < end))
+        {
+            return new ChartWeeklyWindow(monday, first, last, null, [],
+                "Price basis could not be joined within the week.");
+        }
+        var receipt = inputs.All(input => input.Bar.KnownAtUtc is not null)
+            ? inputs.Max(input => input.Bar.KnownAtUtc) : null;
+        var bar = new OhlcvBar(symbol, At(first, TimeOnly.MinValue), "1w", inputs[0].Bar.Open,
+            inputs.Max(input => input.Bar.High), inputs.Min(input => input.Bar.Low), inputs[^1].Bar.Close,
+            inputs.Sum(input => input.Bar.Volume), "sip", "all", receipt);
+        var candle = new ChartCompletedBar(bar, end, first, "weekly", 0, "derived_sip_daily",
+            inputs.Max(input => input.RetrievedAtUtc), Later(end, inputs.Max(input => input.AvailableAtUtc)));
+        return new ChartWeeklyWindow(monday, first, last, candle, inputs, null);
+    }
+
+    // Admit only current verified native daily evidence from the existing chart price basis.
+    private static bool IsWeeklyInput(ChartSourceBar source, string symbol, DateTimeOffset asOf) =>
+        source.AvailableAtUtc <= asOf && source.Bar.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
+        source.Bar.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) &&
+        source.Bar.DataFeed.Equals("sip", StringComparison.OrdinalIgnoreCase) &&
+        source.Bar.AdjustmentPolicy.Equals("all", StringComparison.OrdinalIgnoreCase) &&
+        CanonicalMarketBarValidator.IsValid(source.Bar, false, out _);
 
     // Within each segment only completed, covered buckets can become candles.
     // Continuity advances for a gap or basis break and survives overnight only across regular sessions.

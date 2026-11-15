@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TradingFlow.Application.Candidates;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Wishlists;
@@ -18,7 +19,7 @@ public sealed class UniverseSourceResolver(
     TimeProvider timeProvider,
     ResearchScreenSources? researchScreens = null) : IUniverseSourceResolver
 {
-    private static readonly TimeSpan SourceLifetime = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan SourceLifetime = TimeSpan.FromSeconds(DiscoveryRuntimeConfig.DefaultSourceExpirySeconds);
 
     /// <summary>Reads the same operator source for either research horizon without changing its membership.</summary>
     public async Task<UniverseSourceCapture> ResolveAsync(
@@ -41,6 +42,18 @@ public sealed class UniverseSourceResolver(
         };
     }
 
+    /// <summary>Uses the paper mode to select the Finviz evidence contract and resolves the selected group ID once.</summary>
+    public Task<UniverseSourceCapture> ResolvePaperAsync(
+        UniverseSourceSelectionRequest source, string membershipMode, CancellationToken cancellationToken = default) =>
+        source.SourceKind.Trim().ToLowerInvariant() switch
+        {
+            DiscoverySourceKinds.Wishlist => ResolveWishlistAsync(source, cancellationToken),
+            DiscoverySourceKinds.Finviz => ResolveFinvizAsync(source, cancellationToken,
+                requireBoundedMembership: membershipMode == PaperMembershipModes.RefreshSelectedSources),
+            _ => throw new InvalidOperationException("Paper stock sources must be an editable stock group or a Finviz screen.")
+        };
+
+    /// <summary>Resolves the selected editable group only, allowing an empty current group to supply an observation.</summary>
     private async Task<UniverseSourceCapture> ResolveWishlistAsync(
         UniverseSourceSelectionRequest source,
         CancellationToken cancellationToken)
@@ -51,6 +64,8 @@ public sealed class UniverseSourceResolver(
         {
             throw new InvalidOperationException("Wishlist source requires a wishlist ID.");
         }
+        if (Guid.TryParse(source.SourceKey, out var keyId) && keyId != id)
+            throw new InvalidOperationException("The selected stock group ID does not match its source key.");
         if (await wishlists.IsPreparationRevisionAsync(id, cancellationToken))
             throw new InvalidOperationException("Preparation revisions require their original validated handoff; they cannot be refreshed as ordinary wishlist sources.");
         var wishlist = await wishlists.GetByIdAsync(id, cancellationToken)
@@ -89,16 +104,20 @@ public sealed class UniverseSourceResolver(
             ProviderReference: ResearchScreenSources.ProviderReference(screen));
     }
 
+    /// <summary>Archives current screen membership and returns the exact query sent, without retaining the mutable alias.</summary>
     private async Task<UniverseSourceCapture> ResolveFinvizAsync(
         UniverseSourceSelectionRequest source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireBoundedMembership = false)
     {
         var query = String.IsNullOrWhiteSpace(source.Query) ? source.SourceKey : source.Query;
         if (String.IsNullOrWhiteSpace(query))
         {
             throw new InvalidOperationException("Finviz source requires a saved-view key or query.");
         }
-        var result = await screener.PreviewAsync(query, ScreenerScope.Swing, source.WishlistId, cancellationToken);
+        var result = requireBoundedMembership
+            ? await screener.ReadMembershipAsync(query, resolveSavedScreen: true, cancellationToken)
+            : await screener.PreviewAsync(query, ScreenerScope.Swing, source.WishlistId, cancellationToken);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(result.Error ?? "Finviz swing screen failed.");
@@ -109,6 +128,8 @@ public sealed class UniverseSourceResolver(
                 item.Symbol,
                 JsonSerializer.Serialize(new { vendorReportedRvol = item.VendorReportedRvol }))).ToArray()
             : result.Symbols.Select(symbol => new DiscoverySymbolObservation(symbol)).ToArray();
+        if (!requireBoundedMembership && symbols.Length == 0)
+            throw new InvalidOperationException("Finviz returned no stocks with verifiable membership.");
         return new UniverseSourceCapture(
             DiscoverySourceKinds.Finviz,
             result.NormalizedQuery,

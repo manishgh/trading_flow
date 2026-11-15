@@ -1,3 +1,5 @@
+using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
@@ -130,6 +132,42 @@ public sealed class MobileAutomationServiceEntryGateTests
     {
         Assert.Throws<InvalidOperationException>(() =>
             MobileAutomationService.NormalizeEntryMode(value));
+    }
+
+    // Default strategies use the existing mobile gate. An opt-in requires the hosted paper calendar unless an operator owns the entry.
+    [Theory]
+    [InlineData(null, false, false)]
+    [InlineData("validate_strategy", false, false)]
+    [InlineData(null, true, true)]
+    [InlineData("validate_strategy", true, true)]
+    [InlineData("strategy_gated", true, true)]
+    [InlineData("operator_direct", true, false)]
+    public void MobileEntryWindowGate_RefusesOptedInStrategyExecutionOutsideHostedPaperRun(
+        string? requestedMode, bool optedIn, bool refuses)
+    {
+        var path = Path.Combine(FindRepositoryRoot(), "src", "TradingFlow.Tests", "Fixtures",
+            "Strategies", "daily-trailing-swing.fixture.yaml");
+        var strategy = new SimpleYamlReader().ReadStrategy(path);
+        Assert.Null(strategy.Execution.EntryWindow);
+        if (optedIn)
+        {
+            strategy = strategy with
+            {
+                Execution = strategy.Execution with { EntryWindow = new(EntryWindowRules.NextRegularOpen, 1, 300) }
+            };
+        }
+        // The protection preparation has an internal strategy-gated entry path as well as the public mobile modes.
+        var mode = requestedMode == "strategy_gated" ? requestedMode : MobileAutomationService.NormalizeEntryMode(requestedMode);
+        var error = Record.Exception(() => MobileAutomationService.RequireSupportedEntryWindow(strategy, mode));
+        if (refuses)
+        {
+            Assert.Contains("does not support next-open entry windows", Assert.IsType<InvalidOperationException>(error).Message,
+                StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(error);
+        }
     }
 
     [Fact]

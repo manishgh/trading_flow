@@ -88,7 +88,7 @@ public sealed partial class BacktestRunner
                 batches.Select(batch => batch.Diagnostics).ToArray()), [], Array.Empty<FinalizedOrder>(), unified,
             new UniversePromotionEligibilityValidator().Validate(promotionEvidence),
             EconomicResultsComplete: complete, PreparedMarketData: preparedData?.Summary ?? preparedMarket.PreparedMarketData)
-        { PortfolioState = outcome.State };
+        { PortfolioState = outcome.State, AccountLossReplay = BacktestAccountLossReplayReport.From(run.Engine.AccountLossReplay) };
         var journals = batches.Where(batch => batch.CandidateAuditJournalPath is not null)
             .Select(batch => batch.CandidateAuditJournalPath!).ToArray();
         var artifacts = await WriteResultAsync(resultPath, result, run.Artifacts, hypotheses, execution,

@@ -151,6 +151,7 @@ public sealed partial class MobileAutomationService
         CancellationToken cancellationToken)
     {
         var strategy = runtimeStrategy.Definition;
+        RequireSupportedEntryWindow(strategy, "strategy_gated");
         var ticker = session.Ticker;
         if (!state.SnapshotsByTimeframe.TryGetValue(strategy.Timeframe, out var strategySnapshots) ||
             strategySnapshots.Count == 0 ||
@@ -416,6 +417,13 @@ public sealed partial class MobileAutomationService
             Decimal.Round(planned.StopTriggerPrice, 4),
             Decimal.Round(takeProfit, 4),
             snapshot.Timestamp);
+    }
+
+    // Mobile does not own the daily calendar window; refuse this opt-in before provider work on every entry path.
+    internal static void RequireSupportedEntryWindow(StrategyDefinition strategy, string entryMode)
+    {
+        if (strategy.Execution.EntryWindow is not null && entryMode != "operator_direct")
+            throw new InvalidOperationException("Mobile strategy automation does not support next-open entry windows. Use the reviewed paper-run workflow.");
     }
 
     internal static string NormalizeEntryMode(string? entryMode)

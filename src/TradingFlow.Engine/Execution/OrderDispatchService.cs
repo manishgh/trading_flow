@@ -380,13 +380,15 @@ public sealed class OrderDispatchService : IOrderDispatchService
                         {
                             reason = exception switch
                             {
+                                OrderDispatchExpiredException { EntryWindow: not null } => "entry_window_missed",
                                 OrderDispatchExpiredException => "dispatch_expired_before_broker_post",
                                 OrderDispatchUnsupportedHorizonException => "unsupported_entry_horizon",
                                 PaperEntryDispatchBlockedException blocked => blocked.ReasonCode,
                                 PortfolioRiskReservationRejectedException rejection => rejection.ReasonCode,
                                 _ => "owning_run_inactive_before_broker_post"
                             },
-                            message = exception.Message
+                            message = exception.Message,
+                            entryWindow = (exception as OrderDispatchExpiredException)?.EntryWindow
                         })),
                     cancellationToken);
             }

@@ -2,7 +2,7 @@ using TradingFlow.Contracts.V1;
 
 namespace TradingFlow.Web.Services.Charts;
 
-internal readonly record struct ChartHistoryKey(string Symbol, bool Daily, DateOnly Anchor);
+internal readonly record struct ChartHistoryKey(string Symbol, bool Daily, DateOnly Anchor, bool PartialCalendar = false);
 internal readonly record struct ChartCalculationKey(ChartHistoryKey History, string Profile, string Revision);
 internal readonly record struct ChartIndicatorCacheMetrics(int Running, int Queued, int Profiles, int Points, int Bytes, long Started);
 

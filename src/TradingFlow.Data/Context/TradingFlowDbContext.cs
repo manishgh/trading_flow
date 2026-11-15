@@ -255,6 +255,8 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
 
             entity.HasIndex(e => e.RunName);
             entity.HasIndex(e => e.Ticker);
+            entity.Property(e => e.DeduplicationKey).HasMaxLength(64);
+            entity.HasIndex(e => e.DeduplicationKey).IsUnique();
         });
 
         modelBuilder.Entity<TradingFlow.Domain.Jobs.PersistedJob>(entity =>

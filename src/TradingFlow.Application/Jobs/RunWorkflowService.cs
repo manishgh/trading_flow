@@ -116,6 +116,7 @@ public sealed partial class RunWorkflowService(
             throw new InvalidOperationException("Select valid backtest dates, distinct strategies, positive portfolio limits, cache policy and full retention.");
     }
 
+    /// <summary>Admits the exact reviewed stock receipt and its membership mode through the normal paper queue.</summary>
     public Task<RunJobResponse> StartAsync(StartPaperRunRequest request, CancellationToken token = default)
     {
         Validate(request.ContractVersion, request.IdempotencyKey, request.RunName);
@@ -124,17 +125,18 @@ public sealed partial class RunWorkflowService(
             (request.AllowExtendedHoursTrading && (request.EntryOrderType != "limit" || request.TimeInForce != "day")))
             throw new InvalidOperationException("An explicit authorized paper mode and strategy-validated order policy are required.");
         return StartCoreAsync(request.Mode, request.IdempotencyKey, request.RunName, request.UniverseSnapshotId, [request.Strategy],
-            JsonSerializer.Serialize(request, Json), (universe, name) => configuration.WriteAsync(request, universe, name, token), token);
+            JsonSerializer.Serialize(request, Json), (universe, name) => configuration.WriteAsync(request, universe, name, token), token,
+            paperRequest: request);
     }
 
     /// <summary>Enqueues one prepared execution using the same configured budget as cohort comparisons.</summary>
     private async Task<RunJobResponse> StartCoreAsync(string mode, string key, string name, Guid snapshotId,
         IReadOnlyList<StrategyReference> identities, string json, Func<UniversePreviewResponse, string, Task<IReadOnlyList<string>>> write,
         CancellationToken token, DateTimeOffset? preparedCutoffUtc = null, DecisionContextEvidenceSummary? evidenceSummary = null,
-        IWorkflowEvidenceVerificationScope? evidenceScope = null)
+        IWorkflowEvidenceVerificationScope? evidenceScope = null, StartPaperRunRequest? paperRequest = null)
     {
         var job = await PrepareCoreAsync(mode, key, name, snapshotId, identities, json, write, token,
-            evidenceSummary: evidenceSummary, evidenceScope: evidenceScope);
+            evidenceSummary: evidenceSummary, evidenceScope: evidenceScope, paperRequest: paperRequest);
         try
         {
             var replay = await jobs.GetJobAsync(job.Id, token);
@@ -161,7 +163,8 @@ public sealed partial class RunWorkflowService(
     private async Task<PersistedJob> PrepareCoreAsync(string mode, string key, string name, Guid snapshotId,
         IReadOnlyList<StrategyReference> identities, string json, Func<UniversePreviewResponse, string, Task<IReadOnlyList<string>>> write,
         CancellationToken token, BacktestCohortExecution? cohort = null, UniversePreviewResponse? frozenResearchSource = null,
-        DecisionContextEvidenceSummary? evidenceSummary = null, IWorkflowEvidenceVerificationScope? evidenceScope = null)
+        DecisionContextEvidenceSummary? evidenceSummary = null, IWorkflowEvidenceVerificationScope? evidenceScope = null,
+        StartPaperRunRequest? paperRequest = null)
     {
         if (identities is null || identities.Count == 0 || identities.Any(item => item is null) ||
             identities.Distinct().Count() != identities.Count) throw new InvalidOperationException("Select distinct exact strategy identities.");
@@ -186,6 +189,8 @@ public sealed partial class RunWorkflowService(
             throw new InvalidOperationException("Day research source previews cannot start paper or live trading.");
         if (mode != "backtest" && universe.Members.Any(member => member.Sources.Any(source => source.SourceKind == DiscoverySourceKinds.ResearchScreen)))
             throw new InvalidOperationException("A research screen is backtest-only historical membership and cannot start paper or live trading.");
+        if (paperRequest is not null)
+            RequireReviewedPaperMembership(paperRequest, universe);
         if (cohort is not null)
         {
             var selected = cohort.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -204,7 +209,10 @@ public sealed partial class RunWorkflowService(
         DurableFileJobRequest captured;
         try
         {
-            captured = DurableFileJobRequest.Capture(files) with { Workflow = new(new(mode, snapshotId, kind == "paper" ? id : null, identities), hash, cohort, evidenceSummary) };
+            var review = kind == "paper" ? universe.PaperMembership : null;
+            var provenance = new RunProvenance(mode, snapshotId, kind == "paper" ? id : null, identities,
+                review, review is not null ? universe.ContentSha256 : null);
+            captured = DurableFileJobRequest.Capture(files) with { Workflow = new(provenance, hash, cohort, evidenceSummary) };
             if (kind == "backtest")
             {
                 using var lease = captured.AcquireVerifiedReadLease();
@@ -225,6 +233,16 @@ public sealed partial class RunWorkflowService(
                 events = Array.Empty<string>() }, Json)
         };
         return job;
+    }
+
+    /// <summary>Rejects a changed mode or a substitute snapshot at confirmation. Older fixed requests retain their original shape.</summary>
+    private static void RequireReviewedPaperMembership(StartPaperRunRequest request, UniversePreviewResponse universe)
+    {
+        if (universe.PaperMembership is null && request.PaperMembershipMode is null && request.UniverseContentSha256 is null)
+            return;
+        if (universe.PaperMembership is not { } review || request.PaperMembershipMode != review.Mode ||
+            request.UniverseContentSha256 != universe.ContentSha256)
+            throw new InvalidOperationException("The paper stock selection or membership mode changed. Preview the selected stocks again before starting.");
     }
 
     /// <summary>Checks exact selected artifacts before preview/save and again before admitting new execution inputs.</summary>

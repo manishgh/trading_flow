@@ -74,6 +74,11 @@ public interface IScreenerSnapshotSource
         ScreenerScope scope,
         Guid? wishlistId,
         CancellationToken cancellationToken);
+
+    /// <summary>Reads strictly validated membership, optionally resolving a saved screen at review time only.</summary>
+    Task<ScreenerSyncResult> ReadMembershipAsync(
+        string input, bool resolveSavedScreen, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("Strict Finviz membership capture is unavailable.");
 }
 
 /// <summary>
@@ -91,6 +96,7 @@ public interface IScreenerSnapshotSource
 /// </summary>
 public sealed class ScreenerSyncService : IScreenerSnapshotSource
 {
+    private const int MembershipLimit = 250;
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
     private readonly IWishlistRepository wishlists;
     private readonly IRawArchiveWriter rawArchiveWriter;
@@ -166,7 +172,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             return ScreenerSyncResult.Failed(scope, name, query, $"Finviz read failed: {exception.Message}");
         }
 
-        var symbols = symbolDetails.Take(250).Select(row => row.Symbol).ToArray();
+        var symbols = symbolDetails.Take(MembershipLimit).Select(row => row.Symbol).ToArray();
 
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (wishlistId is { } id)
@@ -190,7 +196,7 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         {
             AllSymbols = snapshot.Rows.Where(x => !String.IsNullOrWhiteSpace(x.Ticker)).Select(x => x.Ticker.Trim().ToUpperInvariant()).Distinct().Order(StringComparer.Ordinal).ToArray(),
             TotalCount = snapshot.Rows.Where(x => !String.IsNullOrWhiteSpace(x.Ticker)).Select(x => x.Ticker.Trim().ToUpperInvariant()).Distinct().Count(),
-            SymbolDetails = symbolDetails.Take(250).ToArray(),
+            SymbolDetails = symbolDetails.Take(MembershipLimit).ToArray(),
             AllSymbolDetails = symbolDetails,
             ProviderTimestampUtc = snapshot.ReceivedAtUtc,
             RawReference = $"finviz:{snapshot.NormalizedQuery}|{snapshot.RawReference}"
@@ -199,13 +205,42 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         return result;
     }
 
+    /// <summary>Resolves an alias only at preview and takes the existing bounded membership from one verified receipt.</summary>
+    public async Task<ScreenerSyncResult> ReadMembershipAsync(
+        string input, bool resolveSavedScreen, CancellationToken cancellationToken)
+    {
+        var scope = ScreenerScope.Swing;
+        var (name, selection) = resolveSavedScreen
+            ? await NormalizeAsync(input, scope, cancellationToken, forMembership: true)
+            : (input, input);
+        var query = FinvizClient.CanonicalizeScheduledSelection(selection);
+        var token = ResolveFinvizToken();
+        if (String.IsNullOrWhiteSpace(token) || String.IsNullOrWhiteSpace(query))
+            throw new InvalidOperationException("Finviz membership requires a stock selection and a configured FINVIZ_API_KEY.");
+
+        using var client = new FinvizClient(new HttpClient(),
+            FinvizOptions.CreateDefault() with { AuthToken = token }, rawArchiveWriter);
+        var snapshot = await client.GetBoundedMembershipAsync(query, timeProvider, cancellationToken);
+        var details = snapshot.Rows.OrderBy(row => row.Ticker, StringComparer.Ordinal)
+            .Take(MembershipLimit).Select(row => new ScreenerSymbolResult(row.Ticker, row.RelativeVolume)).ToArray();
+        return new(scope, name, query, details.Select(row => row.Symbol).ToArray(), [],
+            snapshot.ReceivedAtUtc, null, null)
+        {
+            TotalCount = snapshot.Rows.Count,
+            SymbolDetails = details,
+            ProviderTimestampUtc = snapshot.ReceivedAtUtc,
+            RawReference = snapshot.RawReference
+        };
+    }
+
     /// <summary>
     /// Resolves the four accepted input shapes to one Finviz filter query.
     /// </summary>
     private async Task<(string Name, string Query)> NormalizeAsync(
         string input,
         ScreenerScope scope,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forMembership = false)
     {
         var trimmed = input.Trim();
 
@@ -222,7 +257,9 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
         if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            var selecting = ScreenerPresetService.SelectingParameters(uri.Query);
+            var selecting = forMembership
+                ? FinvizClient.CanonicalizeScheduledSelection(uri.Query)
+                : ScreenerPresetService.SelectingParameters(uri.Query);
             return (String.IsNullOrWhiteSpace(selecting) ? trimmed : $"Finviz screen {selecting}", selecting);
         }
 
@@ -239,7 +276,13 @@ public sealed class ScreenerSyncService : IScreenerSnapshotSource
             return (preset.Name, preset.FilterQuery);
         }
 
-        // 3. A bare query string, with or without a leading `f=`.
+        // 3. Membership must preserve every selecting parameter. An unresolved name is not a bare filter list.
+        if (forMembership)
+        {
+            if (!trimmed.Contains('=') && (!trimmed.Contains('_') || trimmed.Any(Char.IsWhiteSpace)))
+                return (trimmed, String.Empty);
+            return ($"Query {trimmed}", trimmed);
+        }
         var query = trimmed.StartsWith("f=", StringComparison.OrdinalIgnoreCase) ? trimmed[2..] : trimmed;
         return ($"Query {query}", query);
     }

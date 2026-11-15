@@ -36,6 +36,7 @@ public static class BacktestExecutionProfileResolver
         var dayPolicy = ExecutionReplayPolicy.ForEntryMode(entryModes[0]);
         var explicitPolicy = String.IsNullOrWhiteSpace(requestedPolicy) ? null : requestedPolicy;
         var policy = explicitPolicy ?? (day ? dayPolicy : profile.Engine.ExecutionReplayPolicyId);
+        profile.Engine.AccountLossReplay?.Validate(profile.Mode, policy);
         if (policy is not null && !Choices.Any(choice => choice.PolicyId == policy))
             throw new InvalidOperationException($"Unsupported execution replay policy: {policy}.");
         if (day && policy != dayPolicy ||

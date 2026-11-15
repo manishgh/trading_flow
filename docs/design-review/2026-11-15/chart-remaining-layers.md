@@ -1,8 +1,8 @@
 # Remaining chart layers
 
-15 November 2026. Independently reviewed proposal awaiting explicit user approval before implementation.
+15 November 2026. Independently reviewed design explicitly approved by the user on 15 November 2026. Implementation is in progress.
 
-Independent review: separate A plan/execution and B code/design reviewers accepted this packet for presentation after the recorded corrections. This is proposed software scope, not implementation or execution approval. The research definitions in the closure inventory remain preliminary and outside this implementation package.
+Independent review: separate A plan/execution and B code/design reviewers accepted this packet for presentation after the recorded corrections. The subsequent user approval authorizes this software scope; it grants no new strategy execution or economic run. The research definitions in the closure inventory remain preliminary and outside this implementation package.
 
 ## Scope and order
 
