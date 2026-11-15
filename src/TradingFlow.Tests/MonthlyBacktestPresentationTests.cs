@@ -13,7 +13,7 @@ public sealed class MonthlyBacktestPresentationTests
         var opened = new DateTimeOffset(2017, 1, 31, 14, 30, 0, TimeSpan.Zero);
         var receipt = new DateTimeOffset(2017, 2, 1, 5, 0, 0, TimeSpan.Zero);
         var timing = new BacktestFillTiming(session, opened, "regular_session_open", receipt, receipt);
-        Assert.Equal("31 Jan 14:30 UTC", MonthlyBacktestPresentation.FillTimeLabel(timing, receipt));
+        Assert.Equal("31 Jan 2017 09:30 NY · 31 Jan 15:30 Berlin · 31 Jan 14:30 UTC", MonthlyBacktestPresentation.FillTimeLabel(timing, receipt));
         Assert.Equal("31 Jan NY · time unavailable", MonthlyBacktestPresentation.FillTimeLabel(
             timing with { EconomicTimestampUtc = null, Basis = "source_bar_range" }, receipt));
         Assert.Equal("01 Feb 05:00 UTC (saved replay stamp)", MonthlyBacktestPresentation.FillTimeLabel(null, receipt));
@@ -23,6 +23,15 @@ public sealed class MonthlyBacktestPresentationTests
         Assert.Equal(session, MonthlyBacktestPresentation.ExitSessionDate(trade, null));
     }
 
+    // US and European daylight-saving changes occur on different dates.
+    [Fact]
+    public void FillLabelUsesBothActualZonesDuringDstMismatch()
+    {
+        var instant = new DateTimeOffset(2026, 3, 16, 13, 30, 0, TimeSpan.Zero);
+        var timing = new BacktestFillTiming(new DateOnly(2026, 3, 16), instant, "regular_session_open", instant, instant);
+        Assert.Equal("16 Mar 2026 09:30 NY · 16 Mar 14:30 Berlin · 16 Mar 13:30 UTC",
+            MonthlyBacktestPresentation.FillTimeLabel(timing, instant));
+    }
     /// <summary>An actual first-of-month day exit belongs to that month in both monthly totals and the shared drilldown date.</summary>
     [Fact]
     public void DayExitOnOctoberFirst_RemainsInOctoberAndCarriesPriorMonthEquity()

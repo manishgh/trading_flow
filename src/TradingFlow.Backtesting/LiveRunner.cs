@@ -40,7 +40,8 @@ public sealed partial class LiveRunner(
     TimeSpan? iterationInterval = null,
     IStrategyDecisionContextProvider? decisionContextProvider = null,
     LivePipelineHealth? initialPipelineHealth = null,
-    Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null)
+    Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null,
+    bool exitOnly = false)
 {
     private readonly IStrategyDecisionContextProvider? _configuredDecisionContextProvider = decisionContextProvider;
     private IStrategyDecisionContextProvider? _decisionContextProvider;
@@ -137,6 +138,8 @@ public sealed partial class LiveRunner(
         var pollingInterval = _iterationInterval;
         var pipelineHealth = initialPipelineHealth ?? new LivePipelineHealth();
         var decisionCalendar = new PaperDecisionCalendar(provider, ResolveExchangeTimezone(strategies));
+        var entrySkipAudit = new EntrySkipAudit(
+            _auditRepo, logger, run.RunName, _executionRunContext?.RunId, authorizations, _discoverySession is not null);
 
         var configuredTickers = new HashSet<string>(run.Tickers ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         var lastDiscoveryTickers = new HashSet<string>(configuredTickers, StringComparer.OrdinalIgnoreCase);
@@ -184,42 +187,19 @@ public sealed partial class LiveRunner(
             logger.LogInformation("LiveRunner iteration starting at {Time}", _timeProvider.GetUtcNow());
             progress?.Report($"LiveRunner iteration starting at {FormatLocalTime(_timeProvider.GetUtcNow())}");
 
-            var discoveryTickers = new HashSet<string>(lastDiscoveryTickers, StringComparer.OrdinalIgnoreCase);
-            if (_discoverySession is not null)
+            var runWideFailures = new List<string>();
+            var discovery = await RefreshDiscoveryAsync(afterWarmup: false);
+            if (discovery is not null)
             {
-                try
+                SetDiscoveryUniverse(discovery);
+                if (discovery.Added.Count > 0 || discovery.Dropped.Count > 0)
                 {
-                    var discovery = await _discoverySession.RefreshAsync(cancellationToken);
-                    discoveryTickers = discovery.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    lastDiscoveryMembers = discovery.Members.ToDictionary(
-                        member => member.Symbol,
-                        member => member,
-                        StringComparer.OrdinalIgnoreCase);
-                    lastDiscoveryTickers = new HashSet<string>(discoveryTickers, StringComparer.OrdinalIgnoreCase);
-                    if (discovery.Added.Count > 0 || discovery.Dropped.Count > 0)
-                    {
-                        logger.LogInformation(
-                            "Discovery universe changed for {RunName}: ADD [{Added}], DROP [{Dropped}].",
-                            run.RunName,
-                            String.Join(", ", discovery.Added),
-                            String.Join(", ", discovery.Dropped));
-                        progress?.Report(
-                            $"Discovery refresh: +{discovery.Added.Count} / -{discovery.Dropped.Count}; " +
-                            $"{discovery.Symbols.Count} active ticker(s).");
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception exception)
-                {
-                    logger.LogError(
-                        exception,
-                        "Discovery refresh failed for {RunName}; retaining the last durable universe.",
-                        run.RunName);
+                    logger.LogInformation(
+                        "Discovery universe changed for {RunName}: ADD [{Added}], DROP [{Dropped}].",
+                        run.RunName, String.Join(", ", discovery.Added), String.Join(", ", discovery.Dropped));
                     progress?.Report(
-                        $"Discovery refresh failed; retaining {lastDiscoveryTickers.Count} prior ticker(s): {exception.Message}");
+                        $"Discovery refresh: +{discovery.Added.Count} / -{discovery.Dropped.Count}; " +
+                        $"{discovery.Symbols.Count} active ticker(s).");
                 }
             }
 
@@ -274,7 +254,8 @@ public sealed partial class LiveRunner(
                     }
 
                     // Active Cancellation logic for unfilled entry orders if configured
-                    if (run.Execution != null && "active_cancel".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase))
+                    if (!exitOnly && run.Execution != null &&
+                        "active_cancel".Equals(run.Execution.OrderExpiration, StringComparison.OrdinalIgnoreCase))
                     {
                         foreach (var order in openOrders)
                         {
@@ -330,8 +311,16 @@ public sealed partial class LiveRunner(
                     brokerStateConfirmedForOrderDecisions = true;
 
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
+                    if (ex is not OrderCancellationPendingException)
+                    {
+                        runWideFailures.Add($"Broker order and position state: {LivePipelineHealth.DescribeFailure(ex)}");
+                    }
                     brokerStateConfirmedForOrderDecisions = false;
                     logger.LogWarning(
                         ex,
@@ -358,133 +347,202 @@ public sealed partial class LiveRunner(
                 }
             }
 
-            var pipelineFailures = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(
+            var tickerFailures = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(
                 StringComparer.OrdinalIgnoreCase);
-            try
+            var iterationTickers = new HashSet<string>(lastDiscoveryTickers, StringComparer.OrdinalIgnoreCase);
+            iterationTickers.UnionWith(activeExposureTickers);
+            if (iterationTickers.Count == 0)
             {
-                var iterationTickers = new HashSet<string>(discoveryTickers, StringComparer.OrdinalIgnoreCase);
-                iterationTickers.UnionWith(activeExposureTickers);
-                if (iterationTickers.Count == 0)
-                {
-                    logger.LogWarning(
-                        "Discovery produced no active symbols for {RunName}; waiting for the next refresh.",
-                        run.RunName);
-                    progress?.Report("Discovery produced no active symbols. Waiting for the next refresh.");
-                    await Task.Delay(pollingInterval, cancellationToken);
-                    continue;
-                }
-
-                var processed = 0;
-                var total = iterationTickers.Count;
-                var activeTickerSnapshot = activeExposureTickers.ToArray();
-                var (preparedStates, fallbackFailures) = await PrepareMarketStatesAsync(
-                    run, strategies, iterationTickers, start, end, progress, cancellationToken);
-
-                // Refresh sources due after warm-up even when the older observation
-                // has TTL left, while retaining the original batch for exits.
-                if (_discoverySession is not null)
-                {
-                    try
-                    {
-                        var refreshed = await _discoverySession.RefreshAsync(cancellationToken);
-                        lastDiscoveryMembers = refreshed.Members.ToDictionary(member => member.Symbol, StringComparer.OrdinalIgnoreCase);
-                        lastDiscoveryTickers = refreshed.Symbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    }
-                    catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        lastDiscoveryMembers.Clear();
-                        logger.LogWarning(exception, "Discovery revalidation failed for {RunName}; membership is unavailable for this poll.", run.RunName);
-                    }
-                }
-
-                var calendar = decisionCalendar.ForPoll(end, cancellationToken);
-                await Parallel.ForEachAsync(
-                    iterationTickers,
-                    new ParallelOptions
-                    {
-                        MaxDegreeOfParallelism = ResolveWorkerCount(run.Engine.WorkerCount),
-                        CancellationToken = cancellationToken
-                    },
-                    async (ticker, token) =>
-                    {
-                        try
-                        {
-                            progress?.Report($"Processing prepared market state for {ticker}");
-                            var marketFailure = fallbackFailures.GetValueOrDefault(ticker);
-                            if (!preparedStates.TryGetValue(ticker, out var tickerState))
-                            {
-                                throw new InvalidOperationException(marketFailure ??
-                                    $"No prepared market state was produced for ticker {ticker}.");
-                            }
-
-                            await ProcessTickerLiveAsync(
-                                run,
-                                strategies,
-                                ticker,
-                                tickerState,
-                                catalystStreamer,
-                                lastDiscoveryMembers.GetValueOrDefault(ticker),
-                                activeTickerSnapshot,
-                                openOrdersSnapshot,
-                                openPositionsSnapshot,
-                                brokerStateConfirmedForOrderDecisions,
-                                pipelineHealth.EntriesStopped || marketFailure is not null,
-                                calendar,
-                                token,
-                                progress);
-                            if (marketFailure is not null)
-                            {
-                                throw new InvalidOperationException(marketFailure);
-                            }
-                        }
-                        catch (OperationCanceledException) when (token.IsCancellationRequested)
-                        {
-                            throw;
-                        }
-                        catch (Exception ex)
-                        {
-                            pipelineFailures[ticker] = ex.Message;
-                            logger.LogWarning(ex, "Ticker pipeline failed for {Ticker}; continuing with other tickers.", ticker);
-                            progress?.Report($"Ticker {ticker} failed: {ex.Message}");
-                            await SaveTickerPipelineFailureAuditsAsync(run, strategies, ticker, ex.Message, token);
-                        }
-                        finally
-                        {
-                            var finished = Interlocked.Increment(ref processed);
-                            progress?.Report($"Processed {finished}/{total} ticker pipeline(s).");
-                        }
-                    });
+                logger.LogInformation("Discovery produced no active symbols for {RunName}.", run.RunName);
+                progress?.Report("Discovery produced no active symbols. Waiting for the next refresh.");
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            else
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                pipelineFailures[""] = ex.Message;
-                logger.LogError(ex, "Error in LiveRunner iteration");
-                progress?.Report($"Error processing {run.RunName}: {ex.Message}");
+                await ProcessMarketPollAsync();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var updatedHealth = pipelineHealth.RecordPoll(pipelineFailures, end);
-            if (updatedHealth != pipelineHealth)
+            var updatedHealth = pipelineHealth.RecordPoll(tickerFailures, runWideFailures, end);
+            if (updatedHealth.EntriesStopped && !pipelineHealth.EntriesStopped)
             {
-                if (publishPipelineHealth is not null)
+                logger.LogError("New entries stopped for {RunName} after {FailedPolls} consecutive run-wide pipeline failures.",
+                    run.RunName, updatedHealth.ConsecutiveFailingPolls);
+            }
+            await PublishHealthAsync(updatedHealth);
+
+            // Prepare market data, then process all usable states even when this poll blocks entries.
+            async Task ProcessMarketPollAsync()
+            {
+                MarketStatePreparation preparation;
+                try
                 {
-                    await publishPipelineHealth(updatedHealth, cancellationToken);
+                    preparation = await PrepareMarketStatesAsync(
+                        run, strategies, iterationTickers, start, end, progress, cancellationToken);
                 }
-                if (updatedHealth.EntriesStopped && !pipelineHealth.EntriesStopped)
+                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                 {
-                    logger.LogError("New entries stopped for {RunName} after {FailedPolls} consecutive failing polls.",
-                        run.RunName, updatedHealth.ConsecutiveFailingPolls);
+                    runWideFailures.Add($"Market state preparation: {LivePipelineHealth.DescribeFailure(exception)}");
+                    logger.LogError(exception, "Could not prepare market states for {RunName}.", run.RunName);
+                    return;
                 }
-                pipelineHealth = updatedHealth;
+
+                if (preparation.SharedFailure is { } sharedMarketFailure)
+                {
+                    runWideFailures.Add(sharedMarketFailure);
+                }
+
+                // Check the refresh schedule again after warm-up. Keep the original
+                // symbol batch for technical exits even if membership is withdrawn.
+                var membershipBeforeWarmupRefresh = lastDiscoveryMembers;
+                var refreshed = await RefreshDiscoveryAsync(afterWarmup: true);
+                if (refreshed is not null)
+                {
+                    SetDiscoveryUniverse(refreshed);
+                }
+
+                var failedSources = pipelineHealth.Discovery?.FailedSources.ToDictionary(
+                    source => (source.SourceKind, source.SourceKey)) ?? new();
+                var calendar = decisionCalendar.ForPoll(end, cancellationToken);
+                var activeTickerSnapshot = activeExposureTickers.ToArray();
+                var processed = 0;
+                try
+                {
+                    await Parallel.ForEachAsync(
+                        iterationTickers,
+                        new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = ResolveWorkerCount(run.Engine.WorkerCount),
+                            CancellationToken = cancellationToken
+                        },
+                        async (ticker, token) =>
+                        {
+                            try
+                            {
+                                progress?.Report($"Processing prepared market state for {ticker}");
+                                var marketFailure = preparation.TickerFailures.GetValueOrDefault(ticker);
+                                if (!preparation.States.TryGetValue(ticker, out var tickerState))
+                                {
+                                    if (MarketDataUnavailable.IsNamedReason(marketFailure))
+                                    {
+                                        await SaveTickerPipelineAuditsAsync(run, strategies, ticker, marketFailure!, marketEvidenceUnavailable: true, token);
+                                        return;
+                                    }
+                                    if (preparation.SharedFailure is not null)
+                                    {
+                                        return;
+                                    }
+                                    throw new InvalidOperationException(marketFailure ??
+                                        $"No prepared market state was produced for ticker {ticker}.");
+                                }
+
+                                var membership = EntryMembershipObservation.Create(
+                                    refreshed is not null ? lastDiscoveryMembers.GetValueOrDefault(ticker) : null,
+                                    membershipBeforeWarmupRefresh.GetValueOrDefault(ticker),
+                                    refreshed?.ResolvedAtUtc,
+                                    _discoverySession is not null && refreshed is null,
+                                    failedSources,
+                                    _timeProvider.GetUtcNow());
+                                await ProcessTickerLiveAsync(
+                                    run, strategies, ticker, tickerState, catalystStreamer, membership, entrySkipAudit,
+                                    activeTickerSnapshot, openOrdersSnapshot, openPositionsSnapshot,
+                                    brokerStateConfirmedForOrderDecisions,
+                                    exitOnly || pipelineHealth.EntriesStopped || preparation.SharedFailure is not null ||
+                                    marketFailure is not null, calendar, token, progress);
+
+                                if (marketFailure is not null)
+                                {
+                                    throw new InvalidOperationException(marketFailure);
+                                }
+                            }
+                            catch (Exception exception) when (!token.IsCancellationRequested)
+                            {
+                                var reason = LivePipelineHealth.DescribeFailure(exception);
+                                tickerFailures[ticker] = reason;
+                                logger.LogWarning(exception, "Ticker pipeline failed for {Ticker}; continuing with other tickers.", ticker);
+                                progress?.Report($"Ticker {ticker} failed: {reason}");
+                                await SaveTickerPipelineAuditsAsync(run, strategies, ticker, reason, marketEvidenceUnavailable: false, token);
+                            }
+                            finally
+                            {
+                                var finished = Interlocked.Increment(ref processed);
+                                progress?.Report($"Processed {finished}/{iterationTickers.Count} ticker pipeline(s).");
+                            }
+                        });
+                }
+                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    runWideFailures.Add($"Ticker batch coordination: {LivePipelineHealth.DescribeFailure(exception)}");
+                    logger.LogError(exception, "Error coordinating the ticker batch for {RunName}.", run.RunName);
+                }
+
+                if (calendar.IsValueCreated && !calendar.Value.IsCompletedSuccessfully)
+                {
+                    var exception = calendar.Value.Exception?.InnerException;
+                    var reason = exception is null ? "Calendar read was cancelled." : LivePipelineHealth.DescribeFailure(exception);
+                    runWideFailures.Add($"Paper decision calendar: {reason}");
+                    logger.LogError(exception, "Could not read the shared paper decision calendar for {RunName}: {Reason}.", run.RunName, reason);
+                }
             }
 
             logger.LogInformation("LiveRunner iteration finished. Waiting {PollingInterval}...", pollingInterval);
             progress?.Report($"Iteration finished. Waiting {pollingInterval}...");
             await Task.Delay(pollingInterval, cancellationToken);
+        }
+
+        // Apply the new universe only after a complete refresh. Keep the earlier
+        // symbols available for preparation and exits while discovery is unavailable.
+        void SetDiscoveryUniverse(DiscoveryUniverseSnapshot snapshot)
+        {
+            lastDiscoveryMembers = snapshot.Members.ToDictionary(member => member.Symbol, StringComparer.OrdinalIgnoreCase);
+            lastDiscoveryTickers = lastDiscoveryMembers.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Publish current source failures before any candidate can be evaluated
+        // and before the durable first-POST fence checks the job snapshot.
+        async Task<DiscoveryUniverseSnapshot?> RefreshDiscoveryAsync(bool afterWarmup)
+        {
+            if (_discoverySession is null)
+            {
+                return null;
+            }
+
+            var attemptedAt = _timeProvider.GetUtcNow().ToUniversalTime();
+            DiscoveryUniverseSnapshot? snapshot = null;
+            LivePipelineHealth updated;
+            try
+            {
+                snapshot = await _discoverySession.RefreshAsync(cancellationToken);
+                updated = pipelineHealth.RecordDiscoveryRefresh(snapshot);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                var phase = afterWarmup ? "after market warm-up" : "before market warm-up";
+                var reason = LivePipelineHealth.DescribeFailure(exception);
+                logger.LogWarning(exception, "Discovery refresh failed {RefreshPhase} for {RunName}; keeping prior symbols for exit work.",
+                    phase, run.RunName);
+                progress?.Report($"Discovery refresh failed {phase}: {reason}");
+                updated = pipelineHealth.RecordDiscoveryRefreshFailure(attemptedAt, reason);
+                snapshot = null;
+            }
+
+            await PublishHealthAsync(updated);
+            return snapshot;
+        }
+
+        // Snapshot write failures propagate. Continue only once changed entry
+        // restrictions are committed by the durable worker.
+        async Task PublishHealthAsync(LivePipelineHealth updated)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (updated == pipelineHealth)
+            {
+                return;
+            }
+            if (publishPipelineHealth is not null)
+            {
+                await publishPipelineHealth(updated, cancellationToken);
+            }
+            pipelineHealth = updated;
         }
     }
 

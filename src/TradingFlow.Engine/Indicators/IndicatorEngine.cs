@@ -562,7 +562,8 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             : "unexpected_adjustment_policy";
     }
 
-    private decimal?[] ComputeVwap(IReadOnlyList<OhlcvBar> bars)
+    // Compute the shared bar-based VWAP; chart callers supply only covered regular-session inputs.
+    internal decimal?[] ComputeVwap(IReadOnlyList<OhlcvBar> bars)
     {
         var output = new decimal?[bars.Count];
         DateOnly? activeDate = null;

@@ -15,13 +15,19 @@ internal sealed class PaperDecisionCalendar(IMarketDataProvider provider, string
     // Keep entry-only calendar I/O lazy so exits can proceed during a provider failure.
     public Lazy<Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?>> ForPoll(
         DateTimeOffset timestamp, CancellationToken cancellationToken) =>
-        new(() => LoadAsync(ExecutionRunContextFactory.ResolveSessionDate(timestamp, exchangeTimezone), cancellationToken));
+        new(() => LoadAsync(timestamp, cancellationToken));
 
     // Refresh a successful calendar once per exchange date. Failed reads can retry next poll.
     private async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?> LoadAsync(
-        DateOnly exchangeDate, CancellationToken cancellationToken)
+        DateTimeOffset timestamp, CancellationToken cancellationToken)
     {
-        if (cachedDate != exchangeDate && provider is IMarketSessionScheduleProvider calendar)
+        if (provider is not IMarketSessionScheduleProvider calendar)
+        {
+            throw new InvalidOperationException("Paper equity entries require an authoritative exchange calendar.");
+        }
+
+        var exchangeDate = ExecutionRunContextFactory.ResolveSessionDate(timestamp, exchangeTimezone);
+        if (cachedDate != exchangeDate)
         {
             cachedSchedules = await calendar.LoadMarketSessionSchedulesAsync(
                 exchangeDate.AddDays(-31), exchangeDate.AddDays(31), cancellationToken);

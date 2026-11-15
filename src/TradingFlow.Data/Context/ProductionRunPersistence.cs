@@ -33,13 +33,13 @@ internal static class ProductionRunPersistence
     }
 
     // Runtime state and lease changes do not alter the run’s historical provenance.
-    public static void RequireSameProvenance(ProductionRun existing, ProductionRun requested)
+    public static void RequireSameProvenance(ProductionRun existing, ProductionRun requested, bool requireSameBuild = true)
     {
         if (existing.UniverseSnapshotId != requested.UniverseSnapshotId || existing.DecisionRunId != requested.DecisionRunId ||
             existing.SchemaVersion != requested.SchemaVersion ||
             !existing.Profile.Equals(requested.Profile, StringComparison.Ordinal) ||
             !existing.ConfigHash.Equals(requested.ConfigHash, StringComparison.Ordinal) ||
-            !existing.CodeVersion.Equals(requested.CodeVersion, StringComparison.Ordinal))
+            (requireSameBuild && !existing.CodeVersion.Equals(requested.CodeVersion, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
                 $"Run {requested.RunId:N} already exists with different provenance. " +

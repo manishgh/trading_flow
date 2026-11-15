@@ -421,6 +421,24 @@ public sealed class SqliteOrderEventRepositoryTests
         Assert.Equal(expectedState, snapshot.State);
     }
 
+    // A stream session notice can provide missing broker identity without claiming an unjournaled fill.
+    [Fact]
+    public async Task LifecycleService_DoneForDayFromSubmitted_DoesNotCreditStreamSummaryAsFill()
+    {
+        await using var database = await OrderEventTestDatabase.CreateAsync();
+        var intent = await database.ReserveAsync();
+        await database.TransitionAsync(intent, OrderState.Intent, OrderState.Submitted, intent.CreatedAtUtc.AddSeconds(1));
+        var lifecycle = new OrderLifecycleService(database.Events);
+
+        var seen = await lifecycle.ApplyBrokerUpdateAsync(new OrderUpdate("broker-1", intent.ClientOrderId, intent.Symbol,
+            "buy", OrderStatus.DoneForDay, 3m, 100.50m, 0m, null, null, intent.CreatedAtUtc.AddHours(5), BrokerUpdateSource.TradeStream));
+
+        Assert.Equal(OrderState.Acked, seen.State);
+        Assert.Equal("broker-1", seen.BrokerOrderId);
+        Assert.Null(seen.FilledQuantity);
+        Assert.Null(seen.FillPrice);
+    }
+
     [Fact]
     public async Task LifecycleService_UnknownIntent_FailsClosed()
     {

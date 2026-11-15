@@ -6,6 +6,7 @@ using TradingFlow.Web.Services;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Audit;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Backtesting;
 
 namespace TradingFlow.Web.Pages;
@@ -125,6 +126,7 @@ public sealed class PaperJobModel : PageModel
             status = job.Status,
             errorMessage = job.ErrorMessage,
             pipelineHealth = FormatPipelineHealth(job.PaperPipelineHealth),
+            exitOnlyContinuation = FormatExitOnlyContinuation(job.PaperExitOnly),
             startedAt = job.StartedAt is null ? "Queued" : FormatLocal(job.StartedAt.Value),
             refreshedAt = FormatLocal(DateTimeOffset.UtcNow),
             marketDataFeed = ResolveMarketDataFeedLabel(job),
@@ -187,25 +189,47 @@ public sealed class PaperJobModel : PageModel
         return RedirectToPage(new { id });
     }
 
-    // Explain polling failures even after routine progress has rolled past their log entries.
+    // Report the completed lease registration independently of pipeline poll failures.
+    public static string? FormatExitOnlyContinuation(PaperExitOnlyContinuation? continuation)
+    {
+        return continuation is null
+            ? null
+            : $"{PaperExitOnlyContinuation.Reason} Executing build {continuation.ExecutingCodeVersion} on lease attempt " +
+              $"{continuation.LeaseAttempt}. Original build {continuation.OriginCodeVersion}.";
+    }
+
+    // Show current entry restrictions as well as failures that have aged out of the progress log.
     public string? FormatPipelineHealth(LivePipelineHealth? health)
     {
-        if (health is null || health.FailureCount == 0 && !health.EntriesStopped)
+        if (health is null)
         {
             return null;
         }
 
-        var last = health.LastFailureAtUtc is { } timestamp ? FormatLocal(timestamp) : "unknown time";
-        var details = health.FailureCount == 0
-            ? String.Empty
-            : $"{health.FailureCount} pipeline failure(s). Latest at {last}. {health.LastFailure}";
+        var details = new List<string>();
         if (health.EntriesStoppedAtUtc is { } stopped)
         {
-            return $"New entries stopped at {FormatLocal(stopped)}. {health.EntryStopReason} {details}".TrimEnd();
+            details.Add($"New entries stopped at {FormatLocal(stopped)}. {health.EntryStopReason}");
         }
-        return health.FailingSinceUtc is { } failing
-            ? $"Pipeline failing since {FormatLocal(failing)}. {details}"
-            : details;
+        if (health.RunWideFailureCount > 0 && health.FailingSinceUtc is { } failing)
+        {
+            details.Add($"Run-wide pipeline failures since {FormatLocal(failing)}.");
+        }
+        if (health.Discovery?.SessionFailure is { } refreshFailure)
+        {
+            details.Add($"Discovery membership unavailable since the failed refresh at {FormatLocal(refreshFailure.AttemptedAtUtc)}. {refreshFailure.Reason}");
+        }
+        if (health.Discovery is { } discovery)
+        {
+            details.AddRange(discovery.FailedSources.Select(source =>
+                $"Discovery source {source.SourceKind}/{source.SourceKey} refresh failed at {FormatLocal(source.AttemptedAtUtc)}. {source.Reason}"));
+        }
+        if (health.FailureCount > 0)
+        {
+            var last = health.LastFailureAtUtc is { } timestamp ? FormatLocal(timestamp) : "unknown time";
+            details.Add($"{health.FailureCount} pipeline failure(s), {health.RunWideFailureCount} recorded run-wide. Latest at {last}. {health.LastFailure}");
+        }
+        return details.Count == 0 ? null : String.Join(" ", details);
     }
 
     public string FormatLocal(DateTimeOffset timestamp)

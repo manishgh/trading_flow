@@ -306,7 +306,8 @@ public sealed partial class AlpacaMarketDataProvider :
                 _historicalCapture.Value?.Responses.Add(archivedResponse.Archive);
                 cancellationToken.ThrowIfCancellationRequested();
                 
-                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                // Let the caller handle the last archived HTTP 429 with its original status.
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests && retryCount < 2)
                 {
                     var retryAfter = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
                     response.Dispose();

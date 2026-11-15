@@ -24,11 +24,18 @@ public static class MonthlyBacktestPresentation
     // A modeled point has a clock time. Range touches have a source date, and older artifacts have a replay stamp.
     internal static string FillTimeLabel(BacktestFillTiming? timing, DateTimeOffset replayTimestamp) => timing switch
     {
-        { EconomicTimestampUtc: { } instant } => instant.ToUniversalTime().ToString("dd MMM HH:mm 'UTC'", CultureInfo.InvariantCulture),
+        { EconomicTimestampUtc: { } instant } => FillClockLabels(instant),
         { SourceSessionDate: var session } => session.ToString("dd MMM", CultureInfo.InvariantCulture) + " NY · time unavailable",
         _ => replayTimestamp.ToUniversalTime().ToString("dd MMM HH:mm 'UTC'", CultureInfo.InvariantCulture) + " (saved replay stamp)"
     };
 
+    // Show source, operator and persistence clocks explicitly, including their dates across midnight and DST.
+    private static string FillClockLabels(DateTimeOffset instant) =>
+        TimeZoneInfo.ConvertTime(instant, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"))
+            .ToString("dd MMM yyyy HH:mm 'NY'", CultureInfo.InvariantCulture) + " · " +
+        TimeZoneInfo.ConvertTime(instant, TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin"))
+            .ToString("dd MMM HH:mm 'Berlin'", CultureInfo.InvariantCulture) + " · " +
+        instant.ToUniversalTime().ToString("dd MMM HH:mm 'UTC'", CultureInfo.InvariantCulture);
     // Publish the engine's reconciled source-session book; monthly costs/profit are changes in cumulative observations.
     public static IReadOnlyList<MonthlyRunResult> FromPortfolioState(StrategyBacktestResult strategy,
         AuthorizedRuntimeStrategy runtime, string runName, string cohortName, DateTimeOffset start, DateTimeOffset end)

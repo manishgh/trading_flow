@@ -11,6 +11,7 @@
     return;
 }
 <link rel="stylesheet" href="~/css/watch-desk.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
 <section class="watch-desk" aria-label="Stock desk" data-administrator="@User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator).ToString().ToLowerInvariant()">
   <header class="watch-head">
     <div><span class="eyebrow">MARKET WORKSPACE</span><h1>Desk<span class="watch-dot" aria-hidden="true"></span></h1><p>Your stocks, strategy checks and market context.</p></div>
@@ -49,6 +50,7 @@
         <p id="watch-quote-detail" class="watch-fine"></p>
         <div class="watch-focus-trade"><a id="watch-buy" class="btn btn-primary">Buy</a><a id="watch-sell" class="btn btn-secondary">Sell</a></div>
         <p id="watch-order-help" class="watch-fine" hidden></p>
+        <partial name="_StockChart" model="String.Empty" />
         <form id="watch-follow"><label>Follow in a stock group<select id="watch-follow-list" required></select></label><button class="btn btn-secondary" type="submit">Follow stock</button><p id="watch-follow-status" role="status"></p></form>
         <div class="watch-detail-block" id="watch-holding-block"><h3>Holding</h3><dl class="watch-metrics"><dt>Shares</dt><dd id="watch-quantity">—</dd><dt>Average entry</dt><dd id="watch-entry">—</dd><dt>Market value</dt><dd id="watch-value">—</dd><dt>Unrealized P&amp;L</dt><dd id="watch-pl">—</dd></dl></div>
         <div class="watch-detail-block" id="watch-strategy-block"><h3>Strategy · <span id="watch-observation"></span></h3><div id="watch-strategy-checks"></div></div>
@@ -68,4 +70,9 @@
   <p class="watch-footer">Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.</p>
 </section>
 <partial name="_OrderPopup" />
-@section Scripts { <script src="~/js/order-popup.js" asp-append-version="true"></script><script src="~/js/watch-desk.js" asp-append-version="true"></script><script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script> }
+@section Scripts {
+    <script src="~/js/order-popup.js" asp-append-version="true"></script>
+    <partial name="_StockChartScripts" />
+    <script src="~/js/watch-desk.js" asp-append-version="true"></script>
+    <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
+}

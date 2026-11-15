@@ -486,6 +486,7 @@
         return details;
     }
 
+    // Keep price history, evidence and reviewed order setup independently navigable.
     function renderActions(item) {
         const actions = document.createElement("div");
         actions.className = "earnings-actions";
@@ -493,6 +494,11 @@
         const inspect = text("a", "Inspect on desk", "btn btn-secondary btn-md");
         inspect.href = `/Desk?search=${encodeURIComponent(item.ticker)}`;
         actions.append(inspect);
+        const chart = window.TradingFlow.stockChartLink(item.ticker, "Open chart");
+        if (chart) {
+            chart.className = "btn btn-secondary btn-md";
+            actions.append(chart);
+        }
         if (document.getElementById('groupActionDialog')) {
             const add = text('button', 'Add to group', 'btn btn-secondary btn-sm');
             add.type = 'button'; add.dataset.groupAction = 'add'; add.dataset.tickers = item.ticker;

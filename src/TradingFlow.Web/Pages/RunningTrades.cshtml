@@ -182,7 +182,7 @@
                         var guard = Model.ProtectionFor(trade.Ticker);
                         <tr data-trade-key="@TradeKey(trade)">
                             <td>
-                                <strong>@trade.Ticker</strong>
+                                <a asp-page="/Chart" asp-route-symbol="@trade.Ticker" stock-chart-symbol="@trade.Ticker" aria-label="Open chart for @trade.Ticker"><strong>@trade.Ticker</strong></a>
                                 <span class="cell-sub">@trade.Status</span>
                             </td>
                             <td><span class="tag tag-neutral" data-trade-source>@SourceBadge(trade.Source)</span></td>

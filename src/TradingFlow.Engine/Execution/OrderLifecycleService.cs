@@ -107,6 +107,7 @@ public sealed class OrderLifecycleService : IOrderLifecycleService
         return transition.Snapshot;
     }
 
+    // Keep the order working through a session close and journal newly observed fills atomically.
     private async Task<OrderStateSnapshot> ApplyBrokerUpdateCoreAsync(
         OrderUpdate update,
         OrderFillProjection? positionFill = null,
@@ -118,8 +119,9 @@ public sealed class OrderLifecycleService : IOrderLifecycleService
                 $"Broker update references unknown client order ID '{update.ClientOrderId}'.");
         EnsureBrokerIdentity(current, update.OrderId);
 
-        var target = ResolveTargetState(update.Status);
-        if (IsSupersededBrokerObservation(current, update))
+        var target = ResolveTargetState(update, current.State, positionFill);
+        if (IsSupersededBrokerObservation(current, update) ||
+            update.Status == OrderStatus.DoneForDay && update.FilledQuantity < (current.FilledQuantity ?? 0m))
         {
             return current;
         }
@@ -137,7 +139,11 @@ public sealed class OrderLifecycleService : IOrderLifecycleService
             return rejected.Snapshot;
         }
 
-        current = await EnsureAcknowledgedAsync(current, update, cancellationToken);
+        // A done-for-day acknowledgement must leave any cumulative fill for the atomic projection below.
+        var acknowledgement = update.Status == OrderStatus.DoneForDay
+            ? update with { FilledQuantity = 0m, FilledPrice = 0m }
+            : update;
+        current = await EnsureAcknowledgedAsync(current, acknowledgement, cancellationToken);
         if (target is null ||
             (current.State == target && target != OrderState.PartiallyFilled && positionFill is null))
         {
@@ -235,25 +241,31 @@ public sealed class OrderLifecycleService : IOrderLifecycleService
             : observedUtc;
     }
 
-    private static OrderState? ResolveTargetState(OrderStatus status) => status switch
+    // A session pause can supply cumulative fill evidence without resolving an outstanding cancellation.
+    private static OrderState? ResolveTargetState(OrderUpdate update, OrderState current, OrderFillProjection? positionFill) =>
+        update.Status switch
     {
         OrderStatus.New or
         OrderStatus.Accepted or
         OrderStatus.PendingNew or
         OrderStatus.AcceptedForBidding => null,
+        OrderStatus.DoneForDay when positionFill is not null => current == OrderState.CancelPending
+            ? OrderState.CancelPending
+            : BrokerOrderStateProjection.Project(update.Status, update.FilledQuantity),
+        OrderStatus.DoneForDay => null,
         OrderStatus.PartiallyFilled => OrderState.PartiallyFilled,
         OrderStatus.Filled => OrderState.Filled,
         OrderStatus.PendingCancel => OrderState.CancelPending,
         OrderStatus.Canceled => OrderState.Canceled,
-        OrderStatus.Expired or OrderStatus.DoneForDay => OrderState.Expired,
+        OrderStatus.Expired => OrderState.Expired,
         OrderStatus.Rejected => OrderState.Rejected,
         OrderStatus.Replaced or
         OrderStatus.PendingReplace or
         OrderStatus.Stopped or
         OrderStatus.Suspended or
         OrderStatus.Calculated => throw new InvalidOperationException(
-            $"Broker order status {status} requires explicit cancel/replace reconciliation."),
-        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown order status.")
+            $"Broker order status {update.Status} requires explicit cancel/replace reconciliation."),
+        _ => throw new ArgumentOutOfRangeException(nameof(update), update.Status, "Unknown order status.")
     };
 
     private static void EnsureBrokerIdentity(OrderStateSnapshot current, string brokerOrderId)

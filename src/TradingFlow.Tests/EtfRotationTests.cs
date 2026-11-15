@@ -143,12 +143,26 @@ public sealed class EtfRotationTests
         Assert.Equal(new DateOnly(2026, 9, 1), EntrySessions(result)["DDD"]);
     }
 
+    // A real gap in the first buying session spends more than the prior-close plan; both admission modes must fail.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DailyCash_OpeningGapOverdrawFailsWithSwapsOnOrOff(bool swaps)
+    {
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(
+            portfolio => portfolio with { SameOpenExitsReleaseCapacity = swaps },
+            bar => bar.Timestamp == Midnight(new(2026,7,1))
+                ? bar with { Open = bar.Open * 2m, High = bar.High * 2m } : bar));
+        Assert.Contains("cash-only daily book overdrew cash", error.Message);
+        Assert.Contains("2026-07-01", error.Message);
+    }
+
     // The session of each fund's single entry fill.
     private static Dictionary<string, DateOnly> EntrySessions(BacktestResult result) =>
         result.PortfolioState!.Fills.Where(fill => fill.IsEntry).ToDictionary(fill => fill.Ticker, fill => fill.SourceSessionDate);
 
     // Run the catalog rotation with its profile (portfolio adjusted by the caller) on the fixture list for July to October 2026.
-    private static async Task<BacktestResult> RunAsync(Func<PortfolioConfig, PortfolioConfig> portfolio)
+    private static async Task<BacktestResult> RunAsync(Func<PortfolioConfig, PortfolioConfig> portfolio, Func<OhlcvBar, OhlcvBar>? transform = null)
     {
         using var root = new TemporaryFolder();
         var repo = TestRepository.FindRoot();
@@ -177,8 +191,21 @@ public sealed class EtfRotationTests
                 WishlistName = "retired profile list", SelectedSourceTickers = Pool, ResolvedAtUtc = start,
                 RankedMembership = new(screen.ManifestPath, screen.ManifestSha256) }
         };
-        var runner = new BacktestRunner(reader, catalog, marketDataProviderFactory: _ => new FixtureProvider());
-        var result = await runner.RunValidatedAsync(run, [runtime], DateTimeOffset.UtcNow, Path.Combine(run.ResultsRoot, "result.json"), default);
+        var runner = new BacktestRunner(reader, catalog, marketDataProviderFactory: _ => new FixtureProvider(transform));
+        var resultPath = Path.Combine(run.ResultsRoot, "result.json");
+        BacktestResult result;
+        try
+        {
+            result = await runner.RunValidatedAsync(run, [runtime], DateTimeOffset.UtcNow, resultPath, default);
+        }
+        catch
+        {
+            Assert.False(File.Exists(resultPath));
+            throw;
+        }
+        Assert.NotNull(result.PortfolioState!.CashSummary);
+        Assert.Equal(result.PortfolioState.Sessions.Min(item => item.Cash), result.PortfolioState.CashSummary.MinimumCash);
+        Assert.Equal(result.PortfolioState.CashSummary, Assert.Single(result.StrategyResults).PortfolioState!.CashSummary);
         Assert.Equal(screen.ManifestSha256, result.Validation.BiasRisk.UniverseManifestSha256);
         var completedTradesPath = Path.ChangeExtension(result.ResultPath, ".unified-completed-trades.json");
         var published = JsonSerializer.Deserialize<BacktestTrade[]>(await File.ReadAllTextAsync(completedTradesPath));
@@ -220,9 +247,9 @@ public sealed class EtfRotationTests
         new(ticker, Midnight(day), "1d", close, close + 0.5m, close - 0.5m, close, 2_000_000m, "sip", "raw");
 
     /// <summary>Serves the fixture's daily bars and its weekday calendar; no network and no real data.</summary>
-    private sealed class FixtureProvider : IMarketDataProvider, IMarketSessionScheduleProvider, IShareSplitProvider
+    private sealed class FixtureProvider(Func<OhlcvBar, OhlcvBar>? transform = null) : IMarketDataProvider, IMarketSessionScheduleProvider, IShareSplitProvider
     {
-        private readonly OhlcvBar[] bars = DailyBars().ToArray();
+        private readonly OhlcvBar[] bars = DailyBars().Select(bar => transform?.Invoke(bar) ?? bar).ToArray();
 
         // The fixture has no splits.
         public Task<IReadOnlyDictionary<string, IReadOnlyList<ShareSplit>>> LoadShareSplitsAsync(CancellationToken cancellationToken) =>

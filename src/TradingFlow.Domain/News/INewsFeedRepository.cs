@@ -25,5 +25,4 @@ public interface INewsFeedRepository
         IReadOnlyCollection<string> tickers,
         CancellationToken cancellationToken);
 
-    Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);
 }

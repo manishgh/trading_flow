@@ -396,6 +396,10 @@ public sealed class StreamingMarketStateProcessor
                             .ToArray();
                         pipeline.PendingMissingMinutes.ExceptWith(confirmedNoTrade);
                         pipeline.ConfirmedNoTradeMinutes.UnionWith(confirmedNoTrade);
+                        if (confirmedNoTrade.Length > 0)
+                        {
+                            pipeline.ChartNoTradeProofAtUtc = timeProvider.GetUtcNow().ToUniversalTime();
+                        }
                     }
 
                     TrimRetention(pipeline);
@@ -483,6 +487,55 @@ public sealed class StreamingMarketStateProcessor
         }
 
         return new TickerMarketState(NormalizeSymbol(symbol), bars, snapshots);
+    }
+
+    // Copy canonical evidence from an already owned pipeline without computing
+    // indicators, creating a subscription or waiting in a full market queue.
+    public async Task<ChartCanonicalSession?> ReadChartCanonicalAsync(
+        string symbol, long subscriptionGeneration, DateTimeOffset startUtc,
+        DateTimeOffset endUtc, DateTimeOffset asOfUtc, CancellationToken cancellationToken)
+    {
+        if (!TryCaptureSnapshotFence(out var fence) ||
+            !pipelines.TryGetValue(NormalizeSymbol(symbol), out var pipeline))
+        {
+            return null;
+        }
+
+        try
+        {
+            var evidence = await EnqueueAsync(pipeline, () => ReadChartCanonicalCore(
+                    pipeline, fence, subscriptionGeneration, startUtc, endUtc, asOfUtc, cancellationToken),
+                waitForCapacity: false, cancellationToken);
+            return SnapshotFenceIsCurrent(fence) && OwnsCurrentPipeline(pipeline) ? evidence : null;
+        }
+        catch (SymbolPipelineUnavailableException)
+        {
+            return null;
+        }
+    }
+
+    // Bind the chart copy to accepted as-of versions under the symbol owner.
+    private static Task<ChartCanonicalSession?> ReadChartCanonicalCore(
+        SymbolPipeline pipeline, long fence, long generation, DateTimeOffset start, DateTimeOffset end,
+        DateTimeOffset asOf, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var bounded = pipeline.Bars.Where(item => item.Key >= start && item.Key < end &&
+                item.Key.AddMinutes(1) <= asOf)
+            .Select(item => SelectVersionKnownAsOf(item.Value, asOf))
+            .OfType<OhlcvBar>()
+            .Take(16_001)
+            .ToArray();
+        if (bounded.Length > 16_000)
+        {
+            return Task.FromResult<ChartCanonicalSession?>(null);
+        }
+
+        var quiet = pipeline.ChartNoTradeProofAtUtc is { } proofAt && proofAt <= asOf
+            ? pipeline.ConfirmedNoTradeMinutes.Where(minute => minute >= start && minute < end).ToHashSet()
+            : [];
+        return Task.FromResult<ChartCanonicalSession?>(new ChartCanonicalSession(
+            fence, generation, bounded, quiet, pipeline.NeedsRepair || !pipeline.IsReady, pipeline.ChartNoTradeProofAtUtc));
     }
 
     /// <summary>Rejects computation from a draining or replaced symbol owner even when the process-wide stream fence is unchanged.</summary>
@@ -1204,6 +1257,7 @@ public sealed class StreamingMarketStateProcessor
         public SortedDictionary<DateTimeOffset, List<OhlcvBar>> Bars { get; } = [];
         public HashSet<DateTimeOffset> PendingMissingMinutes { get; } = [];
         public HashSet<DateTimeOffset> ConfirmedNoTradeMinutes { get; } = [];
+        public DateTimeOffset? ChartNoTradeProofAtUtc { get; set; }
         public ConcurrentDictionary<string, CachedIndicatorSeries> IndicatorCache { get; } = new(StringComparer.OrdinalIgnoreCase);
         public long FencingToken { get; set; }
         public bool IsReady { get; set; }

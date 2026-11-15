@@ -28,12 +28,14 @@ public sealed partial class LiveRunner
                 "LiveRunner iteration interval must be positive.");
     }
 
-    // Journal infrastructure exceptions separately from the shared strategy evaluator.
-    private async Task SaveTickerPipelineFailureAuditsAsync(
+    // Keep empty/unusable market evidence distinct from ticker infrastructure exceptions.
+    // An audit write error is logged separately and never halts another ticker's exits.
+    private async Task SaveTickerPipelineAuditsAsync(
         BacktestRunConfig run,
         IReadOnlyCollection<StrategyDefinition> strategies,
         string ticker,
         string reason,
+        bool marketEvidenceUnavailable,
         CancellationToken cancellationToken)
     {
         if (_auditRepo is null)
@@ -41,25 +43,27 @@ public sealed partial class LiveRunner
             return;
         }
 
-        var signalJson = JsonSerializer.Serialize(new
+        var timestamp = _timeProvider.GetUtcNow();
+        var signalJson = JsonSerializer.Serialize(new { ticker, reason, timestamp });
+        try
         {
-            ticker,
-            error = reason,
-            timestamp = DateTimeOffset.UtcNow
-        });
-
-        foreach (var strategy in strategies)
-        {
-            await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
+            foreach (var strategy in strategies)
             {
-                RunName = run.RunName,
-                Ticker = ticker,
-                StrategyName = strategy.StrategyName,
-                Timestamp = DateTimeOffset.UtcNow,
-                Decision = "Failed",
-                RejectionReason = $"ticker_pipeline_failed ({reason})",
-                SignalJson = signalJson
-            }, cancellationToken);
+                await _auditRepo.SaveAuditAsync(new TradingFlow.Domain.Audit.DecisionAuditRecord
+                {
+                    RunName = run.RunName,
+                    Ticker = ticker,
+                    StrategyName = strategy.StrategyName,
+                    Timestamp = timestamp,
+                    Decision = marketEvidenceUnavailable ? "Skipped" : "Failed",
+                    RejectionReason = marketEvidenceUnavailable ? reason : $"ticker_pipeline_failed ({reason})",
+                    SignalJson = signalJson
+                }, cancellationToken);
+            }
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Could not save market pipeline audit for {RunName} {Ticker}.", run.RunName, ticker);
         }
     }
 

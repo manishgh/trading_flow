@@ -519,6 +519,7 @@ Units: s = seconds, ms = milliseconds, bps = basis points, pct = percent of acco
 | account_snapshot_max_age_s | int | 60 | 5–300 | RSK-06 |
 | max_daily_loss_pct | pct | 2 | 0.5–5 | RSK-01 |
 | max_weekly_loss_pct | pct | 4 | 1–10 | RSK-01 |
+| max_peak_to_trough_loss_pct | pct | 10 (paper) | 0.5–100 | RSK-01 |
 | max_consecutive_losses | int | 3 | 2–10 | RSK-01 |
 | max_positions_swing | int | 5 | 1–20 | RSK-01 |
 | max_new_stocks_per_day | int | 5 | >=1 | RSK-01 |

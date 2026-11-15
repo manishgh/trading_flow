@@ -70,7 +70,8 @@ public sealed record OrderCancellationSubmission(
     string BrokerOrderId,
     string Reason,
     DateTimeOffset RequestedAtUtc,
-    string? BrokerClientOrderId = null);
+    string? BrokerClientOrderId = null,
+    bool RequireStandaloneOpeningOrder = false);
 
 public sealed record ProtectiveStopReplacementSubmission(
     string OwnerClientOrderId,
@@ -142,6 +143,10 @@ public sealed class BrokerCommandRecoveryIncompleteException(
     public int FailedCount { get; } = failedCount;
 }
 
+public sealed class OpeningOrderCancellationReviewRequiredException(string clientOrderId, string brokerOrderId)
+    : InvalidOperationException(
+        $"Opening order '{clientOrderId}' ({brokerOrderId}) has linked or unverified protection and requires cancellation review.");
+
 public interface IOrderCommandService
 {
     Task<OrderSubmissionResult> SubmitEntryOrderAsync(
@@ -161,6 +166,13 @@ public interface IOrderCommandService
 
     Task<OrderStateSnapshot> RequestCancelAsync(
         OrderCancellationSubmission submission,
+        IBrokerClient brokerClient,
+        CancellationToken cancellationToken);
+
+    Task<ActiveBrokerOrder?> ReconcileTerminalOpeningOrderAsync(
+        string accountId,
+        string clientOrderId,
+        string brokerOrderId,
         IBrokerClient brokerClient,
         CancellationToken cancellationToken);
 
@@ -856,8 +868,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 
         var openOrder = (await brokerClient.GetOpenOrdersAsync(cancellationToken))
             .SingleOrDefault(order =>
-                (order.ParentClientOrderId ?? order.ClientOrderId)
-                    .Equals(entryIntent.ClientOrderId, StringComparison.Ordinal));
+                order.ClientOrderId.Equals(entryIntent.ClientOrderId, StringComparison.Ordinal) &&
+                IsRootOpeningOrder(order));
         if (openOrder is null)
         {
             throw new OrderCancellationPendingException(
@@ -865,7 +877,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 state.BrokerOrderId ?? "broker_order_not_visible");
         }
 
-        var canceled = await RequestCancelAsync(
+        var canceled = await RequestCancelCoreAsync(
             new OrderCancellationSubmission(
                 entryIntent.ClientOrderId,
                 openOrder.OrderId,
@@ -873,6 +885,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 timeProvider.GetUtcNow().ToUniversalTime(),
                 openOrder.ClientOrderId),
             brokerClient,
+            allowLinkedEntryHandoff: true,
             cancellationToken);
         if (!OrderStateMachine.IsTerminal(canceled.State))
         {
@@ -1338,9 +1351,18 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             cancellationToken);
     }
 
-    public async Task<OrderStateSnapshot> RequestCancelAsync(
+    // Generic cancellation cannot remove a linked opening order or its protection.
+    public Task<OrderStateSnapshot> RequestCancelAsync(
         OrderCancellationSubmission submission,
         IBrokerClient brokerClient,
+        CancellationToken cancellationToken) =>
+        RequestCancelCoreAsync(submission, brokerClient, allowLinkedEntryHandoff: false, cancellationToken);
+
+    // Only the durable position-exit workflow can hand off a linked opening order.
+    private async Task<OrderStateSnapshot> RequestCancelCoreAsync(
+        OrderCancellationSubmission submission,
+        IBrokerClient brokerClient,
+        bool allowLinkedEntryHandoff,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(submission);
@@ -1377,17 +1399,30 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         var brokerOrder = await brokerClient.GetOrderByClientOrderIdAsync(
             brokerClientOrderId,
             cancellationToken);
+        var requiresStandalone = submission.RequireStandaloneOpeningOrder ||
+            IsOpeningIntent(intent) && !allowLinkedEntryHandoff;
+        if (requiresStandalone && (brokerOrder is null || !IsOpeningIntent(intent) ||
+            brokerOrder.ClientOrderId != intent.ClientOrderId ||
+            !IsRootOpeningOrder(brokerOrder)))
+        {
+            throw new OpeningOrderCancellationReviewRequiredException(intent.ClientOrderId, submission.BrokerOrderId);
+        }
+
         await RequireCancellationOwnershipAsync(
             intent,
             submission.BrokerOrderId.Trim(),
             brokerOrder,
             cancellationToken);
-        if (OrderStateMachine.IsTerminal(BrokerOrderStateProjection.Project(
-                OrderStatusCodec.ParseBrokerValue(brokerOrder!.Status))))
+        if (IsConfirmedTerminalOrder(brokerOrder!))
         {
             return await ApplyBrokerOrderUpdateWithFillRepairAsync(
-                ProjectBrokerOrderToOwner(brokerOrder, intent.ClientOrderId),
+                ProjectBrokerOrderToOwner(brokerOrder!, intent.ClientOrderId),
                 cancellationToken);
+        }
+
+        if (requiresStandalone && !IsStandaloneOpeningOrder(brokerOrder!))
+        {
+            throw new OpeningOrderCancellationReviewRequiredException(intent.ClientOrderId, submission.BrokerOrderId);
         }
 
         var pending = await lifecycle.RequestCancelAsync(
@@ -1399,6 +1434,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             pending,
             brokerClientOrderId,
             brokerClient,
+            requiresStandalone,
             cancellationToken);
         logger.LogInformation(
             "Cancellation requested for owned order {ClientOrderId} BrokerOrderId={BrokerOrderId} Reason={Reason}.",
@@ -1407,6 +1443,74 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             submission.Reason.Trim());
         return await events!.GetCurrentAsync(intent.ClientOrderId, cancellationToken) ?? pending;
     }
+
+    // An exact terminal opening order can repair cumulative fills without issuing a broker cancellation.
+    public async Task<ActiveBrokerOrder?> ReconcileTerminalOpeningOrderAsync(
+        string accountId,
+        string clientOrderId,
+        string brokerOrderId,
+        IBrokerClient brokerClient,
+        CancellationToken cancellationToken)
+    {
+        var intent = await intentRepository.GetByClientOrderIdAsync(clientOrderId, cancellationToken);
+        if (intent is null || !IsOpeningIntent(intent) || intent.AccountId != accountId ||
+            intent.ClientOrderId != clientOrderId || positions is null || events is null)
+        {
+            return null;
+        }
+
+        await ValidateBrokerAccountAsync(accountId, brokerClient, cancellationToken);
+        var order = await brokerClient.GetOrderByClientOrderIdAsync(clientOrderId, cancellationToken);
+        if (order is null || order.ClientOrderId != clientOrderId || order.OrderId != brokerOrderId ||
+            !IsRootOpeningOrder(order) || !IsConfirmedTerminalOrder(order) ||
+            order.FilledQuantity < 0m || order.FilledQuantity > intent.RequestedQuantity)
+        {
+            return null;
+        }
+
+        var terminalState = BrokerOrderStateProjection.Project(OrderStatusCodec.ParseBrokerValue(order.Status));
+        if (terminalState == OrderState.Filled && order.FilledQuantity != intent.RequestedQuantity)
+        {
+            return null;
+        }
+
+        await RequireCancellationOwnershipAsync(intent, brokerOrderId, order, cancellationToken);
+        var previous = await events.GetCurrentAsync(clientOrderId, cancellationToken);
+        if (previous is null || (previous.FilledQuantity ?? 0m) > order.FilledQuantity)
+        {
+            return null;
+        }
+
+        var state = await ApplyBrokerOrderUpdateWithFillRepairAsync(order, cancellationToken);
+        var accounted = await positions.GetAccountedFillQuantityAsync(accountId, brokerOrderId, cancellationToken);
+        return state.BrokerOrderId == brokerOrderId && state.State == terminalState &&
+            (state.FilledQuantity ?? 0m) == order.FilledQuantity && accounted == order.FilledQuantity
+                ? order
+                : null;
+    }
+
+    // The persisted entry intent controls cancellation policy even if the caller omitted the standalone flag.
+    private static bool IsOpeningIntent(OrderIntentRecord intent) =>
+        intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry;
+
+    // A suspended, replaced, or done-for-day order can still leave a working order at the broker.
+    internal static bool IsConfirmedTerminalOrder(ActiveBrokerOrder order) =>
+        String.IsNullOrWhiteSpace(order.ReplacedByOrderId) &&
+        order.Status.Trim().ToLowerInvariant() is "filled" or "canceled" or "cancelled" or "expired" or "rejected";
+
+    // A child or closing group role cannot establish the state of an entry parent.
+    internal static bool IsRootOpeningOrder(ActiveBrokerOrder order) =>
+        String.IsNullOrWhiteSpace(order.ParentClientOrderId) && String.IsNullOrWhiteSpace(order.ParentOrderId) &&
+        (String.IsNullOrWhiteSpace(order.GroupRole) || order.GroupRole.Equals("entry", StringComparison.OrdinalIgnoreCase));
+
+    // A broker-confirmed simple parent has no linked stop legs that cancellation can remove.
+    internal static bool IsStandaloneOpeningOrder(ActiveBrokerOrder order) =>
+        IsRootOpeningOrder(order) && String.IsNullOrWhiteSpace(order.GroupId) && String.IsNullOrWhiteSpace(order.GroupRole) &&
+        (order.NestedLegOrderIds?.Count ?? 0) == 0 &&
+        String.Equals(order.OrderClass, "simple", StringComparison.OrdinalIgnoreCase) &&
+        String.IsNullOrWhiteSpace(order.ReplacesOrderId) &&
+        String.IsNullOrWhiteSpace(order.ReplacedByOrderId) &&
+        order.BracketStopPrice is null && order.BracketTakeProfitPrice is null;
 
     public async Task<ActiveBrokerOrder> ReplaceProtectiveStopAsync(
         ProtectiveStopReplacementSubmission submission,
@@ -1600,6 +1704,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         return recovered;
     }
 
+    // Recovery revalidates cancellation safety from current broker evidence before each DELETE.
     public async Task<int> RecoverPendingCancellationsAsync(
         IBrokerClient brokerClient,
         CancellationToken cancellationToken)
@@ -1646,6 +1751,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                     snapshot,
                     brokerClientOrderId,
                     brokerClient,
+                    IsOpeningIntent(intent),
                     cancellationToken);
                 recovered++;
             }
@@ -1675,11 +1781,13 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         return recovered;
     }
 
+    // Recover a terminal reply or prove the same standalone opening order still permits a DELETE.
     private async Task SendOrVerifyCancellationAsync(
         OrderIntentRecord intent,
         OrderStateSnapshot pending,
         string brokerClientOrderId,
         IBrokerClient brokerClient,
+        bool requiresStandalone,
         CancellationToken cancellationToken)
     {
         if (events is null || lifecycle is null || String.IsNullOrWhiteSpace(pending.BrokerOrderId))
@@ -1689,6 +1797,27 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 
         using var brokerMutation = brokerMutations.Enter(
             $"cancel {intent.ClientOrderId}");
+        if (requiresStandalone)
+        {
+            var openOrders = await brokerClient.GetOpenOrdersAsync(cancellationToken);
+            var latest = await brokerClient.GetOrderByClientOrderIdAsync(brokerClientOrderId, cancellationToken);
+            if (latest is not null && latest.ClientOrderId == intent.ClientOrderId &&
+                IsRootOpeningOrder(latest) && IsConfirmedTerminalOrder(latest))
+            {
+                await RequireCancellationOwnershipAsync(intent, pending.BrokerOrderId, latest, cancellationToken);
+                await ApplyBrokerOrderUpdateWithFillRepairAsync(latest, cancellationToken);
+                return;
+            }
+
+            if (latest is null || latest.ClientOrderId != intent.ClientOrderId || !CanCancelStandaloneOrder(latest) ||
+                !HasMatchingStandaloneOrder(openOrders, pending.BrokerOrderId, intent.ClientOrderId))
+            {
+                throw new OpeningOrderCancellationReviewRequiredException(intent.ClientOrderId, pending.BrokerOrderId);
+            }
+
+            await RequireCancellationOwnershipAsync(intent, pending.BrokerOrderId, latest, cancellationToken);
+        }
+
         await brokerClient.CancelOrderAsync(pending.BrokerOrderId, cancellationToken);
         var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         do
@@ -1696,7 +1825,8 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             var brokerOrder = await brokerClient.GetOrderByClientOrderIdAsync(
                 brokerClientOrderId,
                 cancellationToken);
-            if (brokerOrder is not null)
+            if (brokerOrder is not null && (IsConfirmedTerminalOrder(brokerOrder) ||
+                brokerOrder.Status.Trim().ToLowerInvariant() is "partial_fill" or "partially_filled"))
             {
                 await RequireCancellationOwnershipAsync(
                     intent,
@@ -1706,7 +1836,9 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 var resolved = await ApplyBrokerOrderUpdateWithFillRepairAsync(
                     ProjectBrokerOrderToOwner(brokerOrder, intent.ClientOrderId),
                     cancellationToken);
-                if (OrderStateMachine.IsTerminal(resolved.State))
+                if (IsConfirmedTerminalOrder(brokerOrder) &&
+                    resolved.State == BrokerOrderStateProjection.Project(OrderStatusCodec.ParseBrokerValue(brokerOrder.Status)) &&
+                    (resolved.FilledQuantity ?? 0m) == brokerOrder.FilledQuantity)
                 {
                     return;
                 }
@@ -1723,6 +1855,23 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
 
         throw new OrderCancellationPendingException(intent.ClientOrderId, pending.BrokerOrderId);
     }
+
+    // Nested, duplicate, or replacement rows make the status-open response ambiguous.
+    private static bool HasMatchingStandaloneOrder(
+        IReadOnlyList<ActiveBrokerOrder> orders, string brokerOrderId, string clientOrderId)
+    {
+        var related = orders.Where(order => order.OrderId == brokerOrderId || order.ClientOrderId == clientOrderId ||
+            order.ParentClientOrderId == clientOrderId || order.ParentOrderId == brokerOrderId ||
+            order.ReplacesOrderId == brokerOrderId).ToArray();
+        return related is [var root] && root.OrderId == brokerOrderId && root.ClientOrderId == clientOrderId &&
+            CanCancelStandaloneOrder(root);
+    }
+
+    // Only an understood working state permits a standalone-order DELETE.
+    private static bool CanCancelStandaloneOrder(ActiveBrokerOrder order) =>
+        IsStandaloneOpeningOrder(order) && order.Status.Trim().ToLowerInvariant() is
+            "new" or "accepted" or "accepted_for_bidding" or "pending_new" or "pending_cancel" or
+            "partially_filled" or "partial_fill" or "done_for_day";
 
     private Task<OrderStateSnapshot> ApplyBrokerOrderUpdateWithFillRepairAsync(
         ActiveBrokerOrder brokerOrder,

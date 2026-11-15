@@ -88,6 +88,33 @@ public sealed class AlpacaMarketDataArchiveTests
         Assert.True(limited.Disposed && first.Disposed && last.Disposed);
     }
 
+    /// <summary>Exhausted rate-limit responses still identify HTTP 429 after archiving every original.</summary>
+    [Fact]
+    public async Task RateLimitRetriesExhausted_PreservesHttpStatusAndArchive()
+    {
+        using var archive = new OwnedAlpacaTestArchive();
+        var writer = new RecordingWriter(archive.Writer);
+        var payload = Encoding.UTF8.GetBytes("fixture rate limited");
+        var responses = Enumerable.Range(0, 3).Select(_ =>
+        {
+            var response = Response(HttpStatusCode.TooManyRequests, new TrackingContent(payload));
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
+            return response;
+        }).ToArray();
+        using var handler = new ResponseQueueHandler(writer, responses);
+        using var http = new HttpClient(handler);
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() => ReadAsync(CreateProvider(http, writer), calendar: false));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, exception.StatusCode);
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.Equal(3, writer.Receipts.Count);
+        foreach (var receipt in writer.Receipts)
+        {
+            await AssertCommittedAsync(receipt, payload, calendar: false, status: 429);
+        }
+    }
+
     /// <summary>A failed page commit emits no rows from the batch even when its first page parsed successfully.</summary>
     [Fact]
     public async Task ArchiveFailure_OnLaterPageEmitsNoBars()

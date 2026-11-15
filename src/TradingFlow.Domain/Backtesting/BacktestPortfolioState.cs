@@ -65,4 +65,14 @@ public sealed record BacktestPortfolioState(string ValuationBasis, DateTimeOffse
     public bool CarriesLastCloseThroughGaps { get; init; }
     public IReadOnlyList<BacktestIntradayDecisionDetail> IntradayDecisions { get; init; } = [];
     public int IntradayDecisionCount { get; init; }
+
+    // Cash evidence is independent of price-mark availability; unknown executions invalidate its suffix.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public DateOnly? CashEvidenceUnavailableFromSession { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestCashSummary? CashSummary { get; init; }
 }
+
+/// <summary>Actual cash at completed, replayed New York session ends; never a substitute for margin/exposure controls.</summary>
+public sealed record BacktestCashSummary(decimal? MinimumCash, DateOnly? MinimumCashSession,
+    int ObservedSessionCount, int ExcludedOpenSessionCount, bool CoversAllClosedSessions, string? UnavailableReason);

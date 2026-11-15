@@ -188,23 +188,6 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
             .ToArrayAsync(cancellationToken);
     }
 
-    public async Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken)
-    {
-        var normalizedCutoff = cutoff.ToUniversalTime();
-        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var staleItems = await db.NewsItems
-            .Where(item => item.Timestamp < normalizedCutoff)
-            .Take(1000)
-            .ToArrayAsync(cancellationToken);
-        if (staleItems.Length == 0)
-        {
-            return;
-        }
-
-        db.NewsItems.RemoveRange(staleItems);
-        await db.SaveChangesAsync(cancellationToken);
-    }
-
     private static string BuildId(CatalystEvent item)
     {
         var provider = item.Provider ?? "unknown";

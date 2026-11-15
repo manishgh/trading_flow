@@ -299,8 +299,6 @@ public sealed class EarningsMonitorTests : IDisposable
         public Task<IReadOnlyList<PersistedNewsItem>> GetIngestedSinceForTickersAsync(DateTimeOffset ingestedSinceUtc, int limit,
             IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) => Read(cancellationToken);
 
-        public Task PruneOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken) => Task.CompletedTask;
-
         private Task<IReadOnlyList<PersistedNewsItem>> Read(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();

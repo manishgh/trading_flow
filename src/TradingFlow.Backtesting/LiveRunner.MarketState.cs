@@ -10,7 +10,7 @@ public sealed partial class LiveRunner
 {
     // Prefer each streamed state, then isolate failures in the historical fallback
     // so symbols with usable state can still reach their exit checks.
-    private async Task<(IReadOnlyDictionary<string, TickerMarketState> States, IReadOnlyDictionary<string, string> Failures)>
+    private async Task<MarketStatePreparation>
         PrepareMarketStatesAsync(
             BacktestRunConfig run, StrategyDefinition[] strategies, IReadOnlyCollection<string> tickers,
             DateTimeOffset start, DateTimeOffset end, IProgress<string>? progress, CancellationToken cancellationToken)
@@ -40,7 +40,7 @@ public sealed partial class LiveRunner
 
         if (needsFallback.IsEmpty)
         {
-            return (prepared, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            return new MarketStatePreparation(prepared, new Dictionary<string, string>());
         }
 
         var unresolved = needsFallback.ToArray();
@@ -70,14 +70,20 @@ public sealed partial class LiveRunner
             {
                 prepared[ticker] = state;
             }
-            return (prepared, fallback.Failures);
+            return new MarketStatePreparation(prepared, fallback.Failures, fallback.SharedProviderFailure);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             logger.LogError(exception, "Historical fallback failed for {RunName}; retaining available streamed market state.", run.RunName);
-            return (prepared, unresolved.ToDictionary(ticker => ticker, _ => exception.Message, StringComparer.OrdinalIgnoreCase));
+            return new MarketStatePreparation(prepared, new Dictionary<string, string>(),
+                $"Historical market data preparation: {LivePipelineHealth.DescribeFailure(exception)}");
         }
     }
+
+    private sealed record MarketStatePreparation(
+        IReadOnlyDictionary<string, TickerMarketState> States,
+        IReadOnlyDictionary<string, string> TickerFailures,
+        string? SharedFailure = null);
 
     // A broken stream read for one ticker still permits its normal historical fallback.
     private async Task<TickerMarketState?> TryLoadStreamStateAsync(

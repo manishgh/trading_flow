@@ -33,6 +33,11 @@ public sealed class NativeDailySessionLedgerTests
         Assert.Equal(60, result.Sessions[1].UnrealizedProfit);
         Assert.Equal(3, result.Sessions[1].Fees);
         Assert.Equal(100, Assert.Single(result.OpenPositions).EntryBasis);
+        var checkedState = NativeDailyCashCheck.Apply(result, Context());
+        Assert.Equal(result.Sessions.Min(item => item.Cash), checkedState.CashSummary!.MinimumCash);
+        NativeDailySessionLedger.VerifyRecordedState(10000, checkedState, Context());
+        Assert.Throws<InvalidDataException>(() => NativeDailySessionLedger.VerifyRecordedState(10000,
+            checkedState with { CashSummary = checkedState.CashSummary with { MinimumCash = 99999 } }, Context()));
         Assert.Equal(entry.TimestampUtc, result.Fills[0].TimestampUtc);
         NativeDailySessionLedger.VerifyRecordedState(10000, result, Context());
     }

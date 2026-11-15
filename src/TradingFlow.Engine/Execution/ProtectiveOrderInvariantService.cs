@@ -39,6 +39,10 @@ public sealed record ProtectiveOrderRepair(
 
 public interface IProtectiveOrderInvariantService
 {
+    // A read-only release proof must be explicitly implemented; repair success alone is insufficient.
+    Task<bool> HasVerifiedCoverageAsync(IBrokerClient broker, string accountId, BrokerPosition position,
+        IReadOnlyList<ActiveBrokerOrder> openOrders, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ProtectiveOrderRepair>> EnsureAsync(
         IBrokerClient broker,
         string accountId,
@@ -147,12 +151,29 @@ public sealed class ProtectiveOrderInvariantService(
                 ? $"ledger:{localPosition.PositionGenerationEventId}:{localPosition.PositionGenerationClientOrderId}"
                 : FormattableString.Invariant(
                     $"broker:{position.Side}:{position.EntryPrice:G29}:{position.Qty:G29}");
+            if (openOrders.GroupBy(order => order.OrderId, StringComparer.Ordinal).Any(group => group.Count() != 1) ||
+                openOrders.GroupBy(order => order.ClientOrderId, StringComparer.Ordinal).Any(group => group.Count() != 1))
+            {
+                repairs.Add(new ProtectiveOrderRepair(symbol, false, "Duplicate broker order identities prevent protection verification."));
+                continue;
+            }
             var effectiveOrders = await ListOwnedProtectiveOrdersAsync(
+                broker,
                 accountId,
                 position,
                 positionGenerationIdentity,
                 openOrders,
                 cancellationToken);
+            // An uncertain native stop may still execute. Never add a competing backstop
+            // merely because its parent proof is incomplete or the stop is being replaced.
+            if (openOrders.Any(order => IsPotentialClosingStop(position, order) &&
+                    !String.IsNullOrWhiteSpace(order.ParentClientOrderId) &&
+                    !effectiveOrders.Any(owned => owned.OrderId == order.OrderId)))
+            {
+                repairs.Add(new ProtectiveOrderRepair(symbol, false,
+                    "Native linked stop ownership or executable coverage is unresolved; group preserved for review."));
+                continue;
+            }
             var coverage = ProtectiveCoverage(position, effectiveOrders);
             if (coverage > Math.Abs(position.Qty))
             {
@@ -276,7 +297,9 @@ public sealed class ProtectiveOrderInvariantService(
         return repairs;
     }
 
+    // Resolve standalone protection and native bracket legs against their immutable position owner.
     private async Task<List<ActiveBrokerOrder>> ListOwnedProtectiveOrdersAsync(
+        IBrokerClient broker,
         string accountId,
         BrokerPosition position,
         string positionGenerationIdentity,
@@ -307,6 +330,17 @@ public sealed class ProtectiveOrderInvariantService(
                 continue;
             }
 
+            if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry)
+            {
+                if (order.Status.Trim().ToLowerInvariant() is "new" or "partially_filled" or "accepted_for_bidding" &&
+                    await IsOwnedNativeStopAsync(broker, accountId, position, positionGenerationIdentity,
+                        order, intent, cancellationToken))
+                {
+                    owned.Add(order);
+                }
+                continue;
+            }
+
             if (intent.Kind != OrderIntentKind.ProtectiveStop ||
                 !intent.AccountId.Equals(accountId, StringComparison.Ordinal) ||
                 !intent.Symbol.Equals(NormalizeSymbol(position.Ticker), StringComparison.Ordinal) ||
@@ -317,7 +351,7 @@ public sealed class ProtectiveOrderInvariantService(
             }
 
             var state = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken);
-            if (state is null || OrderStateMachine.IsTerminal(state.State) ||
+            if (state is null || state.BrokerOrderId != order.OrderId || OrderStateMachine.IsTerminal(state.State) ||
                 !IntentOwnsPositionGeneration(intent, positionGenerationIdentity))
             {
                 continue;
@@ -327,6 +361,92 @@ public sealed class ProtectiveOrderInvariantService(
         }
 
         return owned;
+    }
+
+    // Prove exact resting coverage without placing or canceling orders. The caller obtains the
+    // surrounding fresh snapshots; account and ledger generation are checked again here.
+    public async Task<bool> HasVerifiedCoverageAsync(IBrokerClient broker, string accountId,
+        BrokerPosition position, IReadOnlyList<ActiveBrokerOrder> openOrders,
+        CancellationToken cancellationToken = default)
+    {
+        var account = await broker.GetAccountSnapshotAsync(cancellationToken);
+        if (!String.Equals(account.AccountId, accountId, StringComparison.Ordinal) || position.Qty == 0m ||
+            openOrders.GroupBy(order => order.OrderId, StringComparer.Ordinal).Any(group => group.Count() != 1) ||
+            openOrders.GroupBy(order => order.ClientOrderId, StringComparer.Ordinal).Any(group => group.Count() != 1))
+        {
+            return false;
+        }
+        var local = await positions.GetCurrentAsync(accountId, NormalizeSymbol(position.Ticker), cancellationToken);
+        var signedQuantity = position.Side.Equals("long", StringComparison.OrdinalIgnoreCase)
+            ? Math.Abs(position.Qty) : position.Side.Equals("short", StringComparison.OrdinalIgnoreCase)
+                ? -Math.Abs(position.Qty) : 0m;
+        if (local is null || signedQuantity == 0m || local.Quantity != signedQuantity ||
+            await intents.HasActivePositionExitAsync(accountId, local.Symbol, local.PositionGenerationEventId, cancellationToken))
+        {
+            return false;
+        }
+        var generation = $"ledger:{local.PositionGenerationEventId}:{local.PositionGenerationClientOrderId}";
+        var owned = await ListOwnedProtectiveOrdersAsync(broker, accountId, position, generation, openOrders, cancellationToken);
+        foreach (var stop in owned.Where(order => String.IsNullOrWhiteSpace(order.ParentClientOrderId)))
+        {
+            var ownerId = stop.ClientOrderId;
+            if (stopReplacements is not null)
+                ownerId = (await stopReplacements.GetVerifiedByReplacementClientOrderIdAsync(ownerId, cancellationToken))?.OwnerClientOrderId ?? ownerId;
+            var state = await orderEvents.GetCurrentAsync(ownerId, cancellationToken);
+            if (state?.State is not (OrderState.Acked or OrderState.PartiallyFilled)) return false;
+        }
+        var stops = owned.Where(order => order.Status.Trim().ToLowerInvariant() is
+                "new" or "partially_filled" or "accepted_for_bidding")
+            .Where(order => String.IsNullOrWhiteSpace(order.ReplacedByOrderId) &&
+                order.Qty is > 0m && order.FilledQuantity >= 0m && order.FilledQuantity < order.Qty).ToArray();
+        return !openOrders.Any(order => IsPotentialClosingStop(position, order) &&
+                   !stops.Any(owned => owned.OrderId == order.OrderId)) &&
+               ProtectiveCoverage(position, stops) == Math.Abs(position.Qty);
+    }
+
+    // Held children are inactive; every other nonfinal closing stop can still affect exposure.
+    private static bool IsPotentialClosingStop(BrokerPosition position, ActiveBrokerOrder order) =>
+        NormalizeSymbol(order.Ticker) == NormalizeSymbol(position.Ticker) &&
+        order.Side.Equals(OppositeOrderSide(position), StringComparison.OrdinalIgnoreCase) &&
+        order.OrderType.Trim().ToLowerInvariant() is "stop" or "stop_limit" or "trailing_stop" &&
+        order.Status.Trim().ToLowerInvariant() is not ("held" or "filled" or "canceled" or "expired" or "rejected");
+
+
+
+    // A live nested stop inherits ownership only from the exact fully filled entry that opened
+    // this ledger generation. Held children, unrelated groups and replaced parents cannot qualify.
+    private async Task<bool> IsOwnedNativeStopAsync(IBrokerClient broker, string accountId,
+        BrokerPosition position, string generation, ActiveBrokerOrder stop, OrderIntentRecord intent,
+        CancellationToken cancellationToken)
+    {
+        var local = await positions.GetCurrentAsync(accountId, NormalizeSymbol(position.Ticker), cancellationToken);
+        if (local is null || generation != $"ledger:{local.PositionGenerationEventId}:{local.PositionGenerationClientOrderId}" ||
+            local.PositionGenerationClientOrderId != intent.ClientOrderId || stop.ParentClientOrderId != intent.ClientOrderId ||
+            intent.AccountId != accountId || intent.Symbol != NormalizeSymbol(position.Ticker) ||
+            !intent.Side.Equals(position.Side.Equals("long", StringComparison.OrdinalIgnoreCase) ? "buy" : "sell", StringComparison.OrdinalIgnoreCase) ||
+            !String.IsNullOrWhiteSpace(stop.ReplacedByOrderId) || stop.OrderClass?.ToLowerInvariant() is not ("bracket" or "oto") ||
+            stop.OrderType.Trim().ToLowerInvariant() is not ("stop" or "stop_limit") ||
+            stop.Qty is not > 0m || stop.FilledQuantity < 0m || stop.FilledQuantity >= stop.Qty ||
+            stop.GroupRole is not null && stop.GroupRole != "stop_loss" ||
+            stop.PositionIntent is not null && !stop.PositionIntent.Equals(
+                position.Side.Equals("long", StringComparison.OrdinalIgnoreCase) ? "sell_to_close" : "buy_to_close", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        var parent = await broker.GetOrderByClientOrderIdAsync(intent.ClientOrderId, cancellationToken);
+        var journal = await orderEvents.GetCurrentAsync(intent.ClientOrderId, cancellationToken);
+        return parent is not null && journal is not null && journal.State == OrderState.Filled &&
+            parent.ClientOrderId == intent.ClientOrderId && parent.OrderId == journal.BrokerOrderId &&
+            stop.ParentOrderId == parent.OrderId && parent.NestedLegOrderIds?.Count(id => id == stop.OrderId) == 1 &&
+            (parent.GroupRole is null || parent.GroupRole == "entry") &&
+            (stop.GroupId is null && parent.GroupId is null || stop.GroupId is not null && stop.GroupId == parent.GroupId) &&
+            parent.Ticker.Equals(intent.Symbol, StringComparison.OrdinalIgnoreCase) &&
+            parent.Side.Equals(intent.Side, StringComparison.OrdinalIgnoreCase) &&
+            parent.Status.Equals("filled", StringComparison.OrdinalIgnoreCase) &&
+            parent.OrderClass?.ToLowerInvariant() is "bracket" or "oto" &&
+            String.IsNullOrWhiteSpace(parent.ParentClientOrderId) && String.IsNullOrWhiteSpace(parent.ReplacedByOrderId) &&
+            parent.Qty == intent.RequestedQuantity && parent.FilledQuantity == intent.RequestedQuantity &&
+            journal.FilledQuantity == parent.FilledQuantity && RemainingQuantity(stop) <= parent.FilledQuantity;
     }
 
     private static bool IntentOwnsPositionGeneration(
@@ -497,6 +617,7 @@ public sealed class ProtectiveOrderInvariantService(
         Math.Max(0m, (order.Qty ?? 0m) - order.FilledQuantity);
 
     private static bool IsBackstop(ActiveBrokerOrder order) =>
+        String.IsNullOrWhiteSpace(order.ParentClientOrderId) && String.IsNullOrWhiteSpace(order.ParentOrderId) &&
         order.ClientOrderId.StartsWith("BACKSTOP-", StringComparison.Ordinal);
 
     private static bool IsValidStopSide(BrokerPosition position, decimal stopPrice) =>

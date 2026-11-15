@@ -238,7 +238,7 @@
                     {
                         var rMultiple = BacktestDerivedMetrics.RMultiple(trade);
                         <tr>
-                            <td><strong>@trade.Ticker</strong></td>
+                            <td><a asp-page="/Chart" asp-route-symbol="@trade.Ticker" stock-chart-symbol="@trade.Ticker" aria-label="Open current chart for @trade.Ticker"><strong>@trade.Ticker</strong></a></td>
                             <td>@trade.Direction</td>
                             <td>
                                 @trade.EntryPrice.ToString("C2")

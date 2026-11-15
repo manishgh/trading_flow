@@ -24,6 +24,7 @@ public sealed class PreparationEndpointTests
         var builder=WebApplication.CreateBuilder(new WebApplicationOptions{EnvironmentName="Testing"});builder.Logging.ClearProviders();builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
         builder.Services.AddAuthentication("fixture-cookie").AddCookie("fixture-cookie");builder.Services.AddAuthorization();builder.Services.AddApiMutationSecurity();
         builder.Services.AddSingleton(h.Service);builder.Services.AddSingleton<IApplicationEventRepository>(h.Database.Workflows);
+        builder.Services.AddSingleton(new TradingFlow.Web.Services.Charts.ChartAccessPolicy(h.Database,h.Clock));
         await using var app=builder.Build();app.UseAuthentication();
         app.Use(async(context,next)=>{if(context.Request.Headers.TryGetValue("Fixture-Owner",out var owner))context.User=new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier,owner.ToString())],"fixture"));await next(context);});
         app.UseAuthorization();app.UseApiMutationSecurity();

@@ -5,7 +5,8 @@ namespace TradingFlow.Backtesting.Discovery;
 
 /// <summary>
 /// Refreshes independent discovery sources into one durable run-scoped universe.
-/// Source failures retain prior evidence until TTL; successful empty captures drop it.
+/// Prior observations remain visible until TTL. Refresh outcomes let entry consumers
+/// refuse evidence from a failing source while keeping subscriptions for exits.
 /// </summary>
 public sealed class DurableDiscoverySession : ILiveDiscoverySession
 {
@@ -15,7 +16,8 @@ public sealed class DurableDiscoverySession : ILiveDiscoverySession
     private readonly TimeProvider timeProvider;
     private readonly ILogger<DurableDiscoverySession> logger;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
-    private readonly Dictionary<string, DateTimeOffset> nextRefreshBySource = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Kind, string Key), DateTimeOffset> nextRefreshBySource = new();
+    private readonly Dictionary<(string Kind, string Key), DiscoverySourceRefreshOutcome> latestOutcomes = new();
     private readonly HashSet<string> retainedExposureSymbols = new(StringComparer.Ordinal);
     private HashSet<string>? currentSymbols;
     private bool disposed;
@@ -51,16 +53,23 @@ public sealed class DurableDiscoverySession : ILiveDiscoverySession
 
             foreach (var source in sources)
             {
-                var scheduleKey = $"{source.SourceKind}\u001f{source.SourceKey}";
+                var scheduleKey = (Kind: source.SourceKind.Trim().ToLowerInvariant(), Key: source.SourceKey.Trim());
                 if (nextRefreshBySource.TryGetValue(scheduleKey, out var nextRefresh) && nextRefresh > now)
                 {
                     continue;
                 }
 
+                var attemptedAt = timeProvider.GetUtcNow().ToUniversalTime();
                 try
                 {
                     var capture = await source.CaptureAsync(cancellationToken);
                     var commit = await CommitWithConcurrencyRetryAsync(source, capture, cancellationToken);
+                    if (!commit.WasDuplicate)
+                    {
+                        latestOutcomes[scheduleKey] = new DiscoverySourceRefreshOutcome(
+                            scheduleKey.Kind, scheduleKey.Key, attemptedAt, capture.ObservedAtUtc.ToUniversalTime(), null);
+                    }
+
                     logger.LogInformation(
                         "Committed discovery source {SourceKind}/{SourceKey} version {SourceVersion}: " +
                         "{AddedCount} ADD, {RetainedCount} RETAIN, {DroppedCount} DROP.",
@@ -86,8 +95,9 @@ public sealed class DurableDiscoverySession : ILiveDiscoverySession
                 }
                 catch (Exception exception)
                 {
-                    // A failed read is not an empty successful snapshot. Keep the
-                    // previous source evidence until its configured expiry.
+                    // Keep the existing subscription evidence and expose the failure to entry gates.
+                    latestOutcomes[scheduleKey] = new DiscoverySourceRefreshOutcome(
+                        scheduleKey.Kind, scheduleKey.Key, attemptedAt, null, LivePipelineHealth.DescribeFailure(exception));
                     logger.LogWarning(
                         exception,
                         "Discovery source {SourceKind}/{SourceKey} refresh failed; prior evidence remains until TTL.",
@@ -97,6 +107,8 @@ public sealed class DurableDiscoverySession : ILiveDiscoverySession
                 }
             }
 
+            // Captures can finish after the scheduling clock used at the start of this refresh.
+            now = timeProvider.GetUtcNow().ToUniversalTime();
             await repository.ExpireAsync(ScopeId, now, cancellationToken);
             var active = await repository.GetActiveAsync(ScopeId, now, cancellationToken);
             var nextSymbols = active.Select(member => member.Symbol).ToHashSet(StringComparer.Ordinal);
@@ -108,7 +120,10 @@ public sealed class DurableDiscoverySession : ILiveDiscoverySession
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
             await subscriptions.ReplaceScopeAsync(ScopeId, subscribedSymbols, cancellationToken);
-            return new DiscoveryUniverseSnapshot(ScopeId, now, active, added, dropped);
+            return new DiscoveryUniverseSnapshot(ScopeId, now, active, added, dropped)
+            {
+                SourceRefreshOutcomes = latestOutcomes.Values.ToArray()
+            };
         }
         finally
         {

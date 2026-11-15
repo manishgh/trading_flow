@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Audit;
@@ -29,7 +30,8 @@ public sealed partial class LiveRunner
         string ticker,
         TickerMarketState marketState,
         CatalystStreamer catalystStreamer,
-        ActiveDiscoveryAggregate? discoveryAggregate,
+        EntryMembershipObservation membership,
+        EntrySkipAudit entrySkipAudit,
         IReadOnlyCollection<string> activeTickers,
         IReadOnlyCollection<ActiveBrokerOrder> openOrders,
         IReadOnlyCollection<BrokerPosition> openPositions,
@@ -39,6 +41,7 @@ public sealed partial class LiveRunner
         CancellationToken cancellationToken,
         IProgress<string>? progress = null)
     {
+        var discoveryAggregate = membership.Eligible;
         var podId = Environment.MachineName;
         var lockAcquired = false;
 
@@ -182,8 +185,15 @@ public sealed partial class LiveRunner
                 openPositions,
                 cancellationToken,
                 progress);
-            if (technicalExitHandled || entriesStopped || !HasEntryMembership(run, ticker, discoveryAggregate, now))
+            if (technicalExitHandled || entriesStopped)
             {
+                continue;
+            }
+
+            if (!HasEntryMembership(run, ticker, discoveryAggregate, now))
+            {
+                await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                    new EntryCheck("before_entry_decision", now), cancellationToken);
                 continue;
             }
 
@@ -238,8 +248,20 @@ public sealed partial class LiveRunner
 
             var decisionTimestamp = now;
             var setupAvailableAtUtc = lastSnapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
-            var candidateExpiresAtUtc = PaperDecisionCalendar.ResolveExpiry(
-                setupAvailableAtUtc, strategy, await decisionCalendar.Value);
+            IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null;
+            if (!strategy.Session.IsContinuousMarket)
+            {
+                try
+                {
+                    schedules = await decisionCalendar.Value;
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The poll records the shared calendar failure after all technical exits have run.
+                    continue;
+                }
+            }
+            var candidateExpiresAtUtc = PaperDecisionCalendar.ResolveExpiry(setupAvailableAtUtc, strategy, schedules);
             if (candidateExpiresAtUtc <= setupAvailableAtUtc)
             {
                 continue;
@@ -318,8 +340,12 @@ public sealed partial class LiveRunner
                         pair => (IReadOnlyList<OhlcvBar>)pair.Value, StringComparer.OrdinalIgnoreCase), run.Mode,
                     cancellationToken));
             // Source membership may expire while loading regime or decision context.
-            if (!HasEntryMembership(run, ticker, discoveryAggregate, _timeProvider.GetUtcNow()))
+            var evaluationTime = _timeProvider.GetUtcNow();
+            if (!HasEntryMembership(run, ticker, discoveryAggregate, evaluationTime))
             {
+                await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                    new EntryCheck("before_candidate_evaluation", evaluationTime, candidateExpiresAtUtc),
+                    cancellationToken);
                 continue;
             }
 
@@ -459,9 +485,13 @@ public sealed partial class LiveRunner
                             }
 
                             var submissionTime = _timeProvider.GetUtcNow();
-                            if (submissionTime >= candidateExpiresAtUtc ||
-                                !HasEntryMembership(run, ticker, discoveryAggregate, submissionTime))
+                            var setupDeadlineElapsed = submissionTime >= candidateExpiresAtUtc;
+                            if (setupDeadlineElapsed || !HasEntryMembership(run, ticker, discoveryAggregate, submissionTime))
                             {
+                                await entrySkipAudit.SaveAsync(ticker, strategy, lastSnapshot.Timestamp, membership,
+                                    new EntryCheck("before_order_submission", submissionTime, candidateExpiresAtUtc,
+                                        persistedDecision.Candidate.CandidateId, setupDeadlineElapsed),
+                                    cancellationToken);
                                 continue;
                             }
 
@@ -477,7 +507,7 @@ public sealed partial class LiveRunner
                                     intentId,
                                      new ValidatedEntryCandidate(
                                          persistedDecision.Candidate.CandidateId,
-                                         DiscoverySource: persistedDecision.Candidate.DiscoverySource,
+                                         DiscoverySource: String.Join(",", discovery.Sources),
                                          Horizon: "swing",
                                          DiscoveredAtUtc: persistedDecision.Candidate.DiscoveredAtUtc,
                                          RevalidatedAtUtc: persistedDecision.Candidate.RevalidatedAtUtc,
@@ -593,6 +623,179 @@ public sealed partial class LiveRunner
             ? run.Tickers.Contains(ticker, StringComparer.OrdinalIgnoreCase)
             : aggregate is not null && aggregate.Sources.Any(source =>
                 !source.IsDiagnostic && source.ObservedAtUtc <= asOfUtc && source.ExpiresAtUtc > asOfUtc);
+
+    private readonly record struct EntryMembershipObservation(
+        ActiveDiscoveryAggregate? Current,
+        ActiveDiscoveryAggregate? BeforeWarmupRefresh,
+        ActiveDiscoveryAggregate? Eligible,
+        DateTimeOffset? RefreshedAtUtc,
+        bool RefreshFailed,
+        IReadOnlyList<DiscoverySourceRefreshFailure> FailedSources)
+    {
+        // Keep raw membership for audit. Candidate provenance uses only sources
+        // that are healthy, non-diagnostic and currently in force.
+        public static EntryMembershipObservation Create(
+            ActiveDiscoveryAggregate? current,
+            ActiveDiscoveryAggregate? beforeWarmupRefresh,
+            DateTimeOffset? refreshedAtUtc,
+            bool refreshFailed,
+            IReadOnlyDictionary<(string Kind, string Key), DiscoverySourceRefreshFailure> failures,
+            DateTimeOffset asOfUtc)
+        {
+            var sources = current?.Sources.Where(source =>
+                !source.IsDiagnostic && source.ObservedAtUtc <= asOfUtc && source.ExpiresAtUtc > asOfUtc).ToArray() ?? [];
+            var eligible = sources.Where(source => !failures.ContainsKey((source.SourceKind, source.SourceKey))).ToArray();
+            var failed = sources.Select(source => failures.GetValueOrDefault((source.SourceKind, source.SourceKey)))
+                .OfType<DiscoverySourceRefreshFailure>().ToArray();
+            var projection = current is not null && eligible.Length > 0
+                ? current with
+                {
+                    Sources = eligible,
+                    LastObservedAtUtc = eligible.Max(source => source.ObservedAtUtc),
+                    ExpiresAtUtc = eligible.Max(source => source.ExpiresAtUtc)
+                }
+                : null;
+            return new EntryMembershipObservation(current, beforeWarmupRefresh, projection, refreshedAtUtc, refreshFailed, failed);
+        }
+    }
+
+    private readonly record struct EntryCheck(
+        string Stage,
+        DateTimeOffset CheckedAtUtc,
+        DateTimeOffset? CandidateExpiresAtUtc = null,
+        Guid? CandidateId = null,
+        bool SetupDeadlineElapsed = false);
+
+    // A single run records the latest skip per symbol, strategy identity and gate.
+    private sealed class EntrySkipAudit(
+        IDecisionAuditRepository? repository,
+        ILogger<LiveRunner> auditLogger,
+        string runName,
+        Guid? runId,
+        IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> strategies,
+        bool usesDiscovery)
+    {
+        private readonly ConcurrentDictionary<
+            (string Ticker, string StrategyId, StrategyArtifactIdentity? Identity, string Stage),
+            (DateTimeOffset SetupBarTime, string Reason)> lastSaved = new();
+
+        // Record the gate's actual check time and source evidence after the entry has been skipped.
+        public async Task SaveAsync(
+            string ticker,
+            StrategyDefinition strategy,
+            DateTimeOffset setupBarTime,
+            EntryMembershipObservation membership,
+            EntryCheck check,
+            CancellationToken cancellationToken)
+        {
+            if (repository is null || (!usesDiscovery && !check.SetupDeadlineElapsed))
+            {
+                return;
+            }
+
+            var reason = check.SetupDeadlineElapsed
+                ? "paper_setup_deadline_elapsed_before_order_submission"
+                : ResolveMembershipReason(membership, check.CheckedAtUtc);
+            var identity = strategies.GetValueOrDefault(strategy)?.Identity;
+            var key = (ticker.ToUpperInvariant(), strategy.StrategyId, identity, check.Stage);
+            var skip = (setupBarTime, reason);
+            // The runner processes a ticker and its strategies sequentially in each poll.
+            if (lastSaved.TryGetValue(key, out var previous) && previous == skip)
+            {
+                return;
+            }
+
+            var evidence = membership.Current ?? membership.BeforeWarmupRefresh;
+            try
+            {
+                await repository.SaveAuditAsync(new DecisionAuditRecord
+                {
+                    RunName = runName,
+                    Ticker = ticker,
+                    StrategyName = strategy.StrategyName,
+                    Timestamp = check.CheckedAtUtc.ToUniversalTime(),
+                    Decision = "Skipped",
+                    RejectionReason = reason,
+                    SignalJson = JsonSerializer.Serialize(new
+                    {
+                        runId,
+                        ticker,
+                        strategyId = strategy.StrategyId,
+                        strategyIdentity = identity,
+                        stage = check.Stage,
+                        checkedAtUtc = check.CheckedAtUtc.ToUniversalTime(),
+                        setupBarTimeUtc = setupBarTime.ToUniversalTime(),
+                        candidateExpiresAtUtc = check.CandidateExpiresAtUtc,
+                        candidateId = check.CandidateId,
+                        membershipRefreshedAtUtc = membership.RefreshedAtUtc,
+                        membershipRefreshFailed = membership.RefreshFailed,
+                        failedDiscoverySources = membership.FailedSources,
+                        membershipPresentAfterRefresh = membership.Current is not null,
+                        discoveryAggregateId = evidence?.AggregateId,
+                        discoveryAggregateVersion = evidence?.Version,
+                        sourceEvidence = evidence?.Sources.Select(source => new
+                        {
+                            source.SourceKind,
+                            source.SourceKey,
+                            source.LatestSnapshotId,
+                            source.ObservedAtUtc,
+                            source.ExpiresAtUtc,
+                            source.IsDiagnostic
+                        })
+                    })
+                }, cancellationToken);
+                lastSaved[key] = skip;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                auditLogger.LogWarning(exception,
+                    "Could not save entry skip for {RunName} {Ticker} {StrategyId} at {EntryStage}: {Reason}.",
+                    runName, ticker, strategy.StrategyId, check.Stage, reason);
+            }
+        }
+
+        // A source dropped from the active projection may have expired before the refresh read.
+        private static string ResolveMembershipReason(EntryMembershipObservation membership, DateTimeOffset checkedAtUtc)
+        {
+            if (membership.RefreshFailed)
+            {
+                return "paper_discovery_refresh_failed_after_warmup";
+            }
+
+            if (membership.FailedSources.Count > 0)
+            {
+                return "paper_discovery_source_refresh_failed";
+            }
+
+            var evidence = membership.Current ?? membership.BeforeWarmupRefresh;
+            var asOfUtc = membership.Current is null && membership.RefreshedAtUtc is { } refreshedAtUtc
+                ? refreshedAtUtc
+                : checkedAtUtc;
+            if (evidence is not null)
+            {
+                if (membership.Current is null && evidence.Sources.Any(source =>
+                    !source.IsDiagnostic && source.ObservedAtUtc <= asOfUtc && source.ExpiresAtUtc > asOfUtc))
+                {
+                    return "paper_discovery_membership_removed_after_warmup";
+                }
+                if (evidence.Sources.Any(source =>
+                    !source.IsDiagnostic && source.ObservedAtUtc <= asOfUtc && source.ExpiresAtUtc <= asOfUtc))
+                {
+                    return "paper_discovery_membership_expired";
+                }
+                if (evidence.Sources.Count > 0 && evidence.Sources.All(source => source.IsDiagnostic))
+                {
+                    return "paper_discovery_membership_diagnostic_only";
+                }
+            }
+
+            return "paper_discovery_membership_unavailable";
+        }
+    }
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
         String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)

@@ -122,6 +122,7 @@
         if(row.slot.phase!=='morning')line(el('audit'),'This is the evening result. Collect and review the morning result before continuing.');
         if(snap.removedSymbols.length)line(el('audit'),'Dropped since the evening result: '+snap.removedSymbols.join(', '));renderMembers();if(navigate)el('review').scrollIntoView({block:'start'});
     }
+    // Render recorded membership and evidence without fetching a chart for any stock until its link is opened.
     function renderMembers() {
         const snap=selectedOccurrence.snapshot;el('members').replaceChildren();
         const scroll=document.createElement('div');scroll.className='table-scroll';const table=document.createElement('table');table.className='prep-members';
@@ -140,7 +141,10 @@
             row.news.forEach(x=>{line(details,when(x.publishedAtUtc)+' · '+x.headline);try{const url=new URL(x.url);if(['https:','http:'].includes(url.protocol)){const a=document.createElement('a');a.href=url.href;a.textContent='Open captured article';a.target='_blank';a.rel='noopener noreferrer';details.append(a);}else line(details,'Article link unavailable.');}catch{line(details,'Article link unavailable.');}});
             const links=document.createElement('p');const market=document.createElement('a');market.href='/Desk?search='+encodeURIComponent(row.symbol);market.textContent='Open market detail';
             const audit=document.createElement('a');audit.href=`/api/v1/preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/evidence/${encodeURIComponent(row.symbol)}`;audit.textContent='Open captured evidence';audit.target='_blank';audit.rel='noopener';
-            links.append(market,' · ',audit);details.append(links);line(details,'Evidence hash '+row.evidenceSha256);
+            links.append(market,' · ',audit);
+            const chart = window.TradingFlow.stockChartLink(row.symbol, 'Open stock chart');
+            if (chart) links.append(' · ', chart);
+            details.append(links);line(details,'Evidence hash '+row.evidenceSha256);
             cell().append(details);
             const close=cell();close.className='num';close.textContent=row.close===null||row.close===undefined?'–':'$'+row.close;
             const gap=cell();gap.className='num';gap.textContent=number(row.gapPercent,'%');

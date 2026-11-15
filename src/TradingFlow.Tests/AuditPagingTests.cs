@@ -25,6 +25,21 @@ public sealed class AuditPagingTests : IDisposable
         repository = new(new Factory(options));
     }
 
+    // The analyzer must show the skipped entry through its actual database filter and page projection.
+    [Fact]
+    public async Task MembershipSkipReasonReachesAuditPage()
+    {
+        const string reason = "paper_discovery_membership_expired";
+        await repository.SaveAuditAsync(Record("AAA", "2026-11-15T12:00:00Z") with
+        { Decision = "Skipped", RejectionReason = reason, SignalJson = "{\"stage\":\"before_order_submission\"}" }, default);
+        var model = new AuditModel(repository) { Decision = "Skipped", Reason = reason };
+        await model.OnGetAsync("large", null);
+        var displayed = Assert.Single(model.Records);
+        Assert.Equal("Skipped", displayed.Decision);
+        Assert.Equal(reason, displayed.RejectionReason);
+        Assert.Contains("before_order_submission", displayed.SignalJson);
+    }
+
     [Fact]
     public async Task HundredThousandDecisions_PageAndSummaryStayIndependent()
     {

@@ -30,13 +30,14 @@ public static class IntradayPortfolioEvidence
         foreach (var item in evidence.OrderBy(x => x.Timestamp)) execution.Append(item);
     }
 
-    /// <summary>Keep the existing physical fill contract and retain its interval/phase sequence when adjacent frames share a UTC timestamp.</summary>
+    /// <summary>Keep original physical fill fields, source order, and the display timing observed during replay.</summary>
     private static string FillPayload(IntradayExecutionFill fill)
     {
         var payload = JsonSerializer.SerializeToNode(fill.Event)!.AsObject();
         payload[nameof(fill.SourceIntervalStartUtc)] = JsonSerializer.SerializeToNode(fill.SourceIntervalStartUtc);
         payload[nameof(fill.ExecutionPhase)] = fill.ExecutionPhase;
         payload[nameof(fill.ExecutionSequence)] = fill.ExecutionSequence;
+        payload[nameof(fill.FillTiming)] = JsonSerializer.SerializeToNode(fill.FillTiming);
         return payload.ToJsonString();
     }
 

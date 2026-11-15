@@ -20,6 +20,34 @@ public sealed class StreamingMarketStateProcessorTests
         Assert.Null(await processor.GetTickerStateAsync("NEVER",["1m"],1,now,default));
         Assert.DoesNotContain("NEVER",processor.GetTrackedSymbols());
     }
+    // A chart copy reads only the accepted version at its as-of clock and cannot own an unknown symbol.
+    [Fact]
+    public async Task ReadChartCanonicalAsync_RespectsVersionClockAndOwnerFence()
+    {
+        var start = Utc(2026, 8, 27, 14, 30);
+        var processor = CreateProcessor(NullCandleStore.Instance, new FixedTimeProvider(start.AddMinutes(5)));
+        Assert.Null(await processor.ReadChartCanonicalAsync("NEVER", 4, start, start.AddMinutes(5), start.AddMinutes(5), default));
+        Assert.DoesNotContain("NEVER", processor.GetTrackedSymbols());
+
+        // Mirror the provider parser, which stamps the observed receipt on every live version.
+        var original = Bar("AAPL", start, 100m) with { KnownAtUtc = start.AddMinutes(1) };
+        var revised = original with { Close = 101m, High = 102m, KnownAtUtc = start.AddMinutes(2.5) };
+        await processor.ProcessAsync(Event(original, MarketBarEventKind.CompletedBar, start.AddMinutes(1), 1));
+        await processor.ProcessAsync(Event(revised, MarketBarEventKind.ProviderRevision, start.AddMinutes(2.5), 1));
+
+        var before = Assert.IsType<ChartCanonicalSession>(
+            await processor.ReadChartCanonicalAsync("AAPL", 4, start, start.AddMinutes(5), start.AddMinutes(2), default));
+        Assert.Equal(100m, Assert.Single(before.Bars).Close);
+        Assert.Equal(4L, before.SubscriptionGeneration);
+        var after = Assert.IsType<ChartCanonicalSession>(
+            await processor.ReadChartCanonicalAsync("AAPL", 4, start, start.AddMinutes(5), start.AddMinutes(3), default));
+        Assert.Equal(101m, Assert.Single(after.Bars).Close);
+        Assert.Equal(start.AddMinutes(2.5), Assert.Single(after.Bars).KnownAtUtc);
+
+        processor.InvalidateOwnership(1);
+        Assert.Null(await processor.ReadChartCanonicalAsync("AAPL", 4, start, start.AddMinutes(5), start.AddMinutes(3), default));
+    }
+
     [Theory]
     [InlineData(0, 45)]
     [InlineData(2, 0)]

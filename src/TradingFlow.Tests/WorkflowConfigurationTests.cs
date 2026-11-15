@@ -10,6 +10,7 @@ namespace TradingFlow.Tests;
 public sealed class WorkflowConfigurationTests
 {
     [Fact]
+    // Preserve skipped-entry reasons in the existing paper view even after generated configs are gone.
     public async Task HistoricalPaperView_UsesDurableAttemptWhenGeneratedConfigIsMissing()
     {
         var repo = TestRepository.FindRoot();
@@ -25,7 +26,7 @@ public sealed class WorkflowConfigurationTests
             var audits = new Moq.Mock<TradingFlow.Domain.Audit.IDecisionAuditRepository>(Moq.MockBehavior.Strict);
             audits.Setup(item => item.GetAuditPageAsync("actual_run", null, null, 0, 50, Moq.It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new TradingFlow.Domain.Audit.DecisionAuditPage(
-                    [new() { RunName = "actual_run", Ticker = "MSFT" }], 1));
+                    [new() { RunName = "actual_run", Ticker = "MSFT", Decision = "Skipped", RejectionReason = "paper_discovery_membership_expired" }], 1));
             var job = new TradingFlow.Web.Models.BacktestJobSnapshot(Guid.NewGuid(), "display_name",
                 Path.Combine(temporary, "removed.yaml"), "complete", DateTimeOffset.UtcNow,
                 null, null, null, "complete", 1, 1, [], null, ArtifactDirectory: artifact);
@@ -33,7 +34,10 @@ public sealed class WorkflowConfigurationTests
                 """{"Ticker":"MSFT","Close":123.5,"Timeframe":"1d"}""");
             var view = new PaperRunViewService(new ProjectPaths(repo), catalog, audits.Object);
             Assert.Equal(123.5m, Assert.Single(view.LoadChartData(job)).Close);
-            Assert.Equal("MSFT", Assert.Single(await view.LoadRecentAuditsAsync(job, default)).Ticker);
+            var visibleAudit = Assert.Single(await view.LoadRecentAuditsAsync(job, default));
+            Assert.Equal("MSFT", visibleAudit.Ticker);
+            Assert.Equal("Skipped", visibleAudit.Decision);
+            Assert.Equal("paper_discovery_membership_expired", visibleAudit.RejectionReason);
             Assert.Empty(view.LoadChartData(job with { ArtifactDirectory = null }));
             audits.VerifyAll();
         }

@@ -74,6 +74,9 @@ public sealed record CandlePipelineResult(
     /// provisional snapshot (decision-hour timing) is computed exactly as the completed ones were. Null when not produced here.
     /// </summary>
     public IndicatorEngine? Indicators { get; init; }
+
+    /// <summary>A provider-wide HTTP failure confirmed by the batch and every independent retry.</summary>
+    public string? SharedProviderFailure { get; init; }
 }
 
 internal sealed record TickerTimeframeBars(
@@ -239,12 +242,13 @@ public sealed class CandlePipelineEngine
             : request.DownloadTimeframes;
 
         progress?.Report($"Reading market data for {request.Tickers.Count} ticker(s), {downloadedTimeframes.Count} timeframe(s).");
+        string? sharedProviderFailure = null;
         try
         {
             // Prefer provider batch reads for API efficiency. If the provider
             // rejects the batch, fallback below isolates the bad ticker instead
             // of taking down the whole run.
-            await ReadProviderBarsAsync(request.Tickers, recordFailure: false);
+            await ReadProviderBarsAsync(request.Tickers);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -261,13 +265,13 @@ public sealed class CandlePipelineEngine
             // A paginated batch can fail after yielding a prefix. Retry every
             // ticker independently; logical duplicates are idempotent, while a
             // partial ticker must never be mistaken for complete history.
-            var fallbackTickers = request.Tickers;
-
-            foreach (var ticker in fallbackTickers)
+            var providerFailure = ClassifySharedProviderFailure(exception);
+            var retryMatches = 0;
+            foreach (var ticker in request.Tickers)
             {
                 try
                 {
-                    await ReadProviderBarsAsync([ticker], recordFailure: true);
+                    await ReadProviderBarsAsync([ticker]);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -276,8 +280,16 @@ public sealed class CandlePipelineEngine
                 catch (Exception tickerException)
                 {
                     failures[NormalizeTickerForFailure(ticker)] = tickerException.Message;
-                    progress?.Report($"Ticker {ticker} market data read failed: {tickerException.Message}");
+                    if (providerFailure is not null && ClassifySharedProviderFailure(tickerException) == providerFailure)
+                    {
+                        retryMatches++;
+                    }
                 }
+            }
+
+            if (providerFailure is not null && request.Tickers.Count > 1 && retryMatches == request.Tickers.Count)
+            {
+                sharedProviderFailure = $"Historical market data provider {providerFailure} failed for the batch and every independent symbol read.";
             }
         }
         finally
@@ -350,62 +362,60 @@ public sealed class CandlePipelineEngine
         }
 
         progress?.Report($"Built candle pipeline state for {states.Count}/{request.Tickers.Count} ticker(s).");
-        return new CandlePipelineResult(states, failures, metrics.ToImmutable(failures.Count)) { Indicators = indicatorEngine };
-
-        async Task ReadProviderBarsAsync(IReadOnlyCollection<string> tickers, bool recordFailure)
+        return new CandlePipelineResult(states, failures, metrics.ToImmutable(failures.Count))
         {
-            try
+            Indicators = indicatorEngine,
+            SharedProviderFailure = sharedProviderFailure
+        };
+
+        // Let the caller classify batch and independent read outcomes using the original exception.
+        async Task ReadProviderBarsAsync(IReadOnlyCollection<string> tickers)
+        {
+            await foreach (var providerBar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
             {
-                await foreach (var providerBar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
+                var bar = providerConfirmsSparseNoTradeIntervals &&
+                    providerBar.CoverageVerifiedThroughUtc is null
+                        ? providerBar with { CoverageVerifiedThroughUtc = request.End.ToUniversalTime() }
+                        : providerBar;
+                var normalizedBar = CanonicalMarketBarValidator.Normalize(bar);
+                var isStructurallyValid = CanonicalMarketBarValidator.IsValid(
+                    normalizedBar,
+                    requireOneMinuteSource: false,
+                    out _);
+                if (isStructurallyValid &&
+                    !CanonicalMarketBarValidator.IsCompletedAsOf(normalizedBar, request.End))
                 {
-                    var bar = providerConfirmsSparseNoTradeIntervals &&
-                        providerBar.CoverageVerifiedThroughUtc is null
-                            ? providerBar with { CoverageVerifiedThroughUtc = request.End.ToUniversalTime() }
-                            : providerBar;
-                    var normalizedBar = CanonicalMarketBarValidator.Normalize(bar);
-                    var isStructurallyValid = CanonicalMarketBarValidator.IsValid(
-                        normalizedBar,
-                        requireOneMinuteSource: false,
-                        out _);
-                    if (isStructurallyValid &&
-                        !CanonicalMarketBarValidator.IsCompletedAsOf(normalizedBar, request.End))
-                    {
-                        metrics.IncrementRead();
-                        metrics.IncrementIncompleteBarFiltered();
-                        continue;
-                    }
-
-                    if (isStructurallyValid)
-                    {
-                        retainedBarBudget.Reserve(normalizedBar);
-                    }
-
-                    var replayEvent = replayAdapter.Create(
-                        normalizedBar,
-                        request.StoreContext?.ProviderName ?? provider.GetType().Name,
-                        "historical");
                     metrics.IncrementRead();
-                    await readBuffer.SendAsync(new CandleEvent(replayEvent), cancellationToken);
-                    metrics.ObserveReadBufferDepth(readBuffer.Count);
+                    metrics.IncrementIncompleteBarFiltered();
+                    continue;
                 }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (ReplayBarBudgetExceededException)
-            {
-                throw;
-            }
-            catch (Exception exception) when (recordFailure)
-            {
-                foreach (var ticker in tickers)
+
+                if (isStructurallyValid)
                 {
-                    failures[NormalizeTickerForFailure(ticker)] = exception.Message;
+                    retainedBarBudget.Reserve(normalizedBar);
                 }
+
+                var replayEvent = replayAdapter.Create(
+                    normalizedBar,
+                    request.StoreContext?.ProviderName ?? provider.GetType().Name,
+                    "historical");
+                metrics.IncrementRead();
+                await readBuffer.SendAsync(new CandleEvent(replayEvent), cancellationToken);
+                metrics.ObserveReadBufferDepth(readBuffer.Count);
             }
         }
     }
+
+    // Generic symbol errors, omissions and transport exceptions without an
+    // explicit provider-wide HTTP status cannot establish a shared outage.
+    private static string? ClassifySharedProviderFailure(Exception exception) =>
+        exception is HttpRequestException { StatusCode: { } status } ? (int)status switch
+        {
+            401 or 403 => "authentication or data access",
+            429 => "rate limit",
+            >= 500 and < 600 => "service",
+            _ => null
+        } : null;
 
     private async Task PersistCandlesAsync(
         CandlePipelineRequest request,

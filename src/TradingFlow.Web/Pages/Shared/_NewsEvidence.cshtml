@@ -21,6 +21,13 @@
     <div class="news-entry-footer">
         <span class="muted" data-news-source>@Model.Provider @Model.Source · @Model.Classification</span>
         @if(User.Identity?.IsAuthenticated == true) {<button type="button" class="button secondary" data-group-action="add" data-tickers="@Model.GroupableTickers" hidden="@(Model.GroupableTickers.Length == 0)">Add symbols to group</button>}
+        @if (User.Identity?.IsAuthenticated == true)
+        {
+            @foreach (var symbol in Model.GroupableTickers.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                <a asp-page="/Chart" asp-route-symbol="@symbol" stock-chart-symbol="@symbol" asp-route-env="@(Context.Request.Query["env"].ToString())" aria-label="Open chart for @symbol">@symbol chart</a>
+            }
+        }
         <a data-news-link href="@Model.SafeUrl" hidden="@(Model.SafeUrl is null)" target="_blank" rel="noopener noreferrer">Open article</a>
     </div>
 </article>

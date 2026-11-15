@@ -412,7 +412,6 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 commands,
                 policy));
             _state = step.State;
-            AppendExecutionEvidence(step.Events);
             ApplyEvents(step.Events, bar, timelineBar.AvailableAtUtc);
             if (_windowKinds.TryGetValue((symbol, timelineBar.StartUtc), out var windowKind))
                 CountProtectiveFills(step.Events, windowKind, bar.Open);
@@ -447,7 +446,6 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             bar.AvailableAtUtc, sequence, IsCompleted: true, bar.Bar.Open, bar.Bar.High, bar.Bar.Low, bar.Bar.Close, bar.Bar.Volume),
             commands, SlicePolicy(symbol, filled)));
         _state = step.State;
-        AppendExecutionEvidence(step.Events);
         ApplyEvents(step.Events, bar.Bar, bar.AvailableAtUtc);
         CountProtectiveFills(step.Events, "fill_bar", null);
         FinalizeTerminalTrackers();
@@ -591,7 +589,6 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         };
         var step = _simulator.Advance(new ExecutionStepRequest(_state, slice with { SourceSequence = sequence }, commands, policy));
         _state = step.State;
-        AppendExecutionEvidence(step.Events);
         ApplyEvents(step.Events, source, slice.AvailableAtUtc, priceAtClose);
         FinalizeTerminalTrackers();
         foreach (var tracker in trackers.Where(t => !t.IsTerminal)) Fail(tracker, failureReason);
@@ -627,24 +624,30 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
     private static DateOnly SessionOf(DateTimeOffset timestamp) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, NewYork).DateTime);
 
-    private void AppendExecutionEvidence(IReadOnlyCollection<SimulatedExecutionEvent> events)
+    // Preserve the simulator event, attaching the same source timing used by the reported fill.
+    private void AppendExecutionEvidence(SimulatedExecutionEvent item, ExecutionTracker tracker, BacktestFillTiming? timing)
     {
         if (_executionEvidence is null) return;
-        foreach (var item in events)
+        string evidence;
+        if (timing is null)
         {
-            var tracker = _active.FirstOrDefault(value => value.OwnsOrder(item.ClientOrderId));
-            if (tracker is null)
-                throw new InvalidOperationException($"Execution event references unknown order '{item.ClientOrderId}'.");
-            _executionEvidence.Append(new ExecutionEvent(
-                item.Symbol,
-                tracker.Plan.Candidate.StrategyName,
-                item.OccurredAtUtc,
-                item.LastFillQuantity > 0 ? ExecutionState.OrderFilled : ExecutionState.OrderStateChanged,
-                $"Portfolio simulator order {item.ClientOrderId} is {item.State}: {item.Reason}.",
-                "portfolio_execution",
-                tracker.Plan.Candidate.CandidateId,
-                JsonSerializer.Serialize(item)));
+            evidence = JsonSerializer.Serialize(item);
         }
+        else
+        {
+            var payload = JsonSerializer.SerializeToNode(item)!.AsObject();
+            payload[nameof(BacktestPortfolioFill.FillTiming)] = JsonSerializer.SerializeToNode(timing);
+            evidence = payload.ToJsonString();
+        }
+        _executionEvidence.Append(new ExecutionEvent(
+            item.Symbol,
+            tracker.Plan.Candidate.StrategyName,
+            item.OccurredAtUtc,
+            item.LastFillQuantity > 0 ? ExecutionState.OrderFilled : ExecutionState.OrderStateChanged,
+            $"Portfolio simulator order {item.ClientOrderId} is {item.State}: {item.Reason}.",
+            "portfolio_execution",
+            tracker.Plan.Candidate.CandidateId,
+            evidence));
     }
 
     private List<SimulatedOrderCommand> BuildCommands(
@@ -931,19 +934,29 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         exitReason.Equals("trailing_stop", StringComparison.OrdinalIgnoreCase) ||
         exitReason.StartsWith("stop_loss", StringComparison.OrdinalIgnoreCase);
 
-    // Keep original simulator stamps for book logic and attach reporting evidence to each actual fill.
+    // Journal the events in simulator order, using one timing observation for each report and fill event.
     private void ApplyEvents(IReadOnlyCollection<SimulatedExecutionEvent> events, OhlcvBar bar,
         DateTimeOffset availableAtUtc, bool priceAtClose = false)
     {
-        foreach (var executionEvent in events.Where(item => item.LastFillQuantity > 0))
+        foreach (var executionEvent in events)
         {
+            if (_executionEvidence is null && executionEvent.LastFillQuantity <= 0)
+                continue;
             var tracker = _active.FirstOrDefault(item => item.OwnsOrder(executionEvent.ClientOrderId));
             if (tracker is null)
             {
+                if (_executionEvidence is not null)
+                    throw new InvalidOperationException($"Execution event references unknown order '{executionEvent.ClientOrderId}'.");
                 continue;
             }
 
-            var timing = DescribeFill(tracker, executionEvent, bar, availableAtUtc, priceAtClose);
+            var timing = executionEvent.LastFillQuantity > 0
+                ? DescribeFill(tracker, executionEvent, bar, availableAtUtc, priceAtClose)
+                : null;
+            AppendExecutionEvidence(executionEvent, tracker, timing);
+            if (timing is null)
+                continue;
+
             if (executionEvent.ClientOrderId.Equals(tracker.EntryClientOrderId, StringComparison.Ordinal))
             {
                 tracker.EntryTiming ??= timing;

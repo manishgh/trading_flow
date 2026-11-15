@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -100,6 +101,33 @@ public sealed class PaperJobServiceTests
         Assert.Equal("running", service.Get(persisted.Id)!.Status);
     }
 
+    // The operator snapshot retains both builds and the reason across service restarts.
+    [Fact]
+    public async Task InitializeAsync_ProjectsExitOnlyBuildIndependentlyOfPipelineHealth()
+    {
+        var persisted = CreatePersisted(Guid.NewGuid(), "running");
+        var attempt = new PaperExitOnlyContinuation(
+            persisted.Id, 2, new string('a', 40), new string('b', 40), persisted.CreatedAt, persisted.CreatedAt);
+        var snapshot = new BacktestJobSnapshot(
+            persisted.Id, persisted.RunName, persisted.ConfigPath, persisted.Status, persisted.CreatedAt,
+            persisted.StartedAt, null, null, "running", 0, 0, [], null, PaperExitOnly: attempt);
+        persisted.SnapshotJson = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        repository.Setup(candidate => candidate.GetJobsAsync("paper", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([persisted]);
+        var service = CreateService();
+
+        await service.InitializeAsync();
+
+        var projected = service.Get(persisted.Id);
+        Assert.NotNull(projected);
+        Assert.Null(projected.PaperPipelineHealth);
+        Assert.Equal(attempt, projected.PaperExitOnly);
+        var label = TradingFlow.Web.Pages.PaperJobModel.FormatExitOnlyContinuation(projected.PaperExitOnly);
+        Assert.Contains(PaperExitOnlyContinuation.Reason, label);
+        Assert.Contains($"Executing build {attempt.ExecutingCodeVersion} on lease attempt 2", label);
+        Assert.Contains($"Original build {attempt.OriginCodeVersion}", label);
+    }
+
     [Fact]
     public async Task InitializeAsync_ProjectsDurableJobWhenOriginalConfigWasRemoved()
     {
@@ -172,9 +200,11 @@ public sealed class PaperJobServiceTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // A changed build remains the primary terminal cause even when the independently attempted recovery also fails.
-    [Fact]
-    public async Task RecoveryWorker_PublishesSingleProvenanceMismatchAndAttemptsBrokerProtection()
+    // A frozen identity mismatch or failed reconciliation prevents startup, even on a recovered lease.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveryWorker_DoesNotRegisterWhenRecoveryFails(bool frozenMismatch)
     {
         var lifecycle = new Mock<IPaperRunLifecycleRepository>(MockBehavior.Strict);
         var recovery = new Mock<IPaperJobRecoveryService>(MockBehavior.Strict);
@@ -189,7 +219,9 @@ public sealed class PaperJobServiceTests
         var sequence = new MockSequence();
         lifecycle.InSequence(sequence).Setup(candidate => candidate.ValidatePaperRunAsync(
                 It.Is<ProductionRun>(requested => requested.RunId == persisted.Id), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Stored build and current build have different provenance."));
+            .Returns(() => frozenMismatch
+                ? Task.FromException(new InvalidOperationException("The frozen run configuration has different provenance."))
+                : Task.CompletedTask);
         recovery.InSequence(sequence).Setup(candidate => candidate.RecoverAsync(
                 persisted, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new IOException("Synthetic broker timeout."));
@@ -199,7 +231,10 @@ public sealed class PaperJobServiceTests
 
         Assert.Equal("interrupted", persisted.Status);
         Assert.NotNull(persisted.ErrorMessage);
-        Assert.Contains("different provenance. Broker protection recovery also failed: Synthetic broker timeout.", persisted.ErrorMessage);
+        var expectedError = frozenMismatch
+            ? "The frozen run configuration has different provenance. Broker protection recovery also failed: Synthetic broker timeout."
+            : "Synthetic broker timeout.";
+        Assert.Equal($"Paper job recovery failed: {expectedError}", persisted.ErrorMessage);
         Assert.Equal(persisted.ErrorMessage, service.Get(persisted.Id)?.ErrorMessage);
         lifecycle.Verify(candidate => candidate.ValidatePaperRunAsync(
             It.IsAny<ProductionRun>(), It.IsAny<CancellationToken>()), Times.Once);

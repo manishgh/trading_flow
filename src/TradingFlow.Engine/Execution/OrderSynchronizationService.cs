@@ -321,7 +321,14 @@ public sealed class OrderSynchronizationCoordinator : IOrderSynchronizationCoord
         var ownedBrokerOrders = new List<ActiveBrokerOrder>();
         foreach (var order in openOrders)
         {
-            var ownerClientOrderId = order.ParentClientOrderId ?? order.ClientOrderId;
+            // Preserve nested exits in the returned snapshot, never as entry lifecycle rows.
+            // When only children remain, CrossCheckOrderAsync reads the exact parent.
+            if (!String.IsNullOrWhiteSpace(order.ParentClientOrderId))
+            {
+                continue;
+            }
+
+            var ownerClientOrderId = order.ClientOrderId;
             if (!local.ContainsKey(ownerClientOrderId) && stopReplacements is not null)
             {
                 var replacement = await stopReplacements.GetVerifiedByReplacementClientOrderIdAsync(
@@ -531,6 +538,7 @@ public sealed class OrderSynchronizationRunner(
     PartialFillExecutionOptions? partialFillOptions = null) : IOrderSynchronizationRunner
 {
     private const string RestProtectionPendingBlockSource = "rest_fill_protection_pending";
+    private readonly ConcurrentDictionary<string, OrderUpdate> linkedPartialReviews = new(StringComparer.Ordinal);
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -716,6 +724,16 @@ public sealed class OrderSynchronizationRunner(
             admission?.Clear(cancellationBlockSource);
             return true;
         }
+        catch (OpeningOrderCancellationReviewRequiredException exception)
+        {
+            // Preserve the group and its unresolved entry stop while the stream and
+            // periodic reconciliation continue checking and repairing position protection.
+            linkedPartialReviews[update.ClientOrderId] = update;
+            admission?.Block(cancellationBlockSource, "PARTIAL_ENTRY_REMAINDER_UNRESOLVED",
+                exception.Message, timeProvider.GetUtcNow());
+            logger.LogCritical(exception, "Linked partial entry {ClientOrderId} remains pending review; protection continues.", update.ClientOrderId);
+            return false;
+        }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             admission?.Block(
@@ -764,6 +782,7 @@ public sealed class OrderSynchronizationRunner(
         {
             var openOrders = await coordinator.CrossCheckAsync(broker, cancellationToken);
             await reconciliation.ReconcileAsync(broker, openOrders, cancellationToken);
+            await ResolveLinkedPartialReviewsAsync(openOrders, cancellationToken);
             if (admission is null || !admission.GetSnapshot().Blocks.Any(block =>
                     block.Source == AccountReconciliationService.ProtectionBlockSource))
             {
@@ -784,6 +803,23 @@ public sealed class OrderSynchronizationRunner(
         {
             // Keep the block. A later successful reconciliation owns clearing it.
             throw;
+        }
+    }
+
+    // Reuse the same terminal-fill and protection proof as durable loss reviews. A linked
+    // remainder may finish without another partial event; polling must release its exact block.
+    private async Task ResolveLinkedPartialReviewsAsync(IReadOnlyList<ActiveBrokerOrder> openOrders, CancellationToken cancellationToken)
+    {
+        foreach (var (clientId, update) in linkedPartialReviews)
+        {
+            if (openOrders.Any(order => order.OrderId == update.OrderId || order.ReplacesOrderId == update.OrderId ||
+                    order.ClientOrderId == clientId)) continue;
+            if (await reconciliation.IsOpeningOrderResolvedAsync(broker, clientId, update.OrderId,
+                    update.Ticker, update.FilledQuantity, cancellationToken))
+            {
+                linkedPartialReviews.TryRemove(clientId, out _);
+                admission?.Clear($"partial_entry_remainder_cancellation:{clientId}");
+            }
         }
     }
 
@@ -847,25 +883,35 @@ public sealed class OrderSynchronizationRunner(
 
 public static class BrokerOrderStateProjection
 {
-    public static OrderState Project(OrderStatus status) => status switch
+    // A done-for-day order is paused until the next session and retains any cumulative fill.
+    public static OrderState Project(OrderStatus status, decimal cumulativeFilledQuantity = 0m) => status switch
     {
         OrderStatus.New or
         OrderStatus.Accepted or
         OrderStatus.PendingNew or
         OrderStatus.AcceptedForBidding => OrderState.Acked,
+        OrderStatus.DoneForDay => cumulativeFilledQuantity > 0m ? OrderState.PartiallyFilled : OrderState.Acked,
         OrderStatus.PartiallyFilled => OrderState.PartiallyFilled,
         OrderStatus.Filled => OrderState.Filled,
         OrderStatus.PendingCancel => OrderState.CancelPending,
         OrderStatus.Canceled => OrderState.Canceled,
-        OrderStatus.Expired or OrderStatus.DoneForDay => OrderState.Expired,
+        OrderStatus.Expired => OrderState.Expired,
         OrderStatus.Rejected => OrderState.Rejected,
         _ => throw new InvalidOperationException(
             $"Broker order status {status} requires explicit cancel/replace reconciliation.")
     };
 
+    // A session pause neither abandons an outstanding cancellation nor confirms it.
     public static bool Matches(OrderStateSnapshot local, ActiveBrokerOrder broker)
     {
-        var brokerState = Project(OrderStatusCodec.ParseBrokerValue(broker.Status));
+        var status = OrderStatusCodec.ParseBrokerValue(broker.Status);
+        var brokerState = Project(status, broker.FilledQuantity);
+        if (status == OrderStatus.DoneForDay)
+        {
+            return (local.State == brokerState || local.State == OrderState.CancelPending) &&
+                (local.FilledQuantity ?? 0m) == broker.FilledQuantity;
+        }
+
         if (local.State != brokerState)
         {
             return false;

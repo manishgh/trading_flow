@@ -1,0 +1,20 @@
+{
+  "lightweightCharts": {
+    "package": "lightweight-charts",
+    "version": "5.0.9",
+    "source": "https://registry.npmjs.org/lightweight-charts/-/lightweight-charts-5.0.9.tgz",
+    "registryIntegrity": "sha512-8oQIis8jfZVfSwz8j9Z5x3O79dIRTkEYI9UY7DKtE4O3ZxlHjMK3L0+4nOVOOFq4FHI/oSIzz1RHeNImCk6/Jg==",
+    "asset": "lightweight-charts-5.0.9/lightweight-charts.standalone.production.js",
+    "sha256": "E6BD6516D9AB9CB897C0D6438E3FE1126F2FDCE07E68C23836E84D527DE81F52",
+    "license": "Apache-2.0 with upstream NOTICE and chart attribution"
+  },
+  "signalR": {
+    "package": "@microsoft/signalr",
+    "version": "10.0.0",
+    "source": "https://registry.npmjs.org/@microsoft/signalr/-/signalr-10.0.0.tgz",
+    "registryIntegrity": "sha512-0BRqz/uCx3JdrOqiqgFhih/+hfTERaUfCZXFB52uMaZJrKaPRzHzMuqVsJC/V3pt7NozcNXGspjKiQEK+X7P2w==",
+    "asset": "signalr-10.0.0/signalr.min.js",
+    "sha256": "10DD7681421E4638A55A3367A68AC0EAC1973BE1B4471B91B1B9E2306BB0B050",
+    "license": "MIT; upstream LICENSE.txt and third-party-notices.txt"
+  }
+}

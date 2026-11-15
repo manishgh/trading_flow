@@ -17,7 +17,7 @@
             <thead><tr><th>Ticker</th><th class="num">Signed quantity</th><th class="num">Entry basis</th><th class="num">Mark</th><th>Mark timestamp UTC</th><th class="num">Unrealized</th></tr></thead>
             <tbody>@foreach (var position in Model.OpenPositions)
             {
-                <tr><td>@position.Ticker</td><td class="num">@position.SignedQuantity</td><td class="num">@position.EntryBasis.ToString("N2")</td><td class="num">@(position.MarkPrice?.ToString("N2") ?? "unavailable")</td><td>@(position.MarkTimestampUtc?.ToString("u") ?? "unavailable")</td><td class="num">@(position.UnrealizedProfit?.ToString("N2") ?? "unavailable")</td></tr>
+                <tr><td><a asp-page="/Chart" asp-route-symbol="@position.Ticker" stock-chart-symbol="@position.Ticker" aria-label="Open current chart for @position.Ticker">@position.Ticker</a></td><td class="num">@position.SignedQuantity</td><td class="num">@position.EntryBasis.ToString("N2")</td><td class="num">@(position.MarkPrice?.ToString("N2") ?? "unavailable")</td><td>@(position.MarkTimestampUtc?.ToString("u") ?? "unavailable")</td><td class="num">@(position.UnrealizedProfit?.ToString("N2") ?? "unavailable")</td></tr>
             }</tbody>
         </table></div>
     }

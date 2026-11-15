@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Strategies;
 
@@ -26,6 +27,7 @@ public sealed partial class SqliteOrderIntentRepository
                     job.LeaseToken,
                     job.LeaseExpiresAtUtcTicks,
                     job.CancellationRequestedAtUtc,
+                    job.SnapshotJson,
                     run.PaperJobLeaseToken,
                     run.PaperEntriesStoppedAtUtc
                 })
@@ -46,20 +48,29 @@ public sealed partial class SqliteOrderIntentRepository
 
         if (ownership.PaperEntriesStoppedAtUtc is { } stopped)
         {
+            var stream = PaperExitOnlyContinuation.StreamName(intent.RunId);
+            if (await context.ApplicationEvents.AnyAsync(record => record.StreamName == stream &&
+                    record.EventType == PaperExitOnlyContinuation.EventType, cancellationToken))
+            {
+                throw new PaperEntryDispatchBlockedException(intent.IntentId, PaperExitOnlyContinuation.EventType,
+                    PaperExitOnlyContinuation.Reason);
+            }
+
             throw new PaperEntryDispatchBlockedException(intent.IntentId, "paper_pipeline_entries_stopped",
                 $"The owning run stopped new entries at {stopped:O} after repeated pipeline failures.");
         }
 
         if (intent.Kind == OrderIntentKind.StrategyEntry)
         {
-            await RequireCurrentPaperDiscoveryAsync(context, intent, now, cancellationToken);
+            await RequireCurrentPaperDiscoveryAsync(context, intent, ownership.SnapshotJson, now, cancellationToken);
         }
     }
 
     // Recheck the exact aggregate version used by the persisted Triggered
     // decision. A new version requires a decision using that new evidence.
     private static async Task RequireCurrentPaperDiscoveryAsync(
-        TradingFlowDbContext context, OrderIntentRecord intent, DateTimeOffset now, CancellationToken cancellationToken)
+        TradingFlowDbContext context, OrderIntentRecord intent, string? snapshotJson, DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         var evidence = await (
                 from transition in context.CandidateTransitions
@@ -74,6 +85,13 @@ public sealed partial class SqliteOrderIntentRepository
             throw new OrderDispatchExpiredException(intent.IntentId, expiring.ExpiresAtUtc);
         }
 
+        var refreshHealth = ReadPaperDiscoveryHealth(intent.IntentId, snapshotJson);
+        if (refreshHealth?.SessionFailure is not null)
+        {
+            throw new PaperEntryDispatchBlockedException(intent.IntentId, "paper_discovery_refresh_failed_before_broker_post",
+                "The paper run could not refresh its discovery membership.");
+        }
+
         var discovery = ReadPaperDiscoveryEvidence(evidence?.EvidenceJson);
         if (discovery is not null)
         {
@@ -83,17 +101,55 @@ public sealed partial class SqliteOrderIntentRepository
                     source.Aggregate.Symbol == intent.Symbol && source.Aggregate.Horizon == "swing" &&
                     source.Aggregate.Version == discovery.AggregateVersion &&
                     source.LatestSnapshot != null && !source.LatestSnapshot.IsDiagnostic)
-                .Select(source => new { source.LastObservedAtUtc, source.ExpiresAtUtc })
+                .Select(source => new { source.SourceKind, source.SourceKey, source.LastObservedAtUtc, source.ExpiresAtUtc })
                 .ToArrayAsync(cancellationToken);
+            var failedSources = refreshHealth?.FailedSources.Select(source => (source.SourceKind, source.SourceKey)).ToHashSet() ?? new();
             // SQLite's DateTimeOffset converter does not support ordered LINQ comparisons.
-            if (sources.Any(source => source.LastObservedAtUtc <= now && source.ExpiresAtUtc > now))
+            // Older proof omitted source identities. It cannot claim a healthy alternative during degradation.
+            var qualifyingSources = sources.Where(source =>
+                source.LastObservedAtUtc <= now && source.ExpiresAtUtc > now &&
+                (discovery.Sources is not null
+                    ? discovery.Sources.Contains($"{source.SourceKind}:{source.SourceKey}", StringComparer.Ordinal)
+                    : failedSources.Count == 0)).ToArray();
+            if (qualifyingSources.Any(source => !failedSources.Contains((source.SourceKind, source.SourceKey))))
             {
                 return;
+            }
+
+            if (qualifyingSources.Length > 0 || discovery.Sources is null && failedSources.Count > 0)
+            {
+                throw new PaperEntryDispatchBlockedException(intent.IntentId, "paper_discovery_source_refresh_failed_before_broker_post",
+                    "No currently healthy discovery source supports the recorded candidate decision.");
             }
         }
 
         throw new PaperEntryDispatchBlockedException(intent.IntentId, "paper_discovery_stale_before_broker_post",
             "The discovery membership that triggered the candidate expired, changed, or was removed.");
+    }
+
+    // Read the source restrictions from the same owned job row as the run lease,
+    // within the transaction that records the first submission.
+    private static DiscoveryRefreshHealth? ReadPaperDiscoveryHealth(Guid intentId, string? snapshotJson)
+    {
+        if (snapshotJson is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var health = JsonSerializer.Deserialize<PaperDispatchJobSnapshot>(snapshotJson, paperEvidenceJson)?.PaperPipelineHealth?.Discovery;
+            if (health is { FailedSources: null })
+            {
+                throw new JsonException("Paper discovery health lacks its failed-source list.");
+            }
+            return health;
+        }
+        catch (JsonException)
+        {
+            throw new PaperEntryDispatchBlockedException(intentId, "paper_discovery_health_unavailable_before_broker_post",
+                "The owning paper job's discovery health cannot be read.");
+        }
     }
 
     // Missing or unreadable legacy proof cannot supply current broker authority.
@@ -114,6 +170,8 @@ public sealed partial class SqliteOrderIntentRepository
         }
     }
 
+    private sealed record PaperDispatchJobSnapshot(PaperDispatchPipelineHealth? PaperPipelineHealth);
+    private sealed record PaperDispatchPipelineHealth(DiscoveryRefreshHealth? Discovery);
     private sealed record PaperDecisionAudit(PaperDiscoveryEvidence? Discovery);
-    private sealed record PaperDiscoveryEvidence(Guid AggregateId, long AggregateVersion);
+    private sealed record PaperDiscoveryEvidence(Guid AggregateId, long AggregateVersion, IReadOnlyList<string>? Sources);
 }

@@ -19,6 +19,33 @@ public class AlpacaBrokerClientTests : IDisposable
     private IRawArchiveWriter CreateArchiveWriter() =>
         new FileSystemRawArchiveWriter(new RawArchiveOptions(archiveRoot));
 
+    // An explicitly empty equities class is simple only when there is no group evidence.
+    [Theory]
+    [InlineData("empty", "simple")]
+    [InlineData("missing", null)]
+    [InlineData("group", null)]
+    [InlineData("legs", null)]
+    public async Task OrderClass_PreservesUnknownAndLinkedStructure(string scenario, string? expected)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["id"] = "parent-1", ["symbol"] = "MSFT", ["side"] = "buy", ["status"] = "new",
+            ["type"] = "limit", ["client_order_id"] = "entry", ["qty"] = "10", ["filled_qty"] = "0",
+            ["created_at"] = "2026-07-21T14:30:00Z", ["updated_at"] = "2026-07-21T14:30:00Z",
+            ["asset_class"] = "us_equity"
+        };
+        if (scenario != "missing") body["order_class"] = "";
+        if (scenario == "group") { body["group_id"] = "group-1"; body["group_role"] = "entry"; }
+        if (scenario == "legs") body["legs"] = new[] { new { id = "leg-1", type = "stop", stop_price = "98" } };
+        using var handler = new CapturingHandler(responseBody: JsonSerializer.Serialize(body));
+        using var client = CreateClient(handler);
+        var order = await client.GetOrderByClientOrderIdAsync("entry", CancellationToken.None);
+        Assert.NotNull(order);
+        Assert.Equal(expected, order.OrderClass);
+        if (scenario == "group") { Assert.Equal("group-1", order.GroupId); Assert.Equal("entry", order.GroupRole); }
+        if (scenario == "legs") Assert.Equal("leg-1", Assert.Single(order.NestedLegOrderIds!));
+    }
+
     [Fact]
     public async Task GetAccountSnapshotAsync_MapsAuthoritativeAccountFields()
     {
@@ -29,7 +56,8 @@ public class AlpacaBrokerClientTests : IDisposable
               "trading_blocked":false,"trade_suspended_by_user":false,
               "shorting_enabled":true,"buying_power":"125000.50",
               "regt_buying_power":"95000.25","equity":"100000.25",
-              "long_market_value":"25000.00","short_market_value":"-5000.00"
+              "long_market_value":"25000.00","short_market_value":"-5000.00",
+              "last_equity":"101000.00","intraday_adjustments":"0.00"
             }
             """);
         using var client = CreateClient(handler);
@@ -48,6 +76,69 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.Equal(100000.25m, account.Equity);
         Assert.Equal(25000m, account.LongMarketValue);
         Assert.Equal(-5000m, account.ShortMarketValue);
+        Assert.Equal(101000m, account.LastEquity);
+        Assert.Equal(0m, account.IntradayAdjustments);
+    }
+
+    // Only the broker's verified exchange dates supply prior-close loss anchors.
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("transfer")]
+    [InlineData("missing-cashflow")]
+    [InlineData("unproven-current-flow")]
+    [InlineData("different-cent")]
+    public async Task GetAccountLossEvidenceAsync_UsesActualHolidayWeekCloseAndValidatesFunding(string scenario)
+    {
+        var thanksgivingWeekClose = new DateTimeOffset(2026, 11, 27, 18, 0, 0, TimeSpan.Zero);
+        var wednesdayLabel = new DateTimeOffset(2026, 11, 26, 0, 0, 0, TimeSpan.Zero);
+        var fridayLabel = new DateTimeOffset(2026, 11, 28, 0, 0, 0, TimeSpan.Zero);
+        var history = new Dictionary<string, object>
+        {
+            ["timeframe"] = "1D",
+            ["timestamp"] = new[] { wednesdayLabel.ToUnixTimeSeconds(), fridayLabel.ToUnixTimeSeconds() },
+            ["equity"] = new[] { 100_000m, 98_000m }
+        };
+        if (scenario != "missing-cashflow")
+        {
+            history["cashflow"] = new Dictionary<string, decimal[]>
+            {
+                ["DIV"] = [0m, 50m],
+                ["CSD"] = [0m, scenario == "transfer" ? 1_000m : 0m]
+            };
+        }
+
+        using var handler = new RoutingHandler(path => path switch
+        {
+            "/v2/calendar?start=2026-11-30&end=2026-11-30" =>
+                """[{"date":"2026-11-30","open":"09:30","close":"16:00"}]""",
+            "/v2/calendar?start=2026-11-16&end=2026-11-29" =>
+                """[{"date":"2026-11-25","open":"09:30","close":"16:00"},{"date":"2026-11-27","open":"09:30","close":"13:00"}]""",
+            _ when path.StartsWith("/v2/account/portfolio/history?timeframe=1D&cashflow_types=ALL", StringComparison.Ordinal) =>
+                JsonSerializer.Serialize(history),
+            _ => throw new InvalidOperationException($"Unexpected request: {path}")
+        });
+        using var client = CreateClient(handler);
+        var now = new DateTimeOffset(2026, 11, 30, 16, 0, 0, TimeSpan.Zero);
+        var account = new BrokerAccountSnapshot("account-1", "ACTIVE", false, false, false, false,
+            100_000m, 100_000m, 97_000m, 0m, 0m, now.AddSeconds(-1), now,
+            LastEquity: scenario == "different-cent" ? 98_000.011m : 98_000.004m,
+            IntradayAdjustments: scenario == "unproven-current-flow" ? null : 0m);
+
+        if (scenario is "missing-cashflow" or "unproven-current-flow" or "different-cent")
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => client.GetAccountLossEvidenceAsync(account, null, default));
+            return;
+        }
+
+        var evidence = await client.GetAccountLossEvidenceAsync(account, new DateOnly(2026, 11, 25), default);
+        Assert.Equal(thanksgivingWeekClose, evidence.PriorClose.CloseUtc);
+        Assert.Equal(evidence.PriorClose.CloseUtc, evidence.WeekAnchor.CloseUtc);
+        Assert.Equal(98_000.004m, evidence.PriorClose.Equity);
+        Assert.Equal(98_000m, evidence.WeekAnchor.Equity);
+        Assert.NotNull(evidence.HistoryArchiveId);
+        Assert.Equal(scenario == "transfer", evidence.FundingIssue is not null);
+        await client.GetAccountLossEvidenceAsync(account, new DateOnly(2026, 11, 25), default);
+        Assert.Single(handler.Paths, path => path.StartsWith("/v2/account/portfolio/history", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -158,6 +249,7 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.Equal("/v2/orders?status=open&nested=true&limit=500", handler.Path);
         Assert.Equal("stop-leg-1", order.OrderId);
         Assert.Equal(parentClientId, order.ParentClientOrderId);
+        Assert.Equal("parent-1", order.ParentOrderId);
         Assert.Equal(98m, order.StopPrice);
     }
 

@@ -15,17 +15,17 @@ using System.Text.RegularExpressions;
 namespace TradingFlow.Web.Services;
 
 /// <summary>
-/// Maintains the rolling news cache for mobile and operator views. Strategy
+/// Maintains the rolling news view over retained records for mobile and operator views. Strategy
 /// execution still uses the configured catalyst provider directly, while this
 /// service gives us a continuous, low-latency feed to inspect.
 /// </summary>
 public sealed class NewsFeedService : BackgroundService
 {
-    private static readonly TimeSpan RetentionWindow = TimeSpan.FromHours(72);
+    private static readonly TimeSpan DisplayWindow = TimeSpan.FromHours(72);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
     private const int EarningsStoriesPerStock = 5;
     // Bounded so the per-ticker REST sweep stays cheap at the poll cadence. This only has to
-    // outlast a websocket outage, not the full retention window.
+    // outlast a websocket outage, not the full display window.
     private static readonly TimeSpan AlpacaGapFillWindow = TimeSpan.FromHours(6);
     // Shared because the sweep now runs on every poll; a per-call client would leak a connection
     // pool every minute.
@@ -79,13 +79,13 @@ public sealed class NewsFeedService : BackgroundService
         string? ticker,
         CancellationToken cancellationToken)
     {
-        var clampedHours = Math.Clamp(hours, 1, (int)RetentionWindow.TotalHours);
+        var clampedHours = Math.Clamp(hours, 1, (int)DisplayWindow.TotalHours);
         var windowStart = DateTimeOffset.UtcNow.AddHours(-clampedHours);
         var items = await repository.GetRecentAsync(windowStart, 200, ticker, cancellationToken);
         return new MobileNewsFeedResponse(
             true,
             officialNews.IsSecConfigured ? "finviz+alpaca+fed+sec" : "finviz+alpaca+fed",
-            $"Rolling {clampedHours}h feed. Items older than {RetentionWindow.TotalHours:F0}h are pruned.",
+            $"Rolling {clampedHours}h feed. Older stored headlines remain available for research.",
             items
                 .GroupBy(ArticleDedupeKey, StringComparer.OrdinalIgnoreCase)
                 .Select(ToAggregatedMobileNewsItem)
@@ -149,7 +149,7 @@ public sealed class NewsFeedService : BackgroundService
         {
             var nowUtc = clock.GetUtcNow();
             var evidenceWindow = EarningsNewsWindowPolicy.Resolve(nowUtc);
-            var retentionStartUtc = nowUtc.Subtract(RetentionWindow);
+            var displayStartUtc = nowUtc.Subtract(DisplayWindow);
             var earningsTickers = await GetCurrentEarningsTickersAsync(nowUtc, cancellationToken);
             var events = new List<CatalystEvent>();
             events.AddRange(await LoadProviderAsync("finviz", () => LoadFinvizNewsAsync(cancellationToken), cancellationToken));
@@ -163,12 +163,12 @@ public sealed class NewsFeedService : BackgroundService
                 cancellationToken), cancellationToken));
             events.AddRange(await LoadProviderAsync("official", () => officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken), cancellationToken));
             events = events
-                .Where(item => item.Timestamp >= retentionStartUtc)
+                .Where(item => item.Timestamp >= displayStartUtc)
                 .ToList();
 
             // Dedupe before capping. Capping first would let already-stored items crowd out the
             // gap-filled ones, which are the whole point of the Alpaca sweep.
-            var existing = await repository.GetRecentAsync(retentionStartUtc, 5000, null, cancellationToken);
+            var existing = await repository.GetRecentAsync(displayStartUtc, 5000, null, cancellationToken);
             var existingKeys = existing
                 .Select(StorageDedupeKey)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -181,7 +181,7 @@ public sealed class NewsFeedService : BackgroundService
             await repository.UpsertAsync(unseenEvents, cancellationToken);
             var enrichedEvents = await EnrichNewsAsync(unseenEvents, cancellationToken);
             await repository.UpsertAsync(enrichedEvents, cancellationToken);
-            await repository.PruneOlderThanAsync(retentionStartUtc, cancellationToken);
+            // The rolling window limits this view; original stored news must not expire automatically.
 
             logger.LogInformation(
                 "Rolling news feed refresh stored {EventCount} event(s). Providers={Providers}",

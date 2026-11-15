@@ -24,4 +24,8 @@ public sealed record ActiveBrokerOrder(
     decimal? BracketStopPrice = null,
     string? ReplacesOrderId = null,
     string? ReplacedByOrderId = null,
-    string? PositionIntent = null);
+    string? PositionIntent = null,
+    string? ParentOrderId = null,
+    System.Collections.Generic.IReadOnlyList<string>? NestedLegOrderIds = null,
+    string? GroupId = null,
+    string? GroupRole = null);

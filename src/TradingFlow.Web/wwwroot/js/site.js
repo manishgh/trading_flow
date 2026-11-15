@@ -126,7 +126,21 @@
 
     renderAlertState();
 
+    // Use the authenticated layout route for stock links on dynamically rendered surfaces.
+    function stockChartLink(symbol, label = symbol) {
+        const base = document.body.dataset.stockChartUrl;
+        if (!base || !symbol) return null;
+        const url = new URL(base, location.href);
+        url.searchParams.set('symbol', symbol);
+        const link = document.createElement('a');
+        link.href = url.href;
+        link.textContent = label;
+        link.setAttribute('aria-label', 'Open chart for ' + symbol);
+        return link;
+    }
+
     window.TradingFlow = Object.assign(window.TradingFlow || {}, {
+        stockChartLink,
         toast,
         alertsEnabled,
         /* Raises a desktop notification only when alerts are on, permission was

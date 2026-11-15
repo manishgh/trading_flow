@@ -120,11 +120,14 @@
     }
 
     // Create one row for a broker holding, including unowned holdings and missing market fields.
+    // Supply the same chart link for positions first observed after the journal loaded.
     function createRow(trade) {
         const row = document.createElement("tr");
         row.dataset.tradeKey = tradeKey(trade);
         const symbol = append(row, "td");
-        append(symbol, "strong", trade.ticker);
+        const chart = window.TradingFlow.stockChartLink(trade.ticker);
+        if (chart) symbol.append(chart);
+        else append(symbol, "strong", trade.ticker);
         append(symbol, "span", trade.status || "Open", "cell-sub");
         append(append(row, "td"), "span", sourceLabel(trade.source), "tag tag-neutral").dataset.tradeSource = '';
         append(row, "td", Number(trade.quantity).toLocaleString(undefined, { maximumFractionDigits: 4 }), "num").dataset.tradeQuantity = '';

@@ -144,7 +144,7 @@
                     @foreach (var holding in Model.Account.Holdings)
                     {
                         <tr data-position-symbol="@holding.Symbol">
-                            <td><strong>@holding.Symbol</strong></td>
+                            <td><a data-position-chart asp-page="/Chart" asp-route-symbol="@holding.Symbol" stock-chart-symbol="@holding.Symbol" asp-route-env="@Model.Env" aria-label="Open chart for @holding.Symbol"><strong>@holding.Symbol</strong></a></td>
                             <td class="num">@holding.Quantity.ToString("0.####")</td>
                             <td class="num">@Money(holding.AverageEntry)</td>
                             <td class="num">@Money(holding.MarketValue)</td>
@@ -291,6 +291,7 @@
                                    asp-all-route-data='Model.RouteWith(("ticker", item.Symbol), ("side", null), ("limitPrice", null))'
                                    aria-haspopup="dialog" aria-label="Open ticket for @item.Symbol"><strong>@item.Symbol</strong></a>
                                 <span class="cell-sub">@item.Side.ToUpperInvariant()</span>
+                                <a class="cell-sub" asp-page="/Chart" asp-route-symbol="@item.Symbol" stock-chart-symbol="@item.Symbol" asp-route-env="@Model.Env" aria-label="Open chart for @item.Symbol">Chart</a>
                             </td>
                             <td class="num"><span data-quote-field="mid">—</span></td>
                             <td><span class="@StateTagClass(item.State)" data-order-state>@StateLabel(item.State)</span></td>

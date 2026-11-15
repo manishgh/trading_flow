@@ -142,6 +142,7 @@ public sealed class ExecutionShutdownCoordinator(
         return result ?? throw new InvalidOperationException("Execution shutdown produced no result.");
     }
 
+    // Preserve unresolved linked openings and finish checking their position protection before reporting them.
     private async Task<ExecutionShutdownResult> DrainBrokerAsync(
         IBrokerClient broker,
         CancellationToken cancellationToken)
@@ -150,13 +151,15 @@ public sealed class ExecutionShutdownCoordinator(
         var positionsFlattened = 0;
         var positionsRetained = 0;
         var protectionFailures = 0;
+        var openingReviewSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var openingReviews = new List<Exception>();
         var account = await broker.GetAccountSnapshotAsync(cancellationToken);
         var openOrders = await broker.GetOpenOrdersAsync(cancellationToken);
         foreach (var order in openOrders.OrderBy(item => item.CreatedAt))
         {
             // Nested bracket/OCO children are broker-side position protection. Their
             // parent identity is retained for ownership reconciliation, not cancellation.
-            if (!String.IsNullOrWhiteSpace(order.ParentClientOrderId))
+            if (!OrderSubmissionService.IsRootOpeningOrder(order))
             {
                 continue;
             }
@@ -168,15 +171,33 @@ public sealed class ExecutionShutdownCoordinator(
                 continue;
             }
 
-            var canceled = await commands.RequestCancelAsync(
-                new OrderCancellationSubmission(
-                    ownerId,
-                    order.OrderId,
-                    "process_shutdown_order_drain",
-                    timeProvider.GetUtcNow().ToUniversalTime(),
-                    order.ClientOrderId),
-                broker,
-                cancellationToken);
+            var opening = intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry;
+            var linkedOrUnverified = opening && (!OrderSubmissionService.IsStandaloneOpeningOrder(order) ||
+                openOrders.Any(child => child.ParentClientOrderId == ownerId || child.ParentOrderId == order.OrderId));
+            OrderStateSnapshot canceled;
+            try
+            {
+                canceled = await commands.RequestCancelAsync(
+                    new OrderCancellationSubmission(
+                        ownerId,
+                        order.OrderId,
+                        "process_shutdown_order_drain",
+                        timeProvider.GetUtcNow().ToUniversalTime(),
+                        order.ClientOrderId,
+                        RequireStandaloneOpeningOrder: opening),
+                    broker,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                (exception is OpeningOrderCancellationReviewRequiredException || linkedOrUnverified))
+            {
+                openingReviewSymbols.Add(order.Ticker);
+                openingReviews.Add(exception);
+                logger.LogCritical(exception,
+                    "Shutdown preserved opening order {ClientOrderId} for {Symbol} and will verify protection.", ownerId, order.Ticker);
+                continue;
+            }
+
             if (!OrderStateMachine.IsTerminal(canceled.State))
             {
                 throw new OrderCancellationPendingException(ownerId, order.OrderId);
@@ -193,7 +214,7 @@ public sealed class ExecutionShutdownCoordinator(
             var horizon = ReadHorizon(entryIntent?.RequestJson);
             var shouldFlatten = horizon.Equals("swing", StringComparison.OrdinalIgnoreCase) &&
                 options.FlattenSwingPositions;
-            if (!shouldFlatten || await intents.HasActivePositionExitAsync(
+            if (!shouldFlatten || openingReviewSymbols.Contains(position.Symbol) || await intents.HasActivePositionExitAsync(
                     account.AccountId,
                     position.Symbol,
                     position.PositionGenerationEventId,
@@ -299,6 +320,13 @@ public sealed class ExecutionShutdownCoordinator(
         {
             throw new InvalidOperationException(
                 $"Shutdown left {protectionFailures} position protection failure(s). Recovery remains required.");
+        }
+
+        if (openingReviews.Count > 0)
+        {
+            throw new AggregateException(
+                $"Shutdown preserved {openingReviews.Count} linked or unverified opening order(s) for cancellation review.",
+                openingReviews);
         }
 
         return new ExecutionShutdownResult(

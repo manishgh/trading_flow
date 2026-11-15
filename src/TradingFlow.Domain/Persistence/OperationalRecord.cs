@@ -26,6 +26,6 @@ public sealed class ProductionRun : OperationalRecord
     // Paper job attempts own the run through the exact lease that opened it.
     public Guid? PaperJobLeaseToken { get; set; }
 
-    // A pipeline stop is sticky for the run and enforced at the first broker POST.
+    // An entry stop is sticky for the run and enforced at the first broker POST.
     public DateTimeOffset? PaperEntriesStoppedAtUtc { get; set; }
 }

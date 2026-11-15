@@ -15,9 +15,59 @@ public sealed class NativeArtifactIntegrityTests
     public async Task NativeBundle_AcceptsExactOriginalFillAndPendingState()
     {
         await using var fixture = new Fixture();
-        var state = fixture.State(fixture.Fill);
-        var manifest = await fixture.WriteAsync(state);
+        var manifest = await fixture.WriteAsync(fixture.State(fixture.Fill));
         await BacktestArtifactIntegrity.VerifyManifestAsync(manifest);
+    }
+
+    // A rehashed report cannot rewrite or omit a fill's timing while leaving its physical economics intact.
+    [Theory]
+    [InlineData("economic time")]
+    [InlineData("availability")]
+    [InlineData("omitted")]
+    public async Task NativeBundle_RejectsDisplayTimingDifferentFromItsOriginalFill(string change)
+    {
+        await using var fixture = new Fixture();
+        var timing = fixture.Timing;
+        var reportTiming = change switch
+        {
+            "economic time" => timing with { EconomicTimestampUtc = timing.EconomicTimestampUtc?.AddMinutes(1) },
+            "availability" => timing with { AvailableAtUtc = timing.AvailableAtUtc.AddMinutes(1) },
+            _ => null
+        };
+        var manifest = await fixture.WriteAsync(fixture.State(fixture.Fill with { FillTiming = reportTiming }));
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => BacktestArtifactIntegrity.VerifyManifestAsync(manifest));
+        Assert.Contains("fill timing differs from its original execution evidence", error.Message);
+    }
+
+    // A current bundle must retain original timing, even when the report also omits it.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeBundle_RejectsMissingOriginalTiming(bool includeReportedTiming)
+    {
+        await using var fixture = new Fixture();
+        var fill = fixture.Fill with { FillTiming = includeReportedTiming ? fixture.Timing : null };
+        var manifest = await fixture.WriteAsync(fixture.State(fill), omitOriginalTiming: true);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => BacktestArtifactIntegrity.VerifyManifestAsync(manifest));
+        Assert.Contains("FillTiming", error.Message);
+    }
+
+    // Even equal reporting and journal timing must agree with the source interval and execution phase.
+    [Fact]
+    public async Task IntradayBundle_RejectsMatchingTimingThatContradictsItsSourceInterval()
+    {
+        await using var fixture = new Fixture(intraday: true);
+        var timing = fixture.Timing;
+        await BacktestArtifactIntegrity.VerifyManifestAsync(await fixture.WriteAsync(fixture.State(fixture.Fill)));
+
+        var altered = timing with { AvailableAtUtc = timing.AvailableAtUtc.AddMinutes(1) };
+        var manifest = await fixture.WriteAsync(
+            fixture.State(fixture.Fill with { FillTiming = altered }), originalTiming: altered);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => BacktestArtifactIntegrity.VerifyManifestAsync(manifest));
+        Assert.Contains("intraday fill timing differs from the retained execution interval and phase", error.Message);
     }
 
     // Rehashing a result and recomputing its session ledger cannot authorize moving a physical fill to another source month.
@@ -96,22 +146,29 @@ public sealed class NativeArtifactIntegrityTests
         Assert.Contains("original cutoff execution state", error.Message);
     }
 
-    private sealed class Fixture : IAsyncDisposable
+    private sealed class Fixture(bool intraday = false) : IAsyncDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "native-integrity-" + Guid.NewGuid().ToString("N"));
         private static readonly DateTimeOffset Start = DateTimeOffset.Parse("2026-06-30T04:00:00Z");
         private static readonly DateTimeOffset Cutoff = DateTimeOffset.Parse("2026-07-02T04:00:00Z");
+        private static readonly DateOnly SourceSession = new(2026, 6, 30);
+        private static readonly DateTimeOffset IntervalStart = Start.AddHours(9.5);
         private static readonly IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Calendar = new Dictionary<DateOnly, MarketSessionSchedule> {
             [new(2026, 6, 30)] = MarketSessionSchedule.RegularDay(new(2026, 6, 30)),
             [new(2026, 7, 1)] = MarketSessionSchedule.RegularDay(new(2026, 7, 1))
         };
-        public BacktestPortfolioFill Fill { get; } = new("candidate", "strategy", "ABC", true, true, 10, 100, 1,
-            DateTimeOffset.Parse("2026-07-01T04:00:00Z"), new(2026, 6, 30));
+        private DateTimeOffset ProcessingTimestamp => intraday ? IntervalStart : Start.AddDays(1);
+        public BacktestPortfolioFill Fill => new("candidate", "strategy", "ABC", true, true, 10, 100, 1,
+            ProcessingTimestamp, SourceSession) { FillTiming = Timing };
+        public BacktestFillTiming Timing => new(SourceSession, IntervalStart,
+            intraday ? "source_bar_open" : "regular_session_open", ProcessingTimestamp,
+            intraday ? IntervalStart.AddMinutes(5) : ProcessingTimestamp);
 
         // Recalculate the full accounting projection so timestamp tampering cannot be caught only by stale arithmetic.
         public BacktestPortfolioState State(BacktestPortfolioFill fill)
         {
-            var state = new BacktestPortfolioState(NativeDailySessionLedger.ValuationBasis, Cutoff, 1, 1, 0,
+            var basis = intraday ? IntradayPortfolioExecution.ValuationBasis : NativeDailySessionLedger.ValuationBasis;
+            var state = new BacktestPortfolioState(basis, Cutoff, 1, 1, 0,
                 [fill], [new("candidate", "strategy", "ABC", 10, 100, null, null, null)],
                 [new("candidate", "strategy", "ABC", "candidate:entry", "Buy", "Market", 10, "partially_filled", 1000, Start)],
                 [new("candidate", "strategy", "ABC", Start.AddDays(1), "technical_exit")], []) {
@@ -123,16 +180,26 @@ public sealed class NativeArtifactIntegrityTests
         }
 
         // Freeze original physical/terminal evidence independently of the supplied potentially altered report, then hash every artifact anew.
-        public async Task<string> WriteAsync(BacktestPortfolioState reported, SimulatedOrderSide originalSide = SimulatedOrderSide.Buy)
+        public async Task<string> WriteAsync(BacktestPortfolioState reported,
+            SimulatedOrderSide originalSide = SimulatedOrderSide.Buy, BacktestFillTiming? originalTiming = null,
+            bool omitOriginalTiming = false)
         {
             Directory.CreateDirectory(root);
             var original = State(Fill);
             var fillEvent = new SimulatedExecutionEvent("candidate:entry", "ABC", "partially_filled", 10, 10, 10,
                 100, 1, 0, 0, 0, 10, 0, Fill.TimestampUtc, "filled", originalSide, false);
+            var payload = JsonSerializer.SerializeToNode(fillEvent)!.AsObject();
+            if (!omitOriginalTiming)
+                payload[nameof(BacktestPortfolioFill.FillTiming)] = JsonSerializer.SerializeToNode(originalTiming ?? Timing);
+            if (intraday)
+            {
+                payload[nameof(IntradayExecutionFill.SourceIntervalStartUtc)] = JsonSerializer.SerializeToNode(IntervalStart);
+                payload[nameof(IntradayExecutionFill.ExecutionPhase)] = "opening_entry";
+            }
             var cutoff = new { CutoffUtc = Cutoff, AdmittedOrder = original.AdmittedOrders.Single(),
                 original.PendingOrders, original.PendingExits, TerminalSignedQuantity = 10 };
             var execution = new[] {
-                new { Ticker = "ABC", Timestamp = Fill.TimestampUtc, EvidenceScope = "portfolio_execution", ReferenceId = "candidate", EvidenceJson = JsonSerializer.Serialize(fillEvent) },
+                new { Ticker = "ABC", Timestamp = Fill.TimestampUtc, EvidenceScope = "portfolio_execution", ReferenceId = "candidate", EvidenceJson = payload.ToJsonString() },
                 new { Ticker = "ABC", Timestamp = Cutoff, EvidenceScope = "portfolio_execution", ReferenceId = "candidate", EvidenceJson = JsonSerializer.Serialize(cutoff) }
             };
             var ending = reported.Sessions[^1].Equity!.Value;

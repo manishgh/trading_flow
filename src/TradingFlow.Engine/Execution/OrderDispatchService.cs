@@ -101,9 +101,11 @@ public sealed class OrderDispatchService : IOrderDispatchService
     private readonly ILogger<OrderDispatchService> logger;
     private readonly IEntryAdmissionControl? admission;
     private readonly IBrokerMutationCoordinator brokerMutations;
+    private readonly AccountLossGuard? lossGuard;
     private readonly string ownerId =
         $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}";
 
+    // Compose the shared dispatcher and optional configured operational account guard.
     public OrderDispatchService(
         IOrderIntentRepository intents,
         IOrderDispatchRepository dispatches,
@@ -115,7 +117,8 @@ public sealed class OrderDispatchService : IOrderDispatchService
         TimeProvider timeProvider,
         ILogger<OrderDispatchService> logger,
         IEntryAdmissionControl? admission = null,
-        IBrokerMutationCoordinator? brokerMutations = null)
+        IBrokerMutationCoordinator? brokerMutations = null,
+        AccountLossGuard? lossGuard = null)
     {
         this.intents = intents;
         this.dispatches = dispatches;
@@ -128,6 +131,7 @@ public sealed class OrderDispatchService : IOrderDispatchService
         this.logger = logger;
         this.brokerMutations = brokerMutations ?? new BrokerMutationCoordinator();
         this.admission = admission;
+        this.lossGuard = lossGuard;
     }
 
     public async Task<OrderSubmissionResult> DispatchAsync(
@@ -317,6 +321,18 @@ public sealed class OrderDispatchService : IOrderDispatchService
             OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry
                 ? admission?.BeginEntryDispatch(ignoredEntryAdmissionSources)
                 : null;
+
+        if (lossGuard is not null && intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry)
+        {
+            var run = await intents.GetRunAsync(intent.RunId, cancellationToken)
+                ?? throw new InvalidOperationException("The entry's production run is missing.");
+            var account = await broker.GetAccountSnapshotAsync(cancellationToken);
+            if (!String.Equals(account.AccountId, intent.AccountId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The dispatch account differs from the reserved intent account.");
+            }
+            await lossGuard.ObserveAsync(run, broker, account, cancellationToken);
+        }
 
         if (current.State == OrderState.Intent)
         {

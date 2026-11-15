@@ -89,6 +89,71 @@ public sealed class StrategyCandidateDecisionOrchestratorTests
             item => item.NewState == StrategyCandidateState.Triggered);
     }
 
+    // A current paper decision may use a healthy alternate on the same nonterminal setup.
+    [Theory]
+    [InlineData(StrategySelectionMode.RunPaperShadow, "paper")]
+    [InlineData(StrategySelectionMode.RunPaperShadow, "paper_shadow")]
+    [InlineData(StrategySelectionMode.RunPaperExperiment, "paper_experiment")]
+    [InlineData(StrategySelectionMode.Backtest, "backtest")]
+    public async Task EvaluateAsync_ChangedDiscoveryKeepsOriginalEvidenceAndSamePaperCandidate(StrategySelectionMode mode, string profile)
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var repository = new SqliteCandidateRepository(database.Factory);
+        var orchestrator = new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), repository);
+        var original = StrategyDecisionKernelTests.CreateRequest() with { SelectionMode = mode };
+        var run = CreateRun(original.AsOfUtc.AddMinutes(-15));
+        run.Profile = profile;
+        var discovered = original.Candidate with
+        {
+            Discovery = original.Candidate.Discovery with
+            {
+                IsPersisted = false,
+                Sources = ["finviz:screen", "wishlist:list"]
+            }
+        };
+        var first = await orchestrator.EvaluateAsync(run, original with
+        {
+            Candidate = discovered with { MarketState = discovered.MarketState with { IsWarm = false } }
+        });
+        Assert.Equal(StrategyCandidateState.DataWarming, first.Candidate.State);
+
+        var refreshed = discovered.Discovery with
+        {
+            AggregateVersion = discovered.Discovery.AggregateVersion + 1,
+            ObservedAtUtc = original.AsOfUtc,
+            Sources = ["wishlist:list"],
+            EvidenceSha256 = new string('f', 64)
+        };
+        var next = original with { Candidate = discovered with { Discovery = refreshed } };
+        if (mode == StrategySelectionMode.Backtest)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.EvaluateAsync(run, next));
+            return;
+        }
+
+        var changedDeadline = next with
+        {
+            Candidate = next.Candidate with { Discovery = refreshed with { ExpiresAtUtc = refreshed.ExpiresAtUtc.AddMinutes(1) } }
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.EvaluateAsync(run, changedDeadline));
+
+        var second = await orchestrator.EvaluateAsync(run, next);
+        Assert.True(second.IsNewTrigger);
+        Assert.Equal(first.Candidate.CandidateId, second.Candidate.CandidateId);
+        Assert.Equal("finviz:screen,wishlist:list", second.Candidate.DiscoverySource);
+        Assert.Equal(discovered.Discovery.ObservedAtUtc, second.Candidate.DiscoveredAtUtc);
+        Assert.Equal(discovered.Discovery.ExpiresAtUtc, second.Candidate.ExpiresAtUtc);
+        Assert.Equal(first.Candidate.SetupScoresJson, second.Candidate.SetupScoresJson);
+        var transitions = await repository.GetTransitionsAsync(second.Candidate.CandidateId);
+        var triggered = Assert.Single(transitions, item => item.NewState == StrategyCandidateState.Triggered);
+        using var audit = JsonDocument.Parse(triggered.EvidenceJson);
+        var proof = audit.RootElement.GetProperty("discovery");
+        Assert.Equal(refreshed.AggregateVersion, proof.GetProperty("aggregateVersion").GetInt64());
+        Assert.Equal("wishlist:list", Assert.Single(proof.GetProperty("sources").EnumerateArray()).GetString());
+        Assert.True((await orchestrator.EvaluateAsync(run, next)).WasAlreadyTerminal);
+        Assert.Equal(transitions.Count, (await repository.GetTransitionsAsync(second.Candidate.CandidateId)).Count);
+    }
+
     [Fact]
     public async Task EvaluateAsync_BacktestJournalRequiresRealPersistenceBeforeKernelEvaluation()
     {

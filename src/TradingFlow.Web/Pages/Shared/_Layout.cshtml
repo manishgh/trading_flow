@@ -48,7 +48,8 @@
     <link rel="stylesheet" href="~/css/desk-theme.css" asp-append-version="true" />
     <script src="~/js/theme.js" asp-append-version="true"></script>
 </head>
-<body class="workspace-app @(signedIn ? "workspace-authenticated" : "workspace-public")">
+<body class="workspace-app @(signedIn ? "workspace-authenticated" : "workspace-public")"
+      data-stock-chart-url="@(signedIn ? Url.Page("/Chart", new { env = envSlug }) : null)">
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <div class="environment-rail" aria-hidden="true"></div>
     @if (signedIn)

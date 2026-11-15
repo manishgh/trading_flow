@@ -6,6 +6,7 @@ using TradingFlow.Data.Context;
 using TradingFlow.Data.Discovery;
 using TradingFlow.Data.Jobs;
 using TradingFlow.Domain.Discovery;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Research;
 using TradingFlow.Data.Orders;
@@ -566,8 +567,11 @@ public sealed class SqliteDurabilityTests
         broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [Fact]
-    public async Task SubmitPositionExitAsync_RepeatedRequest_PostsOneDurableExit()
+    // Submit a real durable exit for the original position after a rebuild takes the journal lease.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SubmitPositionExitAsync_RepeatedRequest_PostsOneDurableExit(bool rebuilt)
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
@@ -580,7 +584,16 @@ public sealed class SqliteDurabilityTests
         var events = new SqliteOrderEventRepository(factory);
         var positions = new SqlitePositionLedgerRepository(factory);
         await InitializeAsync(options);
+        var jobs = new SqliteJobRepository(factory);
+        var originalLease = rebuilt ? await StartPaperAttemptAsync(jobs, run) : null;
         await SeedPositionAsync(positions, run, "paper-account", "MSFT", 10m, now.AddMinutes(-5));
+        if (originalLease is not null)
+        {
+            var resumed = await ContinueAfterRebuildAsync(jobs, run, originalLease, default);
+            Assert.NotNull(resumed.ExitOnlyContinuation);
+            Assert.Equal(run.CodeVersion, resumed.Run.CodeVersion);
+            run = resumed.Run;
+        }
         var broker = CreateExitBroker("paper-account", now, "exit-order-1");
         var dispatcher = CreateDispatcher(intents, events, clock, positions);
         var service = new OrderSubmissionService(
@@ -628,6 +641,8 @@ public sealed class SqliteDurabilityTests
         await using var verification = new TradingFlowDbContext(options);
         var intent = await verification.OrderIntents.AsNoTracking().SingleAsync();
         Assert.Equal(OrderIntentKind.PositionExit, intent.Kind);
+        Assert.Equal(run.RunId, intent.RunId);
+        Assert.Equal(run.CodeVersion, intent.CodeVersion);
         Assert.Equal("paper-account", intent.AccountId);
         Assert.Equal(OrderState.Acked, (await events.GetCurrentAsync(intent.ClientOrderId))!.State);
     }
@@ -775,9 +790,11 @@ public sealed class SqliteDurabilityTests
     // A stop committed after dispatch obtains ownership still fences its first POST.
     // A broker-confirmed order can be adopted even when the stop was just latched.
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DispatchAsync_PaperStopDuringBrokerLookupFencesFirstPostButAllowsAdoption(bool adopt)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task DispatchAsync_PaperStopDuringBrokerLookupFencesFirstPostButAllowsAdoption(bool adopt, bool rebuilt)
     {
         await using var database = new TemporarySqliteDatabase();
         var options = database.CreateOptions(withDurabilityInterceptor: true);
@@ -794,8 +811,16 @@ public sealed class SqliteDurabilityTests
         broker.Setup(client => client.GetOrderByClientOrderIdAsync(reserved.ClientOrderId, It.IsAny<CancellationToken>()))
             .Returns(async (string _, CancellationToken token) =>
             {
-                var stopped = DateTimeOffset.UtcNow;
-                Assert.True(await jobs.SavePaperEntryStopSnapshotAsync(run.RunId, lease.LeaseToken, "{}", stopped, stopped, token));
+                if (rebuilt)
+                {
+                    await ContinueAfterRebuildAsync(jobs, run, lease, token);
+                }
+                else
+                {
+                    var stopped = DateTimeOffset.UtcNow;
+                    Assert.True(await jobs.SavePaperEntryStopSnapshotAsync(run.RunId, lease.LeaseToken, "{}", stopped, stopped, token));
+                }
+
                 return adopt ? CreateMatchingBrokerOrder(reserved, "existing-at-broker", "new") : null;
             });
 
@@ -808,7 +833,7 @@ public sealed class SqliteDurabilityTests
         {
             var blocked = await Assert.ThrowsAsync<PaperEntryDispatchBlockedException>(() =>
                 dispatcher.DispatchAsync(reserved.IntentId, broker.Object));
-            Assert.Equal("paper_pipeline_entries_stopped", blocked.ReasonCode);
+            Assert.Equal(rebuilt ? PaperExitOnlyContinuation.EventType : "paper_pipeline_entries_stopped", blocked.ReasonCode);
         }
 
         var stored = await intents.GetByIntentIdAsync(reserved.IntentId);
@@ -879,6 +904,11 @@ public sealed class SqliteDurabilityTests
     [InlineData("live")]
     [InlineData("expired")]
     [InlineData("removed")]
+    [InlineData("unrelated-alternate")]
+    [InlineData("recorded-alternate")]
+    [InlineData("session-degraded")]
+    [InlineData("legacy-degraded")]
+    [InlineData("recovered")]
     public async Task RecoverPendingAsync_PaperDiscoveryRequiresCurrentTriggeredMembership(string sourceState)
     {
         await using var database = new TemporarySqliteDatabase();
@@ -890,15 +920,28 @@ public sealed class SqliteDurabilityTests
         var discovery = new SqliteDiscoveryRepository(factory);
         await discovery.CommitSnapshotAsync(new DiscoverySnapshotRequest(run.RunId, Guid.NewGuid(),
             DiscoverySourceKinds.Wishlist, "sql-test", "swing", now.AddSeconds(-1), now.AddMinutes(5), 0, [new("MSFT")]));
+        string[]? sources = null;
+        if (sourceState is "unrelated-alternate" or "recorded-alternate" or "session-degraded" or "legacy-degraded" or "recovered")
+        {
+            await discovery.CommitSnapshotAsync(new DiscoverySnapshotRequest(run.RunId, Guid.NewGuid(),
+                DiscoverySourceKinds.Finviz, "alternate", "swing", now.AddSeconds(-1), now.AddMinutes(5), 0, [new("MSFT")]));
+            sources = sourceState switch
+            {
+                "legacy-degraded" => null,
+                "recorded-alternate" => ["wishlist:sql-test", "finviz:alternate"],
+                _ => ["wishlist:sql-test"]
+            };
+        }
         var aggregate = Assert.Single(await discovery.GetActiveAsync(run.RunId, now));
         var evidence = System.Text.Encoding.UTF8.GetString(EvidenceCanonicalJson.SerializeToUtf8Bytes(new
         {
-            discovery = new { aggregate.AggregateId, AggregateVersion = aggregate.Version }
+            discovery = new { aggregate.AggregateId, AggregateVersion = aggregate.Version, sources }
         }));
         var candidate = Guid.NewGuid();
         var hash = new string('f', 64);
         await SeedTriggeredCandidateAsync(options, run, candidate, "MSFT", hash, now.AddHours(1), evidence);
-        await StartPaperAttemptAsync(new SqliteJobRepository(factory), run);
+        var jobs = new SqliteJobRepository(factory);
+        var lease = await StartPaperAttemptAsync(jobs, run);
 
         var clock = new FixedTimeProvider(CandidateReservationTime);
         var intents = new SqliteOrderIntentRepository(factory, clock);
@@ -918,10 +961,27 @@ public sealed class SqliteDurabilityTests
                 .ExecuteUpdateAsync(update => update.SetProperty(source => source.ExpiresAtUtc, now.AddSeconds(-1)));
         }
 
+        if (sourceState is "unrelated-alternate" or "recorded-alternate" or "session-degraded" or "legacy-degraded" or "recovered")
+        {
+            var refreshHealth = new DiscoveryRefreshHealth(
+                sourceState == "session-degraded" ? new DiscoveryRefreshFailure(now, "Source projection failed.") : null,
+                [new DiscoverySourceRefreshFailure("wishlist", "sql-test", now, "Source capture failed.")]);
+            Assert.True(await jobs.SaveSnapshotAsync(run.RunId, lease.LeaseToken,
+                System.Text.Json.JsonSerializer.Serialize(new { paperPipelineHealth = new { discovery = refreshHealth } }),
+                now, default));
+            if (sourceState == "recovered")
+            {
+                refreshHealth = new DiscoveryRefreshHealth(null, []);
+                Assert.True(await jobs.SaveSnapshotAsync(run.RunId, lease.LeaseToken,
+                    System.Text.Json.JsonSerializer.Serialize(new { paperPipelineHealth = new { discovery = refreshHealth } }),
+                    now, default));
+            }
+        }
+
         var broker = CreateDispatchBroker(reserved, brokerOrder: null, "fresh-membership-entry");
         var dispatcher = CreateDispatcher(intents, events, clock);
 
-        var shouldPost = sourceState == "live";
+        var shouldPost = sourceState is "live" or "recorded-alternate" or "recovered";
         Assert.Equal(shouldPost ? 1 : 0, await dispatcher.RecoverPendingAsync(broker.Object));
         Assert.Equal(shouldPost ? OrderState.Acked : OrderState.Expired, (await events.GetCurrentAsync(reserved.ClientOrderId))!.State);
         broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
@@ -943,6 +1003,231 @@ public sealed class SqliteDurabilityTests
         Assert.NotNull(lease);
         Assert.NotNull(await jobs.StartPaperRunAsync(run, lease.LeaseToken, default));
         return lease;
+    }
+
+    // Move the paper run to a new lease and register a different executing build.
+    private static async Task<PaperRunStart> ContinueAfterRebuildAsync(
+        SqliteJobRepository jobs, ProductionRun run, DurableJobLease oldLease, CancellationToken token)
+    {
+        await jobs.ReleaseLeaseAsync(run.RunId, oldLease.LeaseToken, token);
+        var lease = await jobs.TryAcquireAsync(run.RunId, "rebuilt-worker", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), token);
+        Assert.NotNull(lease);
+        var requested = CreateRun(run.RunId);
+        requested.StartedAtUtc = run.StartedAtUtc;
+        requested.CodeVersion = new string('f', 40);
+        var continued = await jobs.StartPaperRunAsync(requested, lease.LeaseToken, token);
+        Assert.NotNull(continued);
+        return continued;
+    }
+
+    // Recheck the durable account breach after claiming an intent and before first broker POST.
+    [Fact]
+    public async Task DispatchAsync_AccountLossBreachFromAnotherRunFencesFirstBrokerPost()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var policy = new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1));
+        var clock = new FixedTimeProvider(CandidateReservationTime);
+        var intents = new SqliteOrderIntentRepository(factory, clock, accountLossOptions: policy);
+        var events = new SqliteOrderEventRepository(factory);
+        var store = new SqliteAccountLossStateStore(factory);
+        var scope = new AccountLossScope("alpaca", "paper", "paper-account");
+        var run = CreateRun(Guid.NewGuid());
+        await store.RecordAsync(scope, run, LossSample(100_000m, CandidateReservationTime.AddSeconds(-5)), policy, default);
+        var reserved = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        var observingRun = CreateRun(Guid.NewGuid());
+        observingRun.Profile = "paper_shadow";
+        var broker = CreateDispatchBroker(reserved, brokerOrder: null, "unused");
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(reserved.ClientOrderId, It.IsAny<CancellationToken>()))
+            .Returns(async (string _, CancellationToken token) =>
+            {
+                await store.RecordAsync(scope, observingRun, LossSample(97_000m, CandidateReservationTime), policy, token);
+                return (ActiveBrokerOrder?)null;
+            });
+
+        var dispatcher = CreateDispatcher(intents, events, clock);
+        var rejection = await Assert.ThrowsAsync<PortfolioRiskReservationRejectedException>(() =>
+            dispatcher.DispatchAsync(reserved.IntentId, broker.Object));
+
+        Assert.Equal("account_loss_entry_blocked", rejection.ReasonCode);
+        Assert.Equal(OrderState.Expired, (await events.GetCurrentAsync(reserved.ClientOrderId))!.State);
+        Assert.Equal(0, (await intents.GetByIntentIdAsync(reserved.IntentId))!.DispatchAttemptCount);
+        broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
+        await using var context = factory.CreateDbContext();
+        var breach = Assert.Single(await context.RiskEvents.Where(item => item.EventType == "account_daily_loss_breach").ToArrayAsync());
+        Assert.Equal(3m, breach.ObservedValue);
+        Assert.Equal(2m, breach.LimitValue);
+        Assert.Equal(observingRun.RunId, breach.RunId);
+    }
+
+    // Reopening the store and providing a profitable later observation keeps the day's latch shared across runs.
+    [Fact]
+    public async Task ReserveAsync_AccountLossLatchSurvivesRestartAndSpansRunsOnlyInItsAccount()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var policy = new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1));
+        var scope = new AccountLossScope("alpaca", "paper", "paper-account");
+        var breachedRun = CreateRun(Guid.NewGuid());
+        await new SqliteAccountLossStateStore(factory).RecordAsync(scope, breachedRun,
+            LossSample(97_000m, CandidateReservationTime.AddSeconds(-2)), policy, default);
+        var restarted = new SqliteAccountLossStateStore(factory);
+        var peer = CreateRun(Guid.NewGuid());
+        peer.Profile = "paper_shadow";
+        var current = await restarted.RecordAsync(scope, peer, LossSample(102_000m, CandidateReservationTime), policy, default);
+        Assert.NotNull(current.DailyBreach);
+        Assert.Null(await restarted.GetAsync(scope with { AccountId = "other-account" }, default));
+        Assert.Null(await restarted.GetAsync(scope with { Mode = "live" }, default));
+
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(CandidateReservationTime), accountLossOptions: policy);
+        var rejection = await Assert.ThrowsAsync<PortfolioRiskReservationRejectedException>(() =>
+            intents.ReserveAsync(peer, CreateReservation(Guid.NewGuid(), "AAPL")));
+        Assert.Equal("account_loss_entry_blocked", rejection.ReasonCode);
+        await using var context = factory.CreateDbContext();
+        Assert.Empty(await context.OrderIntents.ToArrayAsync());
+        Assert.Single(await context.RiskEvents.Where(item => item.EventType == "account_daily_loss_breach").ToArrayAsync());
+    }
+
+    // A linked or ambiguous cancellation survives a healthy new session until proved terminal.
+    [Fact]
+    public async Task AccountLossCancelReview_PersistsOnceAcrossRestartAndSessionReset()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var limits = new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1));
+        var scope = new AccountLossScope("alpaca", "paper", "paper-account");
+        var run = CreateRun(Guid.NewGuid());
+        var store = new SqliteAccountLossStateStore(factory);
+        await store.RecordAsync(scope, run, LossSample(97_000m, CandidateReservationTime), limits, default);
+        var review = new AccountLossCancellationReview("owned-bracket", "broker-order", "MSFT", 1m, CandidateReservationTime);
+        await store.SetCancellationReviewAsync(scope, run, review, true, default);
+        await store.SetCancellationReviewAsync(scope, run, review, true, default);
+
+        var restarted = new SqliteAccountLossStateStore(factory);
+        var sample = LossSample(100_000m, CandidateReservationTime.AddDays(1));
+        var priorEvidence = sample.Evidence!;
+        sample = sample with { Evidence = priorEvidence with { Session = priorEvidence.Session.AddDays(1) } };
+        var state = await restarted.RecordAsync(scope, run, sample, limits, default);
+        Assert.False(state.Breached);
+        Assert.Single(state.CancellationReviews!);
+        Assert.NotNull(AccountLossLimitPolicy.Refusal(state, limits, sample.Evidence!.Session, sample.ObservedAtUtc));
+
+        Assert.True(await restarted.CompleteCancellationSweepAsync(scope, state.CancellationSweepGeneration, default));
+        await restarted.SetCancellationReviewAsync(scope, run, review, false, default);
+        var cleared = await restarted.GetAsync(scope, default);
+        Assert.Null(AccountLossLimitPolicy.Refusal(cleared, limits, sample.Evidence!.Session, sample.ObservedAtUtc));
+        await using var context = factory.CreateDbContext();
+        Assert.Single(await context.RiskEvents.Where(item => item.EventType == "account_loss_cancel_review_required").ToArrayAsync());
+        Assert.Single(await context.RiskEvents.Where(item => item.EventType == "account_loss_cancel_review_resolved").ToArrayAsync());
+    }
+
+    // A process can restart after the daily latch rolls over and before it ever lists broker orders.
+    [Fact]
+    public async Task AccountLossSweep_SurvivesRestartBeforeFirstSweepAndFencesOlderCompletion()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var limits = new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1));
+        var scope = new AccountLossScope("alpaca", "paper", "paper-account");
+        var run = CreateRun(Guid.NewGuid());
+        var original = new SqliteAccountLossStateStore(factory);
+        var first = await original.RecordAsync(scope, run, LossSample(97_000m, CandidateReservationTime), limits, default);
+        Assert.True(first.CancellationSweepPending);
+
+        var restarted = new SqliteAccountLossStateStore(factory);
+        var next = LossSampleNextSession(100_000m);
+        var reset = await restarted.RecordAsync(scope, run, next, limits, default);
+        Assert.False(reset.Breached);
+        Assert.True(reset.CancellationSweepPending);
+        Assert.Contains("sweep", AccountLossLimitPolicy.Refusal(reset, limits, next.Evidence!.Session, next.ObservedAtUtc));
+
+        var concurrent = LossSampleNextSession(97_000m, secondsLater: 1);
+        var second = await restarted.RecordAsync(scope, run, concurrent, limits, default);
+        Assert.True(second.CancellationSweepGeneration > first.CancellationSweepGeneration);
+        Assert.False(await restarted.CompleteCancellationSweepAsync(scope, first.CancellationSweepGeneration, default));
+        Assert.True(await restarted.CompleteCancellationSweepAsync(scope, second.CancellationSweepGeneration, default));
+
+        var sweepComplete = await restarted.GetAsync(scope, default);
+        Assert.NotNull(sweepComplete);
+        Assert.False(sweepComplete.CancellationSweepPending);
+        Assert.NotNull(sweepComplete.DailyBreach);
+    }
+
+    // A previously recorded first POST might become visible after the fresh broker snapshot.
+    [Fact]
+    public async Task AccountLossSweep_UnknownBrokerAttemptPreventsCompletionUntilBrokerReconciles()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var limits = new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1));
+        var scope = new AccountLossScope("alpaca", "paper", "paper-account");
+        var run = CreateRun(Guid.NewGuid());
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(CandidateReservationTime));
+        var events = new SqliteOrderEventRepository(factory);
+        var reserved = (await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        var lease = await intents.TryAcquireDispatchLeaseAsync(reserved.IntentId, scope.AccountId, "sweep-fixture",
+            TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(lease);
+        Assert.True((await events.TransitionAsync(new OrderTransitionRequest(
+            reserved.ClientOrderId, OrderState.Intent, OrderState.Submitted, "engine",
+            CandidateReservationTime, PayloadJson: reserved.RequestJson))).Applied);
+        await intents.RecordDispatchAttemptAsync(reserved.IntentId, lease.LeaseToken, default);
+
+        var original = new SqliteAccountLossStateStore(factory);
+        var breached = await original.RecordAsync(scope, run, LossSample(97_000m, CandidateReservationTime), limits, default);
+        var restarted = new SqliteAccountLossStateStore(factory);
+        var next = LossSampleNextSession(100_000m);
+        await restarted.RecordAsync(scope, run, next, limits, default);
+        Assert.False(await restarted.CompleteCancellationSweepAsync(scope, breached.CancellationSweepGeneration, default));
+
+        Assert.True((await events.TransitionAsync(new OrderTransitionRequest(
+            reserved.ClientOrderId, OrderState.Submitted, OrderState.Rejected, "broker_rest",
+            next.ObservedAtUtc, next.ObservedAtUtc, "broker-rejected-order"))).Applied);
+        Assert.True(await restarted.CompleteCancellationSweepAsync(scope, breached.CancellationSweepGeneration, default));
+        Assert.Null(AccountLossLimitPolicy.Refusal(await restarted.GetAsync(scope, default), limits,
+            next.Evidence!.Session, next.ObservedAtUtc));
+    }
+
+    // Advance the evidence to the following synthetic exchange session.
+    private static AccountLossSample LossSampleNextSession(decimal equity, int secondsLater = 0)
+    {
+        var sample = LossSample(equity, CandidateReservationTime.AddDays(1).AddSeconds(secondsLater));
+        var evidence = sample.Evidence!;
+        var newPrior = evidence.PriorClose with
+        {
+            Session = evidence.Session,
+            CloseUtc = evidence.PriorClose.CloseUtc.AddDays(1)
+        };
+        return sample with
+        {
+            Evidence = evidence with
+            {
+                Session = evidence.Session.AddDays(1),
+                PriorClose = newPrior,
+                CompletedSessions = [evidence.WeekAnchor, evidence.PriorClose, newPrior]
+            }
+        };
+    }
+
+    // Keep loss data on the same synthetic exchange date as the order and exposure fixtures.
+    private static AccountLossSample LossSample(decimal equity, DateTimeOffset observedAt)
+    {
+        var previous = new AccountClosingEquity(new DateOnly(2026, 7, 20),
+            new DateTimeOffset(2026, 7, 20, 20, 0, 0, TimeSpan.Zero), 100_000m);
+        var weekly = new AccountClosingEquity(new DateOnly(2026, 7, 17),
+            new DateTimeOffset(2026, 7, 17, 20, 0, 0, TimeSpan.Zero), 100_000m);
+        return new AccountLossSample(observedAt.AddSeconds(-1), observedAt, equity,
+            new AccountLossEvidence(new DateOnly(2026, 7, 21), previous, weekly, [weekly, previous], null), null);
     }
 
     [Fact]
@@ -2049,6 +2334,7 @@ public sealed class SqliteDurabilityTests
             It.IsAny<BrokerExitOrder>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // A safe standalone cancellation journals before using the broker's DELETE endpoint.
     [Fact]
     public async Task RequestCancelAsync_JournalsPendingBeforeBrokerDelete()
     {
@@ -2066,9 +2352,12 @@ public sealed class SqliteDurabilityTests
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
         broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(CreateAccountSnapshot("paper-account", now));
+        var openOrder = CreateMatchingBrokerOrder(intent, "broker-msft", "new");
+        broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([openOrder]);
         broker.SetupSequence(client => client.GetOrderByClientOrderIdAsync(
                 intent.ClientOrderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateMatchingBrokerOrder(intent, "broker-msft", "new"))
+            .ReturnsAsync(openOrder)
+            .ReturnsAsync(openOrder)
             .ReturnsAsync(CreateMatchingBrokerOrder(intent, "broker-msft", "canceled"));
         broker.Setup(client => client.CancelOrderAsync("broker-msft", It.IsAny<CancellationToken>()))
             .Returns(async (string _, CancellationToken cancellationToken) =>
@@ -2098,6 +2387,7 @@ public sealed class SqliteDurabilityTests
         broker.VerifyAll();
     }
 
+    // A fill that wins the race with a standalone DELETE is journaled before cancellation returns.
     [Fact]
     public async Task RequestCancelAsync_BrokerFillDuringCancellation_AtomicallyUpdatesPositionLedger()
     {
@@ -2115,9 +2405,12 @@ public sealed class SqliteDurabilityTests
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
         broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(CreateAccountSnapshot("paper-account", now));
+        var openOrder = CreateMatchingBrokerOrder(intent, "broker-msft", "new");
+        broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([openOrder]);
         broker.SetupSequence(client => client.GetOrderByClientOrderIdAsync(
                 intent.ClientOrderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateMatchingBrokerOrder(intent, "broker-msft", "new"))
+            .ReturnsAsync(openOrder)
+            .ReturnsAsync(openOrder)
             .ReturnsAsync(CreateMatchingBrokerOrder(
                 intent,
                 "broker-msft",
@@ -2219,6 +2512,7 @@ public sealed class SqliteDurabilityTests
             It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    // Recovery still processes a standalone cancellation after another order's broker failure.
     [Fact]
     public async Task RecoverPendingCancellationsAsync_OneBrokerFailure_DoesNotBlockRemainingOrders()
     {
@@ -2243,12 +2537,18 @@ public sealed class SqliteDurabilityTests
         var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
         broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(CreateAccountSnapshot("paper-account", now));
+        var openAapl = CreateMatchingBrokerOrder(aapl, "broker-aapl", "new");
+        var openMsft = CreateMatchingBrokerOrder(msft, "broker-msft", "new");
+        broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([openAapl, openMsft]);
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(aapl.ClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(openAapl);
         broker.Setup(client => client.CancelOrderAsync("broker-aapl", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("temporary broker failure"));
         broker.Setup(client => client.CancelOrderAsync("broker-msft", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        broker.Setup(client => client.GetOrderByClientOrderIdAsync(
+        broker.SetupSequence(client => client.GetOrderByClientOrderIdAsync(
                 msft.ClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(openMsft)
             .ReturnsAsync(CreateMatchingBrokerOrder(msft, "broker-msft", "canceled"));
         var service = CreateCommandService(intents, events, clock);
 
@@ -2264,6 +2564,168 @@ public sealed class SqliteDurabilityTests
             "broker-aapl", It.IsAny<CancellationToken>()), Times.Once);
         broker.Verify(client => client.CancelOrderAsync(
             "broker-msft", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // An older pending journal event is never authority to DELETE a working linked group.
+    [Theory]
+    [InlineData("partially_filled", false)]
+    [InlineData("done_for_day", false)]
+    [InlineData("filled", true)]
+    public async Task RecoverLinkedCancellation_RepairsOnlyConfirmedTerminalParentWithoutDelete(string status, bool recovered)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        var positions = new SqlitePositionLedgerRepository(factory);
+        await InitializeAsync(options);
+        var parent = await SeedAcknowledgedOrderAsync(
+            intents, events, CreateRun(Guid.NewGuid()), Guid.NewGuid(), "MSFT", "broker-parent", now);
+        await events.TransitionAsync(new OrderTransitionRequest(
+            parent.ClientOrderId, OrderState.Acked, OrderState.CancelPending, "engine", now, BrokerOrderId: "broker-parent"));
+        var brokerOrder = CreateMatchingBrokerOrder(parent, "broker-parent", status,
+            filledQuantity: recovered ? parent.RequestedQuantity : 1m, filledAveragePrice: 100m) with { OrderClass = "bracket" };
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateAccountSnapshot("paper-account", now));
+        broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(recovered ? [] : [brokerOrder]);
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(parent.ClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(brokerOrder);
+        var service = CreateCommandService(intents, events, clock, positions: positions);
+
+        if (recovered)
+        {
+            Assert.Equal(1, await service.RecoverPendingCancellationsAsync(broker.Object, default));
+            Assert.Equal(parent.RequestedQuantity, await positions.GetAccountedFillQuantityAsync("paper-account", "broker-parent"));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<OpeningOrderCancellationReviewRequiredException>(() =>
+                service.RequestCancelAsync(new(parent.ClientOrderId, "broker-parent", "generic", now), broker.Object, default));
+            var error = await Assert.ThrowsAsync<BrokerCommandRecoveryIncompleteException>(() =>
+                service.RecoverPendingCancellationsAsync(broker.Object, default));
+            Assert.Equal(1, error.FailedCount);
+        }
+
+        var state = await events.GetCurrentAsync(parent.ClientOrderId);
+        Assert.Equal(recovered ? OrderState.Filled : OrderState.CancelPending, state!.State);
+        var confirmed = await service.ReconcileTerminalOpeningOrderAsync("paper-account", parent.ClientOrderId,
+            "broker-parent", broker.Object, default);
+        Assert.Equal(recovered ? brokerOrder : null, confirmed);
+        broker.Verify(client => client.CancelOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // A nested leg revealed only by the last direct broker read prevents a standalone cancellation retry.
+    [Fact]
+    public async Task RequestCancelAsync_NestedLegAppearsAtDeleteBoundary_PreservesPendingOrder()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        await InitializeAsync(options);
+        var parent = await SeedAcknowledgedOrderAsync(
+            intents, events, CreateRun(Guid.NewGuid()), Guid.NewGuid(), "MSFT", "broker-parent", now);
+        var openRoot = CreateMatchingBrokerOrder(parent, "broker-parent", "new");
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateAccountSnapshot("paper-account", now));
+        broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([openRoot]);
+        broker.SetupSequence(client => client.GetOrderByClientOrderIdAsync(parent.ClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(openRoot)
+            .ReturnsAsync(openRoot with { NestedLegOrderIds = ["broker-stop"] });
+        var service = CreateCommandService(intents, events, clock);
+
+        await Assert.ThrowsAsync<OpeningOrderCancellationReviewRequiredException>(() =>
+            service.RequestCancelAsync(new(parent.ClientOrderId, "broker-parent", "generic", now), broker.Object, default));
+
+        Assert.Equal(OrderState.CancelPending, (await events.GetCurrentAsync(parent.ClientOrderId))!.State);
+        broker.Verify(client => client.CancelOrderAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // A session pause leaves a GTC order open, repairs cumulative fills from REST, and preserves a pending cancellation.
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(false, 3)]
+    [InlineData(true, 0)]
+    [InlineData(true, 3)]
+    public async Task DoneForDay_GtcOrderRemainsReconcilableAcrossSessions(bool cancellationPending, int filledAtClose)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var events = new SqliteOrderEventRepository(factory);
+        var positions = new SqlitePositionLedgerRepository(factory);
+        var lifecycle = new OrderLifecycleService(events, clock);
+        await InitializeAsync(options);
+        const string brokerId = "broker-gtc";
+        var intent = await SeedAcknowledgedOrderAsync(
+            intents, events, CreateRun(Guid.NewGuid()), Guid.NewGuid(), "MSFT", brokerId, now, timeInForce: "gtc");
+        if (cancellationPending)
+        {
+            await lifecycle.RequestCancelAsync(intent.ClientOrderId, brokerId);
+        }
+
+        clock.Advance(TimeSpan.FromHours(5));
+        var doneForDay = CreateMatchingBrokerOrder(intent, brokerId, "done_for_day", filledAtClose,
+            filledAtClose > 0 ? 100m : null) with { UpdatedAt = clock.GetUtcNow() };
+        var update = BrokerOrderUpdateFactory.Create(doneForDay);
+        var notice = await lifecycle.ApplyBrokerUpdateAsync(update with { Source = BrokerUpdateSource.TradeStream });
+        Assert.Equal(cancellationPending ? OrderState.CancelPending : OrderState.Acked, notice.State);
+        Assert.Equal(0m, notice.FilledQuantity ?? 0m);
+
+        var snapshot = filledAtClose > 0
+            ? await lifecycle.ApplyBrokerUpdateWithFillAsync(update,
+                new OrderFillProjection(intent.Symbol, intent.Side, filledAtClose, 100m, "close-rest-fill"))
+            : await lifecycle.ApplyBrokerUpdateAsync(update);
+        var state = cancellationPending ? OrderState.CancelPending : filledAtClose > 0 ? OrderState.PartiallyFilled : OrderState.Acked;
+        Assert.Equal(state, snapshot.State);
+        Assert.True(BrokerOrderStateProjection.Matches(snapshot, doneForDay));
+        Assert.False(BrokerOrderStateProjection.Matches(snapshot, doneForDay with { FilledQuantity = filledAtClose + 1 }));
+        Assert.Equal(filledAtClose, await positions.GetAccountedFillQuantityAsync(intent.AccountId, brokerId));
+
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateAccountSnapshot(intent.AccountId, clock.GetUtcNow()));
+        broker.Setup(client => client.GetOrderByClientOrderIdAsync(intent.ClientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(doneForDay);
+        var commands = CreateCommandService(intents, events, clock, positions: positions);
+        Assert.Null(await commands.ReconcileTerminalOpeningOrderAsync(intent.AccountId, intent.ClientOrderId, brokerId,
+            broker.Object, default));
+
+        clock.Advance(TimeSpan.FromHours(18));
+        if (!cancellationPending && filledAtClose > 0)
+        {
+            var additionalFill = update with
+            {
+                Status = OrderStatus.PartiallyFilled,
+                FilledQuantity = filledAtClose + 1,
+                Timestamp = clock.GetUtcNow()
+            };
+            var partiallyFilled = await lifecycle.ApplyBrokerUpdateWithFillAsync(additionalFill,
+                new OrderFillProjection(intent.Symbol, intent.Side, additionalFill.FilledQuantity, 100m, "reopened-rest-fill"));
+            Assert.Equal(OrderState.PartiallyFilled, partiallyFilled.State);
+            Assert.Equal(filledAtClose + 1, await positions.GetAccountedFillQuantityAsync(intent.AccountId, brokerId));
+        }
+        else
+        {
+            var reopened = await lifecycle.ApplyBrokerUpdateAsync(update with { Status = OrderStatus.New, Timestamp = clock.GetUtcNow() });
+            Assert.Equal(state, reopened.State);
+            var pending = await lifecycle.RequestCancelAsync(intent.ClientOrderId, brokerId);
+            Assert.Equal(OrderState.CancelPending, pending.State);
+            var canceled = await lifecycle.ApplyBrokerUpdateAsync(update with { Status = OrderStatus.Canceled, Timestamp = clock.GetUtcNow() });
+            Assert.Equal(OrderState.Canceled, canceled.State);
+        }
     }
 
     [Fact]
@@ -3948,11 +4410,16 @@ public sealed class SqliteDurabilityTests
         string symbol,
         string brokerOrderId,
         DateTimeOffset timestampUtc,
-        bool protective = false)
+        bool protective = false,
+        string? timeInForce = null)
     {
         var reservation = protective
             ? CreateProtectiveReservation(intentId, symbol)
             : CreateReservation(intentId, symbol);
+        if (timeInForce is not null)
+        {
+            reservation = reservation with { TimeInForce = timeInForce };
+        }
         if (reservation.PortfolioRisk is { } risk)
             reservation = reservation with { PortfolioRisk = risk with
             {
@@ -3980,15 +4447,18 @@ public sealed class SqliteDurabilityTests
         return reserved.Intent;
     }
 
+    // Build the actual durable command service with only broker and dispatch mocked by its callers.
     private static OrderSubmissionService CreateCommandService(
         SqliteOrderIntentRepository intents,
         SqliteOrderEventRepository events,
         TimeProvider clock,
-        IProtectiveStopReplacementRepository? stopReplacements = null) => new(
+        IProtectiveStopReplacementRepository? stopReplacements = null,
+        IPositionLedgerRepository? positions = null) => new(
         intents,
         new Mock<IOrderDispatchService>(MockBehavior.Strict).Object,
         new Mock<IEntryGateChain>(MockBehavior.Strict).Object,
         NullLogger<OrderSubmissionService>.Instance,
+        positions: positions,
         events: events,
         lifecycle: new OrderLifecycleService(events, clock),
         accountBinding: new BrokerAccountBindingService(

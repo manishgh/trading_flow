@@ -79,6 +79,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
     private readonly LiveQuoteBook quotes;
     private long subscriptionGeneration;
     private string runtimeStage = "created";
+    private ConcurrentDictionary<string, long>? chartMembership;
 
     public AlpacaMarketStateStreamService(
         AlpacaCredentialProvider credentials,
@@ -134,6 +135,22 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         return statuses.TryGetValue(normalized, out var status)
             ? status
             : Unknown(normalized);
+    }
+
+    // Require independent candle membership in the live connection; display
+    // quote subscriptions do not populate this dictionary.
+    public async Task<ChartCanonicalSession?> ReadChartCanonicalAsync(
+        string symbol, DateTimeOffset start, DateTimeOffset end, DateTimeOffset asOf,
+        CancellationToken cancellationToken)
+    {
+        var membership = Volatile.Read(ref chartMembership);
+        if (membership is null || !membership.TryGetValue(symbol, out var generation))
+        {
+            return null;
+        }
+        var evidence = await marketState.ReadChartCanonicalAsync(symbol, generation, start, end, asOf, cancellationToken);
+        return ReferenceEquals(membership, Volatile.Read(ref chartMembership)) &&
+            membership.TryGetValue(symbol, out var current) && current == generation ? evidence : null;
     }
 
     internal Task RuntimeCompletion => ExecuteTask ?? Task.CompletedTask;
@@ -456,6 +473,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             }
 
             marketState.MarkSnapshotsReady(leaseState.Current.FencingToken);
+            Volatile.Write(ref chartMembership, activeSubscriptions);
             displayQuotes = ForwardDisplayQuotesAsync(stream, connectionCts.Token);
 
             subscriptions = ForwardSubscriptionChangesAsync(
@@ -470,6 +488,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
         finally
         {
+            Volatile.Write(ref chartMembership, null);
             marketState.InvalidateOwnership(leaseState.Current.FencingToken);
             Volatile.Write(ref runtimeStage, "cleanup_connection_tasks");
             activeSubscriptions.Clear();

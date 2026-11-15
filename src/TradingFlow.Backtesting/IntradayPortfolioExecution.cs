@@ -37,6 +37,7 @@ public sealed record IntradayExecutionFill(string CandidateId, SimulatedExecutio
     public DateTimeOffset SourceIntervalStartUtc { get; init; }
     public string ExecutionPhase { get; init; } = "";
     public long ExecutionSequence { get; init; }
+    public required BacktestFillTiming FillTiming { get; init; }
 }
 
 /// <summary>Bounded OHLC adapter: shared risk sizing, shared fills/costs and completed-candle protection in one chronological book.</summary>
@@ -46,6 +47,21 @@ public static partial class IntradayPortfolioExecution
     /// <summary>Replay a frozen ordinary saved plan; no provider calls or strategy-specific research driver is involved.</summary>
     public static IntradayPortfolioReplayOutcome Replay(IntradayPortfolioReplayRequest request,
         CancellationToken cancellationToken = default) => new Book(request).Run(cancellationToken);
+
+    // Reconstruct reporting clocks from the source interval and phase retained on the original execution event.
+    internal static BacktestFillTiming DescribeFill(DateOnly sourceSession, DateTimeOffset intervalStart,
+        DateTimeOffset stamp, string phase)
+    {
+        var basis = phase switch
+        {
+            "opening_entry" or "opening_entry_lagged_liquidity" or "opening_protection" or "scheduled_opening_liquidation" => "source_bar_open",
+            "session_close_auction" => "regular_session_close",
+            _ => "source_bar_range"
+        };
+        var available = phase == "scheduled_opening_liquidation" ? stamp : intervalStart.AddMinutes(5);
+        return new(sourceSession, basis == "source_bar_range" ? null : stamp.ToUniversalTime(), basis,
+            stamp.ToUniversalTime(), available.ToUniversalTime());
+    }
 
     private sealed class Intent(BacktestCandidateTrade candidate, StrategyDefinition strategy, int requested, decimal maximumNotional)
     {
@@ -693,7 +709,7 @@ public static partial class IntradayPortfolioExecution
             if (intent.LastFillAt is { } last && at < last || !entry && (intent.EntryAt is not { } first || at < first))
                 throw new InvalidDataException("An actual fill cannot precede its parent entry or a previously observed fill; clocks must never be clamped.");
             intent.LastFillAt = at;
-            var timing = DescribeFill(sourceIntervalStartUtc, at, executionPhase);
+            var timing = DescribeFill(Date(sourceIntervalStartUtc), sourceIntervalStartUtc, at, executionPhase);
             var sequence = checked(++executionSequence);
             var price = fill.AverageFillPrice!.Value;
             var quantity = fill.FilledQuantity;
@@ -741,27 +757,17 @@ public static partial class IntradayPortfolioExecution
                 fill.SlippageBps, fill.ImpactBps, (intent.Long ? 1 : -1) * intent.Open,
                 (intent.Long ? 1 : -1) * (intent.ExitNotional - intent.Exited * intent.Entry) - intent.Fees,
                 at, reason, buy ? SimulatedOrderSide.Buy : SimulatedOrderSide.Sell, !entry))
-                { SourceIntervalStartUtc = sourceIntervalStartUtc, ExecutionPhase = executionPhase, ExecutionSequence = sequence });
+            {
+                SourceIntervalStartUtc = sourceIntervalStartUtc,
+                ExecutionPhase = executionPhase,
+                ExecutionSequence = sequence,
+                FillTiming = timing
+            });
             events.Add(new(intent.Candidate.CandidateId, intent.Candidate.Ticker, at, "fill",
                 reason + (executionPhase.Contains("lagged_liquidity", StringComparison.Ordinal) || intent.MarketEntry && executionPhase == "opening_protection"
                     ? ";diagnostic_lagged_completed_bar_volume_capacity;no_current_bar_volume_used"
                     : ";retrospective_bar_participation_assumption"), quantity, price, intent.Stop, intent.Target)
                 { SourceIntervalStartUtc = sourceIntervalStartUtc, ExecutionPhase = executionPhase, ExecutionSequence = sequence });
-        }
-
-        // Fills found during replay of a completed interval become available at interval end.
-        // Scheduled liquidation has its own point clock. Range touches have no exact economic time.
-        private BacktestFillTiming DescribeFill(DateTimeOffset intervalStart, DateTimeOffset stamp, string phase)
-        {
-            var basis = phase switch
-            {
-                "opening_entry" or "opening_entry_lagged_liquidity" or "opening_protection" or "scheduled_opening_liquidation" => "source_bar_open",
-                "session_close_auction" => "regular_session_close",
-                _ => "source_bar_range"
-            };
-            var available = phase == "scheduled_opening_liquidation" ? stamp : intervalStart.AddMinutes(5);
-            return new(Date(intervalStart), basis == "source_bar_range" ? null : stamp.ToUniversalTime(), basis,
-                stamp.ToUniversalTime(), available.ToUniversalTime());
         }
 
         /// <summary>Estimate both-side slippage and actual/frozen fees for the approved cost-covered stop offset.</summary>

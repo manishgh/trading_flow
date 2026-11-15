@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TradingFlow.Backtesting;
@@ -399,7 +400,7 @@ public class LiveRunnerIntegrationTests
         }
     }
 
-    // A failed ticker contributes to run health while another ticker still writes its chart.
+    // An empty provider response skips the ticker while other market state is still usable.
     [Fact]
     public async Task RunAsync_ContinuesOtherTickerPipelines_WhenOneTickerHasNoSourceBars()
     {
@@ -460,17 +461,15 @@ public class LiveRunnerIntegrationTests
                 File.Exists(Path.Combine(resultsRoot, "live", "LiveRunnerTest", "AAPL", "AAPL_chart.json")),
                 "AAPL should still produce live metrics even when SIVEF has no source bars.");
 
-            Assert.NotNull(health);
-            Assert.Equal(1, health.FailureCount);
-            Assert.Equal(1, health.ConsecutiveFailingPolls);
+            Assert.Null(health);
 
             auditRepo.Verify(
                 x => x.SaveAuditAsync(
                     It.Is<DecisionAuditRecord>(record =>
                         record.Ticker == "SIVEF" &&
-                        record.Decision == "Failed" &&
+                        record.Decision == "Skipped" &&
                         record.RejectionReason != null &&
-                        record.RejectionReason.StartsWith("ticker_pipeline_failed", StringComparison.Ordinal)),
+                        record.RejectionReason.StartsWith(MarketDataUnavailable.BarsMissing, StringComparison.Ordinal)),
                     It.IsAny<CancellationToken>()),
                 Times.AtLeastOnce);
         }
@@ -480,13 +479,247 @@ public class LiveRunnerIntegrationTests
         }
     }
 
-    // A 15-minute warm-up renews membership independently of the one-session setup deadline.
+    // A repeated single-symbol exception cannot latch unrelated candidates. The symbol can return on a good read.
+    [Fact]
+    public async Task RunAsync_RepeatedTickerExceptionsLeaveOtherEntriesAndRecoveryAvailable()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var poll = 1;
+            var provider = new Mock<IMarketDataProvider>();
+            provider.Setup(source => source.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                {
+                    if (poll < 5 && tickers.Contains("SIVEF"))
+                    {
+                        throw new InvalidOperationException("Synthetic market read failure.");
+                    }
+
+                    return YieldBars(poll <= 3 ? [] : tickers.SelectMany(CreateFiveMinuteBars).ToArray(), token);
+                });
+
+            var candidates = new MemoryCandidateRepository();
+            var auditRows = new List<DecisionAuditRecord>();
+            LivePipelineHealth? persisted = null;
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepoMock: CaptureDecisionAudits(auditRows),
+                candidateRepository: candidates, iterationInterval: TimeSpan.FromMilliseconds(1),
+                publishPipelineHealth: (health, _) => { persisted = health; return Task.CompletedTask; });
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var progress = new InlineProgress(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal) && poll++ == 5)
+                {
+                    cancellation.Cancel();
+                }
+            });
+            await RunUntilCancelledAsync(
+                runner, CreateRunConfig(resultsRoot, ["AAPL", "SIVEF"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")], cancellation, progress);
+
+            Assert.Equal(new[] { "AAPL", "SIVEF" }, candidates.Records.Select(candidate => candidate.Symbol).Order().ToArray());
+            Assert.NotNull(persisted);
+            Assert.False(persisted.EntriesStopped);
+            Assert.Equal(4, persisted.FailureCount);
+            Assert.Equal(0, persisted.RunWideFailureCount);
+            Assert.Equal(4, auditRows.Count(audit => audit.Ticker == "SIVEF" && audit.Decision == "Failed"));
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // An incomplete broker snapshot is a shared failure. A later snapshot cannot silently clear the durable stop.
+    [Fact]
+    public async Task RunAsync_RepeatedBrokerSnapshotFailureLatchesRunBeforeRecovery()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var poll = 1;
+            var broker = new Mock<IBrokerClient>();
+            broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>()))
+                .Returns(() => poll <= 3
+                    ? throw new InvalidOperationException("Synthetic broker snapshot failure.")
+                    : Task.FromResult<IReadOnlyList<ActiveBrokerOrder>>([]));
+            broker.Setup(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+            var provider = CreateRecordingProvider(new System.Collections.Concurrent.ConcurrentQueue<string>());
+            var candidates = new MemoryCandidateRepository();
+            var snapshots = new List<LivePipelineHealth>();
+            var runner = CreateRunner(provider.Object, lockService: null, brokerClient: broker.Object,
+                candidateRepository: candidates, iterationInterval: TimeSpan.FromMilliseconds(1),
+                publishPipelineHealth: (health, _) => { snapshots.Add(health); return Task.CompletedTask; });
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var progress = new InlineProgress(message =>
+            {
+                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal) && poll++ == 4)
+                {
+                    cancellation.Cancel();
+                }
+            });
+            await RunUntilCancelledAsync(
+                runner, CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")], cancellation, progress);
+
+            Assert.Equal(new[] { 1, 2, 3, 0 }, snapshots.Select(health => health.ConsecutiveFailingPolls));
+            Assert.False(snapshots[1].EntriesStopped);
+            Assert.True(snapshots[2].EntriesStopped);
+            Assert.True(snapshots[3].EntriesStopped);
+            Assert.Equal(3, snapshots[3].RunWideFailureCount);
+            Assert.Empty(candidates.Records);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // A retained failed source cannot admit a symbol unless independent healthy evidence supports it.
+    [Fact]
+    public async Task RunAsync_SourceFailureSurvivesRestartUntilFreshObservation_AndUsesHealthyAlternative()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var started = new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            var clock = new MutableTimeProvider(started);
+            var restored = new LivePipelineHealth
+            {
+                Discovery = new DiscoveryRefreshHealth(null,
+                    [new DiscoverySourceRefreshFailure("finviz", "test-screen", started.AddMinutes(-1), "Timed out")])
+            };
+            restored = JsonSerializer.Deserialize<LivePipelineHealth>(JsonSerializer.Serialize(restored))!;
+            var scope = Guid.NewGuid();
+            var poll = 1;
+            var finviz = new DiscoverySourceEvidence("finviz", "test-screen", started.AddMinutes(-2), started.AddMinutes(3),
+                "{}", Guid.NewGuid(), 1, null, false, null, new string('a', 64));
+            var wishlist = finviz with
+            {
+                SourceKind = "wishlist", SourceKey = "test-list", LatestSnapshotId = Guid.NewGuid(), ObservedAtUtc = started
+            };
+            var discovery = new Mock<ILiveDiscoverySession>();
+            discovery.Setup(session => session.RefreshAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() =>
+                {
+                    var now = clock.GetUtcNow();
+                    var recoveredFinviz = poll >= 4 ? finviz with { ObservedAtUtc = now, SourceVersion = 2 } : finviz;
+                    return new DiscoveryUniverseSnapshot(scope, now,
+                        [
+                            new ActiveDiscoveryAggregate(Guid.NewGuid(), scope, "AAPL", "swing", started.AddMinutes(-2),
+                                now, started.AddMinutes(3), poll, [recoveredFinviz, wishlist]),
+                            new ActiveDiscoveryAggregate(Guid.NewGuid(), scope, "SIVEF", "swing", started.AddMinutes(-2),
+                                recoveredFinviz.ObservedAtUtc, started.AddMinutes(3), poll, [recoveredFinviz])
+                        ], [], [])
+                    {
+                        SourceRefreshOutcomes = poll >= 4
+                            ? [new DiscoverySourceRefreshOutcome("finviz", "test-screen", now, now, null)]
+                            : []
+                    };
+                });
+            discovery.Setup(session => session.RetainExposureSymbolsAsync(
+                It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+            var provider = new Mock<IMarketDataProvider>();
+            provider.Setup(source => source.GetBarsAsync(
+                    It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<IReadOnlyCollection<string>>(),
+                    It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+                .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> _, DateTimeOffset _, DateTimeOffset _, CancellationToken token) =>
+                    YieldBars(tickers.SelectMany(CreateFiveMinuteBars), token));
+
+            var candidates = new MemoryCandidateRepository();
+            var audits = new List<DecisionAuditRecord>();
+            var published = new List<LivePipelineHealth>();
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepoMock: CaptureDecisionAudits(audits),
+                discoverySession: discovery.Object, timeProvider: clock, candidateRepository: candidates,
+                iterationInterval: TimeSpan.FromMilliseconds(1), initialPipelineHealth: restored,
+                publishPipelineHealth: (health, _) => { published.Add(health); return Task.CompletedTask; });
+            // Finish on the recovery poll. The wall clock only bounds a genuinely stalled test.
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var recoveryPollCompleted = false;
+            var progress = new InlineProgress(message =>
+            {
+                if (!message.StartsWith("Iteration finished.", StringComparison.Ordinal))
+                {
+                    return;
+                }
+                if (poll == 4)
+                {
+                    recoveryPollCompleted = true;
+                    cancellation.Cancel();
+                }
+                else
+                {
+                    Assert.Equal("AAPL", Assert.Single(candidates.Records).Symbol);
+                    clock.Set(started.AddSeconds(poll++));
+                }
+            });
+            await RunUntilCancelledAsync(
+                runner, CreateRunConfig(resultsRoot, ["AAPL", "SIVEF"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")], cancellation, progress);
+
+            Assert.True(recoveryPollCompleted, "The test deadline elapsed before the fourth discovery poll completed.");
+            Assert.Equal("wishlist:test-list", Assert.Single(candidates.Records, candidate => candidate.Symbol == "AAPL").DiscoverySource);
+            Assert.Equal("finviz:test-screen", Assert.Single(candidates.Records, candidate => candidate.Symbol == "SIVEF").DiscoverySource);
+            var health = Assert.Single(published);
+            Assert.Empty(health.Discovery!.FailedSources);
+            Assert.False(health.EntriesStopped);
+            Assert.Single(audits, audit => audit.Ticker == "SIVEF" && audit.RejectionReason == "paper_discovery_source_refresh_failed");
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // A refresh outage is visible and recoverable even while there are no symbols to process.
+    [Fact]
+    public async Task RunAsync_EmptyUniverseStillPublishesSessionRefreshFailureAndRecovery()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            var session = new Mock<ILiveDiscoverySession>();
+            var empty = new DiscoveryUniverseSnapshot(Guid.NewGuid(), now, [], [], []);
+            session.SetupSequence(discovery => discovery.RefreshAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(empty)
+                .ThrowsAsync(new InvalidOperationException("Synthetic projection outage."))
+                .ReturnsAsync(empty);
+            session.Setup(discovery => discovery.RetainExposureSymbolsAsync(
+                It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+            var snapshots = new List<LivePipelineHealth>();
+            var runner = CreateRunner(new Mock<IMarketDataProvider>().Object, lockService: null,
+                discoverySession: session.Object, iterationInterval: TimeSpan.FromMilliseconds(1),
+                publishPipelineHealth: (health, _) => { snapshots.Add(health); return Task.CompletedTask; });
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await RunUntilCancelledAsync(
+                runner, CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")], cancellation, CancelAfterIterations(cancellation, 3));
+
+            Assert.Equal(2, snapshots.Count);
+            Assert.Equal("Synthetic projection outage.", snapshots[0].Discovery?.SessionFailure?.Reason);
+            Assert.Null(snapshots[1].Discovery?.SessionFailure);
+            Assert.All(snapshots, health =>
+            {
+                Assert.False(health.EntriesStopped);
+                Assert.Equal(0, health.FailureCount);
+            });
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // A long warm-up can renew membership or skip entry without creating a candidate.
     [Theory]
-    [InlineData("renewed", 15)]
-    [InlineData("removed", 15)]
-    [InlineData("removed", 2)]
-    [InlineData("refresh-failed", 15)]
-    public async Task RunAsync_RechecksSourceAfterLongWarmup(string outcome, int warmupMinutes)
+    [InlineData("renewed", 15, null)]
+    [InlineData("removed", 15, "paper_discovery_membership_expired")]
+    [InlineData("removed", 2, "paper_discovery_membership_removed_after_warmup")]
+    [InlineData("refresh-failed", 15, "paper_discovery_refresh_failed_after_warmup")]
+    public async Task RunAsync_RechecksSourceAfterLongWarmup(string outcome, int warmupMinutes, string? expectedSkipReason)
     {
         var resultsRoot = CreateTempDirectory();
         try
@@ -506,32 +739,50 @@ public class LiveRunnerIntegrationTests
                     return YieldBars(CreateFiveMinuteBars(tickers.Single()), token);
                 });
             var candidates = new MemoryCandidateRepository();
-            var runner = CreateRunner(provider.Object, lockService: null, discoverySession: discovery,
-                timeProvider: clock, candidateRepository: candidates);
+            var audits = new List<DecisionAuditRecord>();
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepoMock: CaptureDecisionAudits(audits),
+                discoverySession: discovery, timeProvider: clock, candidateRepository: candidates,
+                iterationInterval: TimeSpan.FromMilliseconds(1));
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var progress = new InlineProgress(message =>
-            {
-                if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
-                    cancellation.Cancel();
-            });
+            var refreshFailed = outcome == "refresh-failed";
             await RunUntilCancelledAsync(
                 runner,
                 CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
                 [CreateStrategy("1d", "5m")],
                 cancellation,
-                progress);
+                CancelAfterIterations(cancellation, refreshFailed ? 2 : 1));
 
-            Assert.Equal(2, discovery.RefreshCount);
+            Assert.Equal(refreshFailed ? 4 : 2, discovery.RefreshCount);
             if (outcome == "renewed")
             {
                 var candidate = Assert.Single(candidates.Records);
                 Assert.NotEqual(StrategyCandidateState.Expired, candidate.State);
                 Assert.Equal(started.AddMinutes(warmupMinutes), candidate.RevalidatedAtUtc);
                 Assert.Equal(new DateTimeOffset(2026, 8, 26, 20, 0, 0, TimeSpan.Zero), candidate.ExpiresAtUtc);
+                Assert.DoesNotContain(audits, audit => audit.Decision == "Skipped");
             }
             else
             {
                 Assert.Empty(candidates.Records);
+                var skip = Assert.Single(audits);
+                Assert.Equal("Skipped", skip.Decision);
+                Assert.Equal(expectedSkipReason, skip.RejectionReason);
+                Assert.Equal("LiveRunnerTest", skip.RunName);
+                Assert.Equal("AAPL", skip.Ticker);
+                Assert.Equal("Test Strategy", skip.StrategyName);
+                Assert.Equal(started.AddMinutes(warmupMinutes), skip.Timestamp);
+                using var payload = JsonDocument.Parse(skip.SignalJson);
+                var evidence = payload.RootElement;
+                Assert.Equal(TestExecutionRunId, evidence.GetProperty("runId").GetGuid());
+                Assert.Equal("test_strat", evidence.GetProperty("strategyIdentity").GetProperty("StrategyId").GetString());
+                Assert.Equal("1.0.0", evidence.GetProperty("strategyIdentity").GetProperty("SemanticVersion").GetString());
+                Assert.Equal("before_entry_decision", evidence.GetProperty("stage").GetString());
+                Assert.Equal(refreshFailed, evidence.GetProperty("membershipRefreshFailed").GetBoolean());
+                Assert.False(evidence.GetProperty("membershipPresentAfterRefresh").GetBoolean());
+                Assert.Equal(JsonValueKind.Null, evidence.GetProperty("candidateId").ValueKind);
+                var source = Assert.Single(evidence.GetProperty("sourceEvidence").EnumerateArray());
+                Assert.Equal(started, source.GetProperty("ObservedAtUtc").GetDateTimeOffset());
+                Assert.Equal(started.AddMinutes(3), source.GetProperty("ExpiresAtUtc").GetDateTimeOffset());
             }
         }
         finally
@@ -540,9 +791,61 @@ public class LiveRunnerIntegrationTests
         }
     }
 
-    // Restored health blocks entry work even when market evidence and source membership recover.
+    // Source expiry during context loading is audited before any candidate is evaluated.
     [Fact]
-    public async Task RunAsync_LatchedPipelineStopPreventsNewCandidateEvaluation()
+    public async Task RunAsync_RecordsSourceExpiryDuringDecisionContextLoad()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var started = new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero);
+            var expiredAt = started.AddMinutes(3);
+            var clock = new MutableTimeProvider(started);
+            var context = new Mock<IStrategyDecisionContextProvider>();
+            context.Setup(source => source.ResolveAsync(
+                    It.IsAny<StrategyDecisionContextRequest>(), It.IsAny<CancellationToken>()))
+                .Returns(() =>
+                {
+                    clock.Set(expiredAt);
+                    return ValueTask.FromResult<DrawdownDecisionContext?>(null);
+                });
+            var candidates = new MemoryCandidateRepository();
+            var audits = new List<DecisionAuditRecord>();
+            var provider = CreateRecordingProvider(new System.Collections.Concurrent.ConcurrentQueue<string>());
+            var runner = CreateRunner(provider.Object, lockService: null, auditRepoMock: CaptureDecisionAudits(audits),
+                discoverySession: new ScriptedLiveDiscoverySession([["AAPL"]], clock),
+                timeProvider: clock, candidateRepository: candidates, decisionContextProvider: context.Object);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await RunUntilCancelledAsync(
+                runner,
+                CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m"),
+                [CreateStrategy("1d", "5m")],
+                cancellation,
+                CancelAfterIterations(cancellation, 1));
+
+            Assert.Empty(candidates.Records);
+            var skip = Assert.Single(audits);
+            Assert.Equal("Skipped", skip.Decision);
+            Assert.Equal("paper_discovery_membership_expired", skip.RejectionReason);
+            Assert.Equal(expiredAt, skip.Timestamp);
+            using var payload = JsonDocument.Parse(skip.SignalJson);
+            var evidence = payload.RootElement;
+            Assert.Equal("before_candidate_evaluation", evidence.GetProperty("stage").GetString());
+            Assert.True(evidence.GetProperty("membershipPresentAfterRefresh").GetBoolean());
+            Assert.True(evidence.GetProperty("candidateExpiresAtUtc").GetDateTimeOffset() > expiredAt);
+            Assert.Equal(JsonValueKind.Null, evidence.GetProperty("candidateId").ValueKind);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // Restored health or an exit-only lease blocks candidate work despite available market evidence.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_EntryStopPreventsNewCandidateEvaluation(bool rebuilt)
     {
         var resultsRoot = CreateTempDirectory();
         try
@@ -553,7 +856,8 @@ public class LiveRunnerIntegrationTests
             var candidates = new MemoryCandidateRepository();
             var runner = CreateRunner(provider.Object, lockService: null,
                 timeProvider: new FixedTimeProvider(now), candidateRepository: candidates,
-                initialPipelineHealth: new LivePipelineHealth(EntriesStoppedAtUtc: now.AddMinutes(-3)));
+                initialPipelineHealth: rebuilt ? null : new LivePipelineHealth(EntriesStoppedAtUtc: now.AddMinutes(-3)),
+                exitOnly: rebuilt);
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var progress = new InlineProgress(message =>
             {
@@ -900,13 +1204,22 @@ public class LiveRunnerIntegrationTests
         }
     }
 
-    [Fact]
-    public async Task RunAsync_SubmitsOrderUsingExecutionTimeframePrice_WhenSignalTimeframeDiffers()
+    // Use the execution price on success, and audit either clock if it expires during sizing.
+    [Theory]
+    [InlineData(null, 56, 56)]
+    [InlineData("paper_discovery_membership_expired", 56, 59)]
+    [InlineData("paper_setup_deadline_elapsed_before_order_submission", 58, 60)]
+    public async Task RunAsync_RechecksEntryClocksBeforeSubmittingOrder(
+        string? expectedSkipReason, int startedMinute, int submissionMinute)
     {
         var resultsRoot = CreateTempDirectory();
         try
         {
             const decimal executionClose = 123.45m;
+            var hour = new DateTimeOffset(2026, 8, 26, 19, 0, 0, TimeSpan.Zero);
+            var startedAt = hour.AddMinutes(startedMinute);
+            var submissionTime = hour.AddMinutes(submissionMinute);
+            var clock = new MutableTimeProvider(startedAt);
             var provider = new Mock<IMarketDataProvider>();
             provider
                 .Setup(x => x.GetBarsAsync(
@@ -938,32 +1251,40 @@ public class LiveRunnerIntegrationTests
             broker
                 .As<IBrokerAccountProvider>()
                 .Setup(x => x.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new BrokerAccountSnapshot(
-                    "paper-account",
-                    "ACTIVE",
-                    AccountBlocked: false,
-                    TradingBlocked: false,
-                    TradeSuspendedByUser: false,
-                    ShortingEnabled: true,
-                    BuyingPower: 100_000m,
-                    RegulationTBuyingPower: 100_000m,
-                    Equity: 100_000m,
-                    LongMarketValue: 0m,
-                    ShortMarketValue: 0m,
-                    RequestedAtUtc: DateTimeOffset.UtcNow,
-                    ObservedAtUtc: DateTimeOffset.UtcNow));
+                .ReturnsAsync(() =>
+                {
+                    clock.Set(submissionTime);
+                    return new BrokerAccountSnapshot(
+                        "paper-account",
+                        "ACTIVE",
+                        AccountBlocked: false,
+                        TradingBlocked: false,
+                        TradeSuspendedByUser: false,
+                        ShortingEnabled: true,
+                        BuyingPower: 100_000m,
+                        RegulationTBuyingPower: 100_000m,
+                        Equity: 100_000m,
+                        LongMarketValue: 0m,
+                        ShortMarketValue: 0m,
+                        RequestedAtUtc: startedAt,
+                        ObservedAtUtc: submissionTime);
+                });
             broker
                 .Setup(x => x.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()))
                 .Callback<BrokerEntryOrder, CancellationToken>((order, _) => submittedOrder = order.Order)
                 .ReturnsAsync(new BrokerOrderReceipt("order-1", DateTimeOffset.UtcNow));
 
+            var audits = new List<DecisionAuditRecord>();
+            var candidates = new MemoryCandidateRepository();
             var runner = CreateRunner(
                 provider.Object,
                 lockService: null,
+                auditRepoMock: CaptureDecisionAudits(audits),
                 brokerClient: broker.Object,
                 orderSubmissionService: CreatePassThroughSubmissionService(),
-                timeProvider: new FixedTimeProvider(
-                    new DateTimeOffset(2026, 8, 26, 19, 56, 0, TimeSpan.Zero)));
+                discoverySession: expectedSkipReason is null ? null : new ScriptedLiveDiscoverySession([["AAPL"]], clock),
+                timeProvider: clock,
+                candidateRepository: candidates);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var progressMessages = new System.Collections.Concurrent.ConcurrentQueue<string>();
             var progress = new Progress<string>(message =>
@@ -982,8 +1303,28 @@ public class LiveRunnerIntegrationTests
                 cts,
                 progress);
 
-            Assert.True(submittedOrder is not null, String.Join(Environment.NewLine, progressMessages));
-            Assert.Equal(decimal.Round(executionClose * 1.0001m, 4), submittedOrder.LimitPrice);
+            if (expectedSkipReason is null)
+            {
+                Assert.True(submittedOrder is not null, String.Join(Environment.NewLine, progressMessages));
+                Assert.Equal(decimal.Round(executionClose * 1.0001m, 4), submittedOrder.LimitPrice);
+                Assert.DoesNotContain(audits, audit => audit.Decision == "Skipped");
+                return;
+            }
+
+            Assert.Null(submittedOrder);
+            broker.Verify(client => client.SubmitOrderAsync(It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            Assert.Equal(new[] { "Accepted", "Skipped" }, audits.Select(audit => audit.Decision));
+            var skip = audits[1];
+            Assert.Equal(expectedSkipReason, skip.RejectionReason);
+            Assert.Equal(submissionTime, skip.Timestamp);
+            using var payload = JsonDocument.Parse(skip.SignalJson);
+            var evidence = payload.RootElement;
+            Assert.Equal("before_order_submission", evidence.GetProperty("stage").GetString());
+            Assert.Equal(Assert.Single(candidates.Records).CandidateId, evidence.GetProperty("candidateId").GetGuid());
+            Assert.Equal(hour.AddHours(1), evidence.GetProperty("candidateExpiresAtUtc").GetDateTimeOffset());
+            var source = Assert.Single(evidence.GetProperty("sourceEvidence").EnumerateArray());
+            Assert.Equal(startedAt.AddMinutes(3), source.GetProperty("ExpiresAtUtc").GetDateTimeOffset());
         }
         finally
         {
@@ -991,9 +1332,41 @@ public class LiveRunnerIntegrationTests
         }
     }
 
-    // A runtime entry stop and another ticker's stream failure leave the exposed ticker's exit available.
+    // Exit-only recovery cannot cancel an opening order for another run through the polling expiry rule.
     [Fact]
-    public async Task RunAsync_SubmitsTechnicalExitClose_ForActiveStrategyPosition()
+    public async Task RunAsync_ExitOnlySkipsAccountWideEntryExpiry()
+    {
+        var resultsRoot = CreateTempDirectory();
+        try
+        {
+            var broker = new Mock<IBrokerClient>();
+            broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
+                [new ActiveBrokerOrder("old-opening-order", "AAPL", "buy", "accepted", "limit", 10m,
+                    null, 100m, DateTimeOffset.UtcNow.AddHours(-2), "foreign-opening-order", 0m, null, DateTimeOffset.UtcNow)]);
+            broker.Setup(client => client.GetOpenPositionsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+            var submission = new Mock<IOrderSubmissionService>(MockBehavior.Strict);
+            var provider = CreateRecordingProvider(new System.Collections.Concurrent.ConcurrentQueue<string>());
+            var runner = CreateRunner(provider.Object, lockService: null, brokerClient: broker.Object,
+                orderSubmissionService: submission.Object, iterationInterval: TimeSpan.FromMilliseconds(1), exitOnly: true);
+            var run = CreateRunConfig(resultsRoot, ["AAPL"], ["5m"], workerCount: 1, derivedSource: "5m");
+            run = run with { Execution = run.Execution! with { OrderExpiration = "active_cancel" } };
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await RunUntilCancelledAsync(runner, run, [CreateStrategy("1d", "5m")], cancellation, CancelAfterIterations(cancellation, 1));
+
+            submission.Verify(service => service.RequestCancelAsync(It.IsAny<OrderCancellationSubmission>(),
+                It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteDirectory(resultsRoot);
+        }
+    }
+
+    // Pipeline stops and exit-only rebuilds still submit a technical exit using original position ownership.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_SubmitsTechnicalExitClose_ForActiveStrategyPosition(bool rebuilt)
     {
         var resultsRoot = CreateTempDirectory();
         try
@@ -1063,6 +1436,8 @@ public class LiveRunnerIntegrationTests
             submissions.Setup(service => service.SubmitPositionExitAsync(
                     It.Is<PositionExitSubmission>(exit =>
                         exit.Symbol == "MXL" &&
+                        exit.RunContext.RunId == TestExecutionRunId &&
+                        exit.RunContext.CodeVersion == new string('b', 40) &&
                         exit.Quantity == 100m &&
                         exit.Reason == "technical_exit_below_ema20"),
                     broker.Object,
@@ -1107,8 +1482,9 @@ public class LiveRunnerIntegrationTests
                 orderEventRepository: journal.Events.Object,
                 positionLedgerRepository: journal.Positions.Object,
                 marketStateSnapshots: streams.Object,
-                initialPipelineHealth: new LivePipelineHealth(
-                    EntriesStoppedAtUtc: new DateTimeOffset(2026, 8, 26, 19, 0, 0, TimeSpan.Zero)));
+                initialPipelineHealth: rebuilt ? null : new LivePipelineHealth(
+                    EntriesStoppedAtUtc: new DateTimeOffset(2026, 8, 26, 19, 0, 0, TimeSpan.Zero)),
+                exitOnly: rebuilt);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var progress = new Progress<string>(message =>
             {
@@ -1428,6 +1804,17 @@ public class LiveRunnerIntegrationTests
     }
 
     // Supply an authoritative synthetic exchange schedule while keeping market bars test-owned.
+    // Capture the runner's persisted decision rows without creating an operator database.
+    private static Mock<IDecisionAuditRepository> CaptureDecisionAudits(List<DecisionAuditRecord> audits)
+    {
+        var repository = new Mock<IDecisionAuditRepository>();
+        repository.Setup(audit => audit.SaveAuditAsync(It.IsAny<DecisionAuditRecord>(), It.IsAny<CancellationToken>()))
+            .Callback<DecisionAuditRecord, CancellationToken>((record, _) => audits.Add(record))
+            .Returns(Task.CompletedTask);
+        return repository;
+    }
+
+    // Supply deterministic scheduling, execution identity and optional evidence loaders for runner tests.
     private static LiveRunner CreateRunner(
         IMarketDataProvider provider,
         ITickerLockService? lockService,
@@ -1445,7 +1832,9 @@ public class LiveRunnerIntegrationTests
         ICandidateRepository? candidateRepository = null,
         LivePipelineHealth? initialPipelineHealth = null,
         Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null,
-        IMarketStateSnapshotProvider? marketStateSnapshots = null)
+        IMarketStateSnapshotProvider? marketStateSnapshots = null,
+        IStrategyDecisionContextProvider? decisionContextProvider = null,
+        bool exitOnly = false)
     {
         var auditRepo = auditRepoMock ?? new Mock<IDecisionAuditRepository>();
         if (auditRepoMock is null)
@@ -1479,8 +1868,10 @@ public class LiveRunnerIntegrationTests
             timeProvider: timeProvider ?? new FixedTimeProvider(
                 new DateTimeOffset(2026, 8, 26, 19, 31, 0, TimeSpan.Zero)),
             iterationInterval: iterationInterval,
+            decisionContextProvider: decisionContextProvider,
             initialPipelineHealth: initialPipelineHealth,
-            publishPipelineHealth: publishPipelineHealth);
+            publishPipelineHealth: publishPipelineHealth,
+            exitOnly: exitOnly);
     }
 
     private sealed record FilledPositionJournal(

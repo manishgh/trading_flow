@@ -20,7 +20,7 @@ public sealed class OrderSynchronizationRunnerTests
             "broker-1", clientOrderId, "MSFT", "buy",
             OrderStatus.PartiallyFilled, 2m, 100m, 2m, 2m,
             "execution-1", DateTimeOffset.UtcNow, BrokerUpdateSource.TradeStream);
-        var streamer = new SingleUpdateStreamer(update);
+        var streamer = new TestUpdateStreamer(update);
         var factory = new Mock<ITradeUpdateStreamerFactory>();
         factory.Setup(item => item.Create()).Returns(streamer);
         var broker = new Mock<IBrokerClient>();
@@ -127,6 +127,85 @@ public sealed class OrderSynchronizationRunnerTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // A linked cancellation refusal blocks new entries while the live stream protects later fills.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LinkedPartialCancellationRefusal_ContinuesProtectionAndClearsOnlyAfterVerifiedResolution(
+        bool verifiedResolution)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        const string clientOrderId = "SWGA-B-MSFT-20260721-001-12345678";
+        var now = DateTimeOffset.UtcNow;
+        var partial = new OrderUpdate(
+            "broker-1", clientOrderId, "MSFT", "buy", OrderStatus.PartiallyFilled, 2m, 100m,
+            2m, 2m, "execution-1", now, BrokerUpdateSource.TradeStream);
+        var final = partial with
+        {
+            Status = OrderStatus.Filled,
+            FilledQuantity = 10m,
+            LastFillQuantity = 8m,
+            PositionQuantity = 10m,
+            ExecutionId = "execution-2",
+            Timestamp = now.AddSeconds(1)
+        };
+        var factory = new Mock<ITradeUpdateStreamerFactory>();
+        factory.Setup(item => item.Create()).Returns(new TestUpdateStreamer(partial, final));
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        var coordinator = new Mock<IOrderSynchronizationCoordinator>();
+        coordinator.Setup(item => item.CrossCheckAsync(broker.Object, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var admission = new EntryAdmissionControl();
+        const string partialBlockSource = $"partial_entry_remainder_cancellation:{clientOrderId}";
+        admission.Block("independent_risk", "RISK_LIMIT", "Independent limit.", now);
+        var reconciliation = new Mock<IAccountReconciliationService>(MockBehavior.Strict);
+        reconciliation.Setup(item => item.ReconcileAsync(
+                broker.Object, It.IsAny<IReadOnlyList<ActiveBrokerOrder>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AccountReconciliationResult(Guid.NewGuid(), "clean", [], false));
+        EntryBlock? blockBeforeProof = null;
+        reconciliation.Setup(item => item.IsOpeningOrderResolvedAsync(
+                broker.Object, clientOrderId, "broker-1", "MSFT", partial.FilledQuantity, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                blockBeforeProof = admission.GetSnapshot().Blocks.SingleOrDefault(block => block.Source == partialBlockSource);
+                cancellation.Cancel();
+            })
+            .ReturnsAsync(verifiedResolution);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByClientOrderIdAsync(clientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord
+            {
+                Kind = OrderIntentKind.StrategyEntry,
+                ClientOrderId = clientOrderId,
+                RequestedQuantity = 10m,
+                RequestJson = "{\"horizon\":\"swing\"}"
+            });
+        var commands = new Mock<IOrderCommandService>(MockBehavior.Strict);
+        commands.Setup(service => service.RequestCancelAsync(
+                It.Is<OrderCancellationSubmission>(request => request.ClientOrderId == clientOrderId &&
+                    request.BrokerOrderId == "broker-1" && request.Reason == "partial_entry_fill_remainder"),
+                broker.Object, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OpeningOrderCancellationReviewRequiredException(clientOrderId, "broker-1"));
+        var runner = new OrderSynchronizationRunner(
+            factory.Object, broker.Object, coordinator.Object, reconciliation.Object,
+            new OrderSynchronizationOptions(15), TimeProvider.System, NullLogger<OrderSynchronizationRunner>.Instance,
+            intents.Object, commands.Object, admission,
+            new PartialFillExecutionOptions(70m, swingEntryWindowEnd: new TimeOnly(0, 0)));
+
+        await runner.RunAsync(cancellation.Token);
+
+        Assert.Equal("PARTIAL_ENTRY_REMAINDER_UNRESOLVED", blockBeforeProof?.Code);
+        Assert.Equal(!verifiedResolution, admission.GetSnapshot().Blocks.Any(block => block.Source == partialBlockSource));
+        Assert.Contains(admission.GetSnapshot().Blocks, block => block.Source == "independent_risk");
+        coordinator.Verify(item => item.ProcessStreamUpdateAsync(final, It.IsAny<CancellationToken>()), Times.Once);
+        coordinator.Verify(item => item.MarkStreamConnected(), Times.Once);
+        coordinator.Verify(item => item.MarkStreamDisconnected(It.IsAny<string>()), Times.Never);
+        reconciliation.Verify(item => item.ReconcileAsync(
+            broker.Object, It.IsAny<IReadOnlyList<ActiveBrokerOrder>>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+        commands.VerifyAll();
+        commands.VerifyNoOtherCalls();
+    }
+
     [Fact]
     public async Task FillUpdate_TriggersImmediateCrossCheckAndAccountReconciliation()
     {
@@ -144,7 +223,7 @@ public sealed class OrderSynchronizationRunnerTests
             "execution-1",
             DateTimeOffset.UtcNow,
             BrokerUpdateSource.TradeStream);
-        var streamer = new SingleUpdateStreamer(update);
+        var streamer = new TestUpdateStreamer(update);
         var factory = new Mock<ITradeUpdateStreamerFactory>();
         factory.Setup(item => item.Create()).Returns(streamer);
         var broker = new Mock<IBrokerClient>();
@@ -186,14 +265,18 @@ public sealed class OrderSynchronizationRunnerTests
             It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
-    private sealed class SingleUpdateStreamer(OrderUpdate update) : ITradeUpdateStreamer
+    private sealed class TestUpdateStreamer(params OrderUpdate[] updates) : ITradeUpdateStreamer
     {
         public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
+        // Feed consecutive broker events into one connected session and stay connected until cancellation.
         public async IAsyncEnumerable<OrderUpdate> ReadUpdatesAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
         {
-            yield return update;
+            foreach (var update in updates)
+            {
+                yield return update;
+            }
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
 

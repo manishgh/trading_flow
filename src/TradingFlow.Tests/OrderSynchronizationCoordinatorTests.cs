@@ -55,6 +55,59 @@ public sealed class OrderSynchronizationCoordinatorTests
         Assert.Equal("broker_rest", repository.Sources.Last());
     }
 
+    // A nested snapshot preserves exit legs for protection while projecting only the parent fill.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CrossCheck_WithNestedExitLegs_ProjectsOnlyParentAndReturnsAllOpenOrders(bool includeParent)
+    {
+        var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+        var repository = new InMemoryEventRepository(CreateSnapshot(OrderState.Submitted, now));
+        var positions = new InMemoryPositionLedgerRepository();
+        var admission = new EntryAdmissionControl();
+        var coordinator = CreateCoordinator(repository, admission, new MutableTimeProvider(now), positions);
+        coordinator.MarkStreamConnected();
+        var parent = CreateBrokerOrder(
+            includeParent ? "partially_filled" : "filled", includeParent ? 4m : 10m, now, 100m) with
+        {
+            OrderClass = "bracket"
+        };
+        var stop = parent with
+        {
+            OrderId = "native-stop-broker-id",
+            ClientOrderId = "native-stop-client-id",
+            ParentClientOrderId = parent.ClientOrderId,
+            Side = "sell",
+            Status = includeParent ? "held" : "new",
+            OrderType = "stop",
+            LimitPrice = null,
+            StopPrice = 98m,
+            FilledQuantity = 0m,
+            FilledAveragePrice = null
+        };
+        var target = stop with
+        {
+            OrderId = "native-target-broker-id",
+            ClientOrderId = "native-target-client-id",
+            OrderType = "limit",
+            LimitPrice = 106m,
+            StopPrice = null
+        };
+        ActiveBrokerOrder[] openOrders = includeParent ? [parent, stop, target] : [stop, target];
+        var broker = new RecordingBrokerReader { ByClientOrderId = parent, OpenOrders = openOrders };
+
+        var actual = await coordinator.CrossCheckAsync(broker, CancellationToken.None);
+
+        Assert.Equal(openOrders, actual);
+        Assert.Equal<string>(includeParent ? [] : [parent.ClientOrderId], broker.ByClientOrderIdQueries);
+        Assert.Equal(parent.OrderId, repository.Current.BrokerOrderId);
+        Assert.Equal(includeParent ? OrderState.PartiallyFilled : OrderState.Filled, repository.Current.State);
+        Assert.Equal(parent.FilledQuantity, (await positions.GetCurrentAsync("paper-account", "MSFT"))?.Quantity);
+        Assert.Single(positions.ExecutionIds);
+        Assert.True(admission.GetSnapshot().EntriesAllowed);
+        Assert.Empty(coordinator.GetHealth().DivergenceCycles);
+    }
+
     [Fact]
     public async Task StreamFill_IsPrimary_AndTerminalStateWaitsForRestConfirmation()
     {
@@ -468,8 +521,10 @@ public sealed class OrderSynchronizationCoordinatorTests
     private sealed class RecordingBrokerReader : IAccountScopedBrokerOrderReader
     {
         public ActiveBrokerOrder? ByClientOrderId { get; set; }
+        public IReadOnlyList<ActiveBrokerOrder>? OpenOrders { get; init; }
 
-        public int ByClientOrderIdCalls { get; private set; }
+        public List<string> ByClientOrderIdQueries { get; } = [];
+        public int ByClientOrderIdCalls => ByClientOrderIdQueries.Count;
 
         public Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new BrokerAccountSnapshot(
@@ -487,19 +542,21 @@ public sealed class OrderSynchronizationCoordinatorTests
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow));
 
+        // Tests can supply a flat nested-order page independent of the exact lookup result.
         public Task<IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<ActiveBrokerOrder>>(
-                ByClientOrderId is not null && !OrderStateMachine.IsTerminal(
+                OpenOrders ?? (ByClientOrderId is not null && !OrderStateMachine.IsTerminal(
                     BrokerOrderStateProjection.Project(OrderStatusCodec.ParseBrokerValue(ByClientOrderId.Status)))
                     ? [ByClientOrderId]
-                    : []);
+                    : []));
 
+        // Record the requested identity so a child client ID cannot silently resolve as the parent.
         public Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(
             string clientOrderId,
             CancellationToken cancellationToken)
         {
-            ByClientOrderIdCalls++;
+            ByClientOrderIdQueries.Add(clientOrderId);
             return Task.FromResult(ByClientOrderId);
         }
     }

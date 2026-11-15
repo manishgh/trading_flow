@@ -527,6 +527,162 @@ public sealed class ProtectiveOrderInvariantServiceTests
         Assert.Equal(attempts[0].ProtectionRevision, attempts[1].ProtectionRevision);
     }
 
+    // A genuine Alpaca stop leg supplies coverage for the position opened by its filled parent.
+    [Theory]
+    [InlineData("long", "bracket", OrderIntentKind.StrategyEntry)]
+    [InlineData("short", "oto", OrderIntentKind.OperatorEntry)]
+    public async Task NativeStop_FromFullyFilledGenerationOwner_ProvidesExactCoverageWithoutSubmission(
+        string positionSide, string orderClass, OrderIntentKind entryKind)
+    {
+        var fixture = new NativeProtectionFixture(positionSide, orderClass, entryKind);
+
+        Assert.True(await fixture.Service.HasVerifiedCoverageAsync(
+            fixture.Broker.Object, "paper-account", fixture.Position, [fixture.Stop]));
+        Assert.Empty(await fixture.Service.EnsureAsync(
+            fixture.Broker.Object, "paper-account", [fixture.Position], [fixture.Stop]));
+
+        fixture.Submissions.VerifyNoOtherCalls();
+    }
+
+    // Release depends on the current account, same generation, and one executable closing leg.
+    [Theory]
+    [InlineData("account")]
+    [InlineData("local quantity")]
+    [InlineData("exit already owns generation")]
+    [InlineData("parent client ID")]
+    [InlineData("parent broker ID")]
+    [InlineData("parent omitted leg")]
+    [InlineData("parent repeated leg")]
+    [InlineData("replaced parent")]
+    [InlineData("partial parent fill")]
+    [InlineData("nonterminal parent journal")]
+    [InlineData("wrong parent opening side")]
+    [InlineData("wrong generation")]
+    [InlineData("wrong leg side")]
+    [InlineData("wrong leg position intent")]
+    [InlineData("wrong leg role")]
+    [InlineData("wrong group ID")]
+    [InlineData("trailing stop")]
+    [InlineData("under coverage")]
+    [InlineData("over coverage")]
+    [InlineData("held leg")]
+    [InlineData("pending cancel")]
+    [InlineData("pending replace")]
+    [InlineData("replaced leg")]
+    [InlineData("duplicate broker ID")]
+    [InlineData("duplicate client ID")]
+    public async Task NativeStop_WithIncompleteOrConflictingEvidence_DoesNotProveCoverage(string defect)
+    {
+        var fixture = new NativeProtectionFixture("long", "bracket", OrderIntentKind.StrategyEntry);
+        var stop = fixture.Stop;
+        switch (defect)
+        {
+            case "account":
+                fixture.Account = fixture.Account with { AccountId = "other-account" };
+                break;
+            case "local quantity":
+                fixture.Local = fixture.Local with { Quantity = 6m };
+                break;
+            case "exit already owns generation":
+                fixture.ActiveExitOwnsGeneration = true;
+                break;
+            case "parent client ID":
+                stop = stop with { ParentClientOrderId = "different-entry" };
+                break;
+            case "parent broker ID":
+                stop = stop with { ParentOrderId = "different-broker-parent" };
+                break;
+            case "parent omitted leg":
+                fixture.Parent = fixture.Parent with { NestedLegOrderIds = ["different-leg"] };
+                break;
+            case "parent repeated leg":
+                fixture.Parent = fixture.Parent with { NestedLegOrderIds = [stop.OrderId, stop.OrderId] };
+                break;
+            case "replaced parent":
+                fixture.Parent = fixture.Parent with { ReplacedByOrderId = "successor-entry" };
+                break;
+            case "partial parent fill":
+                fixture.Parent = fixture.Parent with { Status = "partially_filled", FilledQuantity = 6m };
+                break;
+            case "nonterminal parent journal":
+                fixture.ParentState = fixture.ParentState with { State = OrderState.PartiallyFilled };
+                break;
+            case "wrong parent opening side":
+                fixture.Parent = fixture.Parent with { Side = "sell" };
+                break;
+            case "wrong generation":
+                fixture.Local = fixture.Local with
+                {
+                    PositionGenerationEventId = 2,
+                    PositionGenerationClientOrderId = "different-entry"
+                };
+                break;
+            case "wrong leg side":
+                stop = stop with { Side = "buy" };
+                break;
+            case "wrong leg position intent":
+                stop = stop with { PositionIntent = "sell_to_open" };
+                break;
+            case "wrong leg role":
+                stop = stop with { GroupRole = "take_profit" };
+                break;
+            case "wrong group ID":
+                stop = stop with { GroupId = "different-group" };
+                break;
+            case "trailing stop":
+                stop = stop with { OrderType = "trailing_stop" };
+                break;
+            case "under coverage":
+                stop = stop with { Qty = 6m };
+                break;
+            case "over coverage":
+                stop = stop with { Qty = 11m };
+                break;
+            case "held leg":
+                stop = stop with { Status = "held" };
+                break;
+            case "pending cancel":
+                stop = stop with { Status = "pending_cancel" };
+                break;
+            case "pending replace":
+                stop = stop with { Status = "pending_replace" };
+                break;
+            case "replaced leg":
+                stop = stop with { ReplacedByOrderId = "successor-stop" };
+                break;
+        }
+        ActiveBrokerOrder[] openOrders = defect switch
+        {
+            "duplicate broker ID" => [stop, stop with { ClientOrderId = "duplicate-client" }],
+            "duplicate client ID" => [stop, stop with { OrderId = "duplicate-broker" }],
+            _ => [stop]
+        };
+
+        Assert.False(await fixture.Service.HasVerifiedCoverageAsync(
+            fixture.Broker.Object, "paper-account", fixture.Position, openOrders));
+        fixture.Submissions.VerifyNoOtherCalls();
+    }
+
+    // Keep uncertain live legs intact and avoid adding a stop that could reverse the position.
+    [Theory]
+    [InlineData("pending_cancel")]
+    [InlineData("pending_replace")]
+    [InlineData("duplicate")]
+    public async Task UncertainNativeStop_FailsRepairWithoutSendingCompetingOrder(string uncertainty)
+    {
+        var fixture = new NativeProtectionFixture("long", "bracket", OrderIntentKind.StrategyEntry);
+        ActiveBrokerOrder[] openOrders = uncertainty == "duplicate"
+            ? [fixture.Stop, fixture.Stop]
+            : [fixture.Stop with { Status = uncertainty, Qty = 6m }];
+
+        var repair = Assert.Single(await fixture.Service.EnsureAsync(
+            fixture.Broker.Object, "paper-account", [fixture.Position], openOrders));
+
+        Assert.False(repair.Succeeded);
+        fixture.Submissions.VerifyNoOtherCalls();
+    }
+
+    // Standalone backstops remain valid when the lifecycle matches their current broker ID.
     [Fact]
     public async Task OwnedStopCoveringFullPosition_DoesNotSubmitAnotherOrder()
     {
@@ -559,11 +715,21 @@ public sealed class ProtectiveOrderInvariantServiceTests
             OrderId = "broker-stop",
             ClientOrderId = clientOrderId
         };
+        var broker = new Mock<IBrokerClient>(MockBehavior.Strict);
+        broker.Setup(item => item.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AccountSnapshot(now));
 
         var repairs = await service.EnsureAsync(
-            Mock.Of<IBrokerClient>(), "paper-account", [position], [stop]);
+            broker.Object, "paper-account", [position], [stop]);
 
         Assert.Empty(repairs);
+        Assert.True(await service.HasVerifiedCoverageAsync(broker.Object, "paper-account", position, [stop]));
+        Assert.False(await service.HasVerifiedCoverageAsync(
+            broker.Object, "paper-account", position, [stop with { OrderId = "other-broker-stop" }]));
+        orderEvents.Setup(repository => repository.GetCurrentAsync(clientOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ActiveSnapshot(clientOrderId, "broker-stop", now) with { State = OrderState.CancelPending });
+        Assert.False(await service.HasVerifiedCoverageAsync(broker.Object, "paper-account", position, [stop]));
+        submissions.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -869,6 +1035,84 @@ public sealed class ProtectiveOrderInvariantServiceTests
         Assert.True(repair.Succeeded);
         Assert.NotNull(captured);
         Assert.InRange(captured.StopPrice, 95m, 100m);
+    }
+
+    // Supplies recorded account ownership for read-only coverage checks without a live broker.
+    private static BrokerAccountSnapshot AccountSnapshot(DateTimeOffset now) => new(
+        "paper-account", "ACTIVE", false, false, false, true,
+        100_000m, 100_000m, 100_000m, 0m, 0m, now, now);
+
+    private sealed class NativeProtectionFixture
+    {
+        public BrokerAccountSnapshot Account { get; set; }
+        public BrokerPosition Position { get; }
+        public PositionLedgerSnapshot Local { get; set; }
+        public bool ActiveExitOwnsGeneration { get; set; }
+        public ActiveBrokerOrder Parent { get; set; }
+        public ActiveBrokerOrder Stop { get; }
+        public OrderStateSnapshot ParentState { get; set; }
+        public Mock<IBrokerClient> Broker { get; } = new(MockBehavior.Strict);
+        public Mock<IOrderSubmissionService> Submissions { get; } = new(MockBehavior.Strict);
+        public ProtectiveOrderInvariantService Service { get; }
+
+        // Build a mutually consistent journal, ledger and pair of nested broker orders.
+        public NativeProtectionFixture(string positionSide, string orderClass, OrderIntentKind entryKind)
+        {
+            var now = new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero);
+            const string parentClientId = "entry-client-id";
+            const string parentBrokerId = "entry-broker-id";
+            const string stopBrokerId = "native-stop-broker-id";
+            var (quantity, openingSide, closingSide, stopPrice) = positionSide == "long"
+                ? (10m, "buy", "sell", 98m)
+                : (-10m, "sell", "buy", 102m);
+            Account = AccountSnapshot(now);
+            Position = new BrokerPosition("MSFT", positionSide, quantity, 100m, 100m, 0m);
+            Local = Snapshot("MSFT", quantity, parentClientId, 100m, openingSide, now);
+            Parent = new ActiveBrokerOrder(
+                parentBrokerId, "MSFT", openingSide, "filled", "limit", 100m, null, 10m,
+                now, parentClientId, 10m, 100m, now, TimeInForce: "gtc", OrderClass: orderClass,
+                BracketStopPrice: stopPrice,
+                PositionIntent: $"{openingSide}_to_open", GroupId: parentBrokerId, GroupRole: "entry",
+                NestedLegOrderIds: orderClass == "bracket" ? [stopBrokerId, "native-target-broker-id"] : [stopBrokerId]);
+            Stop = new ActiveBrokerOrder(
+                stopBrokerId, "MSFT", closingSide, "new", "stop", null, stopPrice, 10m,
+                now, "native-stop-client-id", 0m, null, now, ParentClientOrderId: parentClientId,
+                TimeInForce: "gtc", OrderClass: orderClass, PositionIntent: $"{closingSide}_to_close",
+                ParentOrderId: parentBrokerId, GroupId: parentBrokerId, GroupRole: "stop_loss");
+            ParentState = ActiveSnapshot(parentClientId, parentBrokerId, now) with
+            {
+                State = OrderState.Filled,
+                FilledQuantity = 10m,
+                FillPrice = 100m
+            };
+            Broker.Setup(client => client.GetAccountSnapshotAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => Account);
+            Broker.Setup(client => client.GetOrderByClientOrderIdAsync(parentClientId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => Parent);
+            var intents = new Mock<IOrderIntentRepository>();
+            intents.Setup(repository => repository.GetByClientOrderIdAsync(parentClientId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new OrderIntentRecord
+                {
+                    Kind = entryKind,
+                    ClientOrderId = parentClientId,
+                    AccountId = "paper-account",
+                    Symbol = "MSFT",
+                    Side = openingSide,
+                    RequestedQuantity = 10m,
+                    StopPrice = stopPrice
+                });
+            intents.Setup(repository => repository.HasActivePositionExitAsync(
+                    "paper-account", "MSFT", 1, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => ActiveExitOwnsGeneration);
+            var positions = new Mock<IPositionLedgerRepository>();
+            positions.Setup(repository => repository.GetCurrentAsync("paper-account", "MSFT", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => Local);
+            var orderEvents = new Mock<IOrderEventRepository>();
+            orderEvents.Setup(repository => repository.GetCurrentAsync(parentClientId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => ParentState);
+            Service = CreateService(intents.Object, positions.Object, Submissions.Object,
+                new EmptyMarketDataProvider(), now, orderEvents.Object);
+        }
     }
 
     private static ProtectiveOrderInvariantService CreateService(

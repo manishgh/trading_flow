@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Engine.Execution;
@@ -260,6 +262,163 @@ public sealed class AccountReconciliationServiceTests
         Assert.True(fixture.Admission.GetSnapshot().EntriesAllowed);
     }
 
+    // The stop drains owned opening orders while continuing the existing protection reconciliation.
+    [Fact]
+    public async Task AccountLossBreach_CancelsStandaloneRemaindersAndRecordsLinkedReview()
+    {
+        var fixture = new Fixture();
+        var now = fixture.Time.GetUtcNow();
+        var scope = new AccountLossScope("alpaca", "paper", "paper-account");
+        var day = new DateOnly(2026, 7, 21);
+        var prior = new AccountClosingEquity(day.AddDays(-1), now.AddDays(-1), 100_000m);
+        var week = new AccountClosingEquity(day.AddDays(-4), now.AddDays(-4), 100_000m);
+        fixture.Broker.AccountTime = fixture.Time;
+        fixture.Broker.AccountEquity = 96_000m;
+        fixture.Broker.LossEvidence = new AccountLossEvidence(day, prior, week, [week, prior], null);
+        fixture.Broker.Positions = [new BrokerPosition("HELD", "long", 3m, 10m, 9m, -3m)];
+
+        var store = new Mock<IAccountLossStateStore>(MockBehavior.Strict);
+        store.Setup(candidate => candidate.GetAsync(scope, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((AccountLossState?)null);
+        store.Setup(candidate => candidate.RecordAsync(scope, It.IsAny<ProductionRun>(),
+                It.IsAny<AccountLossSample>(), It.IsAny<AccountLossGuardOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((AccountLossScope _, ProductionRun _, AccountLossSample sample, AccountLossGuardOptions options,
+                CancellationToken _) => AccountLossLimitPolicy.Observe(null, sample, options.Limits));
+        store.Setup(candidate => candidate.SetCancellationReviewAsync(
+                scope, It.IsAny<ProductionRun>(),
+                It.IsAny<AccountLossCancellationReview>(),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        store.Setup(candidate => candidate.CompleteCancellationSweepAsync(scope, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var guard = new AccountLossGuard(store.Object, new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1)),
+            new BrokerAccountBindingService(new BrokerAccountBindingOptions("paper-account")), fixture.Time,
+            NullLogger<AccountLossGuard>.Instance);
+        var intents = new Mock<IOrderIntentRepository>();
+        intents.Setup(repository => repository.GetByClientOrderIdAsync("new-entry", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { ClientOrderId = "new-entry", AccountId = "paper-account", Kind = OrderIntentKind.StrategyEntry });
+        intents.Setup(repository => repository.GetByClientOrderIdAsync("partial-entry", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { ClientOrderId = "partial-entry", AccountId = "paper-account", Kind = OrderIntentKind.StrategyEntry });
+        intents.Setup(repository => repository.GetByClientOrderIdAsync("linked-entry", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { ClientOrderId = "linked-entry", AccountId = "paper-account", Symbol = "MSFT", Kind = OrderIntentKind.StrategyEntry });
+        intents.Setup(repository => repository.GetByClientOrderIdAsync("exit", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderIntentRecord { ClientOrderId = "exit", AccountId = "paper-account", Kind = OrderIntentKind.PositionExit });
+        var commands = new Mock<IOrderCommandService>();
+        commands.Setup(command => command.RequestCancelAsync(
+                It.Is<OrderCancellationSubmission>(request =>
+                    (request.ClientOrderId == "new-entry" || request.ClientOrderId == "partial-entry") &&
+                    request.RequireStandaloneOpeningOrder),
+                fixture.Broker, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((OrderCancellationSubmission request, IBrokerClient _, CancellationToken _) =>
+                new OrderStateSnapshot(Guid.NewGuid(), request.ClientOrderId, request.BrokerOrderId,
+                    request.ClientOrderId == "partial-entry" ? OrderState.CancelPending : OrderState.Canceled, now, now, 0m, null, 1));
+
+        var service = new AccountReconciliationService(
+            fixture.Orders, fixture.Positions, fixture.Reconciliations, fixture.Admission, fixture.Protector,
+            new ReconciliationRunContext(CreateRun(now)), new AccountReconciliationOptions(60, 30),
+            fixture.Time, NullLogger<AccountReconciliationService>.Instance,
+            orderIntents: intents.Object, lossGuard: guard, orderCommands: commands.Object);
+        var opening = new ActiveBrokerOrder("new-order", "MSFT", "buy", "new", "limit", 100m, null, 10m,
+            now, "new-entry", 0m, null, now, OrderClass: "simple");
+        var partial = opening with { OrderId = "partial-order", ClientOrderId = "partial-entry", FilledQuantity = 1m };
+        var exit = opening with { OrderId = "exit-order", ClientOrderId = "exit", Side = "sell" };
+        var linked = partial with { OrderId = "linked-order", ClientOrderId = "linked-entry", OrderClass = "bracket" };
+        var protective = opening with { OrderId = "stop-order", ClientOrderId = "stop", Side = "sell", ParentClientOrderId = "linked-entry" };
+
+        fixture.Broker.FreshOpenOrders = [opening, partial, linked, exit, protective];
+        var result = await service.ReconcileAsync(fixture.Broker, [], default);
+
+        Assert.True(result.BrokerProtectionReady);
+        Assert.Contains("HELD", fixture.Protector.Symbols);
+        commands.Verify(command => command.RequestCancelAsync(
+            It.Is<OrderCancellationSubmission>(request => request.ClientOrderId == "new-entry"),
+            fixture.Broker, It.IsAny<CancellationToken>()), Times.Once);
+        commands.Verify(command => command.RequestCancelAsync(
+            It.Is<OrderCancellationSubmission>(request => request.ClientOrderId == "partial-entry"),
+            fixture.Broker, It.IsAny<CancellationToken>()), Times.Once);
+        commands.VerifyNoOtherCalls();
+        store.Verify(candidate => candidate.CompleteCancellationSweepAsync(scope, 1, It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(candidate => candidate.SetCancellationReviewAsync(
+            scope, It.IsAny<ProductionRun>(), It.Is<AccountLossCancellationReview>(review => review.ClientOrderId == "linked-entry"),
+            true, It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(candidate => candidate.SetCancellationReviewAsync(
+            scope, It.IsAny<ProductionRun>(), It.Is<AccountLossCancellationReview>(review => review.ClientOrderId == "new-entry"),
+            false, It.IsAny<CancellationToken>()), Times.Never);
+        store.Verify(candidate => candidate.SetCancellationReviewAsync(
+            scope, It.IsAny<ProductionRun>(), It.Is<AccountLossCancellationReview>(review => review.ClientOrderId == "partial-entry"),
+            false, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // A stored review survives terminal-order detection until the broker and durable position agree and protection is verified.
+    [Theory]
+    [InlineData("verified_stop", true)]
+    [InlineData("flat_after_accounted_close", true)]
+    [InlineData("stale_flat_projection", false)]
+    [InlineData("failed_repair", false)]
+    [InlineData("unverified_stop", false)]
+    [InlineData("later_fill", false)]
+    [InlineData("terminal_below_observed_fill", false)]
+    [InlineData("replacement", false)]
+    public async Task CancellationReview_RequiresStableTerminalFillAndVerifiedExposure(string evidence, bool resolves)
+    {
+        var fixture = new Fixture();
+        var now = fixture.Time.GetUtcNow();
+        const string clientId = "linked-entry";
+        const string brokerId = "linked-order";
+        const string symbol = "MSFT";
+        var review = new AccountLossCancellationReview(clientId, brokerId, symbol,
+            evidence == "terminal_below_observed_fill" ? 4m : 2m, now);
+        var lossState = new AccountLossState(now, null, null, null, null, null, CancellationReviews: [review]);
+        var terminal = new ActiveBrokerOrder(brokerId, symbol, "buy", "canceled", "limit", 100m, null, 10m,
+            now, clientId, 3m, 100m, now.AddSeconds(1), OrderClass: "bracket");
+        var quantity = evidence == "flat_after_accounted_close" ? 0m : terminal.FilledQuantity;
+        fixture.Positions.Current[symbol] = new PositionLedgerSnapshot(
+            "paper-account", symbol, quantity, "strategy", now, now, 2, 1, clientId, clientId, 100m, "buy");
+        fixture.Orders.Additional[clientId] = new OrderStateSnapshot(Guid.NewGuid(), clientId, brokerId,
+            OrderState.Canceled, now, terminal.UpdatedAt, terminal.FilledQuantity, terminal.FilledAveragePrice, 1);
+        fixture.Broker.AccountTime = fixture.Time;
+        fixture.Broker.Positions = quantity == 0m || evidence == "stale_flat_projection"
+            ? []
+            : [new BrokerPosition(symbol, "long", quantity, 100m, 101m, 3m)];
+        fixture.Broker.LookupOrder = evidence switch
+        {
+            "later_fill" => terminal with { FilledQuantity = 4m, UpdatedAt = now.AddSeconds(2) },
+            "replacement" => terminal with { ReplacedByOrderId = "new-broker-id" },
+            _ => terminal
+        };
+        fixture.Protector.VerifiedCoverage = evidence != "unverified_stop";
+        fixture.Protector.Repairs = evidence == "failed_repair"
+            ? [new ProtectiveOrderRepair(symbol, false, "Stop order was rejected")]
+            : [];
+
+        var store = new Mock<IAccountLossStateStore>();
+        store.Setup(service => service.RecordAsync(It.IsAny<AccountLossScope>(), It.IsAny<ProductionRun>(),
+                It.IsAny<AccountLossSample>(), It.IsAny<AccountLossGuardOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(lossState);
+        var guard = new AccountLossGuard(store.Object,
+            new AccountLossGuardOptions("alpaca", new(2m, 4m, 10m), TimeSpan.FromMinutes(1)),
+            new BrokerAccountBindingService(new BrokerAccountBindingOptions("paper-account")), fixture.Time,
+            NullLogger<AccountLossGuard>.Instance);
+        var commands = new Mock<IOrderCommandService>();
+        commands.Setup(service => service.ReconcileTerminalOpeningOrderAsync(
+                "paper-account", clientId, brokerId, fixture.Broker, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(terminal);
+        var service = new AccountReconciliationService(fixture.Orders, fixture.Positions, fixture.Reconciliations,
+            fixture.Admission, fixture.Protector, new ReconciliationRunContext(CreateRun(now)),
+            new AccountReconciliationOptions(60, 30), fixture.Time, NullLogger<AccountReconciliationService>.Instance,
+            lossGuard: guard, orderCommands: commands.Object);
+
+        await service.ReconcileAsync(fixture.Broker, []);
+
+        store.Verify(candidate => candidate.SetCancellationReviewAsync(
+            new AccountLossScope("alpaca", "paper", "paper-account"), It.IsAny<ProductionRun>(), review,
+            false, It.IsAny<CancellationToken>()), resolves ? Times.Once() : Times.Never());
+        Assert.Equal(resolves,
+            await service.IsOpeningOrderResolvedAsync(fixture.Broker, clientId, brokerId, symbol, review.FilledQuantity));
+        commands.Verify(candidate => candidate.RequestCancelAsync(
+            It.IsAny<OrderCancellationSubmission>(), It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private sealed class Fixture
     {
         public Fixture()
@@ -411,19 +570,35 @@ public sealed class AccountReconciliationServiceTests
         }
     }
 
-    private sealed class RecordingBroker : IBrokerClient
+    private sealed class RecordingBroker : IBrokerClient, IBrokerAccountLossEvidenceProvider
     {
         public IReadOnlyList<BrokerPosition> Positions { get; set; } = [];
+        public IReadOnlyList<ActiveBrokerOrder> FreshOpenOrders { get; set; } = [];
+        public TimeProvider AccountTime { get; set; } = TimeProvider.System;
+        public decimal AccountEquity { get; set; } = 100_000m;
+        public AccountLossEvidence? LossEvidence { get; set; }
+        public ActiveBrokerOrder? LookupOrder { get; set; }
+
+        // Supply coherent marked equity on the same test clock as loss supervision.
         public Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = AccountTime.GetUtcNow();
             return Task.FromResult(new BrokerAccountSnapshot(
                 "paper-account", "ACTIVE", false, false, false, true,
-                100_000m, 100_000m, 100_000m, 0m, 0m, now, now));
+                100_000m, 100_000m, AccountEquity, 0m, 0m, now, now));
         }
+
+        // Use only the explicitly seeded closing marks in account-loss cases.
+        public Task<AccountLossEvidence> GetAccountLossEvidenceAsync(
+            BrokerAccountSnapshot account, DateOnly? lastTrustedSession, CancellationToken cancellationToken) =>
+            Task.FromResult(LossEvidence ?? throw new InvalidOperationException("No account-loss fixture supplied."));
         public Task<IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken) => Task.FromResult(Positions);
-        public Task<IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ActiveBrokerOrder>>([]);
-        public Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(string clientOrderId, CancellationToken cancellationToken) => Task.FromResult<ActiveBrokerOrder?>(null);
+        // Simulate a fresh post-breach read independently from the earlier reconciliation snapshot.
+        public Task<IReadOnlyList<ActiveBrokerOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(FreshOpenOrders);
+        // Return the final terminal parent separately from the earlier command evidence.
+        public Task<ActiveBrokerOrder?> GetOrderByClientOrderIdAsync(string clientOrderId, CancellationToken cancellationToken) =>
+            Task.FromResult(LookupOrder?.ClientOrderId == clientOrderId ? LookupOrder : null);
         public Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<BrokerOrderReceipt> SubmitExitOrderAsync(BrokerExitOrder order, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<TradingSessionSnapshot> GetSessionAsync(DateTimeOffset timestampUtc, CancellationToken cancellationToken) =>
@@ -451,6 +626,13 @@ public sealed class AccountReconciliationServiceTests
         public List<string> Symbols { get; } = [];
         public IReadOnlyList<ProtectiveOrderRepair> Repairs { get; set; } = [];
         public Exception? Failure { get; set; }
+        public bool VerifiedCoverage { get; set; }
+
+        // Keep the positive resting-coverage check independent of the result of a repair attempt.
+        public Task<bool> HasVerifiedCoverageAsync(
+            IBrokerClient broker, string accountId, BrokerPosition position,
+            IReadOnlyList<ActiveBrokerOrder> openOrders, CancellationToken cancellationToken = default) =>
+            Task.FromResult(VerifiedCoverage);
 
         public Task<IReadOnlyList<ProtectiveOrderRepair>> EnsureAsync(
             IBrokerClient broker,

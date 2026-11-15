@@ -1,3 +1,5 @@
+using System.Net;
+using Moq;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Pipeline;
@@ -124,6 +126,40 @@ public class CandlePipelineEngineTests
         Assert.Equal(3, provider.RequestCount);
         Assert.Equal(3, result.Metrics.ReadCount);
         Assert.Equal(1, result.Metrics.FailureCount);
+    }
+
+    // A provider-wide category requires matching evidence from the batch and every independent symbol read.
+    [Theory]
+    [InlineData(503, 502, 503, true)]
+    [InlineData(403, 401, 403, true)]
+    [InlineData(429, 429, 429, true)]
+    [InlineData(503, 503, 0, false)]
+    [InlineData(503, 503, 404, false)]
+    [InlineData(404, 404, 404, false)]
+    public async Task RunAsync_ClassifiesOnlyConfirmedProviderWideHttpFailure(
+        int batchStatus, int firstStatus, int secondStatus, bool shared)
+    {
+        var provider = new Mock<IMarketDataProvider>();
+        var goodData = new CapturingMarketDataProvider();
+        provider.Setup(source => source.GetBarsAsync(
+                It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<IReadOnlyCollection<string>>(),
+                It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .Returns((IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> timeframes, DateTimeOffset start,
+                DateTimeOffset end, CancellationToken token) =>
+            {
+                var status = tickers.Count > 1 ? batchStatus : tickers.Contains("AAPL") ? firstStatus : secondStatus;
+                return status == 0 ? goodData.GetBarsAsync(tickers, timeframes, start, end, token)
+                    : throw new HttpRequestException("Fixture HTTP failure", null, (HttpStatusCode)status);
+            });
+
+        var now = new DateTimeOffset(2026, 8, 26, 21, 0, 0, TimeSpan.Zero);
+        var result = await new CandlePipelineEngine().RunAsync(
+            new CandlePipelineRequest(["AAPL", "MSFT"], ["5m"], ["5m"], "5m", now.AddDays(-1), now, 4, 1),
+            provider.Object, default);
+
+        Assert.Equal(shared, result.SharedProviderFailure is not null);
+        Assert.Equal(secondStatus == 0, result.TickerStates.ContainsKey("MSFT"));
+        Assert.Contains("AAPL", result.Failures.Keys);
     }
 
     [Fact]

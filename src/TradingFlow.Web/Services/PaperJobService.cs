@@ -602,13 +602,18 @@ public sealed class PaperJobService : IDurableJobHandler
             var requestedRun = LiveRunner.CreateProductionRun(executionRunContext);
             var restoredHealth = job.ToSnapshot().PaperPipelineHealth;
             requestedRun.PaperEntriesStoppedAtUtc = restoredHealth?.EntriesStoppedAtUtc;
-            var ownedRun = await lifecycle.StartPaperRunAsync(requestedRun, context.LeaseToken, cancellationToken);
-            if (ownedRun is null)
+            var registration = await lifecycle.StartPaperRunAsync(requestedRun, context.LeaseToken, cancellationToken);
+            if (registration is null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 throw new DurableJobLeaseLostException(job.JobId);
             }
-            if (ownedRun.PaperEntriesStoppedAtUtc is { } journalStop && restoredHealth?.EntriesStoppedAtUtc != journalStop)
+            var continuation = registration.ExitOnlyContinuation;
+            job.ExitOnlyContinuation = continuation;
+            // Exit journals use the originating run identity. The attempt records the executing build.
+            executionRunContext = executionRunContext with { CodeVersion = registration.Run.CodeVersion };
+            if (continuation is null && registration.Run.PaperEntriesStoppedAtUtc is { } journalStop &&
+                restoredHealth?.EntriesStoppedAtUtc != journalStop)
             {
                 job.SetPipelineHealth((restoredHealth ?? new LivePipelineHealth()) with
                 {
@@ -624,7 +629,14 @@ public sealed class PaperJobService : IDurableJobHandler
             job.ArtifactDirectory = Path.GetFullPath(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
             await PersistPaperSnapshotAsync(context, job.ToSnapshot(), cancellationToken);
             ClearLiveChartSnapshots(runConfig);
-            Directory.CreateDirectory(Path.Combine(runConfig.ResultsRoot, "live", runConfig.RunName));
+            Directory.CreateDirectory(job.ArtifactDirectory);
+            if (continuation is not null)
+            {
+                await artifactWriter.WriteTextAsync(
+                    Path.Combine(job.ArtifactDirectory, "paper-exit-only.json"),
+                    JsonSerializer.Serialize(continuation, JsonOptions),
+                    cancellationToken);
+            }
 
             var provider = runtimeFactory.CreateProvider(runConfig);
             var newsProvider = runtimeFactory.CreateNewsProvider(runConfig);
@@ -682,7 +694,8 @@ public sealed class PaperJobService : IDurableJobHandler
                 candidateRepository,
                 timeProvider: context.TimeProvider,
                 initialPipelineHealth: job.ToSnapshot().PaperPipelineHealth,
-                publishPipelineHealth: (health, token) => SaveSnapshotAsync(token, health));
+                publishPipelineHealth: (health, token) => SaveSnapshotAsync(token, health),
+                exitOnly: continuation is not null);
 
             var progress = new Progress<string>(msg =>
             {
@@ -923,6 +936,7 @@ public sealed class PaperJobService : IDurableJobHandler
         public string? ErrorMessage { get; set; }
         public string? ArtifactDirectory { get; set; }
         private LivePipelineHealth? pipelineHealth;
+        public PaperExitOnlyContinuation? ExitOnlyContinuation { get; set; }
 
         // A health update persists independently of the rolling progress-event buffer.
         public void SetPipelineHealth(LivePipelineHealth health)
@@ -959,13 +973,14 @@ public sealed class PaperJobService : IDurableJobHandler
             }
         }
 
-        // Restore the entry stop and poll streak alongside the existing progress projection.
+        // Restore the continuation and pipeline health alongside the existing progress projection.
         public void ApplySnapshot(BacktestJobSnapshot snapshot)
         {
             lock (stateLock)
             {
                 ArtifactDirectory = snapshot.ArtifactDirectory;
                 pipelineHealth = snapshot.PaperPipelineHealth;
+                ExitOnlyContinuation = snapshot.PaperExitOnly;
                 CurrentStage = snapshot.CurrentStage;
                 CompletedTickerCount = snapshot.CompletedTickerCount;
                 TotalTickerCount = snapshot.TotalTickerCount;
@@ -980,7 +995,7 @@ public sealed class PaperJobService : IDurableJobHandler
         public BacktestJobSnapshot ToSnapshot() =>
             ToTerminalSnapshot(Status, FinishedAt, ErrorMessage);
 
-        // Keep health visible after both terminal publication and a worker restart.
+        // Keep continuation and health visible after terminal publication and a worker restart.
         public BacktestJobSnapshot ToTerminalSnapshot(
             string status,
             DateTimeOffset? finishedAt,
@@ -991,7 +1006,7 @@ public sealed class PaperJobService : IDurableJobHandler
                 return new BacktestJobSnapshot(
                     JobId, RunName, ConfigPath, status, CreatedAt, StartedAt, finishedAt, error,
                     CurrentStage, CompletedTickerCount, TotalTickerCount, Events.ToArray(), null,
-                    ArtifactDirectory: ArtifactDirectory, PaperPipelineHealth: pipelineHealth);
+                    ArtifactDirectory: ArtifactDirectory, PaperPipelineHealth: pipelineHealth, PaperExitOnly: ExitOnlyContinuation);
             }
         }
     }

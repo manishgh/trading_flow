@@ -163,7 +163,7 @@
                                     {
                                         <tr data-ticker="@item.Ticker">
                                             <td class="select-column"><input type="checkbox" name="Tickers" value="@item.Ticker" data-bulk-item aria-label="Select @item.Ticker" /></td>
-                                            <td><strong>@item.Ticker</strong></td>
+                                            <td><a asp-page="/Chart" asp-route-symbol="@item.Ticker" stock-chart-symbol="@item.Ticker" asp-route-env="@(Request.Query["env"].ToString())" aria-label="Open chart for @item.Ticker"><strong>@item.Ticker</strong></a></td>
                                             <td><input class="wl-cell-input" data-inline-name value="@item.DisplayName" placeholder="—" aria-label="@item.Ticker name" /></td>
                                             <td><input class="wl-cell-input" data-inline-notes value="@item.Notes" placeholder="—" aria-label="@item.Ticker notes" /></td>
                                         </tr>

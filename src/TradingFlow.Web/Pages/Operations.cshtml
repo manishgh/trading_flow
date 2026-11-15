@@ -52,6 +52,11 @@
     }
 </div>
 
+@if (User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator))
+{
+    <p><a asp-page="/AccountLossReview">Review paper account loss limits</a></p>
+}
+
 @if (report is null)
 {
     <p class="empty-state">Operational state has not loaded.</p>

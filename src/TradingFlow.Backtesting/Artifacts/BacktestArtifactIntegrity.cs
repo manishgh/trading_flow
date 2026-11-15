@@ -457,14 +457,15 @@ public static class BacktestArtifactIntegrity
             throw new InvalidDataException("Native admitted ticker or catalog strategy differs from its original candidate decision.");
     }
 
-    // Match a multiset of physical fill events so a shifted month, changed side, split fill or duplicate cannot hide in aggregate totals.
+    // Match physical fills and their retained display timing on the same multiset occurrence.
     private static async Task VerifyNativeFillEventsAsync(SqliteConnection connection, BacktestAdmittedOrder order,
         IReadOnlyList<BacktestPortfolioFill> fills, string valuationBasis, CancellationToken token)
     {
         var firstEntry = fills.Where(fill => fill.IsEntry).Select(fill => (DateTimeOffset?)fill.TimestampUtc).Min();
         if (fills.Any(fill => !fill.IsEntry && (firstEntry is null || fill.TimestampUtc < firstEntry)))
             throw new InvalidDataException("An exit fill precedes its parent's first actual entry fill.");
-        var remaining = fills.GroupBy(fill => fill).ToDictionary(group => group.Key, group => group.Count());
+        var remaining = fills.GroupBy(fill => (Physical: fill with { FillTiming = null }, Timing: fill.FillTiming))
+            .ToDictionary(group => group.Key, group => group.Count());
         // One candidate fills on one timeframe; a sub-daily one (decision-hour timing) books each fill to its own session.
         var fillTimeframes = fills.Select(fill => fill.FillTimeframe).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (fillTimeframes.Length > 1)
@@ -490,12 +491,37 @@ public static class BacktestArtifactIntegrity
                 execution.Side == SimulatedOrderSide.Buy, !execution.IsRiskReducing, execution.LastFillQuantity,
                 execution.FillPrice.Value, execution.Fees, execution.OccurredAtUtc,
                 NativeDailySessionLedger.FillSessionDate(execution.OccurredAtUtc, fillTimeframe, valuationBasis)) { FillTimeframe = fillTimeframe };
-            if (!remaining.TryGetValue(observed, out var count) || count == 0)
+            var timing = ReadOriginalFillTiming(payload.RootElement, execution.OccurredAtUtc, valuationBasis);
+            var key = (Physical: observed, Timing: timing);
+            if (!remaining.TryGetValue(key, out var count) || count == 0)
+            {
+                if (remaining.Any(item => item.Value > 0 && item.Key.Physical == observed))
+                    throw new InvalidDataException("Native fill timing differs from its original execution evidence.");
                 throw new InvalidDataException("Native fill does not match one original execution event's timestamp, side, quantity, price and fees.");
-            remaining[observed] = count - 1;
+            }
+            remaining[key] = count - 1;
         }
         if (remaining.Values.Any(count => count != 0))
             throw new InvalidDataException("Native fill has no matching original execution event.");
+    }
+
+    // Require the original timing and cross-check intraday timing against its retained interval and phase.
+    private static BacktestFillTiming ReadOriginalFillTiming(JsonElement payload, DateTimeOffset processingTimestamp,
+        string valuationBasis)
+    {
+        var timing = RequireProperty(payload, nameof(BacktestPortfolioFill.FillTiming)).Deserialize<BacktestFillTiming>();
+        if (timing is null || timing.ProcessingTimestampUtc != processingTimestamp)
+            throw new InvalidDataException("Original fill timing does not retain its execution processing timestamp.");
+        if (valuationBasis == IntradayPortfolioExecution.ValuationBasis)
+        {
+            var interval = RequireDateTimeOffset(payload, nameof(IntradayExecutionFill.SourceIntervalStartUtc));
+            var phase = RequireString(payload, nameof(IntradayExecutionFill.ExecutionPhase));
+            var expected = IntradayPortfolioExecution.DescribeFill(
+                NativeDailySessionLedger.SourceSessionDate(interval, valuationBasis), interval, processingTimestamp, phase);
+            if (timing != expected)
+                throw new InvalidDataException("Original intraday fill timing differs from the retained execution interval and phase.");
+        }
+        return timing;
     }
 
     // Compare every pending command and intention with the coordinator's immutable cutoff observation, including empty lists.

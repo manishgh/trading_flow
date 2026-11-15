@@ -9,6 +9,34 @@ namespace TradingFlow.Tests;
 
 public sealed class NativeEconomicClaimSuppressionTests
 {
+    // Independent strategy books share the selected-work evidence boundary before computing their cash summaries.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IndependentNativeBooks_WithholdCashWhenSelectedWorkIsMissing(bool missingWork)
+    {
+        var start = DateTimeOffset.Parse("2026-06-01T04:00:00Z");
+        var strategy = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("swing-connors-rsi2-sma5-risk-managed.bt-v7.yaml"));
+        var other = strategy with { StrategyId = "synthetic.other", StrategyName = "Other synthetic strategy" };
+        var context = new NativeDailyAccountingContext(start, start.AddDays(1),
+            new Dictionary<DateOnly, MarketSessionSchedule> { [new(2026,6,1)] = MarketSessionSchedule.RegularDay(new(2026,6,1)) }, true)
+            { ExecutionUnavailableFromSession = missingWork ? new(2026,6,1) : null };
+        var method = typeof(BacktestRunner).GetMethod("BuildStrategyResults",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var results = (IReadOnlyList<StrategyBacktestResult>)method.Invoke(null,
+            [new PortfolioConfig(10000,1,25,2,0,0,1,true), new[] {strategy,other},
+                Array.Empty<BacktestCandidateTrade>(), Array.Empty<OhlcvBar>(), Array.Empty<StrategyCandidateDiagnostics>(),
+                null,null,null,context])!;
+        Assert.Equal(2, results.Count);
+        Assert.All(results, result =>
+        {
+            var cash = result.PortfolioState!.CashSummary!;
+            Assert.Equal(!missingWork, cash.CoversAllClosedSessions);
+            Assert.Equal(missingWork ? null : (decimal?)10000m, cash.MinimumCash);
+            Assert.Equal(missingWork ? 0 : 1, cash.ObservedSessionCount);
+            NativeDailySessionLedger.VerifyRecordedState(10000m, result.PortfolioState, context);
+        });
+    }
     [Fact]
     public void NativeAdmissionAudit_DoesNotRelabelAnAdmittedPartialExitFailureAsRejection()
     {

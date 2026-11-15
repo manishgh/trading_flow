@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 
@@ -61,6 +62,11 @@ public interface IAccountReconciliationService
         IReadOnlyList<ActiveBrokerOrder> openOrders,
         CancellationToken cancellationToken = default);
 
+    // Return false unless a fresh terminal order and its resulting position protection can be verified.
+    Task<bool> IsOpeningOrderResolvedAsync(
+        IBrokerClient broker, string clientOrderId, string brokerOrderId, string symbol, decimal minimumFilledQuantity,
+        CancellationToken cancellationToken = default);
+
     Task AcknowledgeAsync(
         Guid reconciliationId,
         string actor,
@@ -96,6 +102,9 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
     private readonly ILogger<AccountReconciliationService> logger;
     private readonly IProtectiveStopReplacementRepository? stopReplacements;
     private readonly IOrderIntentRepository? orderIntents;
+    private const string AccountLossSupervisionBlockSource = "account_loss_supervision";
+    private readonly AccountLossGuard? lossGuard;
+    private readonly IOrderCommandService? orderCommands;
     private readonly SemaphoreSlim reconcileLock = new(1, 1);
     private volatile bool initialCompleted;
     private long lastCompletedUnixMilliseconds = -1;
@@ -103,6 +112,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
     private Guid? outstandingId;
     private int differenceCount;
 
+    // Wire periodic loss observation into the broker supervision that already owns protection.
     public AccountReconciliationService(
         IOrderEventRepository orderEvents,
         IPositionLedgerRepository positions,
@@ -114,7 +124,9 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         TimeProvider timeProvider,
         ILogger<AccountReconciliationService> logger,
         IProtectiveStopReplacementRepository? stopReplacements = null,
-        IOrderIntentRepository? orderIntents = null)
+        IOrderIntentRepository? orderIntents = null,
+        AccountLossGuard? lossGuard = null,
+        IOrderCommandService? orderCommands = null)
     {
         this.orderEvents = orderEvents;
         this.positions = positions;
@@ -127,6 +139,8 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         this.logger = logger;
         this.stopReplacements = stopReplacements;
         this.orderIntents = orderIntents;
+        this.lossGuard = lossGuard;
+        this.orderCommands = orderCommands;
         admission.Block(
             StartupBlockSource,
             "RECONCILIATION_NOT_READY",
@@ -141,6 +155,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
         outstandingId,
         Volatile.Read(ref differenceCount));
 
+    // Reconcile positions, protect broker exposure, and supervise the account entry stop.
     public async Task<AccountReconciliationResult> ReconcileAsync(
         IBrokerClient broker,
         IReadOnlyList<ActiveBrokerOrder> openOrders,
@@ -339,6 +354,7 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
                 admission.Clear(PositionExitHandoffBlockSource);
             }
 
+            await SuperviseAccountLossAsync(broker, account, openOrders, cancellationToken);
             initialCompleted = true;
             Interlocked.Exchange(ref lastCompletedUnixMilliseconds, completedAt.ToUnixTimeMilliseconds());
             admission.Clear(StartupBlockSource);
@@ -356,6 +372,267 @@ public sealed class AccountReconciliationService : IAccountReconciliationService
             reconcileLock.Release();
         }
     }
+
+    // The partial-entry close-window gate uses the same broker and position proof as a stored loss review.
+    public async Task<bool> IsOpeningOrderResolvedAsync(
+        IBrokerClient broker, string clientOrderId, string brokerOrderId, string symbol, decimal minimumFilledQuantity,
+        CancellationToken cancellationToken = default)
+    {
+        await reconcileLock.WaitAsync(cancellationToken);
+        try
+        {
+            var account = await broker.GetAccountSnapshotAsync(cancellationToken);
+            var review = new AccountLossCancellationReview(clientOrderId, brokerOrderId, symbol, minimumFilledQuantity, timeProvider.GetUtcNow());
+            return await GetCancellationReviewIssueAsync(broker, account.AccountId, review, cancellationToken) is null;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogCritical(exception, "Opening order resolution could not be verified for {ClientOrderId} ({Symbol}).",
+                clientOrderId, symbol);
+            return false;
+        }
+        finally
+        {
+            reconcileLock.Release();
+        }
+    }
+
+    // Monitor loss even when there is no entry candidate. Loss evidence failure
+    // cannot skip reconciliation or stop the broker-side protection check.
+    private async Task SuperviseAccountLossAsync(
+        IBrokerClient broker, BrokerAccountSnapshot account, IReadOnlyList<ActiveBrokerOrder> openOrders,
+        CancellationToken cancellationToken)
+    {
+        if (lossGuard is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var state = await lossGuard.ObserveAsync(runContext.Run, broker, account, cancellationToken);
+            var orders = state.CancellationSweepPending || state.CancellationReviews is { Count: > 0 }
+                ? await broker.GetOpenOrdersAsync(cancellationToken)
+                : openOrders;
+            if (orderIntents is not null && orderCommands is not null &&
+                (state.Breached || state.CancellationSweepPending || state.CancellationReviews is { Count: > 0 }))
+            {
+                await CancelOwnedOpeningOrdersAsync(broker, account.AccountId, orders, state, cancellationToken);
+                if (state.CancellationSweepPending)
+                {
+                    await lossGuard.CompleteCancellationSweepAsync(
+                        runContext.Run, account.AccountId, state.CancellationSweepGeneration, cancellationToken);
+                }
+            }
+            await RecheckCancellationReviewsAsync(broker, account.AccountId, orders,
+                state.CancellationReviews ?? [], cancellationToken);
+            admission.Clear(AccountLossSupervisionBlockSource);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            admission.Block(AccountLossSupervisionBlockSource, "ACCOUNT_LOSS_EVIDENCE_UNAVAILABLE",
+                "Account loss supervision failed to persist its observation.", timeProvider.GetUtcNow());
+            logger.LogError(exception, "Account loss supervision failed. New entries require a fresh verified loss observation.");
+        }
+    }
+
+    // Cancel standalone opening remainders through the immutable command path.
+    // Linked bracket groups require a reviewed handoff to preserve their stops.
+    private async Task CancelOwnedOpeningOrdersAsync(
+        IBrokerClient broker, string accountId, IReadOnlyList<ActiveBrokerOrder> orders,
+        AccountLossState state, CancellationToken cancellationToken)
+    {
+        foreach (var order in orders)
+        {
+            var pendingReview = state.CancellationReviews?.FirstOrDefault(review =>
+                review.BrokerOrderId == order.OrderId && review.ClientOrderId == order.ClientOrderId);
+            if ((!state.Breached && !state.CancellationSweepPending && pendingReview is null) ||
+                !OrderSubmissionService.IsRootOpeningOrder(order))
+            {
+                continue;
+            }
+
+            var intent = await orderIntents!.GetByClientOrderIdAsync(order.ClientOrderId, cancellationToken);
+            if (intent?.Kind is not (OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry) ||
+                !String.Equals(intent.AccountId, accountId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var review = pendingReview ?? new AccountLossCancellationReview(
+                intent.ClientOrderId, order.OrderId, intent.Symbol, order.FilledQuantity, timeProvider.GetUtcNow());
+            if (!OrderSubmissionService.IsStandaloneOpeningOrder(order) ||
+                orders.Any(child => child.ParentClientOrderId == order.ClientOrderId || child.ParentOrderId == order.OrderId))
+            {
+                await RequireCancellationReviewAsync(accountId, review, cancellationToken);
+                continue;
+            }
+
+            await CancelStandaloneOpeningOrderAsync(broker, accountId, review, pendingReview is not null, cancellationToken);
+        }
+    }
+
+    // Journal a cancellation before it is attempted so a crash or pending reply
+    // leaves an explicit account stop, then retry its exact standalone order.
+    private async Task CancelStandaloneOpeningOrderAsync(
+        IBrokerClient broker, string accountId, AccountLossCancellationReview review,
+        bool wasPending, CancellationToken cancellationToken)
+    {
+        if (!wasPending)
+        {
+            await lossGuard!.SetCancellationReviewAsync(runContext.Run, accountId, review, true, cancellationToken);
+        }
+
+        try
+        {
+            var result = await orderCommands!.RequestCancelAsync(new OrderCancellationSubmission(
+                review.ClientOrderId, review.BrokerOrderId, "account_loss_entry_stop",
+                timeProvider.GetUtcNow().ToUniversalTime(), review.ClientOrderId, RequireStandaloneOpeningOrder: true),
+                broker, cancellationToken);
+            if (result.ClientOrderId == review.ClientOrderId && result.BrokerOrderId == review.BrokerOrderId &&
+                OrderStateMachine.IsTerminal(result.State))
+            {
+                // The next review verifies the accounted fill against fresh positions and resting coverage.
+                return;
+            }
+            logger.LogCritical("Cancellation is still pending for opening order {ClientOrderId}.", review.ClientOrderId);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogCritical(exception, "Account loss cancellation remains unresolved for {ClientOrderId}.", review.ClientOrderId);
+        }
+    }
+
+    // Unverified linked protection needs review before cancellation or new entries.
+    private async Task RequireCancellationReviewAsync(
+        string accountId, AccountLossCancellationReview review, CancellationToken cancellationToken)
+    {
+        await lossGuard!.SetCancellationReviewAsync(runContext.Run, accountId, review, true, cancellationToken);
+        logger.LogCritical("Account loss stop requires protection review before cancelling opening order {ClientOrderId}. FilledQuantity={FilledQuantity}",
+            review.ClientOrderId, review.FilledQuantity);
+    }
+
+    // Keep the durable entry stop until the broker and journal agree on the terminal order and its resulting exposure.
+    private async Task RecheckCancellationReviewsAsync(
+        IBrokerClient broker, string accountId, IReadOnlyList<ActiveBrokerOrder> openOrders,
+        IReadOnlyList<AccountLossCancellationReview> reviews, CancellationToken cancellationToken)
+    {
+        foreach (var review in reviews)
+        {
+            if (HasWorkingOpeningOrder(openOrders, review))
+            {
+                continue;
+            }
+
+            try
+            {
+                var reason = await GetCancellationReviewIssueAsync(broker, accountId, review, cancellationToken);
+                if (reason is null)
+                {
+                    await lossGuard!.SetCancellationReviewAsync(runContext.Run, accountId, review, false, cancellationToken);
+                }
+                else
+                {
+                    logger.LogCritical("Cancellation review remains unresolved for {ClientOrderId} ({Symbol}): {Reason}",
+                        review.ClientOrderId, review.Symbol, reason);
+                }
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogCritical(exception, "Cancellation review verification failed for {ClientOrderId} ({Symbol}).",
+                    review.ClientOrderId, review.Symbol);
+            }
+        }
+    }
+
+    // Verify exposure after filling any gap in the durable order and position journals.
+    private async Task<string?> GetCancellationReviewIssueAsync(
+        IBrokerClient broker, string accountId, AccountLossCancellationReview review, CancellationToken cancellationToken)
+    {
+        if (orderCommands is null)
+        {
+            return "The durable order command service is unavailable.";
+        }
+
+        var terminal = await orderCommands.ReconcileTerminalOpeningOrderAsync(
+            accountId, review.ClientOrderId, review.BrokerOrderId, broker, cancellationToken);
+        if (terminal is null || !terminal.Ticker.Equals(review.Symbol, StringComparison.OrdinalIgnoreCase) ||
+            terminal.FilledQuantity < review.FilledQuantity)
+        {
+            return "The exact terminal parent and its reconciled cumulative fill could not be verified.";
+        }
+
+        var local = await positions.GetCurrentAsync(accountId, review.Symbol, cancellationToken);
+        var beforePositions = await broker.GetOpenPositionsAsync(cancellationToken);
+        var beforeOrders = await broker.GetOpenOrdersAsync(cancellationToken);
+        var repairs = await protectiveOrders.EnsureAsync(broker, accountId, beforePositions, beforeOrders, cancellationToken);
+        if (repairs.Any(repair => !repair.Succeeded))
+        {
+            return "Broker-side protection repair reported a failure.";
+        }
+
+        var finalOrders = await broker.GetOpenOrdersAsync(cancellationToken);
+        var finalPositions = await broker.GetOpenPositionsAsync(cancellationToken);
+        var finalAccount = await broker.GetAccountSnapshotAsync(cancellationToken);
+        var finalTerminal = await broker.GetOrderByClientOrderIdAsync(review.ClientOrderId, cancellationToken);
+        if (finalAccount.AccountId != accountId || !MatchesTerminalParent(finalTerminal, terminal) ||
+            HasWorkingOpeningOrder(beforeOrders, review) || HasWorkingOpeningOrder(finalOrders, review))
+        {
+            return "The broker account, terminal parent, or replacement evidence changed during protection verification.";
+        }
+
+        var first = FindBrokerPosition(beforePositions, review.Symbol);
+        var last = FindBrokerPosition(finalPositions, review.Symbol);
+        var quantity = local?.Quantity ?? 0m;
+        if ((first is null ? 0m : SignedBrokerQuantity(first)) != quantity ||
+            (last is null ? 0m : SignedBrokerQuantity(last)) != quantity)
+        {
+            return "Fresh broker positions disagree with each other or with the accounted position.";
+        }
+
+        if (last is null ?
+            beforeOrders.Concat(finalOrders).Any(order => order.Ticker.Equals(review.Symbol, StringComparison.OrdinalIgnoreCase)) :
+            !await protectiveOrders.HasVerifiedCoverageAsync(broker, accountId, last, finalOrders, cancellationToken))
+        {
+            return "The broker has unverified working orders or the exposure lacks verified resting stop coverage.";
+        }
+
+        var finalLocal = await positions.GetCurrentAsync(accountId, review.Symbol, cancellationToken);
+        var finalState = await orderEvents.GetCurrentAsync(review.ClientOrderId, cancellationToken);
+        var expectedState = BrokerOrderStateProjection.Project(OrderStatusCodec.ParseBrokerValue(terminal.Status));
+        if (finalLocal?.PositionEventId != local?.PositionEventId || finalState is null || finalState.BrokerOrderId != review.BrokerOrderId ||
+            finalState.State != expectedState || (finalState.FilledQuantity ?? 0m) != terminal.FilledQuantity)
+        {
+            return "The order or position journal changed during protection verification.";
+        }
+
+        return null;
+    }
+
+    // A new cumulative fill, replacement, or identity change invalidates the completed protection check.
+    private static bool MatchesTerminalParent(ActiveBrokerOrder? current, ActiveBrokerOrder terminal) =>
+        current is not null && OrderSubmissionService.IsRootOpeningOrder(current) &&
+        OrderSubmissionService.IsConfirmedTerminalOrder(current) &&
+        current.OrderId == terminal.OrderId && current.ClientOrderId == terminal.ClientOrderId &&
+        current.GroupId == terminal.GroupId && current.GroupRole == terminal.GroupRole &&
+        current.ReplacesOrderId == terminal.ReplacesOrderId && current.OrderClass == terminal.OrderClass &&
+        (current.NestedLegOrderIds ?? []).Order(StringComparer.Ordinal)
+            .SequenceEqual((terminal.NestedLegOrderIds ?? []).Order(StringComparer.Ordinal), StringComparer.Ordinal) &&
+        current.Ticker == terminal.Ticker &&
+        current.Side == terminal.Side && current.Qty == terminal.Qty && current.Status == terminal.Status &&
+        current.UpdatedAt == terminal.UpdatedAt && current.FilledQuantity == terminal.FilledQuantity &&
+        current.FilledAveragePrice == terminal.FilledAveragePrice;
+
+    // Treat an open exact root or an observed successor as contradictory terminal evidence.
+    private static bool HasWorkingOpeningOrder(IReadOnlyList<ActiveBrokerOrder> orders, AccountLossCancellationReview review) =>
+        orders.Any(order => order.OrderId == review.BrokerOrderId || order.ReplacesOrderId == review.BrokerOrderId ||
+            order.ClientOrderId == review.ClientOrderId);
+
+    // An absent symbol is flat only when the durable ledger independently agrees after fill repair.
+    private static BrokerPosition? FindBrokerPosition(IReadOnlyList<BrokerPosition> positions, string symbol) =>
+        positions.SingleOrDefault(position => position.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase)) is { Qty: not 0m } position
+            ? position
+            : null;
 
     private Task<bool> HasActiveExitAsync(
         PositionLedgerSnapshot position,

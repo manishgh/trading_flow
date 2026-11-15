@@ -141,6 +141,47 @@ public sealed class DiscoveryRepositoryTests
         Assert.Equal(4, sink.Snapshots.Count);
     }
 
+    // A failed source stays visible during cooldown and no observation. An authoritative empty capture recovers it.
+    [Fact]
+    public async Task DurableSession_ReportsFailureUntilFreshCommittedEmptyCapture()
+    {
+        await using var database = await DiscoveryTestDatabase.CreateAsync();
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 8, 27, 14, 0, 0, TimeSpan.Zero));
+        var source = new ScriptedDiscoverySource([["AAPL"], []], clock);
+        var sink = new RecordingSubscriptionSink();
+        await using var session = new DurableDiscoverySession(
+            Guid.NewGuid(), database.CreateRepository(), [source], sink, clock,
+            NullLogger<DurableDiscoverySession>.Instance);
+
+        var initial = await session.RefreshAsync(default);
+        Assert.NotNull(Assert.Single(initial.SourceRefreshOutcomes).CommittedObservationAtUtc);
+
+        source.Fail = true;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var degraded = await session.RefreshAsync(default);
+        var failure = Assert.Single(degraded.SourceRefreshOutcomes);
+        Assert.Equal("Finviz timed out.", failure.Failure);
+        Assert.Equal(["AAPL"], degraded.Symbols);
+        Assert.Equal(failure, Assert.Single((await session.RefreshAsync(default)).SourceRefreshOutcomes));
+
+        source.Fail = false;
+        source.NoObservation = true;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var unchanged = await session.RefreshAsync(default);
+        Assert.Equal(failure, Assert.Single(unchanged.SourceRefreshOutcomes));
+        Assert.Equal(["AAPL"], unchanged.Symbols);
+
+        source.NoObservation = false;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await session.RetainExposureSymbolsAsync(["AAPL"], default);
+        var fresh = await session.RefreshAsync(default);
+        Assert.Empty(fresh.Symbols);
+        Assert.Equal(["AAPL"], sink.Snapshots[^1]);
+        var success = Assert.Single(fresh.SourceRefreshOutcomes);
+        Assert.Null(success.Failure);
+        Assert.Equal(clock.GetUtcNow(), success.CommittedObservationAtUtc);
+    }
+
     [Fact]
     public async Task DurableSession_DroppedDiscoveryKeepsConfirmedExposureSubscribed()
     {
@@ -296,6 +337,7 @@ public sealed class DiscoveryRepositoryTests
         }
 
         public bool Fail { get; set; }
+        public bool NoObservation { get; set; }
         public string SourceKind => DiscoverySourceKinds.Finviz;
         public string SourceKey => "test-screen";
         public string Horizon => "swing";
@@ -309,6 +351,11 @@ public sealed class DiscoveryRepositoryTests
             if (Fail)
             {
                 throw new TimeoutException("Finviz timed out.");
+            }
+
+            if (NoObservation)
+            {
+                throw new DiscoveryNoObservationException("No new event observation.");
             }
 
             var symbols = captures.Count > 0 ? captures.Dequeue() : Array.Empty<string>();

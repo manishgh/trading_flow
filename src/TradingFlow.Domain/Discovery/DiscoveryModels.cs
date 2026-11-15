@@ -142,6 +142,27 @@ public interface IDiscoverySource
     Task<DiscoveryCapture> CaptureAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>The last failed attempt or newly committed observation for one discovery source.</summary>
+public sealed record DiscoverySourceRefreshOutcome(
+    string SourceKind,
+    string SourceKey,
+    DateTimeOffset AttemptedAtUtc,
+    DateTimeOffset? CommittedObservationAtUtc,
+    string? Failure);
+
+public sealed record DiscoveryRefreshFailure(DateTimeOffset AttemptedAtUtc, string Reason);
+
+public sealed record DiscoverySourceRefreshFailure(
+    string SourceKind,
+    string SourceKey,
+    DateTimeOffset AttemptedAtUtc,
+    string Reason);
+
+/// <summary>Discovery entry restrictions persisted in the paper job snapshot for admission and first dispatch.</summary>
+public sealed record DiscoveryRefreshHealth(
+    DiscoveryRefreshFailure? SessionFailure,
+    IReadOnlyList<DiscoverySourceRefreshFailure> FailedSources);
+
 public sealed record DiscoveryUniverseSnapshot(
     Guid ScopeId,
     DateTimeOffset ResolvedAtUtc,
@@ -149,6 +170,9 @@ public sealed record DiscoveryUniverseSnapshot(
     IReadOnlyList<string> Added,
     IReadOnlyList<string> Dropped)
 {
+    // Latest meaningful outcome by source, including across calls that have no refresh due.
+    public IReadOnlyList<DiscoverySourceRefreshOutcome> SourceRefreshOutcomes { get; init; } = [];
+
     public IReadOnlyList<string> Symbols => Members
         .Select(member => member.Symbol)
         .OrderBy(symbol => symbol, StringComparer.Ordinal)

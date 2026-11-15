@@ -5,7 +5,7 @@ public interface IPaperRunLifecycleRepository
 {
     Task ValidatePaperRunAsync(ProductionRun requested, CancellationToken cancellationToken);
 
-    Task<ProductionRun?> StartPaperRunAsync(
+    Task<PaperRunStart?> StartPaperRunAsync(
         ProductionRun requested, Guid leaseToken, CancellationToken cancellationToken);
 
     Task<bool> SavePaperEntryStopSnapshotAsync(

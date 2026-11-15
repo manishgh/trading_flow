@@ -67,6 +67,7 @@ public sealed class OrderDispatchRecoveryHostedService : BackgroundService, IOrd
         }
     }
 
+    // Wait for a healthy cycle using the same clock that measures the readiness deadline.
     public async Task WaitUntilReadyAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         if (timeout <= TimeSpan.Zero)
@@ -98,7 +99,7 @@ public sealed class OrderDispatchRecoveryHostedService : BackgroundService, IOrd
 
             try
             {
-                await readiness.WaitAsync(remaining, cancellationToken);
+                await readiness.WaitAsync(remaining, timeProvider, cancellationToken);
             }
             catch (TimeoutException)
             {
@@ -109,6 +110,7 @@ public sealed class OrderDispatchRecoveryHostedService : BackgroundService, IOrd
         }
     }
 
+    // Keep recovery retries and readiness deadlines on the host's configured clock.
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -168,7 +170,7 @@ public sealed class OrderDispatchRecoveryHostedService : BackgroundService, IOrd
                 logger.LogError(exception, "Durable order-dispatch recovery cycle failed.");
             }
 
-            await Task.Delay(options.RecoveryInterval, stoppingToken);
+            await Task.Delay(options.RecoveryInterval, timeProvider, stoppingToken);
         }
     }
 

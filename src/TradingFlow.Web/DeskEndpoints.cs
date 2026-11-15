@@ -38,7 +38,7 @@ public static class DeskEndpoints
     /// <summary>Streams bounded observation pages and the selected run's recorded strategy checks; never starts an evaluation.</summary>
     private static async Task StreamAsync(HttpContext context, DeskSources sources, DeskReadService reader,
         DeskStrategyAssessmentService assessments, TradingFlow.Web.Services.IDisplayQuoteSubscriptions subscriptions, TradingFlow.Web.Services.LiveQuoteBook quoteBook,
-        ILoggerFactory logs)
+        ILoggerFactory logs, TradingFlow.Web.Services.Charts.ChartAccessPolicy charts)
     {
         var key = context.Request.Query["source"].FirstOrDefault() ?? "all";
         var search = context.Request.Query["search"].ToString();
@@ -83,6 +83,7 @@ public static class DeskEndpoints
                         StrategyAssessment = bySymbol.GetValueOrDefault(row.Membership.Symbol) }).ToArray() };
                 }
                 var symbols = snapshot.Rows.Select(row => row.Membership.Symbol).ToArray();
+                charts.RecordDisplayed(context.User, symbols);
                 await subscriptions.ReplaceDisplayQuotesAsync(quoteScope, symbols, ct);
                 snapshot = snapshot with { Rows = snapshot.Rows.Select(row => row with {
                     Quote = quoteBook.Newest(row.Membership.Symbol, row.Quote) }).ToArray() };

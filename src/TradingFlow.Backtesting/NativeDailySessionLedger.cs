@@ -14,6 +14,9 @@ public sealed record NativeDailyAccountingContext(DateTimeOffset StartUtc, DateT
     /// </summary>
     public bool ResearchScreenHoldingRules { get; init; }
 
+    // Selected work failures can hide admissions and fills from this point onward.
+    public DateOnly? ExecutionUnavailableFromSession { get; init; }
+
     /// <summary>Split ex-dates by symbol (upper case) for <see cref="ResearchScreenHoldingRules"/>; empty otherwise.</summary>
     public IReadOnlySet<(string Symbol, DateOnly ExDate)> SplitExDates { get; init; } = new HashSet<(string, DateOnly)>();
 }
@@ -48,15 +51,25 @@ public static class NativeDailySessionLedger
     private static DateTimeOffset AccountingKey(DateOnly date) => new(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
 
     // Unknown executions invalidate their dependent valuation prefix without erasing observed fills or cash.
-    public static BacktestPortfolioState MarkUnavailableFrom(BacktestPortfolioState state, DateOnly boundary, string reason)
+    public static BacktestPortfolioState MarkUnavailableFrom(BacktestPortfolioState state, DateOnly boundary, string reason,
+        NativeDailyAccountingContext? cashContext = null)
     {
-        if (state.UnavailableFromSession is { } previous && previous < boundary) return state;
-        return state with { UnavailableFromSession = boundary, UnavailableReason = reason,
-            Sessions = state.Sessions.Select(s => s.SessionDate < boundary ? s : s with
-            { Equity = null, PositionValue = null, UnrealizedProfit = null, GrossExposurePct = null,
-                UnavailableReason = reason }).ToArray() };
+        if (state.ValuationBasis == ValuationBasis)
+        {
+            var cashBoundary = state.CashEvidenceUnavailableFromSession is { } priorCash && priorCash < boundary
+                ? priorCash : boundary;
+            state = state with { CashEvidenceUnavailableFromSession = cashBoundary };
+        }
+        if (state.UnavailableFromSession is not { } previous || previous >= boundary)
+            state = state with { UnavailableFromSession = boundary, UnavailableReason = reason,
+                Sessions = state.Sessions.Select(s => s.SessionDate < boundary ? s : s with
+                { Equity = null, PositionValue = null, UnrealizedProfit = null, GrossExposurePct = null,
+                    UnavailableReason = reason }).ToArray() };
+        if (state.CashSummary is not null)
+            state = NativeDailyCashCheck.Apply(state, cashContext ??
+                throw new InvalidOperationException("Updating published cash evidence requires its authoritative session context."));
+        return state;
     }
-
     // Build one sequential fill/cost-basis ledger and reconcile its supported prefix with the generic close valuator.
     public static BacktestPortfolioState Analyze(decimal startingCapital, BacktestPortfolioState state,
         IReadOnlyCollection<OhlcvBar> bars, NativeDailyAccountingContext context)
@@ -83,6 +96,13 @@ public static class NativeDailySessionLedger
         if (!replayed.Sessions.SequenceEqual(state.Sessions) || !replayed.OpenPositions.SequenceEqual(state.OpenPositions) ||
             !replayed.SessionMarks.SequenceEqual(state.SessionMarks))
             throw new InvalidDataException("Native recorded session ledger, marks or cutoff positions do not reconcile.");
+        // New cash summaries must reconcile with actual fills and calendar coverage; older immutable artifacts omit it.
+        if (state.CashSummary is { } cash)
+        {
+            var expected = NativeDailyCashCheck.Apply(replayed, context).CashSummary!;
+            if (cash != expected)
+                throw new InvalidDataException("Native cash summary does not reconcile with the recorded session ledger.");
+        }
     }
 
     // Keep source-clock normalization separate from the single chronological accounting implementation.

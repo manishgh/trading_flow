@@ -36,23 +36,6 @@ public sealed partial class BacktestRunner
             sizingEquity);
     }
 
-    /// <summary>
-    /// With same-open swaps on, a purchase spends the sale value of a fund sold at that open (counted at its last close).
-    /// If a sale filled only in part, or the open was far below the last close, cash would go negative unnoticed: the daily
-    /// book has no cash check. Fails the run on any session ending with negative cash instead of publishing such a result.
-    /// Returns the state unchanged otherwise, and always when the setting is off.
-    /// </summary>
-    private static BacktestPortfolioState RequireSwapsKeptCashCovered(PortfolioConfig portfolio, BacktestPortfolioState state)
-    {
-        if (!portfolio.SameOpenExitsReleaseCapacity) return state;
-        var overdrawn = state.Sessions.FirstOrDefault(session => session.Cash < 0m);
-        if (overdrawn is not null)
-            throw new InvalidOperationException(
-                $"Same-open swaps overdrew cash: the session {overdrawn.SessionDate:yyyy-MM-dd} ended with cash {overdrawn.Cash:F2}. " +
-                "A released sale filled short or far below its last close; the result is not published.");
-        return state;
-    }
-
     // A held position whose planned sale is an open fill at this same open (a next-open technical exit, not a stop or target
     // touched inside a bar, and not a position still open at the end of the test).
     private static bool SellsAtOpen(ActiveBacktestExecution position, DateTimeOffset open) =>

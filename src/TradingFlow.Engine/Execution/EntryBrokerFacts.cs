@@ -17,7 +17,9 @@ public sealed record BrokerAccountSnapshot(
     decimal LongMarketValue,
     decimal ShortMarketValue,
     DateTimeOffset RequestedAtUtc,
-    DateTimeOffset ObservedAtUtc);
+    DateTimeOffset ObservedAtUtc,
+    decimal? LastEquity = null,
+    decimal? IntradayAdjustments = null);
 
 public interface IBrokerAccountProvider
 {

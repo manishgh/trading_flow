@@ -107,7 +107,15 @@
             const values = [trade.ticker, quantity(trade.quantity), money(trade.entryPrice), money(trade.holding?.marketValue), signedMoney(trade.unrealizedPl), trade.protectionSummary || 'Broker protection unknown'];
             values.forEach((value, index) => {
                 const td = cells[index] || cell(row, '');
-                td.textContent = value;
+                if (index === 0) {
+                    if (!td.querySelector('[data-position-chart]')) {
+                        const chart = window.TradingFlow.stockChartLink(value);
+                        if (chart) chart.dataset.positionChart = '';
+                        td.replaceChildren(chart ?? value);
+                    }
+                } else {
+                    td.textContent = value;
+                }
                 td.className = index > 0 && index < 5 ? 'num' : '';
                 if (index === 4) td.className = `num ${signedClass(trade.unrealizedPl)}`;
                 if (index === 5) {

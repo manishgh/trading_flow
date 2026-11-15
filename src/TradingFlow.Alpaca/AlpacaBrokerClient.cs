@@ -18,6 +18,7 @@ public sealed partial class AlpacaBrokerClient :
     IBrokerClient,
     IBrokerFillHistoryProvider,
     IBrokerAccountProvider,
+    IBrokerAccountLossEvidenceProvider,
     IBrokerMarketObservationProvider,
     IDisposable
 {
@@ -39,6 +40,7 @@ public sealed partial class AlpacaBrokerClient :
         _marketDataClient = new AlpacaMarketDataRestClient(marketDataHttpClient, options, rawArchiveWriter);
     }
 
+    // Capture marked equity and the broker's non-trade adjustment alongside other account facts.
     public async Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(
         CancellationToken cancellationToken)
     {
@@ -69,7 +71,9 @@ public sealed partial class AlpacaBrokerClient :
             ParseRequiredDecimal(root, "long_market_value", "account snapshot"),
             ParseRequiredDecimal(root, "short_market_value", "account snapshot"),
             requestedAtUtc,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            ReadLossDecimal(root, "last_equity"),
+            ReadLossDecimal(root, "intraday_adjustments"));
     }
 
     public async Task<BrokerMarketObservation> GetMarketObservationAsync(
@@ -626,7 +630,7 @@ public sealed partial class AlpacaBrokerClient :
                 {
                     foreach (var leg in legs.EnumerateArray())
                     {
-                        var child = ParseOrder(leg, "open-order leg query", parent.ClientOrderId);
+                        var child = ParseOrder(leg, "open-order leg query", parent.ClientOrderId, parent.OrderId);
                         if (IsOpenStatus(child.Status))
                         {
                             orders.Add(child);
@@ -679,7 +683,7 @@ public sealed partial class AlpacaBrokerClient :
     private static ActiveBrokerOrder ParseOrder(
         JsonElement element,
         string operation,
-        string? parentClientOrderId = null)
+        string? parentClientOrderId = null, string? parentOrderId = null)
     {
         var id = RequireString(element, "id", operation);
         var symbol = RequireString(element, "symbol", operation).Trim().ToUpperInvariant();
@@ -704,13 +708,34 @@ public sealed partial class AlpacaBrokerClient :
             RequireTimestamp(element, "updated_at", operation),
             parentClientOrderId,
             ParseOptionalString(element, "time_in_force"),
-            ParseOptionalString(element, "order_class"),
+            ParseOrderClass(element, parentClientOrderId),
             ParseOptionalBoolean(element, "extended_hours"),
             bracketTakeProfitPrice,
             bracketStopPrice,
             ParseOptionalString(element, "replaces"),
             ParseOptionalString(element, "replaced_by"),
-            ParseOptionalString(element, "position_intent"));
+            ParseOptionalString(element, "position_intent"),
+            parentOrderId,
+            element.TryGetProperty("legs", out var legs) && legs.ValueKind == JsonValueKind.Array
+                ? legs.EnumerateArray().Select(leg => RequireString(leg, "id", operation)).ToArray() : null,
+            ParseOptionalString(element, "group_id"),
+            ParseOptionalString(element, "group_role"));
+    }
+
+    // Alpaca documents explicit empty equity order_class as simple. Missing class and
+    // any nested/group evidence remain unknown so cancellation cannot detach protection.
+    private static string? ParseOrderClass(JsonElement element, string? parentClientOrderId)
+    {
+        var value = ParseOptionalString(element, "order_class");
+        var hasGroup = !String.IsNullOrWhiteSpace(parentClientOrderId) ||
+            !String.IsNullOrWhiteSpace(ParseOptionalString(element, "group_id")) ||
+            !String.IsNullOrWhiteSpace(ParseOptionalString(element, "group_role")) ||
+            element.TryGetProperty("legs", out var legs) && legs.ValueKind != JsonValueKind.Null &&
+                (legs.ValueKind != JsonValueKind.Array || legs.GetArrayLength() > 0);
+        if (hasGroup && (value == "" || String.Equals(value, "simple", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        return value == "" && !hasGroup && ParseOptionalString(element, "asset_class") == "us_equity"
+            ? "simple" : value;
     }
 
     private static (decimal? TakeProfitPrice, decimal? StopPrice) ParseBracketLegPrices(

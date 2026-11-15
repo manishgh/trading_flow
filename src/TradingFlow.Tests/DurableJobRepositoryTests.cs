@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.Jobs;
@@ -340,7 +341,8 @@ public sealed class DurableJobRepositoryTests : IAsyncLifetime
 
     // All stored identity fields remain exact after a rejected restart.
     [Theory]
-    [InlineData("build")]
+    [InlineData("profile")]
+    [InlineData("schema")]
     [InlineData("config")]
     [InlineData("universe")]
     [InlineData("decision")]
@@ -356,9 +358,11 @@ public sealed class DurableJobRepositoryTests : IAsyncLifetime
         var original = CreatePaperRun(job.Id);
         Assert.NotNull(await repository.StartPaperRunAsync(original, lease.LeaseToken, default));
         var changed = CreatePaperRun(job.Id);
+        changed.CodeVersion = new string('c', 40);
         switch (changedField)
         {
-            case "build": changed.CodeVersion = new string('c', 40); break;
+            case "profile": changed.Profile = "paper_shadow"; break;
+            case "schema": changed.SchemaVersion++; break;
             case "config": changed.ConfigHash = new string('d', 64); break;
             case "universe": changed.UniverseSnapshotId = Guid.NewGuid(); break;
             case "decision": changed.DecisionRunId = Guid.NewGuid(); break;
@@ -376,6 +380,66 @@ public sealed class DurableJobRepositoryTests : IAsyncLifetime
         Assert.Equal(original.UniverseSnapshotId, stored.UniverseSnapshotId);
         Assert.Equal(original.DecisionRunId, stored.DecisionRunId);
         Assert.Equal(original.StartedAtUtc, stored.StartedAtUtc);
+    }
+
+    // The replacement lease latches the stop and records the actual build before publishing the run.
+    [Fact]
+    public async Task PaperRunLifecycle_RebuildContinuationIsStickyAcrossRestartsAndBuildRollback()
+    {
+        var repository = new SqliteJobRepository(factory);
+        var job = CreateJob();
+        job.JobType = "paper";
+        Assert.True(await repository.TryEnqueueAsync(job, 10, default));
+        var first = await repository.TryAcquireAsync(job.Id, "first", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(first);
+        var original = CreatePaperRun(job.Id);
+        var initial = await repository.StartPaperRunAsync(original, first.LeaseToken, default);
+        Assert.NotNull(initial);
+        Assert.Null(initial.ExitOnlyContinuation);
+        Assert.Null(initial.Run.PaperEntriesStoppedAtUtc);
+
+        var current = CreatePaperRun(job.Id);
+        current.CodeVersion = new string('d', 40);
+        await repository.ValidatePaperRunAsync(current, default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.StartPaperRunAsync(current, first.LeaseToken, default));
+        await repository.ReleaseLeaseAsync(job.Id, first.LeaseToken, default);
+
+        var next = await repository.TryAcquireAsync(job.Id, "replacement", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(next);
+        Assert.Null(await repository.StartPaperRunAsync(current, first.LeaseToken, default));
+        var continued = await repository.StartPaperRunAsync(current, next.LeaseToken, default);
+        Assert.NotNull(continued);
+        Assert.NotNull(continued.ExitOnlyContinuation);
+        Assert.Equal(next.LeaseToken, continued.Run.PaperJobLeaseToken);
+        Assert.Equal(continued.ExitOnlyContinuation.EntriesStoppedAtUtc, continued.Run.PaperEntriesStoppedAtUtc);
+        Assert.Equal(original.RunId, continued.Run.RunId);
+        Assert.Equal(original.CodeVersion, continued.Run.CodeVersion);
+        Assert.Equal(original.StartedAtUtc, continued.Run.StartedAtUtc);
+        Assert.Equal(current.CodeVersion, continued.ExitOnlyContinuation.ExecutingCodeVersion);
+        Assert.Equal(original.CodeVersion, continued.ExitOnlyContinuation.OriginCodeVersion);
+        Assert.Equal(2, continued.ExitOnlyContinuation.LeaseAttempt);
+        var repeated = await repository.StartPaperRunAsync(current, next.LeaseToken, default);
+        Assert.Equal(continued.ExitOnlyContinuation, repeated?.ExitOnlyContinuation);
+        await repository.ReleaseLeaseAsync(job.Id, next.LeaseToken, default);
+
+        // No job snapshot was saved, as if the replacement crashed just after committing the latch.
+        var restored = await repository.TryAcquireAsync(job.Id, "rollback-build", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), default);
+        Assert.NotNull(restored);
+        Assert.Null(restored.Job.SnapshotJson);
+        var resumed = await repository.StartPaperRunAsync(CreatePaperRun(job.Id), restored.LeaseToken, default);
+        Assert.NotNull(resumed);
+        Assert.NotNull(resumed.ExitOnlyContinuation);
+        Assert.Equal(continued.Run.PaperEntriesStoppedAtUtc, resumed.Run.PaperEntriesStoppedAtUtc);
+        Assert.Equal(original.CodeVersion, resumed.ExitOnlyContinuation.ExecutingCodeVersion);
+        Assert.Equal(3, resumed.ExitOnlyContinuation.LeaseAttempt);
+
+        await using var db = factory.CreateDbContext();
+        var records = await db.ApplicationEvents.Where(record => record.StreamName == PaperExitOnlyContinuation.StreamName(job.Id))
+            .OrderBy(record => record.EventSequence).ToArrayAsync();
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        Assert.All(records, record => Assert.Equal(PaperExitOnlyContinuation.EventType, record.EventType));
+        Assert.Equal([continued.ExitOnlyContinuation, resumed.ExitOnlyContinuation],
+            records.Select(record => JsonSerializer.Deserialize<PaperExitOnlyContinuation>(record.PayloadJson, json)));
     }
 
     // A cancellation recorded before startup prevents registration under the otherwise current lease.

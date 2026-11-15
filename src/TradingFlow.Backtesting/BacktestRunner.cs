@@ -720,20 +720,23 @@ public sealed partial class BacktestRunner(
             .Cast<string>()
             .ToArray();
         var candidateDiagnostics = batches.Select(batch => batch.Diagnostics).ToArray();
+        var stoppingBatches = StoppingBatches(run, batches);
         // Native daily books retain actual cutoff exposure; explicitly configured terminal exits remain required.
         var accounting = run.Engine.ExecutionReplayPolicyId is null && strategies.All(s => s.Execution.Timeframe == "1d" &&
             s.Session.ExchangeTimezone == "America/New_York" && !s.Session.IsContinuousMarket)
             ? new NativeDailyAccountingContext(preparedMarket.WindowStart.ToUniversalTime(), preparedMarket.WindowEnd.ToUniversalTime(),
                 candidateSessionSchedules ?? throw new InvalidDataException("Native daily accounting requires authoritative sessions."),
                 run.Engine.PrecommittedLiquidationSourceUtc is null)
-                { ResearchScreenHoldingRules = run.Universe?.RankedMembership is not null,
+                { ExecutionUnavailableFromSession = stoppingBatches.Count > 0
+                        ? DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(preparedMarket.WindowStart,
+                            TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime) : null,
+                    ResearchScreenHoldingRules = run.Universe?.RankedMembership is not null,
                     SplitExDates = await ResearchScreenSplitExDatesAsync(run, strategies, cancellationToken) } : null;
         var eventOutcome = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
             ? await ExecuteEventPortfolioAsync(run, strategies, candidates, allBars,
                 universeMembership, regimeCalendars, portfolioExecutionJournal, cancellationToken)
             : accounting is not null ? BuildUnifiedPortfolioTradesWithAudit(run.Portfolio, strategies, candidates,
                 universeMembership, regimeCalendars, allBars, portfolioExecutionJournal, accounting) : null;
-        var stoppingBatches = StoppingBatches(run, batches);
         await PublishDataGapsAsync(run, batches, stoppingBatches, eventOutcome?.Trades ?? [], cancellationToken,
             eventOutcome?.DecisionHourCounts);
         if (eventOutcome?.State is { } nativeState && stoppingBatches.Count > 0)
@@ -741,7 +744,7 @@ public sealed partial class BacktestRunner(
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(preparedMarket.WindowStart,
                     TimeZoneInfo.FindSystemTimeZoneById("America/New_York")).DateTime),
                 "Selected work items failed: " + String.Join("; ", stoppingBatches
-                    .Select(b => $"{b.Ticker} ({b.StrategyId}): {b.ErrorMessage}"))) };
+                    .Select(b => $"{b.Ticker} ({b.StrategyId}): {b.ErrorMessage}")), accounting) };
         var unifiedPortfolio = BuildUnifiedPortfolioResult(
             run.Portfolio,
             strategies,

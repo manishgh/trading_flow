@@ -9,6 +9,7 @@
     const isAdministrator = document.querySelector(".watch-desk").dataset.administrator === "true";
     let stream, generation = 0, lastStreamedQuoteAt = 0, snapshot, selected, newsForAll = true, catalog = [], newsSignature = '', connected = false;
     const rowNodes = new Map();
+    let deskChart, chartSymbol;
     const money = value => value == null ? '—' : new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2}).format(value);
     const number = value => value == null ? '—' : new Intl.NumberFormat(undefined, {maximumFractionDigits:2}).format(value);
     const text = (id, value) => { el(id).textContent = value; };
@@ -67,6 +68,7 @@
         if(currentJob && ['queued','running'].includes(currentJob.status)) cancelAssessment(currentJob.jobId).catch(()=>{});
         currentJob=null;currentStocks=new Map();currentSignature='';currentSubmitting=false;currentFailure='';el('strategy-refresh').disabled=false;
         stream?.close();const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
+        syncChart(null);
         el('focus-content').hidden=true;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
         el('retry').hidden=true;text('connection','Connecting · live quotes');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
         document.querySelector('.watch-table').classList.toggle('watch-no-strategy',!selectedStrategyChoice());
@@ -362,10 +364,21 @@
         if(side==='buy'&&!isAdministrator){link.hidden=true;link.removeAttribute('href');return;}
         link.textContent=(side==='buy'?(isAdministrator?'Override buy ':'Buy '):'Sell ')+money(price);link.href='/OrderTicket?'+query;
     }
+    // Start history only for a selected stock and ignore quote ticks that keep the same selection.
+    function syncChart(symbol) {
+        if (chartSymbol === symbol) return;
+        chartSymbol = symbol;
+        if (symbol && !deskChart) {
+            const root = el('focus-content').querySelector('[data-stock-chart]');
+            if (root) deskChart = window.TradingFlowStockChart?.mount(root);
+        }
+        deskChart?.setSymbol(symbol);
+    }
     // Keep quote/account rendering separate from the selected strategy's recorded evidence.
     function renderFocus(){
         const row=snapshot?.rows.find(x=>x.membership.symbol===selected);
         el('focus-content').hidden=!row;
+        syncChart(row?.membership.symbol ?? null);
         if(!row){text('symbol','Choose a stock');text('name','Select a row to see its price, holding and news.');text('mid','—');text('prev-close','');return;}
         text('symbol',row.membership.symbol);text('name',row.membership.name||row.membership.wishlists.map(x=>x.name).join(' · ')||'Finviz discovery');
         const change=row.previousClose?.close>0&&row.quote?.midPrice!=null?(row.quote.midPrice/row.previousClose.close-1)*100:null;
@@ -439,7 +452,16 @@
     el('follow').onsubmit=async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;try{await api('follow',{source:el('source').value,symbol:selected,wishlistId:el('follow-list').value});text('follow-status','Added. Membership refreshes with the next update.');}catch(e){text('follow-status',e.message);}finally{button.disabled=false;}};
     function loadPreparation(){if(document.querySelector('[data-preparation-script]'))return;const script=document.createElement('script');script.src=el('preparation').dataset.scriptUrl;script.dataset.preparationScript='true';script.onerror=()=>{script.remove();document.getElementById('prep-status').textContent='Preparation controls could not load. Retry to reconnect.';const retry=document.getElementById('prep-retry');retry.hidden=false;retry.onclick=()=>{retry.hidden=true;loadPreparation();};};document.body.append(script);}
     el('preparation').addEventListener('toggle',()=>{if(el('preparation').open)loadPreparation();});
-    window.addEventListener('pagehide',()=>{stream?.close();generation++;});
+    // Close the quote stream and release the selected chart when leaving Desk.
+    window.addEventListener('pagehide', () => {
+        stream?.close();
+        generation++;
+        void deskChart?.dispose();
+        deskChart = null;
+        chartSymbol = null;
+        const root = el('focus-content').querySelector('[data-stock-chart]');
+        if (root) root.dataset.symbol = '';
+    });
     window.addEventListener('pageshow',event=>{if(event.persisted)connect();});
     setInterval(()=>{ageRows();updateHealth();if(snapshot&&selected)renderFocus();},1000);
     // Load both catalogs before connecting; a strategy-list error must not hide otherwise available quotes.

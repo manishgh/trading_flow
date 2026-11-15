@@ -22,16 +22,19 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim reservationLock = new(1, 1);
     private readonly TradingLimitDefaults tradingLimitDefaults;
+    private readonly AccountLossGuardOptions? accountLossOptions;
 
-    /// <summary>Use the shared mode defaults and the existing transactional account-reservation owner.</summary>
+    /// <summary>Use configured mode limits and the same transaction for account-wide entry fences.</summary>
     public SqliteOrderIntentRepository(
         IDbContextFactory<TradingFlowDbContext> contextFactory,
         TimeProvider? timeProvider = null,
-        TradingLimitDefaults? tradingLimitDefaults = null)
+        TradingLimitDefaults? tradingLimitDefaults = null,
+        AccountLossGuardOptions? accountLossOptions = null)
     {
         this.contextFactory = contextFactory;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.tradingLimitDefaults = tradingLimitDefaults ?? TradingLimitDefaultsFactory.FromRegistry();
+        this.accountLossOptions = accountLossOptions;
     }
 
     public async Task<OrderIntentRecord?> GetByIntentIdAsync(
@@ -292,12 +295,12 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             throw new OrderDispatchLeaseLostException(intentId);
         }
 
-        var runStatus = await context.ProductionRuns
+        var owningRun = await context.ProductionRuns
             .Where(record => record.RunId == intent.RunId)
-            .Select(record => record.Status)
+            .Select(record => new { record.Status, record.Profile })
             .SingleAsync(cancellationToken);
         if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
-            !runStatus.Equals("running", StringComparison.Ordinal))
+            !owningRun.Status.Equals("running", StringComparison.Ordinal))
         {
             throw intent.DispatchAttemptCount > 0
                 ? new OrderDispatchAdoptionRequiredException(intentId)
@@ -327,6 +330,8 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             if (intent.DispatchAttemptCount == 0)
             {
                 await RequirePaperEntryDispatchAsync(context, intent, cancellationToken);
+                await RequireAccountLossPermissionAsync(context, owningRun.Profile, intent.AccountId, intent.SessionDate,
+                    intent.IntentId, nowUtc, cancellationToken);
                 await RequireCurrentEntryCapacityAsync(context, intent, nowUtc, cancellationToken);
             }
         }
@@ -649,6 +654,12 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
                     throw new InvalidOperationException(
                         $"Cannot submit an entry intent for run {run.RunId:N} in state '{existingRun.Status}'.");
                 }
+            }
+
+            if (reservation.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry)
+            {
+                await RequireAccountLossPermissionAsync(context, run.Profile, reservation.AccountId, reservation.SessionDate,
+                    reservation.IntentId, serverNowUtc, cancellationToken);
             }
 
             if (reservation.Kind == OrderIntentKind.PositionExit)

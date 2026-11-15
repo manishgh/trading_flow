@@ -76,9 +76,10 @@ public sealed class EntryGateChain(
     ISecurityTradingStatusProvider tradingStatuses,
     EntryGateOptions options,
     TimeProvider timeProvider,
-    IOperationalTradingLimitStore tradingLimits) : IEntryGateChain
+    IOperationalTradingLimitStore tradingLimits,
+    AccountLossGuard? lossGuard = null) : IEntryGateChain
 {
-    /// <summary>Evaluate shared strategy/account rules and pass complete account-wide fill evidence to atomic reservation.</summary>
+    /// <summary>Evaluate the shared strategy, account loss and exposure gates before atomic entry reservation.</summary>
     public async Task<T> ExecuteAsync<T>(
         EntryOrderSubmission submission,
         IBrokerClient brokerClient,
@@ -450,6 +451,19 @@ public sealed class EntryGateChain(
                             EntryGateSlot.Account,
                             reservationAccountReject,
                             $"Entry rejected at account for {submission.Order.Ticker}: {reservationAccountReject}.");
+                    }
+
+                    if (lossGuard is not null)
+                    {
+                        var loss = await lossGuard.ObserveAsync(ToRun(submission.RunContext), brokerClient, reservationAccount, token);
+                        if (lossGuard.Refusal(loss, session!.TradeDate) is { } refusal)
+                        {
+                            await RequireAsync(
+                                submission, results, EntryGateSlot.Exposure, false,
+                                loss.Breached ? RejectCode.REJECT_BUDGET_EXHAUSTED : RejectCode.REJECT_DEGRADED_DATA,
+                                new { accountLossRefusal = refusal, loss.DailyBreach, loss.WeeklyBreach, loss.PeakBreach },
+                                timeProvider.GetUtcNow(), token);
+                        }
                     }
 
                     var perTradeRiskPct = options.PerTradeRiskPct;

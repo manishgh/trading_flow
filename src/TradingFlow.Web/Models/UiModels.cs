@@ -1,5 +1,6 @@
 using TradingFlow.Backtesting;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 
 namespace TradingFlow.Web.Models;
@@ -163,7 +164,8 @@ public sealed record BacktestJobSnapshot(
     string? MonthlyUnavailableReason = null,
     TradingFlow.Contracts.V1.BacktestCohortExecution? Cohort = null,
     PreparedMarketDataSummary? PreparedMarketData = null,
-    LivePipelineHealth? PaperPipelineHealth = null);
+    LivePipelineHealth? PaperPipelineHealth = null,
+    PaperExitOnlyContinuation? PaperExitOnly = null);
 
 public sealed record BacktestStrategyRunGroup(
     string StrategyName,

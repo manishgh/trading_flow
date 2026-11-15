@@ -1,0 +1,23 @@
+@page
+@{
+    var symbol = Request.Query["symbol"].ToString().Trim().ToUpperInvariant().Replace('.', '-');
+    var valid = System.Text.RegularExpressions.Regex.IsMatch(symbol, @"\A[A-Z][A-Z0-9]{0,9}(?:-[A-Z0-9]{1,4})?\z");
+    ViewData["Title"] = valid ? $"{symbol} chart" : "Stock chart";
+    ViewData["MainClass"] = "stock-chart-page";
+}
+<link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
+<header class="stock-chart-page-head">
+    <h1>@(valid ? $"{symbol} chart" : "Stock chart")</h1>
+    <a asp-page="/Desk" asp-route-env="@(Request.Query["env"].ToString())" class="btn btn-secondary">Back to Desk</a>
+</header>
+@if (valid)
+{
+    <partial name="_StockChart" model="symbol" />
+}
+else
+{
+    <p>Open a chart from a stock in Desk, Stock groups, Trading, News or Earnings.</p>
+}
+@section Scripts {
+    @if (valid) { <partial name="_StockChartScripts" /> }
+}

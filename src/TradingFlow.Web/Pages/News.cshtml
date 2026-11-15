@@ -191,7 +191,12 @@
         <p>@stocks.Total stocks · wishlist overlap shown. Source membership is not a trading signal.</p>
         <ul class="source-stock-list">
             @foreach (var stock in stocks.Items) {
-                <li><strong>@stock.Symbol</strong>
+                <li>
+                    @if (User.Identity?.IsAuthenticated == true)
+                    {
+                        <a asp-page="/Chart" asp-route-symbol="@stock.Symbol" stock-chart-symbol="@stock.Symbol" asp-route-env="@(Request.Query["env"].ToString())" aria-label="Open chart for @stock.Symbol"><strong>@stock.Symbol</strong></a>
+                    }
+                    else { <strong>@stock.Symbol</strong> }
                     @if (stock.Wishlists.Count > 0) { <span> · @String.Join(", ", stock.Wishlists)</span> }
                     @if (stock.InFinviz == true) { <span> · Finviz</span> }
                     @if (stock.InFinviz == false) { <span> · Not in the selected Finviz result</span> }

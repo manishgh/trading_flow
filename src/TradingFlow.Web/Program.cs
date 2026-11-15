@@ -300,6 +300,23 @@ builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredServ
 builder.Services.AddSingleton<WishlistDeskService>();
 builder.Services.AddSingleton<DeskUniverseEvidenceService>();
 builder.Services.AddMemoryCache();
+// Chart transport is read-only and shares the canonical market source with all hosts.
+builder.Services.AddSignalR(options =>
+{
+    options.MaximumReceiveMessageSize = 4096;
+    options.MaximumParallelInvocationsPerClient = 1;
+    options.StreamBufferCapacity = 1;
+    options.EnableDetailedErrors = false;
+});
+builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartAccessPolicy>();
+builder.Services.AddOptions<TradingFlow.Web.Services.Charts.ChartTransportOptions>().BindConfiguration("ChartTransport")
+    .Validate(options => options.MaximumConnectionsPerUser is >= 1 and <= 8,
+        "ChartTransport:MaximumConnectionsPerUser must be between 1 and 8.").ValidateOnStart();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartTransportLimits>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartHistoryCursor>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartSeriesService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.IChartSeriesReader>(services =>
+    services.GetRequiredService<TradingFlow.Web.Services.Charts.ChartSeriesService>());
 builder.Services.AddSingleton<ResearchScreenSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, TradingFlow.Web.Services.Desk.DeskAccountReader>();
@@ -515,6 +532,19 @@ builder.Services.AddSingleton(ManualEntryOptions.Parse(
 builder.Services.AddSingleton<ISecurityTradingStatusProvider>(serviceProvider =>
     serviceProvider.GetRequiredService<AlpacaMarketStateStreamService>());
 builder.Services.AddSingleton<IEntryGateChain, EntryGateChain>();
+var accountLossOptions = new TradingFlow.Domain.Execution.AccountLossGuardOptions(
+    "alpaca",
+    new TradingFlow.Domain.Execution.AccountLossLimits(
+        ResolveProductionParameter<decimal>("max_daily_loss_pct", "TRADINGFLOW_MAX_DAILY_LOSS_PCT"),
+        ResolveProductionParameter<decimal>("max_weekly_loss_pct", "TRADINGFLOW_MAX_WEEKLY_LOSS_PCT"),
+        ResolveProductionParameter<decimal>("max_peak_to_trough_loss_pct", "TRADINGFLOW_MAX_PEAK_TO_TROUGH_LOSS_PCT")),
+    TimeSpan.FromSeconds(ResolveProductionParameter<int>("account_snapshot_max_age_s", "TRADINGFLOW_ACCOUNT_SNAPSHOT_MAX_AGE_S")));
+builder.Services.AddSingleton(accountLossOptions);
+builder.Services.AddSingleton<TradingFlow.Domain.Execution.IAccountLossStateStore, TradingFlow.Data.Orders.SqliteAccountLossStateStore>();
+builder.Services.AddSingleton<AccountLossGuard>();
+builder.Services.AddSingleton<TradingFlow.Domain.Execution.IAccountLossReviewStore>(serviceProvider =>
+    (TradingFlow.Data.Orders.SqliteAccountLossStateStore)serviceProvider.GetRequiredService<TradingFlow.Domain.Execution.IAccountLossStateStore>());
+builder.Services.AddSingleton<IAccountLossReviewService, AccountLossReviewService>();
 var orderPollIntervalSeconds = productionConfiguration.ResolveParameter<int>(
     ProductionProfile.Paper,
     "order_poll_interval_s",
@@ -619,7 +649,8 @@ var synchronizationRunContext = ExecutionRunContextFactory.Create(
     {
         orderPollIntervalSeconds,
         reconcileIntervalSeconds,
-        orphanTimeoutSeconds
+        orphanTimeoutSeconds,
+        accountLossOptions
     },
     synchronizationStartedAt);
 builder.Services.AddSingleton(new ReconciliationRunContext(new TradingFlow.Domain.Persistence.ProductionRun
@@ -838,13 +869,15 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseApiMutationSecurity();
+app.UseChartOriginGuard();
 app.Use(async (context, next) => {
     if (runtimePaused && (HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method) || HttpMethods.IsPatch(context.Request.Method) || HttpMethods.IsDelete(context.Request.Method)) &&
         (context.Request.Path.StartsWithSegments("/api/v1/orders") || context.Request.Path.StartsWithSegments("/api/v1/positions") ||
          context.Request.Path.StartsWithSegments("/api/v1/paper") || context.Request.Path.StartsWithSegments("/api/v1/paper-runs") ||
          context.Request.Path.StartsWithSegments("/api/v1/automation") || context.Request.Path.StartsWithSegments("/api/v1/runs") ||
          context.Request.Path.StartsWithSegments("/Orders") || context.Request.Path.StartsWithSegments("/RunningTrades") ||
-         context.Request.Path.StartsWithSegments("/Paper") || context.Request.Path.StartsWithSegments("/PaperJob"))) {
+         context.Request.Path.StartsWithSegments("/Paper") || context.Request.Path.StartsWithSegments("/PaperJob") ||
+         context.Request.Path.StartsWithSegments("/api/operations/account-loss") || context.Request.Path.StartsWithSegments("/AccountLossReview"))) {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         await context.Response.WriteAsJsonAsync(new { error = "Runtime is paused; run starts and broker actions are disabled." });
         return;
@@ -855,6 +888,8 @@ app.MapRazorPages();
 app.MapTradingFlowAuthApi();
 app.MapTradingFlowApiV1();
 app.MapDeskEndpoints();
+app.MapChartEndpoints();
+app.MapAccountLossReviewEndpoints();
 app.MapTradingFlowEarningsApi();
 // Health probes stay open: a readiness check that needs a session cannot tell a
 // load balancer or a container runtime whether the process is alive. Neither

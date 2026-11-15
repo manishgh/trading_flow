@@ -90,6 +90,36 @@ public sealed class ExecutionShutdownCoordinatorTests
         fixture.Journal.Verify(service => service.FlushAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // A linked opening parent must not send shutdown through the position-exit path or skip the journal flush.
+    [Fact]
+    public async Task Shutdown_UnresolvedLinkedOpening_RetainsPositionAndFinishesProtectionCheck()
+    {
+        var fixture = CreateFixture(new ExecutionShutdownOptions(true, false));
+        const string clientId = "bracket-parent-client";
+        const string brokerId = "bracket-parent-broker";
+        var position = Position("MSFT", clientId, 11, 4m);
+        var parent = Order(brokerId, clientId, "buy", "limit") with { OrderClass = "bracket", Ticker = position.Symbol };
+        fixture.Intents.Setup(repository => repository.GetByClientOrderIdAsync(clientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Intent(OrderIntentKind.StrategyEntry, clientId, position.Symbol, "swing"));
+        fixture.Positions.Setup(repository => repository.ListCurrentAsync("paper-account", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([position]);
+        fixture.Broker.Setup(client => client.GetOpenOrdersAsync(It.IsAny<CancellationToken>())).ReturnsAsync([parent]);
+        fixture.Commands.Setup(service => service.RequestCancelAsync(
+                It.Is<OrderCancellationSubmission>(request => request.ClientOrderId == clientId && request.RequireStandaloneOpeningOrder),
+                fixture.Broker.Object, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OpeningOrderCancellationReviewRequiredException(clientId, brokerId));
+
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => fixture.Service.ShutdownAsync(fixture.Broker.Object));
+
+        Assert.IsType<OpeningOrderCancellationReviewRequiredException>(Assert.Single(failure.InnerExceptions));
+        fixture.Commands.Verify(service => service.SubmitPositionExitAsync(It.IsAny<PositionExitSubmission>(),
+            fixture.Broker.Object, It.IsAny<CancellationToken>()), Times.Never);
+        fixture.Protection.Verify(service => service.EnsureAsync(fixture.Broker.Object, "paper-account",
+            It.IsAny<IReadOnlyList<BrokerPosition>>(), It.IsAny<IReadOnlyList<ActiveBrokerOrder>>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        fixture.Journal.Verify(service => service.FlushAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     [Fact]
     public async Task Shutdown_FlattensSwingPositionButRetainsUnsupportedLegacyPosition()
     {

@@ -162,6 +162,7 @@ public static class ProductionParameterRegistry
             Decimal("per_trade_risk_pct_swing", 0.5m, 0.1m, 2.0m, ProductionParameterUnit.Percent, "RSK-01"),
             Decimal("max_daily_loss_pct", 2m, 0.5m, 5m, ProductionParameterUnit.Percent, "RSK-01"),
             Decimal("max_weekly_loss_pct", 4m, 1m, 10m, ProductionParameterUnit.Percent, "RSK-01"),
+            Decimal("max_peak_to_trough_loss_pct", 10m, 0.5m, 100m, ProductionParameterUnit.Percent, "RSK-01"),
             Integer("max_consecutive_losses", 3, 2, 10, ProductionParameterUnit.None, "RSK-01"),
             Integer("max_positions_swing", 5, 1, 20, ProductionParameterUnit.None, "RSK-01"),
             Integer("max_new_stocks_per_day", 5, 1, null, ProductionParameterUnit.Symbols, "RSK-01"),

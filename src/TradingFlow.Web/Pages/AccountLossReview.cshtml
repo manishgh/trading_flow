@@ -1,0 +1,32 @@
+@page
+@model TradingFlow.Web.Pages.AccountLossReviewModel
+@{ ViewData["Title"] = "Review paper loss limits"; }
+<div class="page-head"><div><span class="eyebrow">Administrator review</span><h1>Review paper loss limits</h1>
+<p>Review the recorded stop before establishing a new observed peak. This action does not clear daily or weekly losses, outstanding opening orders, or reconciliation requirements.</p></div></div>
+@if (Model.Message is not null) { <p role="status">@Model.Message</p> }
+@if (Model.Snapshot?.State is { } state)
+{
+    <dl>
+        <dt>Last broker observation (UTC)</dt><dd>@state.ObservationUtc.ToString("u")</dd>
+        <dt>Peak equity</dt><dd>@state.PeakEquity?.ToString("N2")</dd>
+        <dt>Peak stop</dt><dd>@(state.PeakBreach is null ? "None" : $"{state.PeakBreach.ObservedPct:F2}%")</dd>
+        <dt>Daily / weekly stop</dt><dd>@(state.DailyBreach?.ObservedPct.ToString("F2") ?? "None") / @(state.WeeklyBreach?.ObservedPct.ToString("F2") ?? "None")</dd>
+        <dt>Funding review</dt><dd>@(state.FundingIssue ?? "None")</dd>
+        <dt>Latest recorded transfer date</dt><dd>@(state.LatestFundingDate?.ToString("yyyy-MM-dd") ?? "Unknown / none recorded")</dd>
+        <dt>Evidence issue</dt><dd>@(state.EvidenceIssue ?? "None")</dd>
+        <dt>Opening-order review</dt><dd>@(state.CancellationSweepPending ? "Sweep pending" : "No pending sweep"); @(state.CancellationReviews?.Count ?? 0) unresolved orders</dd>
+    </dl>
+    <form method="post">
+        <input type="hidden" asp-for="ExpectedRevision" />
+        <label asp-for="ReviewAction">Reviewed action</label>
+        <select asp-for="ReviewAction">
+            <option value="reset_peak">Reset observed peak after review</option>
+            <option value="rebaseline_funding">Rebaseline after a recorded transfer</option>
+        </select>
+        <p>A funding rebaseline requires verified daily and weekly reference closes after the transfer. It also starts a new observed peak. A new snapshot or order event requires a fresh review.</p>
+        <label asp-for="Reason">Review findings and reason</label>
+        <textarea asp-for="Reason" maxlength="2000" required rows="4"></textarea>
+        <button type="submit" class="btn btn-primary">Record reviewed reset</button>
+    </form>
+}
+else { <p>No account loss state is available to review.</p> }

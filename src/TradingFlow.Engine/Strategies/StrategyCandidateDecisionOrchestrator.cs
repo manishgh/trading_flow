@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TradingFlow.Domain.Execution;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 
@@ -50,9 +51,14 @@ public sealed class StrategyCandidateDecisionOrchestrator(
             return new PersistedStrategyDecision(existing, null, true);
         }
 
+        var initialPaperDiscovery = existing is not null &&
+            request.SelectionMode is StrategySelectionMode.RunPaperExperiment or StrategySelectionMode.RunPaperShadow &&
+            OperationalTradingLimitProfile.Mode(run.Profile) == "paper"
+                ? existing
+                : null;
         var persisted = await candidates.UpsertDiscoveryAsync(
             run,
-            CreateDiscoveryRecord(run, request),
+            CreateDiscoveryRecord(run, request, initialPaperDiscovery),
             cancellationToken);
         var persistedRequest = request with
         {
@@ -95,19 +101,21 @@ public sealed class StrategyCandidateDecisionOrchestrator(
         return new PersistedStrategyDecision(applied, decision, false);
     }
 
-    // Preserve the strategy-derived horizon with the persisted candidate's immutable identity and provenance.
+    // Paper retains the first observation verbatim. Each subsequent decision
+    // journals its current source proof while the repository still checks setup identity and expiry.
     private static CandidateRecord CreateDiscoveryRecord(
         ProductionRun run,
-        StrategyDecisionRequest request) => new()
+        StrategyDecisionRequest request,
+        CandidateRecord? initialPaperDiscovery) => new()
     {
         CandidateId = request.Candidate.CandidateId,
         Symbol = request.Candidate.Identity.Symbol,
-        DiscoveredAtUtc = request.Candidate.Discovery.ObservedAtUtc,
+        DiscoveredAtUtc = initialPaperDiscovery?.DiscoveredAtUtc ?? request.Candidate.Discovery.ObservedAtUtc,
         RevalidatedAtUtc = request.AsOfUtc,
-        DiscoverySource = String.Join(",", request.Candidate.Discovery.Sources),
+        DiscoverySource = initialPaperDiscovery?.DiscoverySource ?? String.Join(",", request.Candidate.Discovery.Sources),
         Horizon = StrategyHorizonResolver.Resolve(request.Strategy),
         LastPrice = ResolveLastPrice(request),
-        SetupScoresJson = JsonSerializer.Serialize(new
+        SetupScoresJson = initialPaperDiscovery?.SetupScoresJson ?? JsonSerializer.Serialize(new
         {
             request.Candidate.Identity.SetupKey,
             request.Candidate.Discovery.AggregateId,

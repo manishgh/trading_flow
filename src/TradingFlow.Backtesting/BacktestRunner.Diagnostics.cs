@@ -737,7 +737,7 @@ public sealed partial class BacktestRunner
             execution.Failures)
         {
             State = accounting is null ? null
-                : RequireSwapsKeptCashCovered(portfolio, BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting)),
+                : BuildNativePortfolioState(portfolio.StartingCapital, execution, marketBars, accounting),
             DecisionHourCounts = execution.DecisionHourCounts
                 .Append(new(SplitEveEntryRefusedReason, admissionAudit.RejectionCounts.GetValueOrDefault("portfolio_" + SplitEveEntryRefusedReason)))
                 .Where(pair => pair.Value > 0)
@@ -773,11 +773,15 @@ public sealed partial class BacktestRunner
         ChronologicalBacktestExecutionCoordinator execution, IReadOnlyCollection<OhlcvBar> bars,
         NativeDailyAccountingContext accounting)
     {
-        var state = NativeDailySessionLedger.Analyze(capital, execution.Snapshot(accounting.CutoffUtc), bars, accounting);
-        if (execution.Failures.Count == 0) return state;
+        var snapshot = execution.Snapshot(accounting.CutoffUtc);
+        if (accounting.ExecutionUnavailableFromSession is { } missingWork)
+            snapshot = NativeDailySessionLedger.MarkUnavailableFrom(snapshot, missingWork,
+                "Selected work items failed; admissions and executions cannot be established.");
+        var state = NativeDailySessionLedger.Analyze(capital, snapshot, bars, accounting);
+        if (execution.Failures.Count == 0) return NativeDailyCashCheck.Apply(state, accounting);
         var first = execution.Failures.Min(f => ToExchangeDate(f.EntryTimestamp, "America/New_York"));
-        return NativeDailySessionLedger.MarkUnavailableFrom(state, first,
-            "Required execution evidence is unavailable from an admitted candidate's entry session.");
+        return NativeDailyCashCheck.Apply(NativeDailySessionLedger.MarkUnavailableFrom(state, first,
+            "Required execution evidence is unavailable from an admitted candidate's entry session."), accounting);
     }
 
     private static IReadOnlyCollection<OhlcvBar> BuildSyntheticExecutionBars(
