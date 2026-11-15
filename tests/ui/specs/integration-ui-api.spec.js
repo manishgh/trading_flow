@@ -26,6 +26,8 @@ for(const width of [1440,412])test("shared strategy prices and layout at "+width
  let request;
  await page.route("**/api/v1/orders/plan",route=>{request=route.request().postDataJSON();return json(route,{contractVersion:"1.0",symbol:"MSFT",strategy:identity,limit:100,stop:97,target:109,riskBudget:30,stopNote:"Exact strategy completed-bar stop",targetNote:"Configured reward-to-risk target"});});
  await page.goto("/Orders?ticker=MSFT");const ticket=page.frameLocator("#OrderPopupFrame");await expect(ticket.locator("#OrderWorkflowForm")).not.toHaveAttribute("inert");
+ await expect(ticket.locator("[data-order-entry-restriction]")).toContainText("New entries are paused");
+ await expect(ticket.locator("#OrderWorkflowForm")).toBeVisible();
  await ticket.getByText("Strategy & protection",{exact:true}).click();
  await ticket.getByRole("button",{name:"Use strategy prices"}).click();
  await expect(ticket.locator('[name=stop]')).toHaveValue("97");await expect(ticket.locator('[name=target]')).toHaveValue("109");

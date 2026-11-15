@@ -112,6 +112,18 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
             screen.Error is null ? null : "Finviz is unavailable. Check the provider connection or saved filters, then retry.", page, search);
     }
 
+    // Display a verified owner's frozen symbols. Only independent followed groups count as membership for orders.
+    public async Task<DeskSelection> ResolvePreparedAsync(TradingFlow.Contracts.Preparation.PreparationHandoff review,
+        CancellationToken token, int page, string search)
+    {
+        var source = new DeskSource("prepared", "Reviewed preparation", "Preparation",
+            $"Saved revision {review.ParentRevisionId:D} · evidence valid until {review.ExpiresAtUtc:yyyy-MM-dd HH:mm:ss} UTC · advisory stock list.");
+        var followed = Merge(await FollowedListsAsync(token)).ToDictionary(member => member.Symbol, StringComparer.Ordinal);
+        var members = review.Symbols.Select(symbol => followed.GetValueOrDefault(symbol) ??
+            new DeskMembership(symbol, null, [])).ToArray();
+        return Window(source, members, members.Length, null, null, page, search);
+    }
+
     /// <summary>
     /// Today's group follows the session that trades the report: today's releases and last session's
     /// after-close releases. Each member is labelled with its release time and result.

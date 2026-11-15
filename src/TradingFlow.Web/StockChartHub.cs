@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using TradingFlow.Contracts.V1;
@@ -16,8 +17,23 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
     ChartHistoryCursor cursors, TimeProvider clock, ILogger<StockChartHub> logger) : Hub
 {
     public const int MaximumSnapshotBytes = 256 * 1024;
-    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal const string BoundedSnapshotReason = "Chart exceeds the bounded snapshot size. Choose fewer indicators or a smaller view.";
+    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new UtcChartClock() }
+    };
     private const string Active = "chart.active";
+
+    private sealed class UtcChartClock : JsonConverter<DateTimeOffset>
+    {
+        // Parse either legal ISO offset, then use UTC consistently when reading chart receipts.
+        public override DateTimeOffset Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            reader.GetDateTimeOffset().ToUniversalTime();
+
+        // Write the canonical UTC suffix to avoid repeating offset fields on every candle clock.
+        public override void Write(Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value.UtcDateTime);
+    }
 
     // Admission happens before any source data read and is released on disconnect.
     public override async Task OnConnectedAsync()
@@ -74,7 +90,7 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
                     };
                     var payload = JsonSerializer.Serialize(snapshot, Json);
                     if (System.Text.Encoding.UTF8.GetByteCount(payload) > MaximumSnapshotBytes)
-                        throw new HubException("Chart exceeds the bounded snapshot size.");
+                        throw new HubException(BoundedSnapshotReason);
                     var chunks = SplitSnapshot(payload);
                     for (var part = 0; part < chunks.Count; part++)
                     {

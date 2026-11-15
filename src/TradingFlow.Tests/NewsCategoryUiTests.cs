@@ -175,7 +175,7 @@ public sealed class NewsCategoryUiTests
         Assert.Contains("name=\"stockLinkedOnly\"", page); Assert.Contains("name=\"linkedOnly\"", page);
         Assert.Contains("name=\"pageSize\" value=\"@Model.PageSize\"", page);
         Assert.DoesNotContain("role=\"tab\"", page);
-        Assert.Contains("No stories match @Model.CategoryLabel / @Model.SectorLabel", page);
+        Assert.Contains("Model.RefreshStatus?.Heading ?? \"No matching stored headlines\"", page);
         Assert.Contains("30000", Source("wwwroot/js/news-live.js"));
         Assert.Contains(".tab-strip.news-category-nav { flex-wrap: wrap", Source("wwwroot/css/site.css"));
     }

@@ -1,12 +1,12 @@
-@{ var embedded = ViewData["EmbeddedPreparation"] is true; }
 <section class="prep-page" data-preparation-owner="@User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value">
   <div class="prep-head">
     <div>
-      @if (embedded) { <h2>Morning preparation</h2> } else { <h1>Morning preparation</h1> }
+      <h1>Morning preparation</h1>
       <p class="muted">Before the open, TradingFlow collects price history and news for the stocks you choose, applies your filters and hands you a reviewed list to research or paper-trade. Nothing is bought or sold here.</p>
     </div>
-    @if (!embedded) { <a class="button secondary" asp-page="/Desk">Open the Desk</a> }
+    <a class="button secondary" asp-page="/Desk">Open the Desk</a>
   </div>
+  <p id="prep-worker" class="prep-note" role="status">Preparation worker status is unknown. Review saved evidence.</p>
   <p id="prep-status" class="muted" role="status" aria-live="polite">Loading workflows…</p>
   <button id="prep-retry" type="button" class="button secondary" hidden>Retry loading preparation</button>
 
@@ -40,7 +40,7 @@
     <p id="prep-empty" class="muted">No preparation selected. Open a workflow to see its latest result, or create one to begin.</p>
     <section id="prep-review" class="prep-review" hidden>
       <div class="prep-ready">
-        <h2>Ready list</h2>
+        <h2>Collected stock list</h2>
         <div id="prep-audit" class="prep-audit"></div>
         <div id="prep-members"></div>
         <button id="prep-more" type="button" class="button secondary" hidden>Show next 30</button>
@@ -53,6 +53,7 @@
         <select id="prep-strategy"></select>
         <p id="prep-handoff-reason" class="prep-note" role="status"></p>
         <div class="prep-actions">
+          <button id="prep-open-desk" type="button" class="button" disabled>Review and open on Desk</button>
           <button id="prep-handoff" type="button" class="button">Research these stocks</button>
           <button id="prep-paper" type="button" class="button secondary">Start a paper run with them</button>
         </div>
@@ -60,7 +61,8 @@
         <details class="prep-adjust"><summary>Adjust reviewed membership</summary>
           <label for="prep-additions">Add tickers and collect a new revision</label>
           <input id="prep-additions" placeholder="AAPL, MSFT" />
-          <button id="prep-curate" type="button" class="button secondary">Collect curated revision</button>
+          <button id="prep-curate" type="button" class="button secondary" disabled>Collect curated revision</button>
+          <p id="prep-curation-status" class="prep-note"></p>
         </details>
       </div>
     </section>
@@ -101,6 +103,7 @@
         <button type="button" id="prep-toggle" class="button secondary" disabled>Enable workflow</button>
       </div>
       <p class="muted prep-note" id="prep-revision"></p>
+      <p id="prep-schedule-worker" class="prep-note"></p>
     </form>
   </div>
 

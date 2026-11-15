@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TradingFlow.Application.Preparation;
 using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Services;
@@ -7,7 +8,11 @@ public sealed record RuntimeHostedServiceOptions(
     bool Enabled,
     bool EnableEarningsMonitor,
     bool EnableMarketFeeds = false,
-    bool EnableStrategyAssessments = false);
+    bool EnableStrategyAssessments = false,
+    bool? MutationPause = null)
+{
+    public bool TradingMutationsPaused => MutationPause ?? !Enabled;
+}
 
 /// <summary>
 /// Owns the complete background-service composition for the web host. Keeping the
@@ -22,6 +27,9 @@ public static class RuntimeHostedServiceRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(options);
+        services.AddSingleton(options);
+        services.AddSingleton<PreparationWorkerCapability>();
+        services.AddSingleton<IPreparationCollectionCapability>(sp => sp.GetRequiredService<PreparationWorkerCapability>());
         services.AddSingleton<OrderDispatchRecoveryHostedService>();
         services.AddSingleton<IOrderDispatchRecoveryHealth>(serviceProvider =>
             serviceProvider.GetRequiredService<OrderDispatchRecoveryHostedService>());

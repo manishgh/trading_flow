@@ -36,6 +36,12 @@ public sealed class PreparationReviewRecord
     public string Json { get; set; } = "";
 }
 public sealed class PreparationScheduleCursor { public Guid WorkflowId {get;set;} public long ThroughTicks {get;set;} }
+
+/// <summary>Small projection of saved occurrences; the daily card does not load captured symbol evidence.</summary>
+public sealed record PreparationWorkspaceRecord(Guid OccurrenceId, Guid WorkflowId, string TargetDate,
+    string Phase, string HandoffUntilUtc, string? RevisionId, string? ExpiresAtUtc, string? Readiness,
+    string? Outcome, string? JobStatus, string? ReviewKey, string? ReviewExpiresAtUtc);
+
 public interface IPreparationRepository
 {
     Task<long> CursorAsync(Guid workflowId, CancellationToken token);
@@ -43,6 +49,7 @@ public interface IPreparationRepository
     Task<PreparationDefinitionRecord[]> DefinitionsAsync(CancellationToken token);
     Task<PreparationDefinitionRecord> SaveDefinitionAsync(PreparationDefinitionRecord definition, int expectedRevision, CancellationToken token);
     Task<PreparationOccurrenceRecord[]> OccurrencesAsync(Guid workflowId, CancellationToken token);
+    Task<PreparationWorkspaceRecord[]> WorkspaceOccurrencesAsync(string owner, CancellationToken token);
     Task<PreparationOccurrenceRecord?> OccurrenceAsync(Guid id, CancellationToken token);
     Task<PreparationOccurrenceRecord?> ReserveAsync(PreparationOccurrenceRecord occurrence, PersistedJob job, CancellationToken token, Wishlist? sourceWishlist = null, PreparationReviewRecord? sourceBinding = null);
     Task<bool> PublishAsync(Guid occurrenceId, Guid leaseToken, string resultJson, string? eventJson, CancellationToken token);

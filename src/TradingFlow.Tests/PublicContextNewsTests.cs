@@ -48,31 +48,43 @@ public sealed class PublicContextNewsTests
     }
 
     [Fact]
+    // Reusing a response preserves receipt time and explicitly reports cache reuse rather than a fresh provider success.
     public async Task PublicFeeds_AreCachedAndOldPublicationsDoNotReenterRollingWindow()
     {
         var handler = new FeedHandler();
         using var client = new HttpClient(handler);
         var provider = new OfficialMarketNewsProvider(client, NullLogger<OfficialMarketNewsProvider>.Instance, new Clock(Now));
-        var first = await provider.GetEventsAsync([], Now.AddHours(-4), default);
-        var second = await provider.GetEventsAsync([], Now.AddHours(-1), default);
-        Assert.Equal(2, first.Count);
+        var firstSources = await provider.ReadSourcesAsync([], Now.AddHours(-4), default);
+        var secondSources = await provider.ReadSourcesAsync([], Now.AddHours(-1), default);
+        var first = firstSources.SelectMany(source => source.Events).ToArray();
+        var second = secondSources.SelectMany(source => source.Events).ToArray();
+        Assert.Equal(2, first.Length);
         Assert.All(first, item => Assert.Equal(Now, item.ReceivedAt));
         Assert.Empty(second);
+        var unFirst = Assert.Single(firstSources, source => source.Reading.Source == "UN News").Reading;
+        var unCached = Assert.Single(secondSources, source => source.Reading.Source == "UN News").Reading;
+        Assert.Equal("success", unFirst.State);
+        Assert.Equal("cached", unCached.State);
+        Assert.Equal(unFirst.AttemptedAtUtc, unCached.AttemptedAtUtc);
         Assert.Equal(1, handler.Requests.Count(url => url == OfficialMarketNewsProvider.UnitedNationsFeedUrl));
         Assert.Equal(1, handler.Requests.Count(url => url == OfficialMarketNewsProvider.GovernmentDocumentsFeedUrl));
     }
 
     [Fact]
+    // A failed source remains visible as failed while independently successful stories remain available.
     public async Task OneSourceFailure_DoesNotDiscardOtherPublicContext()
     {
         var handler = new FeedHandler(failUn: true);
         using var client = new HttpClient(handler);
         var provider = new OfficialMarketNewsProvider(client, NullLogger<OfficialMarketNewsProvider>.Instance, new Clock(Now));
-        var rows = await provider.GetEventsAsync([], Now.AddHours(-4), default);
+        var sources = await provider.ReadSourcesAsync([], Now.AddHours(-4), default);
+        var rows = sources.SelectMany(source => source.Events).ToArray();
         Assert.Equal("us_government", Assert.Single(rows).Provider);
+        Assert.Equal("failed", Assert.Single(sources, source => source.Reading.Source == "UN News").Reading.State);
     }
 
     [Fact]
+    // A source-local deadline cancels only that read and reports failure without discarding another source's evidence.
     public async Task StalledBodyIsTimedOutAndHealthySourceStillReturns()
     {
         var handler = new FeedHandler(stallUn: true);
@@ -80,20 +92,25 @@ public sealed class PublicContextNewsTests
         var provider = new OfficialMarketNewsProvider(client, NullLogger<OfficialMarketNewsProvider>.Instance, new Clock(Now))
         { PublicContextRequestTimeout = TimeSpan.FromMilliseconds(100) };
         using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var rows = await provider.GetEventsAsync([], Now.AddHours(-4), watchdog.Token);
+        var sources = await provider.ReadSourcesAsync([], Now.AddHours(-4), watchdog.Token);
+        var rows = sources.SelectMany(source => source.Events).ToArray();
         Assert.False(watchdog.IsCancellationRequested);
         Assert.Equal("us_government", Assert.Single(rows).Provider);
         Assert.True(handler.StalledBody.ReadWasCanceled);
+        Assert.Equal("failed", Assert.Single(sources, source => source.Reading.Source == "UN News").Reading.State);
     }
 
     [Fact]
+    // Both article and source observations use body-completion receipt time rather than request-start time.
     public async Task ReceiptTimestampIsSampledAfterBodyCompletion()
     {
         var clock = new Clock(Now);
         using var client = new HttpClient(new FeedHandler(bodyRead: () => clock.Now = Now.AddSeconds(30)));
         var provider = new OfficialMarketNewsProvider(client, NullLogger<OfficialMarketNewsProvider>.Instance, clock);
-        var rows = await provider.GetEventsAsync([], Now.AddHours(-4), default);
+        var sources = await provider.ReadSourcesAsync([], Now.AddHours(-4), default);
+        var rows = sources.SelectMany(source => source.Events).ToArray();
         Assert.Equal(Now.AddSeconds(30), Assert.Single(rows, item => item.Provider == "un_news").ReceivedAt);
+        Assert.Equal(Now.AddSeconds(30), Assert.Single(sources, source => source.Reading.Source == "UN News").Reading.AttemptedAtUtc);
     }
 
     private static string Rss(string publication, string link = "https://example.org/article") => $"""

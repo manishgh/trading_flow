@@ -323,6 +323,7 @@ builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, 
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskReadService>();
 builder.Services.AddSingleton<TradingEnvironmentService>();
 builder.Services.AddSingleton<OperationalStatusService>();
+builder.Services.AddSingleton<WorkspaceStatusService>();
 builder.Services.AddSingleton<OperationsHealthService>();
 builder.Services.AddSingleton<UniverseRankService>();
 builder.Services.AddSingleton<ScreenerSyncService>();
@@ -673,7 +674,8 @@ builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOpt
     Enabled: runtimeEnabled,
     EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey),
     EnableMarketFeeds: !uiTestMode && String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase),
-    EnableStrategyAssessments: !uiTestMode));
+    EnableStrategyAssessments: !uiTestMode,
+    MutationPause: runtimePaused));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
 builder.Services.AddSingleton<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>();

@@ -23,6 +23,33 @@
     <div>
         <h1>News</h1>
         <p>Company news, sector stories and market events.</p>
+        <div id="news-live-feed">
+        @if (Model.FeedEnabled && Model.RefreshStatus is { } status)
+        {
+            <p><strong>@status.Heading</strong>
+                @if (status.Refresh.CompletedAtUtc is { } checkedAt)
+                { <span> · <time datetime="@checkedAt.ToString("O")">@checkedAt.ToString("dd MMM HH:mm") UTC</time></span> }
+            </p>
+            <p class="muted">@status.Detail @(status.Refresh.Running ? "The feed retries automatically." : "Check the feed worker in Operations.")</p>
+            <details class="feed-evidence">
+                <summary>Source refresh evidence</summary>
+                <p>@status.Refresh.Detail</p>
+                <ul>
+                    @foreach (var source in status.Refresh.Sources)
+                    {
+                        <li>
+                            <strong>@source.Source · @source.State</strong> · @source.ReceivedCount received
+                            @if (source.AttemptedAtUtc is { } attempted)
+                            {
+                                <span> · @attempted.ToString("dd MMM HH:mm:ss") UTC</span>
+                            }
+                            <span> · @source.Detail</span>
+                        </li>
+                    }
+                </ul>
+            </details>
+        }
+        </div>
     </div>
     <div class="actions">
         <a class="button secondary" asp-page="/Desk">Open Desk</a>
@@ -149,7 +176,7 @@
                 <p class="muted">Ticker and directly linked stock filters apply across topics: provider symbols only, excluding general market stories.</p>
             }
         </div>
-        <span class="count-label">@Model.Items.Count shown · @Model.TotalBeforeFilters matching</span>
+        <span class="count-label">@Model.Items.Count shown · @Model.TotalBeforeFilters matching stored records</span>
     </div>
 
     @if (!Model.FeedEnabled)
@@ -159,8 +186,8 @@
     else if (Model.Items.Count == 0)
     {
         <div class="empty-state">
-            <strong>No stories match @Model.CategoryLabel / @Model.SectorLabel with these filters.</strong>
-            <span>Widen the window or clear a filter.</span>
+            <strong>@(Model.RefreshStatus?.Heading ?? "No matching stored headlines")</strong>
+            <span>@(Model.RefreshStatus?.Detail ?? "Widen the window or clear a filter.")</span>
         </div>
     }
     else

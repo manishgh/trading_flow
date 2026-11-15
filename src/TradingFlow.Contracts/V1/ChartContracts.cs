@@ -1,6 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace TradingFlow.Contracts.V1;
 
-public sealed record ChartSeriesKey(string Symbol, string Interval, string SessionView, string Context = "auto");
+public sealed record ChartSeriesKey(string Symbol, string Interval, string SessionView, string Context = "auto", string Indicators = "");
 
 public sealed record ChartSeriesEvidence(
     string Provider,
@@ -26,8 +28,8 @@ public sealed record ChartCandle(
     decimal Close,
     decimal Volume,
     string SourceKind,
-    DateTimeOffset? KnownAtUtc,
-    DateTimeOffset? RetrievedAtUtc,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? KnownAtUtc,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? RetrievedAtUtc,
     DateTimeOffset AvailableAtUtc,
     string CompletionState = "completed");
 
@@ -69,6 +71,31 @@ public sealed record ChartMarker(
     string? Url = null,
     bool IsEstimate = false);
 
+// Values are column-major and share the snapshot's bar indices. Availability runs are [index, count, UTC milliseconds].
+public sealed record ChartIndicatorSeries(
+    string Id,
+    string SourceInterval,
+    string SessionView,
+    string AdjustmentPolicy,
+    string FormulaVersion,
+    string Parameters,
+    DateTimeOffset? CutoffUtc,
+    DateTimeOffset? AnchorUtc,
+    string? SourceRevision,
+    bool Reconstructed,
+    DateTimeOffset? AvailableAtUtc,
+    string Status,
+    string? Reason,
+    IReadOnlyList<string> Columns,
+    IReadOnlyList<double?[]> Samples,
+    IReadOnlyList<int> SegmentStarts,
+    IReadOnlyList<long[]> AvailabilityRuns,
+    int? SeedObservations = null,
+    int? WarmupObservations = null,
+    IReadOnlyList<DateTimeOffset?>? SegmentAnchorsUtc = null,
+    int? BaselineSessions = null,
+    int? BaselineSampleCount = null);
+
 public sealed record ChartSeriesSnapshot(
     ChartSeriesKey SeriesKey,
     DateTimeOffset AsOfUtc,
@@ -79,7 +106,8 @@ public sealed record ChartSeriesSnapshot(
     IReadOnlyList<ChartZone> Zones,
     IReadOnlyList<ChartLevel> Levels,
     IReadOnlyList<ChartMarker> Markers,
-    int ContractVersion = 1,
+    int ContractVersion = 2,
     string? Epoch = null,
     long Sequence = 0,
-    string? HistoryCursor = null);
+    string? HistoryCursor = null,
+    IReadOnlyList<ChartIndicatorSeries>? Indicators = null);

@@ -5,22 +5,50 @@
     const maxParts = 40;
     const maxRetries = 5;
     const encoder = new TextEncoder();
+    const boundedResponse = 'Chart exceeds the bounded snapshot size. Choose fewer indicators or a smaller view.';
 
     // Compare the normalized server identity with the exact active chart selection.
     function sameKey(actual, selected) {
         const context = selected.context === 'auto' ? (selected.interval === '1d' ? 'swing' : 'intraday') : selected.context;
         return actual?.symbol === selected.symbol && actual.interval === selected.interval &&
-            actual.sessionView === selected.sessionView && actual.context === context;
+            actual.sessionView === selected.sessionView && actual.context === context && actual.indicators === selected.indicators;
+    }
+
+    // Check all compact columns and evidence runs before reading any candle-indexed study data.
+    function validIndicators(series, barCount, profile) {
+        const requested = profile ? profile.split(',') : [];
+        if (!Array.isArray(series) || series.length !== requested.length) return false;
+        return requested.every(id => {
+            const item = series.find(value => value?.id === id);
+            if (!item || !Array.isArray(item.columns) || item.columns.length > 3 || !Array.isArray(item.samples) ||
+                !['ready', 'partial', 'unavailable', 'retry'].includes(item.status) ||
+                !Array.isArray(item.segmentStarts) || !Array.isArray(item.availabilityRuns)) return false;
+            const aligned = item.samples.length === item.columns.length && item.samples.every(column =>
+                Array.isArray(column) && column.length === barCount && column.every(value => value === null || Number.isFinite(value)));
+            if (!aligned && (item.samples.length || !['unavailable', 'retry'].includes(item.status))) return false;
+            if (!item.segmentStarts.every((index, offset, list) => Number.isInteger(index) && index >= 0 &&
+                index < barCount && (!offset || index > list[offset - 1]))) return false;
+            let end = 0;
+            return item.availabilityRuns.every(run => {
+                if (!Array.isArray(run) || run.length !== 3) return false;
+                const [start, count, timestamp] = run;
+                if (!run.every(Number.isSafeInteger) || start < end || count < 1 || start + count > barCount ||
+                    !Number.isFinite(new Date(timestamp).getTime())) return false;
+                end = start + count;
+                return true;
+            });
+        });
     }
 
     // Validate the version and bounded page shape before any plot is replaced.
     function readSnapshot(text, key) {
         if (encoder.encode(text).length > maxPayloadBytes) throw new Error('Chart response exceeded its size limit.');
         const snapshot = JSON.parse(text);
-        const { bars, zones, levels, markers } = snapshot;
-        if (snapshot.contractVersion !== 1 || !sameKey(snapshot.seriesKey, key) || !snapshot.evidence ||
+        const { bars, zones, levels, markers, indicators } = snapshot;
+        if (snapshot.contractVersion !== 2 || !sameKey(snapshot.seriesKey, key) || !snapshot.evidence ||
             !Array.isArray(bars) || bars.length > 500 || !Array.isArray(zones) ||
-            !Array.isArray(levels) || !Array.isArray(markers) || markers.length > 100) {
+            !Array.isArray(levels) || !Array.isArray(markers) || markers.length > 100 ||
+            !validIndicators(indicators, bars.length, key.indicators)) {
             throw new Error('Chart data did not match the selected view.');
         }
         return snapshot;
@@ -31,6 +59,7 @@
         if (status === 401) return 'Sign in again to open charts.';
         if (status === 403) return 'This stock is not in the recorded workspace. Open it from an authorized stock list.';
         if (status === 429) return 'Too many chart requests. Try again shortly.';
+        if (status === 413) return boundedResponse;
         if (status === 400) return 'The chart or history link expired. Retry the chart.';
         return 'Chart history is temporarily unavailable. Try again shortly.';
     }
@@ -38,14 +67,14 @@
     // Fetch a bounded baseline or older page with the active selection's abort signal.
     async function history(path, key, cursor, signal) {
         const query = new URLSearchParams({
-            symbol: key.symbol, interval: key.interval, sessionView: key.sessionView, chartContext: key.context
+            symbol: key.symbol, interval: key.interval, sessionView: key.sessionView, chartContext: key.context, indicators: key.indicators
         });
         if (cursor) query.set('cursor', cursor);
         const response = await fetch(path + '?' + query, { cache: 'no-store', credentials: 'same-origin', signal });
         if (!response.ok) {
             const error = new Error(historyError(response.status));
             error.status = response.status;
-            error.permanent = response.status === 401 || response.status === 403;
+            error.permanent = [401, 403, 413].includes(response.status);
             throw error;
         }
         return readSnapshot(await response.text(), key);
@@ -184,7 +213,13 @@
                     // Re-authenticate and read a new baseline after the watch expires.
                     complete() { reconnect(active); },
                     // Recover from server errors while keeping an existing historical view visible.
-                    error() { reconnect(active); }
+                    error(error) {
+                        if (stopped || connection !== active) return;
+                        if (error?.message?.includes(boundedResponse)) {
+                            callbacks.status(boundedResponse, false);
+                            stop();
+                        } else reconnect(active);
+                    }
                 });
             } catch {
                 reconnect(active);

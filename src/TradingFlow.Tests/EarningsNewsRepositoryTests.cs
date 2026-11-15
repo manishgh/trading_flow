@@ -1,9 +1,14 @@
 using Moq;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Data.Context;
 using TradingFlow.Data.News;
 using TradingFlow.Domain.Market;
+using TradingFlow.Engine.Storage;
+using TradingFlow.Finviz;
+using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
 
@@ -66,6 +71,7 @@ public sealed class EarningsNewsRepositoryTests
         Assert.Equal(received.UtcDateTime, stored.IngestedAt.UtcDateTime);
     }
 
+    // Exercise the complete refresh while provider requests fail and retained news remains readable.
     [Fact]
     public async Task RefreshDuringProviderOutage_PreservesNewsOutsideTheDisplayWindow()
     {
@@ -88,14 +94,22 @@ public sealed class EarningsNewsRepositoryTests
         earnings.Setup(x => x.GetCalendarAsync(Moq.It.IsAny<DateOnly>(), Moq.It.IsAny<DateOnly>(),
             Moq.It.IsAny<IReadOnlyCollection<string>?>(), Moq.It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<TradingFlow.Domain.Earnings.EarningsCalendarEvent>());
-        // Provider dependencies are unavailable deliberately: refresh tolerates their failure,
-        // makes no network request, and still exercises the original automatic-expiry path.
-        var service = new TradingFlow.Web.Services.NewsFeedService(null!, null!, null!, repository,
-            null!, null!, null!, earnings.Object, null!, new FixedNewsClock(now),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<TradingFlow.Web.Services.NewsFeedService>.Instance);
+        var clock = new FixedNewsClock(now);
+        using var finviz = new FinvizClient(new HttpClient(new OfflineNewsHandler()),
+            FinvizOptions.CreateDefault() with { AuthToken = "fixture" },
+            Mock.Of<IRawArchiveWriter>(MockBehavior.Strict));
+        using var publicFeeds = new HttpClient(new OfflineNewsHandler());
+        var official = new OfficialMarketNewsProvider(publicFeeds, NullLogger<OfficialMarketNewsProvider>.Instance, clock);
+        var alpaca = new AlpacaCredentialProvider(new ConfigurationBuilder().Build(), _ => null);
+        var service = new NewsFeedService(null!, null!, null!, repository,
+            null!, alpaca, null!, earnings.Object, official, finviz, clock, NullLogger<NewsFeedService>.Instance);
         await service.RefreshOnceAsync(CancellationToken.None);
         await service.RefreshOnceAsync(CancellationToken.None);
 
+        var status = service.GetRefreshStatus();
+        Assert.Equal("failed", status.State);
+        Assert.Contains(status.Sources, source => source is { Source: "Finviz stocks", State: "failed" });
+        Assert.Contains(status.Sources, source => source is { Source: "Federal Reserve", State: "failed" });
         var visible = await repository.GetRecentAsync(now.AddHours(-72), 200, null, CancellationToken.None);
         Assert.Equal("NVDA", Assert.Single(visible).Ticker);
         await using var verification = new TradingFlowDbContext(options);
@@ -104,6 +118,13 @@ public sealed class EarningsNewsRepositoryTests
         Assert.Equal(original.Timestamp, retained.Timestamp);
         Assert.Equal(original.ReceivedAt, retained.IngestedAt);
         Assert.Equal(original.Headline, retained.Headline);
+    }
+
+    // Simulate an offline provider without consulting ambient credentials or network.
+    private sealed class OfflineNewsHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(new HttpRequestException("Provider connection unavailable."));
     }
 
     private sealed class FixedNewsClock(DateTimeOffset now) : TimeProvider

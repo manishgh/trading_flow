@@ -38,7 +38,7 @@ public static class ChartEndpoints
             options.TransportMaxBufferSize = 64 * 1024;
         }).RequireAuthorization();
         app.MapGet("/api/v1/charts/history", async (HttpContext context, string symbol, string interval,
-            string sessionView, string? chartContext, string? cursor, IChartSeriesReader series, ChartAccessPolicy access,
+            string sessionView, string? chartContext, string? indicators, string? cursor, IChartSeriesReader series, ChartAccessPolicy access,
             ChartTransportLimits limits, ChartHistoryCursor cursors, CancellationToken token) =>
         {
             context.Response.Headers.CacheControl = "private, no-store";
@@ -46,7 +46,7 @@ public static class ChartEndpoints
             {
                 var user = ChartAccessPolicy.UserId(context.User);
                 if (!limits.Request(user)) return Results.StatusCode(429);
-                var key = ChartSeriesService.Normalize(new ChartSeriesKey(symbol, interval, sessionView, chartContext ?? "auto"));
+                var key = ChartSeriesService.Normalize(new ChartSeriesKey(symbol, interval, sessionView, chartContext ?? "auto", indicators ?? ""));
                 if (!await access.CanReadAsync(context.User, key.Symbol, token)) return Results.Forbid();
                 var before = cursor is null ? (DateTimeOffset?)null : cursors.Read(cursor, user, key);
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -57,7 +57,7 @@ public static class ChartEndpoints
                 var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, StockChartHub.Json);
                 return json.Length <= StockChartHub.MaximumSnapshotBytes
                     ? Results.Bytes(json, "application/json")
-                    : Results.Problem("Chart response exceeds the bounded view. Choose a smaller interval.", statusCode: 413);
+                    : Results.Problem(StockChartHub.BoundedSnapshotReason, statusCode: 413);
             }
             catch (ArgumentException ex) { return Results.BadRequest(new { message = ex.Message }); }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)

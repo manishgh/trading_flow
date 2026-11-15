@@ -51,7 +51,7 @@ public sealed class PaperModel : PageModel
     [BindProperty(SupportsGet = true)] public bool NewsEnabled { get; set; } = true;
     [BindProperty(SupportsGet = true)] public string? ScreenerFilter { get; set; }
     [BindProperty(SupportsGet = true)] public string? ExperimentSourceStrategyPath { get; set; }
-    [BindProperty] public string ExperimentSemanticVersion { get; set; } = String.Empty;
+    [BindProperty] public string? ExperimentSemanticVersion { get; set; }
     [BindProperty] public Guid ExperimentRegistrationOperationId { get; set; }
     [BindProperty] public DateTimeOffset ExperimentRegistrationRequestedAtUtc { get; set; }
     [BindProperty] public PaperExperimentParameterInput ExperimentParameters { get; set; } = new();

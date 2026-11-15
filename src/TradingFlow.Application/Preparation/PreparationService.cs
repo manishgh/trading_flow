@@ -10,7 +10,8 @@ namespace TradingFlow.Application.Preparation;
 
 public sealed class PreparationService(IPreparationRepository repository, IDurableJobRepository jobs,
     IPreparationCalendar calendar, IPreparationAuthorization authorization, IUniverseSourceResolver sources,
-    IPreparationEvidence evidence, IWishlistRepository wishlists, TimeProvider clock) : IDurableJobHandler
+    IPreparationEvidence evidence, IWishlistRepository wishlists, TimeProvider clock,
+    IPreparationCollectionCapability collection) : IDurableJobHandler
 {
     public string JobType => "preparation";
     public DurableJobRecoveryMode RecoveryMode => DurableJobRecoveryMode.ReplayFromStart;
@@ -31,6 +32,53 @@ public sealed class PreparationService(IPreparationRepository repository, IDurab
     public async Task<PreparationDefinition[]> ListAsync(string owner,CancellationToken token) =>
         (await repository.DefinitionsAsync(token)).Where(x=>x.OwnerId==owner).GroupBy(x=>x.WorkflowId)
         .Select(x=>PreparationJson.View(x.MaxBy(y=>y.Revision)!)).OrderBy(x=>x.Settings.Name).ToArray();
+
+    // Describe the latest observed exchange target without assigning a guessed upcoming session to saved evidence.
+    public async Task<PreparationWorkspaceSummary> ReadWorkspaceSummaryAsync(string owner, CancellationToken token)
+    {
+        var workflows = await ListAsync(owner, token);
+        var recent = workflows.Length == 0 ? [] : await repository.WorkspaceOccurrencesAsync(owner, token);
+        var latest = recent.FirstOrDefault();
+        var workflow = latest is null ? workflows.FirstOrDefault() : workflows.FirstOrDefault(item => item.WorkflowId == latest.WorkflowId);
+        var target = recent.Where(row => row.WorkflowId == workflow?.WorkflowId && row.TargetDate == latest?.TargetDate).ToArray();
+        var evening = target.FirstOrDefault(row => row.Phase == "nightly");
+        var morning = target.FirstOrDefault(row => row.Phase == "morning");
+        var saved = target.FirstOrDefault(row => Guid.TryParse(row.RevisionId, out _)) ??
+            recent.FirstOrDefault(row => row.WorkflowId == workflow?.WorkflowId && Guid.TryParse(row.RevisionId, out _));
+        var expires = ReadExpiry(saved?.ExpiresAtUtc);
+        var now = clock.GetUtcNow();
+        var reviewable = morning is not null && saved?.OccurrenceId == morning.OccurrenceId &&
+            morning.JobStatus == "completed" && UsablePhaseEvidence(morning) &&
+            expires > now && ReadExpiry(morning.HandoffUntilUtc) > now;
+        var reviewKey = reviewable && ReadExpiry(morning!.ReviewExpiresAtUtc) > now ? morning.ReviewKey : null;
+        return new(workflow?.WorkflowId, workflow?.Settings.Name, workflow?.Settings.Enabled == true, latest?.TargetDate,
+            PhaseLabel(evening, "Evening"), PhaseLabel(morning, "Morning", reviewable), saved?.OccurrenceId,
+            Guid.TryParse(saved?.RevisionId, out var revision) ? revision : null, expires, reviewable, reviewKey);
+    }
+
+    // Saved evidence keeps the snapshot's outcome, even after terminal execution records are pruned.
+    private static bool UsablePhaseEvidence(PreparationWorkspaceRecord? row) =>
+        row is { Outcome: "completed" or "completed_with_gaps", Readiness: "complete" or "partial" }
+        && Guid.TryParse(row.RevisionId, out _);
+
+    // Explicitly distinguish a missing phase from a failed, pending or expired result.
+    private static string PhaseLabel(PreparationWorkspaceRecord? row, string phase, bool reviewable = false)
+    {
+        if (row?.JobStatus is "queued" or "running" or "cancelling") return phase + " collection in progress";
+        if (row?.JobStatus is "failed" or "cancelled") return phase + " collection " + row.JobStatus;
+        if (UsablePhaseEvidence(row))
+        {
+            if (row!.JobStatus is null) return phase + " evidence saved · job record unavailable";
+            if (row.JobStatus == "completed")
+                return phase == "Morning" && !reviewable ? "Morning saved · review window closed" : phase + " collected";
+        }
+        return row is null ? phase + " collection needed" : phase + " collection unavailable";
+    }
+
+    // Stored exchange slots and expiry timestamps have an explicit UTC offset.
+    private static DateTimeOffset? ReadExpiry(string? value) =>
+        DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var expires) ? expires : null;
 
     public async Task<PreparationDefinition> SaveAsync(string owner,SavePreparationRequest request,CancellationToken token)
     {
@@ -79,12 +127,18 @@ public sealed class PreparationService(IPreparationRepository repository, IDurab
         slots.Where(x=>x.ScheduledAtUtc<=now && now<x.DeadlineUtc)
             .GroupBy(x=>x.Phase,StringComparer.Ordinal)
             .Select(x=>x.MaxBy(slot=>slot.ScheduledAtUtc)!).ToArray();
+    // Show retained evidence after a job is pruned, while keeping execution completion explicit for handoff.
     private async Task<PreparationOccurrence> ViewAsync(PreparationOccurrenceRecord row,int revision,CancellationToken token)
     {
         var job=await jobs.GetJobAsync(row.Id,token); var snapshot=row.ResultJson is null?null:PreparationJson.Read<PreparationSnapshot>(row.ResultJson);
         if(snapshot is not null) snapshot=snapshot with { Symbols=snapshot.Symbols.Select(x=>x with {InputEvidenceJson=null}).ToArray() };
-        return new(row.Id,row.WorkflowId,revision,PreparationJson.Read<PreparationSlot>(row.SlotJson),
-            job?.Status is "cancelled" or "failed" ? job.Status : snapshot?.Outcome ?? job?.Status ?? "unavailable",job?.ErrorMessage,snapshot);
+        var slot = PreparationJson.Read<PreparationSlot>(row.SlotJson);
+        if (job is null && snapshot is not null)
+            return new(row.Id, row.WorkflowId, revision, slot, "saved_evidence",
+                "The job record is unavailable. You can inspect the saved evidence.", snapshot);
+        return new(row.Id,row.WorkflowId,revision,slot,
+            job?.Status is "queued" or "running" or "cancelling" or "cancelled" or "failed"
+                ? job.Status : snapshot?.Outcome ?? job?.Status ?? "unavailable",job?.ErrorMessage,snapshot);
     }
     public async Task TickAsync(CancellationToken token)
     {
@@ -109,6 +163,7 @@ public sealed class PreparationService(IPreparationRepository repository, IDurab
             await repository.AdvanceCursorAsync(def.WorkflowId,def.Id,advance.UtcTicks,token);
         }
     }
+    // Read back an idempotent retry; require a running worker before admitting new manual collection.
     public async Task<PreparationOccurrence> RunAsync(string owner,Guid workflowId,PreparationRunRequest request,CancellationToken token)
     {
         RequireKey(request.IdempotencyKey);
@@ -123,10 +178,12 @@ public sealed class PreparationService(IPreparationRepository repository, IDurab
             var old=(await repository.DefinitionsAsync(token)).Single(x=>x.Id==existing.DefinitionId);
             return await ViewAsync(existing,old.Revision,token);
         }
+        RequireCollectionWorker();
         var slots=await PlannedAsync(s,clock.GetUtcNow().AddDays(-7),token);
         var now=clock.GetUtcNow();
         var slot=CurrentCollectionWindows(slots,now).SingleOrDefault(x=>x.Phase==request.Phase)
             ?? throw new InvalidOperationException("Run now is outside the configured exchange-session collection window.");
+        RequireCollectionWorker();
         var row=await ReserveAsync(def,slot with { ScheduledAtUtc=now },"manual:"+request.IdempotencyKey,false,token)
             ?? throw new InvalidOperationException("This workflow already has active work, or the discovery queue is full.");
         return await ViewAsync(row,def.Revision,token);
@@ -248,6 +305,7 @@ public sealed class PreparationService(IPreparationRepository repository, IDurab
             blocked?"blocked":gaps?"completed_with_gaps":"completed",problems.ToArray(),captures.ToArray(),symbols,
             previous?.Symbols.Select(x=>x.Symbol).Except(namesSet).Order().ToArray() ?? [],curation);
     }
+    // A curation retry can read its saved occurrence, but new curation requires a worker before reserving the job and its list.
     public async Task<PreparationOccurrence> CurateAsync(string owner,Guid workflowId,Guid occurrenceId,PreparationCurationRequest request,CancellationToken token)
     {
         var definition=await OwnedAsync(owner,workflowId,token);RequireKey(request.IdempotencyKey);
@@ -277,9 +335,18 @@ public sealed class PreparationService(IPreparationRepository repository, IDurab
         var wishlist=new Wishlist {Id=wishlistId,Name="Preparation additions "+id.ToString("N"),CreatedAtUtc=now,UpdatedAtUtc=now,
             Items=additions.Select(x=>new WishlistItem {Id=Guid.NewGuid(),WishlistId=wishlistId,Ticker=x,AddedAtUtc=now,Notes=request.Reason}).ToList()};
         var binding=new PreparationReviewRecord {Id=Guid.NewGuid(),OccurrenceId=id,WishlistId=wishlistId,OwnerId=owner,IdempotencyKey=key,RequestSha256=hash,CreatedAtUtc=now,Json=PreparationJson.Write(curation)};
+        RequireCollectionWorker();
         var stored=await repository.ReserveAsync(row,job,token,wishlist,binding)??throw new InvalidOperationException("This workflow already has active work or the queue is full.");
         return await ViewAsync(stored,definition.Revision,token);
     }
+    // Keep collection fail-closed while leaving review, history and saved settings available.
+    private void RequireCollectionWorker()
+    {
+        var worker = collection.Read();
+        if (!worker.CanCollect)
+            throw new InvalidOperationException(worker.Detail);
+    }
+
     public async Task<PreparationHandoff> HandoffAsync(string owner,Guid workflowId,Guid occurrenceId,PreparationHandoffRequest request,CancellationToken token)
     {
         await OwnedAsync(owner,workflowId,token); RequireKey(request.IdempotencyKey);

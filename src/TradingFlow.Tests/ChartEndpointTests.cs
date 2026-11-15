@@ -17,11 +17,14 @@ using TradingFlow.Contracts.V1;
 using TradingFlow.Data.Context;
 using TradingFlow.Web;
 using TradingFlow.Web.Services.Charts;
+using Xunit.Abstractions;
 
 namespace TradingFlow.Tests;
 
-public sealed class ChartEndpointTests
+[Collection("Chart transport measurements")]
+public sealed partial class ChartEndpointTests(ITestOutputHelper output)
 {
+    private readonly ITestOutputHelper measurements = output;
     // Exercise the actual HTTP routes and WebSocket hub against synthetic evidence, with no operator host or provider.
     [Fact]
     public async Task HostedChartRequiresAuthOriginAndMembershipAndStreamsKnownStock()
@@ -116,7 +119,8 @@ public sealed class ChartEndpointTests
         public Uri Address => new(app.Urls.Single());
         public Reader Reader => reader;
         // Own one ephemeral in-memory SQLite instance and one random loopback listener.
-        public static async Task<Fixture> StartAsync(TimeProvider? clock = null)
+        public static async Task<Fixture> StartAsync(TimeProvider? clock = null, IReadOnlyList<string>? users = null,
+            ChartSeriesSnapshot? snapshot = null)
         {
             var database = new SqliteConnection("Data Source=:memory:");
             await database.OpenAsync();
@@ -134,7 +138,7 @@ public sealed class ChartEndpointTests
             builder.Services.AddSingleton<ChartAccessPolicy>();
             builder.Services.AddSingleton<ChartHistoryCursor>();
             builder.Services.AddSingleton<ChartTransportLimits>();
-            var reader = new Reader();
+            var reader = new Reader(snapshot);
             builder.Services.AddSingleton<IChartSeriesReader>(reader);
             var app = builder.Build();
             app.UseRouting();
@@ -142,8 +146,10 @@ public sealed class ChartEndpointTests
             app.UseAuthorization();
             app.UseChartOriginGuard();
             app.MapChartEndpoints();
-            app.Services.GetRequiredService<ChartAccessPolicy>().RecordDisplayed(
-                new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, "reader")], "fixture")), ["AAPL"]);
+            var access = app.Services.GetRequiredService<ChartAccessPolicy>();
+            foreach (var user in users ?? ["reader"])
+                access.RecordDisplayed(new ClaimsPrincipal(new ClaimsIdentity(
+                    [new(ClaimTypes.NameIdentifier, user)], "fixture")), ["AAPL"]);
             await app.StartAsync();
             return new Fixture(app, database, reader);
         }
@@ -156,15 +162,22 @@ public sealed class ChartEndpointTests
         }
     }
 
-    private sealed class Reader : IChartSeriesReader
+    private sealed class Reader(ChartSeriesSnapshot? snapshot) : IChartSeriesReader
     {
+        private ChartSeriesSnapshot? published = snapshot;
         public int ReadCount;
         public Action? OnRead;
+
+        // Hold one prepared source version at a time for the live polling fixture.
+        public void Publish(ChartSeriesSnapshot next) => Volatile.Write(ref published, next);
+
         // Supply deterministic chart evidence through the production transport boundary.
         public Task<ChartSeriesPage> ReadAsync(ChartSeriesKey key, DateTimeOffset? beforeUtc, CancellationToken token)
         {
             Interlocked.Increment(ref ReadCount);
             OnRead?.Invoke();
+            if (Volatile.Read(ref published) is { } current)
+                return Task.FromResult(new ChartSeriesPage(current with { SeriesKey = key }, current.Bars[0].StartUtc));
             return Task.FromResult(new ChartSeriesPage(new ChartSeriesSnapshot(key, DateTimeOffset.UtcNow,
                 "history_only", "Fixture", new("fixture", "sip", "all", "complete", null, null, null, null, true, [], []),
                 [], [], [], []), null));

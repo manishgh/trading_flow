@@ -2,6 +2,8 @@
 
 `trading_flow` is a config-driven trading research and paper-trading system built around one shared decision brain for backtesting, paper trading, and live trading.
 
+Start with the [user guide](docs/user-guide.md) for daily preparation, charts and indicators, saved-plan backtesting, and authorized paper monitoring. The [implementation plan](docs/implementation/audit-repairs-2026-11-14.md) records completed checks and remaining rollout work.
+
 ## Principles
 
 - One strategy, confluence, risk, and portfolio brain across modes.

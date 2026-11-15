@@ -53,6 +53,10 @@ public sealed class BacktestsModel : PageModel
     [BindProperty(SupportsGet = true)] public string? Month { get; set; }
 
     public BacktestJobSnapshot? SelectedJob { get; private set; }
+    public BacktestResultAvailability? SelectedResultAvailability { get; private set; }
+    public IReadOnlyDictionary<Guid, BacktestResultAvailability> RecentResultAvailability { get; private set; } =
+        new Dictionary<Guid, BacktestResultAvailability>();
+    public bool SelectedJobMissing => JobId.HasValue && SelectedJob is null;
 
     /// <summary>
     /// Which of the three phases renders. Derived from the run status rather than
@@ -120,6 +124,7 @@ public sealed class BacktestsModel : PageModel
     {
         await LoadDataAsync(configPath, strategyPath, wishlistId, cancellationToken);
         SelectedJob = JobId is { } id ? await backtestJobs.GetSnapshotAsync(id, cancellationToken) : null;
+        SelectedResultAvailability = SelectedJob is null ? null : BacktestResultAvailability.Observe(SelectedJob);
     }
 
     /// <summary>
@@ -148,6 +153,7 @@ public sealed class BacktestsModel : PageModel
             ProgressPercent = Math.Round(progressPercent, 1),
             Elapsed = elapsed.ToString(ElapsedFormat),
             job.ErrorMessage,
+            ResultAvailability = BacktestResultAvailability.Observe(job),
             PreparedMarketData = job.PreparedMarketData ?? job.Result?.PreparedMarketData,
             CanCancel = job.Status is "queued" or "running" or "cancelling",
             Events = job.Events.TakeLast(40),
@@ -193,6 +199,7 @@ public sealed class BacktestsModel : PageModel
             cancellationToken);
         OptimizationJobs = optJobs.List().Take(5).ToArray();
         BacktestJobs = await backtestJobs.RecentSnapshotsAsync(5, cancellationToken);
+        RecentResultAvailability = BacktestJobs.ToDictionary(job => job.JobId, BacktestResultAvailability.Observe);
         ResearchSnapshots = LoadResearchSnapshots();
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);

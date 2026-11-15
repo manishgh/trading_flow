@@ -16,7 +16,12 @@ internal sealed record ChartHistoryBatch(
     IReadOnlyDictionary<DateOnly, ChartMinuteAcquisition> MinuteAcquisitions,
     DateTimeOffset? DailyReconciledAtUtc,
     DateTimeOffset? CoveredThroughUtc,
-    string? Limitation);
+    string? Limitation,
+    string? CalendarRevision = null)
+{
+    private readonly Lazy<string> rawRevision = new(() => ChartInputRevision.History(Sessions, Bars, Quiet, BasisBreaks));
+    public string Revision => $"{CalendarRevision}:{rawRevision.Value}";
+}
 
 internal sealed record ChartMinuteAcquisition(
     DateTimeOffset? VerifiedThroughUtc, DateTimeOffset? FullReadAtUtc, bool NeedsFullRepair);
@@ -32,7 +37,7 @@ internal sealed class ChartHistorySource(
     private static readonly TimeSpan FullReconciliationInterval = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan MinuteQueryOverlap = TimeSpan.FromMinutes(15);
     private readonly object gate = new();
-    private readonly Dictionary<(string Symbol, bool Daily, DateOnly Anchor), Entry> cache = [];
+    private readonly Dictionary<ChartHistoryKey, Entry> cache = [];
     private readonly SemaphoreSlim permits = new(2);
     private readonly SemaphoreSlim calendarGate = new(1);
     private (DateOnly Start, DateOnly End, DateTimeOffset Expires, IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Calendar)? cachedCalendar;
@@ -42,7 +47,7 @@ internal sealed class ChartHistorySource(
     // Pending loads own a bounded deadline independent of any one subscriber.
     public Task<ChartHistoryBatch> ReadAsync(string symbol, bool daily, DateOnly anchor, CancellationToken cancellationToken)
     {
-        var key = (symbol, daily, anchor);
+        var key = new ChartHistoryKey(symbol, daily, anchor);
         var now = clock.GetUtcNow();
         Task<ChartHistoryBatch> load;
         lock (gate)
@@ -77,6 +82,25 @@ internal sealed class ChartHistorySource(
         return load.WaitAsync(cancellationToken);
     }
 
+    // Only active source entries can own retained indicator profiles.
+    public bool IsActive(ChartHistoryKey key)
+    {
+        lock (gate) return cache.ContainsKey(key);
+    }
+
+    // Reuse already loaded regular-session proof for RVOL without fetching or extending a history entry.
+    public ChartHistoryBatch[] WarmMinuteHistory(string symbol, DateOnly first, DateOnly last)
+    {
+        lock (gate)
+            return cache.Where(pair => pair.Key.Symbol == symbol && !pair.Key.Daily &&
+                    pair.Key.Anchor >= first && pair.Value.Load.IsCompletedSuccessfully)
+                .OrderByDescending(pair => pair.Key.Anchor)
+                .Select(pair => pair.Value.Load.Result)
+                .Where(batch => batch.Sessions.Count > 0 && batch.Sessions[0] <= last)
+                .Distinct(ReferenceEqualityComparer.Instance)
+                .Cast<ChartHistoryBatch>().ToArray();
+    }
+
     // A forward calendar rollover can reuse a recent completed seed. Never seed an older page from a newer anchor.
     private ChartHistoryBatch? MostRecentSeed(string symbol, bool daily, DateOnly anchor) =>
         cache.Where(pair => pair.Key.Symbol == symbol && pair.Key.Daily == daily &&
@@ -95,6 +119,7 @@ internal sealed class ChartHistorySource(
             var asOf = clock.GetUtcNow().ToUniversalTime();
             var calendar = await LoadCalendarAsync(anchor, asOf, budget.Token);
             var projector = new ChartBarProjector(calendar);
+            var calendarRevision = ChartInputRevision.Calendar(calendar);
             var eligible = calendar.Where(pair => pair.Key <= anchor && pair.Value.IsTradingDay)
                 .Select(pair => pair.Key).Order().TakeLast(daily ? MaximumDaily : 15).ToArray();
             if (eligible.Length == 0)
@@ -102,7 +127,7 @@ internal sealed class ChartHistorySource(
                 return new ChartHistoryBatch(projector, eligible, new Dictionary<DateTimeOffset, ChartSourceBar>(),
                     new Dictionary<DateTimeOffset, DateTimeOffset>(), new HashSet<DateTimeOffset>(), new HashSet<DateOnly>(),
                     new Dictionary<DateOnly, DateTimeOffset>(), new Dictionary<DateOnly, ChartMinuteAcquisition>(),
-                    null, null, "No scheduled exchange sessions were returned for this window.");
+                    null, null, "No scheduled exchange sessions were returned for this window.", calendarRevision);
             }
 
             var state = new HistoryRefresh(previous, eligible[0]);
@@ -113,10 +138,10 @@ internal sealed class ChartHistorySource(
             {
                 if (previous is not null && previous.Sessions.SequenceEqual(eligible))
                 {
-                    return previous with { Projector = projector };
+                    return previous with { Projector = projector, CalendarRevision = calendarRevision };
                 }
 
-                return state.ToBatch(projector, eligible, daily, asOf, previous?.Limitation);
+                return state.ToBatch(projector, eligible, daily, asOf, previous?.Limitation, calendarRevision);
             }
 
             var lastRequested = daily ? dailyDates[^1] : minuteReads[0].Date;
@@ -129,7 +154,7 @@ internal sealed class ChartHistorySource(
             {
                 limitation = "Some scheduled SIP sessions have not completed history acquisition.";
             }
-            return state.ToBatch(projector, eligible, daily, asOf, limitation);
+            return state.ToBatch(projector, eligible, daily, asOf, limitation, calendarRevision);
         }
         finally
         {
@@ -461,7 +486,7 @@ internal sealed class ChartHistorySource(
 
         // Report the end of the first contiguous run of scheduled dates. Later verified islands do not bridge an older gap.
         public ChartHistoryBatch ToBatch(ChartBarProjector projector, DateOnly[] sessions, bool daily,
-            DateTimeOffset asOf, string? limitation)
+            DateTimeOffset asOf, string? limitation, string calendarRevision)
         {
             DateTimeOffset? through = null;
             foreach (var date in sessions)
@@ -480,7 +505,7 @@ internal sealed class ChartHistorySource(
                 }
             }
             return new ChartHistoryBatch(projector, sessions, Bars, Quiet, Breaks, Acquired, Retry,
-                MinuteAcquisitions, DailyReconciledAtUtc, through, limitation);
+                MinuteAcquisitions, DailyReconciledAtUtc, through, limitation, calendarRevision);
         }
     }
 

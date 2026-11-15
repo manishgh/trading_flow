@@ -14,10 +14,10 @@
         streaming: 'Streaming completed candles', delayed: 'Delayed candles', repairing: 'Repairing data',
         history_only: 'History only', closed: 'Market closed', unavailable: 'Candles unavailable'
     };
-    const dailyContexts = new Set(['swing', 'week', 'month', 'year']);
     const horizonLabels = {
-        swing: 'Daily pivots · 64 sessions', week: 'Daily pivots · 5 sessions', month: 'Daily pivots · 21 sessions', year: 'Daily pivots · 252 sessions'
+        swing: '64-session lookback', week: 'week lookback', month: 'month lookback', year: 'year lookback'
     };
+    const defaults = { interval: '5m', session: 'regular', structure: 'auto', lookback: 'swing' };
     const historyPageLimit = 3;
 
     // Express the same instant in New York and Berlin, with each zone's historical daylight saving rules.
@@ -69,12 +69,9 @@
     // Preserve authoritative current-page removals when joining earlier completed candles.
     function joinedBars(current, older) {
         const decorate = bar => ({ ...bar, startMs: Date.parse(bar.startUtc), endMs: Date.parse(bar.endUtc) });
-        const latest = current.bars.map(decorate);
-        const first = latest[0]?.startMs;
-        return byId([
-            ...older.flatMap(page => page.bars.map(decorate)).filter(bar => first == null || bar.startMs < first),
-            ...latest
-        ].filter(bar => bar.completionState === 'completed' && bar.endMs > bar.startMs), bar => bar.startMs)
+        const owned = window.TradingFlowStockChartIndicators.pageRanges(current, older)
+            .flatMap(({ page, before }) => page.bars.map(decorate).filter(bar => bar.startMs < before));
+        return byId(owned.filter(bar => bar.completionState === 'completed' && bar.endMs > bar.startMs), bar => bar.startMs)
             .sort((a, b) => a.startMs - b.startMs);
     }
 
@@ -112,6 +109,7 @@
         const get = name => root.querySelector('[data-chart-' + name + ']');
         const transport = window.TradingFlowStockChartTransport;
         const plotting = window.TradingFlowStockChartPlot;
+        const indicatorLibrary = window.TradingFlowStockChartIndicators;
         const paths = { history: root.dataset.chartHistory, hub: root.dataset.chartHub };
         const controller = new AbortController();
         const layerFields = [...root.querySelectorAll('[data-chart-layer]')];
@@ -123,8 +121,10 @@
         let currentBars = [], currentLevels = [], olderPages = [];
         let paging = false;
         let historyExpired = false;
+        let earlierStudiesChanged = false;
         let streamStatus = '';
         let reconstructed = false;
+        let shownPane = null;
 
         // Add handlers whose lifetime is no longer than this chart host.
         function on(node, event, handler) {
@@ -192,10 +192,34 @@
             get('distances').hidden = distances.length === 0;
             get('distances').textContent = distances.join(' · ');
             fields(get('values'), values, true);
+            const indicators = studies.readouts(start);
+            const studyReadout = get('study-values');
+            studyReadout.hidden = !indicators.length;
+            fields(studyReadout, indicators, true);
+            for (const [offset, [, , available, anchor, revision, reconstructedStudy, observed, historical]] of indicators.entries()) {
+                if (!available) continue;
+                const label = element('small', 'Available ' + available);
+                label.title = timestamp(available);
+                studyReadout.children[offset].append(label);
+                if (anchor) {
+                    const source = element('small', 'Segment from ' + anchor);
+                    source.title = timestamp(anchor);
+                    studyReadout.children[offset].append(source);
+                }
+                if (historical) studyReadout.children[offset].append(element('small', 'Separate earlier-page segment'));
+                if (reconstructedStudy) studyReadout.children[offset].append(element('small', 'Reconstructed history'));
+                if (observed) studyReadout.children[offset].append(element('small', 'Observed ' + observed));
+                if (revision) {
+                    const provenance = element('small', 'Source revision ' + revision.slice(0, 12));
+                    provenance.title = revision;
+                    studyReadout.children[offset].append(provenance);
+                }
+            }
             get('prev').disabled = index === 0;
             get('next').disabled = index === currentBars.length - 1;
             get('readout').hidden = false;
-            if (announce) get('inspection').textContent = get('candle-time').textContent + '. ' + values.map(value => value.join(' ')).join(', ');
+            if (announce) get('inspection').textContent = get('candle-time').textContent + '. ' + [...values, ...indicators]
+                .map(([label, value]) => label + ' ' + value).join(', ');
         }
 
         // Move the keyboard inspection to a real completed bar and preserve zoom while bringing it into view.
@@ -243,7 +267,9 @@
                 item.dataset.zoneType = zone.type;
                 const evidence = [zone.currentOnly ? 'Current zone' : 'Historical zone', zone.sourceTimeframe + ' pivots'];
                 if (zone.isPriceInBand) evidence.push('Latest close in band');
-                item.append(element('strong', zoneTitle(zone)), element('small', evidence.join(' · ')));
+                const cutoff = element('small', 'Inputs available ' + zone.effectiveAtUtc);
+                cutoff.title = timestamp(zone.effectiveAtUtc);
+                item.append(element('strong', zoneTitle(zone)), element('small', evidence.join(' · ')), cutoff);
                 return item;
             }));
             keyList.hidden = visible.length === 0;
@@ -320,8 +346,9 @@
         // Keep page navigation buttons aligned with the last accepted cursor and active request.
         function refreshPager() {
             const cursor = (olderPages.at(-1) || snapshot)?.historyCursor;
-            get('older').disabled = !cursor || paging || historyExpired || olderPages.length >= historyPageLimit;
-            get('history-reload').hidden = !historyExpired;
+            const profilePending = snapshot?.seriesKey.indicators !== key?.indicators;
+            get('older').disabled = !cursor || paging || historyExpired || profilePending || olderPages.length >= historyPageLimit;
+            get('history-reload').hidden = !historyExpired && !earlierStudiesChanged;
             get('latest').disabled = currentBars.length === 0;
         }
 
@@ -340,9 +367,12 @@
             }));
             const events = byId(recent.flatMap(page => page.markers), event => event.id)
                 .sort((a, b) => Date.parse(b.eventAtUtc) - Date.parse(a.eventAtUtc));
+            const selectedStudies = indicatorLibrary.joinedStudies(snapshot, olderPages.slice().reverse(), studies.tokens());
+            earlierStudiesChanged = selectedStudies.some(study => study.earlierUnavailable);
+            studies.update(selectedStudies);
             plot.setData({ bars: currentBars, zones, levels: currentLevels, events, interval: key.interval,
                 basisBreaks: recent.flatMap(page => page.evidence.basisBreaks || []),
-                reconstructed }, retainPosition);
+                reconstructed, studies: selectedStudies, shownPane }, retainPosition);
             const hasBars = currentBars.length > 0;
             get('empty').hidden = hasBars;
             get('empty').textContent = 'No completed candles for the selected view.';
@@ -375,9 +405,11 @@
             olderPages = [];
             paging = false;
             historyExpired = false;
+            earlierStudiesChanged = false;
             streamStatus = '';
             get('history-reload').disabled = false;
             reconstructed = false;
+            studies.update([]);
             get('retry').hidden = true;
             get('readout').hidden = true;
             get('empty').hidden = false;
@@ -391,6 +423,8 @@
         function startSelection(reset = true, reloadEarlier = false) {
             const closed = stop();
             const request = new AbortController();
+            const profile = studies.tokens().sort().join(',');
+            let profileChanged = !reset && snapshot?.seriesKey.indicators !== profile;
             active = request;
             if (reset) resetSelection();
             else {
@@ -399,10 +433,9 @@
                     get('history-reload').disabled = true;
                     get('history-status').textContent = 'Reloading earlier history links…';
                 }
-                streamStatus = 'Reconnecting chart stream…';
+                streamStatus = profileChanged ? 'Updating indicators…' : 'Reconnecting chart stream…';
                 get('retry').hidden = true;
                 refreshStatus();
-                refreshPager();
             }
             if (!root.dataset.symbol) {
                 stop = () => closed;
@@ -414,21 +447,23 @@
 
             const interval = get('interval').value;
             const daily = interval === '1d';
-            const contextControl = get('context');
+            const structureControl = get('structure');
             const sessionControl = get('session');
             sessionControl.disabled = daily;
             sessionControl.options[0].textContent = daily ? 'Provider daily' : 'Regular';
             if (daily) sessionControl.value = 'regular';
-            for (const option of contextControl.options) {
-                if (option.value === 'auto') continue;
-                option.disabled = daily !== dailyContexts.has(option.value);
-            }
-            if (contextControl.selectedOptions[0]?.disabled) contextControl.value = daily ? 'swing' : 'intraday';
-            key = { symbol: root.dataset.symbol, interval, sessionView: sessionControl.value, context: contextControl.value };
+            const showDaily = daily || structureControl.value === 'daily';
+            structureControl.querySelector('[value="intraday"]').disabled = daily;
+            if (daily && structureControl.value === 'intraday') structureControl.value = 'auto';
+            get('lookback-control').hidden = !showDaily;
+            const context = showDaily ? get('lookback').value : structureControl.value;
+            key = { symbol: root.dataset.symbol, interval, sessionView: daily ? 'regular' : sessionControl.value,
+                context, indicators: profile };
+            refreshPager();
             updateFullLink();
-            get('context-label').textContent = daily
-                ? (horizonLabels[key.context] || 'Daily pivots · Swing context') + ' · Provider daily aggregation'
-                : 'Intraday zones use 15-minute candles';
+            get('context-label').textContent = showDaily
+                ? '1d structure · ' + horizonLabels[context] + ' · Current confirmed zones'
+                : '15m structure · Current confirmed zones';
             if (!plotting || !window.LightweightCharts || !transport) {
                 stop = () => closed;
                 get('empty').textContent = 'Chart assets could not load. Reload this page to retry.';
@@ -461,7 +496,12 @@
                         refreshStatus();
                         return;
                     }
-                    if (snapshot && !sameBasis(snapshot.evidence, received.evidence)) olderPages = [];
+                    if (profileChanged || (snapshot && !sameBasis(snapshot.evidence, received.evidence))) {
+                        if (olderPages.length && profileChanged) get('history-status').textContent = 'Load earlier candles again for the selected indicators.';
+                        olderPages = [];
+                        historyExpired = false;
+                        profileChanged = false;
+                    }
                     const followNewest = currentBars.at(-1)?.startMs === selected;
                     snapshot = received;
                     if (followNewest) selected = null;
@@ -542,20 +582,77 @@
             url.searchParams.set('interval', key.interval);
             url.searchParams.set('sessionView', key.sessionView);
             url.searchParams.set('chartContext', key.context);
+            url.searchParams.set('indicators', key.indicators);
+            url.searchParams.set('preset', get('preset').value);
             full.href = url.href;
             full.setAttribute('aria-label', 'Open full chart for ' + key.symbol);
         }
 
-        const controls = { interval: 'interval', session: 'sessionView', context: 'chartContext' };
-        if (root.closest('.stock-chart-page')) {
-            const query = new URLSearchParams(location.search);
-            for (const [picker, field] of Object.entries(controls)) {
-                const select = get(picker);
-                const value = query.get(field);
-                if ([...select.options].some(option => option.value === value)) select.value = value;
-            }
+        // Store only the active browser display preferences without changing the workspace or stock.
+        function savePreferences() {
+            indicatorLibrary.remember({
+                ...Object.fromEntries(Object.keys(defaults).map(name => [name, get(name).value])),
+                preset: get('preset').value, indicators: studies.tokens(), layers
+            });
         }
-        for (const picker of Object.keys(controls)) on(get(picker), 'change', () => startSelection());
+
+        // Restore supported selections, allowing an explicit full chart URL to override browser defaults.
+        function restorePreferences(settings, query = new URLSearchParams()) {
+            const context = query.get('chartContext');
+            const params = { interval: query.get('interval'), session: query.get('sessionView') };
+            if (Object.hasOwn(horizonLabels, context)) {
+                params.structure = 'daily';
+                params.lookback = context;
+            } else if (context === 'intraday' || context === 'auto') params.structure = context;
+            for (const [name, fallback] of Object.entries(defaults)) {
+                const select = get(name);
+                const value = params[name] ?? settings[name];
+                select.value = [...select.options].some(option => option.value === value) ? value : fallback;
+            }
+            for (const checkbox of layerFields) {
+                const name = checkbox.dataset.chartLayer;
+                checkbox.checked = typeof settings.layers?.[name] === 'boolean' ? settings.layers[name] : checkbox.defaultChecked;
+                layers[name] = checkbox.checked;
+            }
+            const indicators = query.has('indicators') ? query.get('indicators').split(',') : settings.indicators;
+            studies.restore(indicators, query.get('preset') ?? settings.preset);
+        }
+
+        const studies = indicatorLibrary.mount(get, on, element, timestamp, preset => {
+            const intervalChanged = key?.interval !== get('interval').value;
+            if (preset && preset !== 'custom') get('settings-announcement').textContent =
+                (preset === 'swing' ? 'Swing' : 'Intraday') + ' preset selected. Candle interval ' + get('interval').selectedOptions[0].textContent + '.';
+            if (intervalChanged || key?.indicators !== studies.tokens().sort().join(',')) {
+                plot?.clearStudies();
+                inspect(selected);
+                startSelection(!snapshot || intervalChanged);
+            }
+            savePreferences();
+        }, pane => {
+            shownPane = pane;
+            plot?.setShownPane(pane);
+        });
+
+        restorePreferences(indicatorLibrary.preferences(), new URLSearchParams(root.closest('.stock-chart-page') ? location.search : ''));
+        for (const picker of Object.keys(defaults)) on(get(picker), 'change', () => {
+            if (picker === 'interval') studies.intervalChanged();
+            startSelection();
+            savePreferences();
+        });
+        on(get('reset'), 'click', () => {
+            indicatorLibrary.remember(null);
+            restorePreferences({});
+            get('study-feedback').textContent = '';
+            get('settings-announcement').textContent = 'Chart settings reset.';
+            if (root.closest('.stock-chart-page')) {
+                const url = new URL(location.href);
+                for (const parameter of ['interval', 'sessionView', 'chartContext', 'indicators', 'preset']) url.searchParams.delete(parameter);
+                window.history.replaceState(window.history.state, '', url);
+            }
+            hiddenZones.clear();
+            hiddenLevels.clear();
+            startSelection();
+        });
         on(get('retry'), 'click', () => startSelection(!snapshot));
         on(get('older'), 'click', loadEarlier);
         on(get('history-reload'), 'click', () => startSelection(false, true));
@@ -594,6 +691,7 @@
             plot?.setLayers(layers, hiddenLevels, hiddenZones);
             renderZoneKey(snapshot?.zones || []);
             refreshSource();
+            savePreferences();
         });
         const sourceAge = setInterval(refreshSource, 15_000);
         if (root.dataset.symbol) startSelection();

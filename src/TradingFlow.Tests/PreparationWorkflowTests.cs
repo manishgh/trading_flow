@@ -164,6 +164,145 @@ public sealed class PreparationWorkflowTests
         await using var db=h.Database.CreateDbContext();Assert.Equal(1,await db.ApplicationEvents.CountAsync(x=>x.EventType=="preparation_failed"));
     }
 
+    // A disabled or unobserved worker must reject both entry points without reserving work or a curation list.
+    [Theory]
+    [InlineData("paused")]
+    [InlineData("unknown")]
+    public async Task UnavailableWorker_RefusesNewManualAndCuratedWork(string state)
+    {
+        await using var h = await Harness.Create();
+        var (definition, parent) = await h.Execute();
+        h.Collection.Setup(x => x.Read()).Returns(new PreparationWorkerStatus(state, "Worker cannot accept collection."));
+        var manual = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            h.Service.RunAsync(h.Owner, definition.WorkflowId, new("morning", "paused-manual"), default));
+        var curated = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            h.Service.CurateAsync(h.Owner, definition.WorkflowId, parent.Id,
+                new(parent.Snapshot!.RevisionId, ["MSFT"], [], "Added on review", "paused-curation"), default));
+        Assert.Equal("Worker cannot accept collection.", manual.Message);
+        Assert.Equal(manual.Message, curated.Message);
+        Assert.Equal(parent.Id, Assert.Single(await h.Repository.OccurrencesAsync(definition.WorkflowId, default)).Id);
+        Assert.Single(await h.Jobs.GetJobsAsync("preparation", default));
+        Assert.Empty(await h.Wishlists.ListAsync(default));
+    }
+
+    // The Desk query returns the exact saved morning revision and accepted review, scoped to the owner.
+    [Fact]
+    public async Task WorkspaceSummary_ReportsExpiryAndKeepsReviewOwnerScoped()
+    {
+        await using var h = await Harness.Create();
+        var (definition, occurrence) = await h.Execute();
+        var summary = await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default);
+        Assert.Equal(definition.WorkflowId, summary.WorkflowId);
+        Assert.Equal(occurrence.Snapshot!.RevisionId, summary.RevisionId);
+        Assert.Equal(occurrence.Slot.TargetDate.ToString("yyyy-MM-dd"), summary.TargetDate);
+        Assert.Equal("Evening collection needed", summary.EveningState);
+        Assert.True(summary.MorningReviewable);
+        Assert.Null(summary.ReviewKey);
+        await h.Service.HandoffAsync(h.Owner, definition.WorkflowId, occurrence.Id,
+            new(occurrence.Snapshot.RevisionId, ["AAPL"], "Verified", "desk-review"), default);
+        Assert.Equal("desk-review", (await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default)).ReviewKey);
+        Assert.Null((await h.Service.ReadWorkspaceSummaryAsync("other", default)).WorkflowId);
+        h.Clock.Now = summary.ExpiresAtUtc!.Value;
+        Assert.False((await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default)).MorningReviewable);
+    }
+
+    // Newer records from other workflows cannot push the selected target's evening evidence out of the summary.
+    [Fact]
+    public async Task WorkspaceSummary_ReadsExactEveningBeyondOwnerWideRecentRows()
+    {
+        await using var h = await Harness.Create();
+        var (workflow, morning) = await h.Execute();
+        var evening = h.Rows(workflow, "older-evening");
+        evening.Row.ScheduledTicks = h.Clock.Now.AddHours(-12).UtcTicks;
+        evening.Row.SlotJson = PreparationJson.Write(morning.Slot with
+            { Phase = "nightly", ScheduledAtUtc = h.Clock.Now.AddHours(-12) });
+        evening.Row.ResultJson = PreparationJson.Write(morning.Snapshot! with { RevisionId = evening.Row.Id });
+        evening.Job.Status = "completed";
+        await h.Repository.ReserveAsync(evening.Row, evening.Job, default);
+        var other = await h.Definition(Settings with { Name = "Other workflow" });
+        for (var i = 1; i <= 13; i++)
+        {
+            var row = h.Rows(other, "other-" + i);
+            row.Row.ScheduledTicks = h.Clock.Now.AddMinutes(-i).UtcTicks;
+            row.Job.Status = "completed";
+            await h.Repository.ReserveAsync(row.Row, row.Job, default);
+        }
+        var summary = await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default);
+        Assert.Equal(workflow.WorkflowId, summary.WorkflowId);
+        Assert.Equal("Evening collected", summary.EveningState);
+        Assert.Equal(morning.Id, summary.OccurrenceId);
+    }
+
+    // A projected snapshot may exist before job completion and must not be advertised as published for review.
+    [Fact]
+    public async Task Detail_KeepsQueuedStatusWhenSnapshotExistsBeforeCompletion()
+    {
+        await using var h = await Harness.Create();
+        var (workflow, completed) = await h.Execute();
+        var next = h.Rows(workflow, "awaiting-terminal-publication");
+        next.Row.ResultJson = PreparationJson.Write(completed.Snapshot! with { RevisionId = next.Row.Id });
+        await h.Repository.ReserveAsync(next.Row, next.Job, default);
+        var detail = await h.Service.DetailAsync(h.Owner, workflow.WorkflowId, default);
+        Assert.Equal("queued", detail.History.Single(item => item.Id == next.Row.Id).Status);
+    }
+
+    // Friday's terminal job can age out before its Monday target without erasing collected evening evidence.
+    [Fact]
+    public async Task WorkspaceSummary_PreservesFridayEvidenceAfterPruning()
+    {
+        await using var h = await Harness.Create();
+        h.Clock.Now = DateTimeOffset.Parse("2026-11-13T22:00:00Z");
+        var workflow = await h.Definition();
+        var evening = h.Rows(workflow, "friday-evening");
+        var friday = new DateOnly(2026, 11, 13);
+        var monday = friday.AddDays(3);
+        var mondayOpen = PreparationCalendarAdapter.Utc(monday, new(9, 30));
+        var fridaySession = new PreparationSession(friday, true, PreparationCalendarAdapter.Utc(friday, new(9, 30)),
+            PreparationCalendarAdapter.Utc(friday, new(16, 0)));
+        evening.Row.SlotJson = PreparationJson.Write(new PreparationSlot(monday, "nightly", h.Clock.Now,
+            h.Clock.Now.AddMinutes(30), mondayOpen, fridaySession, new(h.Clock.Now, "fixture", [fridaySession])));
+        evening.Row.ResultJson = PreparationJson.Write(new PreparationSnapshot(evening.Row.Id, null,
+            h.Clock.Now, h.Clock.Now, mondayOpen, "complete", "completed", [], [], [], []));
+        evening.Job.Status = "completed";
+        evening.Job.FinishedAt = h.Clock.Now;
+        Assert.NotNull(await h.Repository.ReserveAsync(evening.Row, evening.Job, default));
+
+        h.Clock.Now = mondayOpen.AddMinutes(-90);
+        await h.Jobs.PruneTerminalJobsOlderThanAsync(h.Clock.Now.AddDays(-2), default);
+        Assert.Null(await h.Jobs.GetJobAsync(evening.Row.Id, default));
+        var summary = await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default);
+        Assert.Equal("2026-11-16", summary.TargetDate);
+        Assert.Equal("Evening evidence saved · job record unavailable", summary.EveningState);
+        Assert.Equal("Morning collection needed", summary.MorningState);
+        Assert.Equal(evening.Row.Id, summary.RevisionId);
+        Assert.Equal(mondayOpen, summary.ExpiresAtUtc);
+        Assert.False(summary.MorningReviewable);
+    }
+
+    // A missing execution row keeps an unexpired morning snapshot visible and prevents a new handoff.
+    [Fact]
+    public async Task MissingMorningJob_KeepsEvidenceWithoutOfferingHandoff()
+    {
+        await using var h = await Harness.Create();
+        var (workflow, morning) = await h.Execute();
+        Assert.True((await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default)).MorningReviewable);
+        await using (var db = h.Database.CreateDbContext())
+            Assert.Equal(1, await db.Jobs.Where(job => job.Id == morning.Id).ExecuteDeleteAsync());
+
+        var summary = await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default);
+        Assert.Equal("Morning evidence saved · job record unavailable", summary.MorningState);
+        Assert.Equal(morning.Snapshot!.RevisionId, summary.RevisionId);
+        Assert.False(summary.MorningReviewable);
+        Assert.Null(summary.ReviewKey);
+        var detail = await h.Service.DetailAsync(h.Owner, workflow.WorkflowId, default);
+        var saved = Assert.Single(detail.History);
+        Assert.Equal("saved_evidence", saved.Status);
+        Assert.Contains("inspect the saved evidence", saved.Error);
+        Assert.NotNull(saved.Snapshot);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Service.HandoffAsync(h.Owner, workflow.WorkflowId,
+            morning.Id, new(morning.Snapshot.RevisionId, ["AAPL"], "Verified", "missing-job"), default));
+    }
+
     [Fact]
     public async Task Curation_CollectsAddedSymbolsAndPreservesParentAudit()
     {
@@ -213,6 +352,7 @@ public sealed class PreparationWorkflowTests
         public string Stamp="stamp";public bool FailSecond,Incomplete,Expired;public string[] Symbols=["AAPL"];
         public SqlitePreparationRepository Repository=>new(Database); public SqliteJobRepository Jobs=>new(Database);public SqliteWishlistRepository Wishlists=>new(Database);
         public PreparationService Service {get;private set;}=null!; public DurableJobProcessor Processor=>new(Jobs,Clock);
+        public Mock<IPreparationCollectionCapability> Collection { get; } = new();
         public static async Task<Harness> Create()
         {
             var h=new Harness();await h.Database.InitializeAsync();await using var db=h.Database.CreateDbContext();db.Users.Add(new TradingFlowUser {Id=Guid.Parse(h.Owner),UserName="test",NormalizedUserName="TEST",SecurityStamp=h.Stamp});await db.SaveChangesAsync();
@@ -221,7 +361,8 @@ public sealed class PreparationWorkflowTests
                 if(h.FailSecond&&r.SourceKey=="second")throw new InvalidOperationException("source offline");return Task.FromResult(new UniverseSourceCapture(r.SourceKind,r.SourceKey,h.Clock.Now.AddMinutes(h.Expired?-5:0),h.Clock.Now.AddMinutes(h.Expired?-2:3),h.Symbols.Select(s=>new DiscoverySymbolObservation(s,"{}")).ToArray()));});
             var evidence=new Mock<IPreparationEvidence>();evidence.Setup(x=>x.CollectAsync(It.IsAny<string>(),It.IsAny<PreparationSlot>(),It.IsAny<PreparationSettings>(),It.IsAny<DateTimeOffset>(),It.IsAny<CancellationToken>())).Returns((string symbol,PreparationSlot slot,PreparationSettings s,DateTimeOffset cutoff,CancellationToken token)=>Task.FromResult(new PreparationSymbol(symbol,"",h.Incomplete?"incomplete":"complete",h.Incomplete?["Missing final daily bar"]:[],slot.PreviousSession.Date,126,100,1000000,100000000,100,2,null,null,"sip","all",new string('a',64),[],[])));
             var cal=new Mock<IPreparationCalendar>();cal.Setup(x=>x.LoadAsync(It.IsAny<DateOnly>(),It.IsAny<DateOnly>(),It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("fixture calendar unavailable"));
-            h.Service=new(h.Repository,h.Jobs,cal.Object,auth.Object,source.Object,evidence.Object,h.Wishlists,h.Clock);return h;
+            h.Collection.Setup(x => x.Read()).Returns(new PreparationWorkerStatus("available", "Worker running."));
+            h.Service=new(h.Repository,h.Jobs,cal.Object,auth.Object,source.Object,evidence.Object,h.Wishlists,h.Clock,h.Collection.Object);return h;
         }
         public Task<PreparationDefinition> Definition(PreparationSettings? settings=null)=>Service.SaveAsync(Owner,new(Guid.Empty,0,settings??Settings),default);
         public (PreparationOccurrenceRecord Row,PersistedJob Job) Rows(PreparationDefinition definition,string key)

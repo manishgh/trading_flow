@@ -1,5 +1,7 @@
 @page
 @inject TradingFlow.Web.Services.TradingEnvironmentService Environments
+@inject TradingFlow.Web.Services.RuntimeHostedServiceOptions Runtime
+@inject TradingFlow.Engine.Execution.IEntryAdmissionControl Admission
 @{
     ViewData["Title"] = "Review order";
     var environment = Environments.GetState(Environments.Parse(Request.Query["env"]));
@@ -12,8 +14,23 @@
     <partial name="_EnvironmentLock" model="environment" />
     return;
 }
+@{ var restrictions = TradingFlow.Web.Services.WorkspaceStatusService.DescribeRestrictions(Runtime.TradingMutationsPaused, Admission.GetSnapshot());
+   var isExit = Request.Query["side"].FirstOrDefault() == "sell"; }
+@if (Runtime.TradingMutationsPaused)
+{
+    <section class="panel">
+        <h1>Order review unavailable</h1>
+        <p role="status">@restrictions.Exit</p>
+        <a asp-page="/RunningTrades" target="@(embedded ? "_top" : null)">View positions and protection</a>
+    </section>
+    return;
+}
 <section class="@(embedded ? "order-embedded" : "panel")">
     @if (!embedded) { <h1>Review paper order</h1> }
+    @if (!isExit && restrictions.Opening is { } openingRestriction)
+    {
+        <p class="status-banner" role="status" data-order-entry-restriction>@openingRestriction</p>
+    }
     <partial name="_OrderWorkflow" />
     @if (!embedded) { <a asp-page="/Desk" asp-route-runId="@Request.Query["runId"]" asp-route-env="@Request.Query["env"]">Return to candidates</a> }
 </section>

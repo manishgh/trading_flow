@@ -30,6 +30,13 @@
     <div>
         <h1>Earnings monitor</h1>
         <p>Reporting calendar, results and breakout evidence.</p>
+        <p id="earnings-observation" role="status">First analysis status is being read…</p>
+        <p id="earnings-next-action" class="muted"></p>
+        <details class="feed-evidence">
+            <summary>Source refresh evidence</summary>
+            <p id="earnings-calendar-evidence">Finviz calendar coverage not yet observed.</p>
+            <ul id="earnings-news-evidence"></ul>
+        </details>
     </div>
 </header>
 
@@ -226,7 +233,7 @@
 </div>
 
 <template id="earnings-empty-template">
-    <p class="empty-state">No earnings events or evidence are available for this period.</p>
+    <p class="empty-state">Earnings evidence is being read.</p>
 </template>
 
 <partial name="_GroupActions" />

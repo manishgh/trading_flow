@@ -4,10 +4,15 @@
   if (!form || !status) return;
   const filters = () => JSON.stringify([...new FormData(form)]);
   const original = filters();
+  const regions = ['#news-live-feed', '#news-live-body'];
   let busy = false;
+  // Avoid replacing evidence while the operator is reading or has focused either live region.
   const reading = () => document.hidden || filters() !== original ||
-    document.querySelector('#news-live-body')?.contains(document.activeElement) ||
-    document.querySelector('#news-live-body details[open]') || document.querySelector('dialog[open]');
+    regions.some(selector => {
+      const region = document.querySelector(selector);
+      return region?.contains(document.activeElement) || region?.querySelector('details[open]');
+    }) || document.querySelector('dialog[open]');
+  // Apply feed status and retained stories from the same document only after both regions are present.
   async function refresh() {
     if (busy || reading()) return;
     busy = true;
@@ -22,12 +27,11 @@
       }
       if (!response.ok) throw Error('News refresh failed');
       const documentCopy = new DOMParser().parseFromString(await response.text(), 'text/html');
-      const next = documentCopy.querySelector('#news-live-body');
-      const current = document.querySelector('#news-live-body');
-      if (!next || !current) throw Error('News response is incomplete');
+      const updates = regions.map(selector => [document.querySelector(selector), documentCopy.querySelector(selector)]);
+      if (updates.some(([current, next]) => !current || !next)) throw Error('News response is incomplete');
       // A reader may start editing/opening a dialog while the request is in flight.
       if (reading()) return;
-      current.replaceWith(document.importNode(next, true));
+      updates.forEach(([current, next]) => current.replaceWith(document.importNode(next, true)));
       status.textContent = 'Updated ' + new Date().toLocaleTimeString() + ' · refreshes every 30 seconds';
     } catch {
       status.textContent = 'Live update failed · showing the last loaded news; retrying in 30 seconds';

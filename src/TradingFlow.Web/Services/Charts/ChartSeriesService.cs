@@ -30,12 +30,16 @@ public sealed partial class ChartSeriesService(
 {
     private readonly ChartHistorySource source = new(provider, candles, clock,
         TimeSpan.FromMinutes(streamOptions.ActiveSessionStalenessMinutes), logger);
+    private readonly ChartIndicatorCache indicators = new();
     private const int MaximumBars = 500;
     private const int MaximumMarkers = 100;
     private readonly object projectionGate = new();
     private readonly Dictionary<ChartSeriesKey, ProjectionMemo> projections = [];
     private readonly object markerGate = new();
     private readonly Dictionary<(string Symbol, DateTimeOffset Start, DateTimeOffset? Before), MarkerMemo> markers = [];
+
+    // Keep calculation counts available to offline fanout tests without exposing a public operator route.
+    internal ChartIndicatorCacheMetrics MeasureIndicators() => indicators.Measure();
 
     // The visible key chooses context only. A caller cannot select a feed, URL,
     // arbitrary timeframe, unbounded window or strategy execution scope.
@@ -53,12 +57,12 @@ public sealed partial class ChartSeriesService(
         if (!SymbolPattern().IsMatch(symbol) || interval is not ("1m" or "5m" or "15m" or "1d") ||
             session is not ("regular" or "extended") ||
             (interval == "1d" && (session != "regular" || context is not ("swing" or "week" or "month" or "year"))) ||
-            (interval != "1d" && context != "intraday"))
+            (interval != "1d" && context is not ("intraday" or "swing" or "week" or "month" or "year")))
         {
             throw new ArgumentException("Unsupported symbol, interval, session view or chart context.", nameof(key));
         }
 
-        return new ChartSeriesKey(symbol, interval, session, context!);
+        return new ChartSeriesKey(symbol, interval, session, context!, ChartIndicatorProfile.Normalize(key.Indicators, interval, session));
     }
 
     // Canonical Alpaca equity symbols admit limited class-share punctuation.
@@ -77,10 +81,20 @@ public sealed partial class ChartSeriesService(
         }
 
         var daily = key.Interval == "1d";
+        var studies = ChartIndicatorProfile.Read(key);
+        var needsDaily = !daily && (key.Context != "intraday" && beforeUtc is null ||
+            studies.Any(study => study.SourceInterval == "1d"));
+        var anchor = ChartBarProjector.NewYorkDate(cutoff.AddTicks(-1));
+        var historyKey = new ChartHistoryKey(key.Symbol, daily, anchor);
         ChartHistoryBatch history;
+        ChartHistoryBatch? dailyHistory;
         try
         {
-            history = await source.ReadAsync(key.Symbol, daily, ChartBarProjector.NewYorkDate(cutoff.AddTicks(-1)), token);
+            var read = source.ReadAsync(key.Symbol, daily, anchor, token);
+            var readDaily = needsDaily ? ReadDailyContextAsync(key.Symbol, anchor, token) : Task.FromResult<ChartHistoryBatch?>(null);
+            await Task.WhenAll((Task)read, readDaily);
+            history = await read;
+            dailyHistory = await readDaily;
         }
         catch (Exception exception) when (!token.IsCancellationRequested)
         {
@@ -96,7 +110,8 @@ public sealed partial class ChartSeriesService(
         var canonical = daily || beforeUtc is not null ? null : await stream.ReadChartCanonicalAsync(
             key.Symbol, ChartBarProjector.At(history.Sessions[0], TimeOnly.MinValue), cutoff, requestedAt, token);
         var asOf = clock.GetUtcNow().ToUniversalTime();
-        var projection = ReadProjection(key, history, canonical, projector, cutoff, asOf, beforeUtc is not null);
+        var projection = ReadProjection(key with { Indicators = "" }, history, dailyHistory, canonical, projector,
+            cutoff, asOf, beforeUtc is not null);
         var visible = projection.Visible;
         if (visible.Count == 0)
         {
@@ -106,6 +121,7 @@ public sealed partial class ChartSeriesService(
         var last = visible[^1];
         var zones = projection.Zones;
         var levels = projection.Levels;
+        var calculated = await ReadIndicatorsAsync(key, historyKey, history, dailyHistory, canonical, studies, visible, beforeUtc, asOf, token);
         var markerRows = await ReadMarkersAsync(key.Symbol, visible[0].Bar.Timestamp, beforeUtc, cutoff, asOf, token);
         var (status, reason, liveThrough) = Classify(key, projector, history, canonical, requestedAt, beforeUtc is not null, last);
         var reconstructed = visible.Any(bar => bar.Bar.KnownAtUtc is null || bar.AvailableAtUtc > cutoff) ||
@@ -119,26 +135,63 @@ public sealed partial class ChartSeriesService(
                     canonical?.Bars.MaxBy(bar => bar.KnownAtUtc)?.KnownAtUtc,
                     canonical is null ? null : $"{canonical.OwnershipFence}:{canonical.SubscriptionGeneration}",
                     reconstructed, notes, projection.BasisBreaks.Where(point => point >= visible[0].Bar.Timestamp && point < cutoff).Order().ToArray()),
-                visible.Select(ToCandle).ToArray(), zones, levels.Select(level => ToLevel(level, last.Bar.Close)).ToArray(), markerRows),
+                visible.Select(ToCandle).ToArray(), zones, levels.Select(level => ToLevel(level, last.Bar.Close)).ToArray(), markerRows,
+                Indicators: calculated),
             beforeUtc is null || visible[0].Bar.Timestamp < cutoff ? visible[0].Bar.Timestamp : null);
+    }
+
+    // Higher-context prices use the same existing bounded daily entry. A failed daily read leaves intraday candles available.
+    private async Task<ChartHistoryBatch?> ReadDailyContextAsync(string symbol, DateOnly anchor, CancellationToken token)
+    {
+        try { return await source.ReadAsync(symbol, true, anchor, token); }
+        catch (Exception exception) when (!token.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Daily chart context unavailable for {Symbol}.", symbol);
+            return null;
+        }
+    }
+
+    // Numerical work shares the canonical history revision across viewers and is skipped entirely for candle-only views.
+    private async Task<IReadOnlyList<ChartIndicatorSeries>> ReadIndicatorsAsync(ChartSeriesKey key, ChartHistoryKey historyKey,
+        ChartHistoryBatch history, ChartHistoryBatch? dailyHistory, ChartCanonicalSession? canonical, ChartStudy[] studies,
+        IReadOnlyList<ChartCompletedBar> visible, DateTimeOffset? beforeUtc, DateTimeOffset asOf, CancellationToken token)
+    {
+        if (studies.Length == 0) return [];
+        var crossDaily = !historyKey.Daily && studies.Any(study => study.SourceInterval == "1d") ? dailyHistory : null;
+        var first = visible[0];
+        var last = visible[^1];
+        var prior = studies.Any(study => study.Name == "rvol") && !historyKey.Daily
+            ? history.Projector.PriorTradingDates(first.SessionDate, MarketEvidenceProfile.DefaultLookbackSessions) : [];
+        var warm = prior.Count > 0 ? source.WarmMinuteHistory(key.Symbol, prior[0], last.SessionDate) : [];
+        var revision = ChartInputRevision.Combine(new[] { history.Revision, ChartInputRevision.Canonical(canonical),
+            crossDaily?.Revision ?? "-" }.Concat(warm.Select(batch => batch.Revision)));
+        var view = $"{revision}:{first.Bar.Timestamp.UtcTicks}:{last.EndUtc.UtcTicks}:{visible.Count}:{beforeUtc?.UtcTicks}";
+        var profile = $"{key.Interval}:{key.SessionView}:{key.Indicators}";
+        var calculated = await indicators.ReadAsync(new ChartCalculationKey(historyKey, profile, view),
+            workToken => ChartStudyProjection.Calculate(key, studies, history, crossDaily, Merge(history, canonical, key.Symbol),
+                visible, warm, last.EndUtc, beforeUtc ?? asOf, asOf, revision, workToken), source.IsActive, token);
+        return calculated ?? studies.Select(study =>
+            study.Unavailable("Chart indicators are busy. Retry this selection shortly.", "retry")).ToArray();
     }
 
     // Reuse exact completed inputs within the same close boundary; status and
     // freshness are evaluated outside this memo. Historical cursor pages do not displace recent views.
     private ProjectedChart ReadProjection(
-        ChartSeriesKey key, ChartHistoryBatch history, ChartCanonicalSession? canonical, ChartBarProjector projector,
+        ChartSeriesKey key, ChartHistoryBatch history, ChartHistoryBatch? dailyHistory,
+        ChartCanonicalSession? canonical, ChartBarProjector projector,
         DateTimeOffset cutoff, DateTimeOffset asOf, bool paged)
     {
         if (paged)
         {
-            return Project(key, history, canonical, projector, cutoff, asOf, paged);
+            return Project(key, history, dailyHistory, canonical, projector, cutoff, asOf, paged);
         }
         var minute = cutoff.UtcTicks / TimeSpan.TicksPerMinute;
         Lazy<ProjectedChart> result;
         lock (projectionGate)
         {
             if (projections.TryGetValue(key, out var previous) && ReferenceEquals(previous.History, history) &&
-                previous.Minute == minute && SameCanonicalInputs(previous.Canonical, canonical))
+                ReferenceEquals(previous.DailyHistory, dailyHistory) && previous.Minute == minute &&
+                SameCanonicalInputs(previous.Canonical, canonical))
             {
                 result = previous.Result;
             }
@@ -148,9 +201,9 @@ public sealed partial class ChartSeriesService(
                 {
                     projections.Remove(projections.MinBy(item => item.Value.Used).Key);
                 }
-                result = new Lazy<ProjectedChart>(() => Project(key, history, canonical, projector, cutoff, asOf, paged));
+                result = new Lazy<ProjectedChart>(() => Project(key, history, dailyHistory, canonical, projector, cutoff, asOf, paged));
             }
-            projections[key] = new ProjectionMemo(history, canonical, minute, asOf, result);
+            projections[key] = new ProjectionMemo(history, dailyHistory, canonical, minute, asOf, result);
         }
         return result.Value;
     }
@@ -163,7 +216,8 @@ public sealed partial class ChartSeriesService(
 
     // Derive all interval values from one reconciled input without carrying chart clocks into availability.
     private static ProjectedChart Project(
-        ChartSeriesKey key, ChartHistoryBatch history, ChartCanonicalSession? canonical, ChartBarProjector projector,
+        ChartSeriesKey key, ChartHistoryBatch history, ChartHistoryBatch? dailyHistory,
+        ChartCanonicalSession? canonical, ChartBarProjector projector,
         DateTimeOffset cutoff, DateTimeOffset asOf, bool paged)
     {
         var merged = Merge(history, canonical, key.Symbol);
@@ -179,11 +233,12 @@ public sealed partial class ChartSeriesService(
         }
 
         IReadOnlyList<ChartZone> zones = paged ? [] :
-            BuildZones(key, daily, projected, projector, merged, history.Sessions, cutoff, asOf, visible[^1].Bar.Close);
+            BuildZones(key, daily, projected, projector, merged, history.Sessions, dailyHistory,
+                cutoff, asOf, visible[^1].Bar.Close);
         // Anchor display overlays to the latest shown exchange session. The real cutoff still governs eligibility.
         var session = visible[^1].SessionDate;
         var levels = daily
-            ? ChartContextLevels.Daily(projected, history.Sessions, session, visible[0].Bar.Timestamp)
+            ? ChartContextLevels.Daily(projected, history.Sessions, session)
             : ChartContextLevels.Intraday(projector, history.Sessions, session, merged.Bars, merged.Quiet,
                 merged.BasisBreaks, visible, cutoff, asOf);
         var covered = HasViewportCoverage(key, history, projector, merged, projected, visible, cutoff, asOf);
@@ -193,10 +248,16 @@ public sealed partial class ChartSeriesService(
     // Return current bands with fixed warm-up independent of display interval, zoom or window size.
     private static IReadOnlyList<ChartZone> BuildZones(
         ChartSeriesKey key, bool daily, IReadOnlyList<ChartCompletedBar> projected, ChartBarProjector projector,
-        MergedChartSource merged, IReadOnlyList<DateOnly> sessions, DateTimeOffset cutoff, DateTimeOffset asOf, decimal close)
+        MergedChartSource merged, IReadOnlyList<DateOnly> sessions, ChartHistoryBatch? dailyHistory,
+        DateTimeOffset cutoff, DateTimeOffset asOf, decimal close)
     {
-        var zoneBars = daily ? projected : projector.Intraday(
-            merged.Bars, merged.Quiet, merged.BasisBreaks, "15m", false, cutoff, asOf);
+        var dailyContext = key.Context != "intraday";
+        if (!daily && dailyContext && (dailyHistory is null || merged.BasisBreaks.Any(point => point < cutoff)))
+            return [];
+        var zoneBars = daily ? projected : dailyContext
+            ? dailyHistory!.Projector.Daily(dailyHistory.Bars.Values, dailyHistory.BasisBreaks, cutoff, asOf)
+            : projector.Intraday(merged.Bars, merged.Quiet, merged.BasisBreaks, "15m", false, cutoff, asOf);
+        if (!daily && dailyContext) sessions = dailyHistory!.Sessions;
         var activeCount = key.Context switch
         {
             "week" => 5,
@@ -205,8 +266,11 @@ public sealed partial class ChartSeriesService(
             "swing" => 64,
             _ => 6
         };
-        var active = sessions.TakeLast(activeCount).ToHashSet();
-        var bars = ChartSupportResistance.Calculate($"{key.Symbol}:{(daily ? "1d" : "15m")}:{key.Context}:sip:all",
+        var eligibleSessions = dailyContext
+            ? sessions.Where(date => (dailyHistory?.Projector ?? projector).Regular(date)?.EndUtc <= cutoff)
+            : sessions;
+        var active = eligibleSessions.TakeLast(activeCount).ToHashSet();
+        var bars = ChartSupportResistance.Calculate($"{key.Symbol}:{(dailyContext ? "1d" : "15m")}:{key.Context}:sip:all",
             zoneBars, active, asOf, close);
         return bars.Select(band => new ChartZone(band.Id, band.Type, band.Lower, band.Upper, band.PivotCount,
             band.SourceTimeframe, band.FirstPivotUtc, band.LatestConfirmationUtc, band.EffectiveAtUtc,
@@ -282,13 +346,13 @@ public sealed partial class ChartSeriesService(
     }
 
     // Use the same session-count contract for pagination and coverage.
-    private static int ViewportDays(ChartSeriesKey key) => key.Context switch
+    private static int ViewportDays(ChartSeriesKey key) => key.Interval != "1d" ? key.Interval == "1m" ? 1 : 6 : key.Context switch
     {
         "week" => 5,
         "month" => 21,
         "year" => 252,
         "swing" => 126,
-        _ => key.Interval == "1m" ? 1 : 6
+        _ => 126
     };
 
     // Separate source ownership, active segment freshness and daily completion timing.
@@ -469,10 +533,11 @@ public sealed partial class ChartSeriesService(
     private static ChartSeriesPage Unavailable(ChartSeriesKey key, DateTimeOffset now, string reason = "Verified SIP chart history is unavailable for this window.") =>
         new(new ChartSeriesSnapshot(key, now, "unavailable", reason,
             new ChartSeriesEvidence("alpaca", "sip", "all", "unavailable", null, null, null, null, false, [], []),
-            [], [], [], []), null);
+            [], [], [], [], Indicators: ChartIndicatorProfile.Read(key).Select(study => study.Unavailable(reason)).ToArray()), null);
 
     private sealed record ProjectionMemo(
-        ChartHistoryBatch History, ChartCanonicalSession? Canonical, long Minute, DateTimeOffset Used, Lazy<ProjectedChart> Result);
+        ChartHistoryBatch History, ChartHistoryBatch? DailyHistory, ChartCanonicalSession? Canonical,
+        long Minute, DateTimeOffset Used, Lazy<ProjectedChart> Result);
 
     private sealed record ProjectedChart(
         IReadOnlySet<DateTimeOffset> BasisBreaks, IReadOnlyList<ChartCompletedBar> Visible, IReadOnlyList<ChartZone> Zones,
@@ -480,8 +545,4 @@ public sealed partial class ChartSeriesService(
 
     private sealed record MarkerMemo(Task<IReadOnlyList<ChartMarker>> Read, DateTimeOffset Expires);
 
-    private sealed record MergedChartSource(
-        IReadOnlyDictionary<DateTimeOffset, ChartSourceBar> Bars,
-        IReadOnlyDictionary<DateTimeOffset, DateTimeOffset> Quiet,
-        IReadOnlySet<DateTimeOffset> BasisBreaks);
 }

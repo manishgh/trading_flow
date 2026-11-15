@@ -28,6 +28,9 @@ public sealed partial class FinvizClient : IDisposable
         _httpClient.BaseAddress = _options.BaseUrl;
     }
 
+    /// <summary>Indicates whether the host supplied a credential for authenticated exports.</summary>
+    public bool IsConfigured => !String.IsNullOrWhiteSpace(_options.AuthToken);
+
     /// <summary>
     /// Fetches tickers from a Finviz Screener export URL.
     /// Example: /export?v=111&f=fa_div_pos,sec_technology

@@ -39,6 +39,60 @@ test('News updates its loaded feed while preserving unsubmitted filters',async({
  await expect(page.getByLabel('Ticker',{exact:true})).toHaveValue('AAPL');
 });
 
+// Live refreshes update provider evidence and retained stories as one observation.
+test('News replaces pending feed evidence and retains stored rows on a later source failure',async({page})=>{
+ await page.clock.install();
+ await page.goto('/News?hours=4');
+ const feed=page.locator('#news-live-feed'), body=page.locator('#news-live-body');
+ await expect(feed).toHaveCount(1);
+ await feed.evaluate(node=>{
+  node.innerHTML='<p><strong>First refresh pending</strong></p><details><summary>Source refresh evidence</summary><p>Waiting for the first source read.</p></details>';
+ });
+ await body.evaluate(node=>{node.innerHTML='<p>Waiting for the first news refresh.</p>';});
+ let state='success', requests=0;
+ await page.route('**/News?hours=4',route=>{
+  requests++;
+  const failed=state==='failed';
+  const time=failed?'2026-11-12T17:41:30Z':'2026-11-12T17:41:00Z';
+  const heading=failed?'News refresh failed':'News results updated';
+  const evidence=failed?'Fixture source timed out.':'Fixture source delivered one article.';
+  const retained=failed?'Stored rows from the last successful refresh.':'Latest stored coverage.';
+  const header='<div id="news-live-feed"><p><strong>'+heading+'</strong><time datetime="'+time+'">'+time+'</time></p>'+
+   '<details><summary>Source refresh evidence</summary><p>'+evidence+'</p></details></div>';
+  const stories='<div id="news-live-body"><p>'+retained+'</p><article>Retained news fixture</article></div>';
+  return route.fulfill({contentType:'text/html',body:state==='incomplete'?header:header+stories});
+ });
+ await expect(feed).toContainText('First refresh pending');
+ await page.clock.fastForward(30000);
+ await expect(feed).toContainText('News results updated');
+ await expect(feed.locator('time')).toHaveAttribute('datetime','2026-11-12T17:41:00Z');
+ await expect(body).toContainText('Retained news fixture');
+
+ const details=feed.locator('details');
+ const summary=details.locator('summary');
+ await summary.focus();await summary.press('Enter');
+ await expect(details).toHaveAttribute('open','');
+ state='failed';
+ await page.clock.fastForward(30000);
+ expect(requests).toBe(1);
+ await expect(summary).toBeFocused();
+ await expect(details).toHaveAttribute('open','');
+ await expect(feed).toContainText('News results updated');
+
+ await summary.press('Enter');
+ await summary.evaluate(node=>node.blur());
+ await page.clock.fastForward(30000);
+ await expect(feed).toContainText('News refresh failed');
+ await expect(feed.locator('time')).toHaveAttribute('datetime','2026-11-12T17:41:30Z');
+ await expect(body).toContainText('Stored rows from the last successful refresh.');
+ await expect(body).toContainText('Retained news fixture');
+ state='incomplete';
+ await page.clock.fastForward(30000);
+ await expect(page.locator('#news-live-status')).toContainText('Live update failed');
+ await expect(feed).toContainText('News refresh failed');
+ await expect(body).toContainText('Retained news fixture');
+});
+
 test('a slow live response does not replace a feed after a group dialog opens',async({page})=>{
  await signIn(page);await page.clock.install();await page.goto('/News?hours=4');
  await page.evaluate(()=>document.querySelector('[aria-labelledby="news-results-heading"]').append(
@@ -63,7 +117,7 @@ for(const width of [390,1440])test('News stock-source dropdown and exact stock f
  try {
   await page.goto('/News?groupId='+list.id+'&hours=24&view=ticker&source=wire&provider=wire&sentiment=positive&search=earnings&ticker=AAPL');
   const dropdown=page.getByLabel('Stock source',{exact:true});
-  expect(await dropdown.locator('optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My wishlists','Earnings','Finviz lists']);
+  expect(await dropdown.locator('optgroup').evaluateAll(xs=>xs.map(x=>x.label))).toEqual(['My stock groups','Earnings','Finviz lists']);
   await expect(dropdown).toHaveValue('wishlist:'+list.id);
   for(const label of ['All news / all stocks','All wishlist stocks','All Finviz stocks','All wishlist + Finviz stocks',list.name,'Top Gainers','Earnings today','Earnings next reporting day'])
    await expect(dropdown.getByRole('option',{name:label,exact:true})).toHaveCount(1);

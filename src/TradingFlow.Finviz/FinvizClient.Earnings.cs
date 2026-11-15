@@ -30,6 +30,8 @@ public sealed partial class FinvizClient
         for (var queryDate = fromExchangeDate; queryDate <= toExchangeDate; queryDate = queryDate.AddDays(1))
         {
             var page = 1;
+            int? expectedItems = null, expectedPages = null;
+            var received = 0;
             do
             {
                 var safeSourceUrl = $"/api/calendar/earnings?dateFrom={queryDate:yyyy-MM-dd}&page={page}";
@@ -44,14 +46,17 @@ public sealed partial class FinvizClient
                     archived.Receipt.Manifest.ReceivedAtUtc,
                     archived.Receipt.Manifest.Sha256,
                     new Uri(_options.BaseUrl, safeSourceUrl).ToString());
-                results.AddRange(parsed.Items.Where(item =>
-                    item.ReportDateExchange >= fromExchangeDate &&
-                    item.ReportDateExchange <= toExchangeDate));
-
                 if (parsed.Page != page)
                 {
                     throw new InvalidDataException($"Finviz returned earnings page {parsed.Page} while page {page} was requested.");
                 }
+                ValidateEarningsPageTotals(parsed, expectedItems, expectedPages, received);
+                expectedItems = parsed.TotalItems;
+                expectedPages = parsed.TotalPages;
+                received += parsed.Items.Count;
+                results.AddRange(parsed.Items.Where(item =>
+                    item.ReportDateExchange >= fromExchangeDate &&
+                    item.ReportDateExchange <= toExchangeDate));
 
                 if (parsed.TotalPages == 0)
                 {
@@ -84,6 +89,18 @@ public sealed partial class FinvizClient
             .OrderBy(item => item.ScheduledAtUtc)
             .ThenBy(item => item.Ticker, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    // A date may be used as empty evidence only if the full set of pages accounts for every advertised row.
+    private static void ValidateEarningsPageTotals(FinvizEarningsCalendarPage page, int? expectedItems, int? expectedPages, int received)
+    {
+        if (page.TotalItems < 0 || page.TotalPages < 0 || page.TotalPages > MaximumEarningsCalendarPages ||
+            expectedItems is { } size && size != page.TotalItems ||
+            expectedPages is { } pages && pages != page.TotalPages)
+            throw new InvalidDataException("Finviz earnings page totals are invalid or changed during the date request.");
+        var totalReceived = received + page.Items.Count;
+        if (totalReceived > page.TotalItems || (page.Page >= page.TotalPages && totalReceived != page.TotalItems))
+            throw new InvalidDataException($"Finviz earnings pagination supplied {totalReceived} rows; {page.TotalItems} were advertised.");
     }
 
     public static FinvizEarningsCalendarPage ParseEarningsCalendarJson(

@@ -22,11 +22,9 @@ public sealed class EarningsMonitor
     private readonly TimeProvider clock;
     private readonly ILogger<EarningsMonitor> logger;
     private readonly SemaphoreSlim refreshLock = new(1, 1);
-    private DateTimeOffset? lastCalendarRefreshUtc;
-    private DateTimeOffset? lastAnalysisUtc;
+    private volatile PassStatus pass = new(null, null, 0, null);
+    private volatile EarningsCalendarEvidence? calendarCoverage;
     private DateTimeOffset? lastPriorResultRefreshUtc;
-    private int trackedEventCount;
-    private string? lastError;
     private volatile bool isRunning;
     private static readonly IReadOnlyDictionary<string, LatestTrade> NoTrades = new Dictionary<string, LatestTrade>();
     // The latest-trades read has its own short limit, so a slow provider cannot fail a pass that already saved.
@@ -56,14 +54,18 @@ public sealed class EarningsMonitor
         this.logger = logger;
     }
 
-    public EarningsMonitorStatus GetStatus() => new(
-        isRunning,
-        options.AnalysisInterval,
-        lastCalendarRefreshUtc,
-        lastAnalysisUtc,
-        trackedEventCount,
-        lastError);
+    private sealed record PassStatus(DateTimeOffset? LastAnalysisUtc, EarningsAnalysisAttempt? Latest, int Tracked, string? Error);
 
+    // Read completed attempts atomically; older saved analyses do not clear a more recent failure.
+    public EarningsMonitorStatus GetStatus()
+    {
+        var current = pass;
+        var calendar = calendarCoverage;
+        return new(isRunning, options.AnalysisInterval, calendar?.ReceivedAtUtc, current.LastAnalysisUtc,
+            current.Tracked, current.Error, calendar, current.Latest);
+    }
+
+    // Keep the monitor alive after a failed pass; RefreshAsync publishes the attempt for both callers.
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         isRunning = true;
@@ -81,7 +83,6 @@ public sealed class EarningsMonitor
                 }
                 catch (Exception exception)
                 {
-                    lastError = exception.Message;
                     logger.LogError(exception, "Earnings monitor iteration failed.");
                 }
 
@@ -102,6 +103,7 @@ public sealed class EarningsMonitor
     public async Task RefreshAsync(bool forceCalendarRefresh, CancellationToken cancellationToken)
     {
         await refreshLock.WaitAsync(cancellationToken);
+        var step = "Alpaca exchange calendar";
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -113,19 +115,35 @@ public sealed class EarningsMonitor
             var firstReportDate = EarningsCalendarDates.PreviousWeekday(exchangeToday);
             var lastReportDate = EarningsCalendarDates.NextWeekday(exchangeToday);
             analyzer.UpdateMarketSessionSchedules(await LoadSessionSchedulesAsync(exchangeToday, lastReportDate, timeout.Token));
+            step = "Finviz earnings calendar";
             await RefreshCalendarIfDueAsync(forceCalendarRefresh, firstReportDate, lastReportDate, nowUtc, timeout.Token);
 
+            step = "Stored earnings events";
             var trackedEvents = await GetTrackedEventsAsync(firstReportDate, lastReportDate, exchangeToday, timeout.Token);
-            trackedEventCount = trackedEvents.Count;
             if (trackedEvents.Count > 0)
             {
                 await TryRefreshPriorResultsAsync(trackedEvents, nowUtc, cancellationToken);
             }
 
-            await AnalyzeAndSaveAsync(trackedEvents, nowUtc, cancellationToken);
-
-            lastAnalysisUtc = nowUtc;
-            lastError = null;
+            step = "Earnings analysis and evidence";
+            var missingBars = await AnalyzeAndSaveAsync(trackedEvents, nowUtc, cancellationToken);
+            var completed = clock.GetUtcNow();
+            var attempt = missingBars == 0
+                ? new EarningsAnalysisAttempt("success", completed, "Analysis finished; individual cards identify missing price and news evidence.")
+                : new EarningsAnalysisAttempt("partial", completed, $"Analysis finished with no 5-minute bars for {missingBars} watched ticker(s).");
+            pass = new(nowUtc, attempt, trackedEvents.Count, null);
+        }
+        catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            var reason = error switch
+            {
+                HttpRequestException { StatusCode: { } status } => $"returned HTTP {(int)status}",
+                OperationCanceledException => "timed out",
+                _ => "could not be read or saved"
+            };
+            var detail = $"{step} {reason}. Retained events and analyses may be older.";
+            pass = pass with { Latest = new("failed", clock.GetUtcNow(), detail), Error = detail };
+            throw;
         }
         finally
         {
@@ -158,7 +176,7 @@ public sealed class EarningsMonitor
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken)
     {
-        if (!force && lastCalendarRefreshUtc is { } lastRefresh && nowUtc - lastRefresh < options.CalendarRefreshInterval)
+        if (!force && calendarCoverage is { } last && nowUtc < last.RefreshDueAtUtc)
         {
             return;
         }
@@ -166,7 +184,8 @@ public sealed class EarningsMonitor
         var from = firstReportDate.AddDays(-options.RecentResultLookbackDays);
         var to = lastReportDate;
         var eventCount = await ReplaceFinvizWindowAsync(from, to, cancellationToken);
-        lastCalendarRefreshUtc = nowUtc;
+        var receivedAt = clock.GetUtcNow();
+        calendarCoverage = new(receivedAt, from, to, eventCount, receivedAt + options.CalendarRefreshInterval);
         try
         {
             await sectors.RefreshIfStaleAsync(cancellationToken);
@@ -218,7 +237,7 @@ public sealed class EarningsMonitor
     /// covers the news read, the analyses and the saves together, because a long bar load after a restart
     /// (14 minutes for about 900 stocks on 4 Nov 2026) once cancelled the news read so the pass saved nothing.
     /// </summary>
-    private async Task AnalyzeAndSaveAsync(
+    private async Task<int> AnalyzeAndSaveAsync(
         IReadOnlyList<EarningsCalendarEvent> trackedEvents,
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken)
@@ -266,6 +285,7 @@ public sealed class EarningsMonitor
             (long)saveTime.TotalMilliseconds,
             liveTradeCount,
             (long)stage.Elapsed.TotalMilliseconds);
+        return symbols.Count(ticker => !barsByTicker.TryGetValue(ticker, out var bars) || bars.Count == 0);
     }
 
     /// <summary>

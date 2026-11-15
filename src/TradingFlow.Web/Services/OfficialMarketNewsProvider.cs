@@ -40,22 +40,28 @@ public sealed partial class OfficialMarketNewsProvider
         Environment.GetEnvironmentVariable("SEC_USER_AGENT") ??
         Environment.GetEnvironmentVariable("SEC_USER_AGENT", EnvironmentVariableTarget.User));
 
-    public async Task<IReadOnlyList<CatalystEvent>> GetEventsAsync(
+    // Read each official source independently so one failure cannot masquerade as an empty official feed.
+    internal async Task<IReadOnlyList<NewsCollection>> ReadSourcesAsync(
         IReadOnlyCollection<string> earningsTickers,
         DateTimeOffset windowStartUtc,
         CancellationToken cancellationToken)
     {
-        var events = new List<CatalystEvent>();
-        events.AddRange(await GetFederalReserveEventsAsync(windowStartUtc, cancellationToken));
-        events.AddRange(await GetSupplementalEventsAsync(windowStartUtc, cancellationToken));
+        var sources = new List<NewsCollection>();
+        sources.Add(await ReadFederalReserveAsync(windowStartUtc, cancellationToken));
+        sources.AddRange(await GetSupplementalEventsAsync(windowStartUtc, cancellationToken));
+        sources.Add(await ReadSecAsync(earningsTickers, windowStartUtc, cancellationToken));
+        return sources;
+    }
 
+    // SEC's current-filings endpoint is bounded; even a success does not cover the whole news period.
+    private async Task<NewsCollection> ReadSecAsync(IReadOnlyCollection<string> earningsTickers,
+        DateTimeOffset windowStartUtc, CancellationToken cancellationToken)
+    {
+        const string source = "SEC filings";
         var secUserAgent = Environment.GetEnvironmentVariable("SEC_USER_AGENT")
             ?? Environment.GetEnvironmentVariable("SEC_USER_AGENT", EnvironmentVariableTarget.User);
         if (String.IsNullOrWhiteSpace(secUserAgent))
-        {
-            logger.LogDebug("SEC filing ingestion is disabled because SEC_USER_AGENT is not configured.");
-            return events;
-        }
+            return NewsFeedService.NotQueried(source, "SEC_USER_AGENT is not configured.");
 
         try
         {
@@ -64,29 +70,36 @@ public sealed partial class OfficialMarketNewsProvider
             using var response = await httpClient.SendAsync(request, cancellationToken);
             response.EnsureSuccessStatusCode();
             var xml = await response.Content.ReadAsStringAsync(cancellationToken);
-            events.AddRange(ParseSecAtom(xml, tickerMap, earningsTickers, windowStartUtc));
+            var events = ParseSecAtom(xml, tickerMap, earningsTickers, windowStartUtc);
+            return new(events, new(source, "success", newsClock.GetUtcNow(), events.Count,
+                "Current filings returned for the bounded feed and selected scope; full window coverage is unverified."));
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception)
         {
             logger.LogWarning(exception, "Official SEC current-filings refresh failed.");
+            return new([], new(source, "failed", newsClock.GetUtcNow(), 0, NewsFeedService.NewsRequestFailure(exception)));
         }
-
-        return events;
     }
 
-    private async Task<IReadOnlyList<CatalystEvent>> GetFederalReserveEventsAsync(
+    // A recent RSS response is evidence of receipt, without a claim of historical completeness.
+    private async Task<NewsCollection> ReadFederalReserveAsync(
         DateTimeOffset windowStartUtc,
         CancellationToken cancellationToken)
     {
+        const string source = "Federal Reserve";
         try
         {
             var xml = await httpClient.GetStringAsync(FederalReserveFeedUrl, cancellationToken);
-            return ParseFederalReserveRss(xml, windowStartUtc);
+            var events = ParseFederalReserveRss(xml, windowStartUtc);
+            return new(events, new(source, "success", newsClock.GetUtcNow(), events.Count,
+                "Rolling monetary policy feed returned; earlier publications may be outside the feed."));
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception)
         {
             logger.LogWarning(exception, "Official Federal Reserve news refresh failed.");
-            return Array.Empty<CatalystEvent>();
+            return new([], new(source, "failed", newsClock.GetUtcNow(), 0, NewsFeedService.NewsRequestFailure(exception)));
         }
     }
 

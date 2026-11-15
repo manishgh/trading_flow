@@ -101,9 +101,17 @@
     }
 
     const emptyNotes = new Map();
+    // The calendar, news and attention lanes have different evidence and cannot share an unconditional empty claim.
     function emptyNote(container) {
         if (!emptyNotes.has(container)) emptyNotes.set(container, emptyTemplate.content.firstElementChild.cloneNode(true));
-        return emptyNotes.get(container);
+        const note = emptyNotes.get(container);
+        const observation = latestPayload?.status;
+        note.textContent = container === newsFeed
+            ? 'No stored news matches this view. See source refresh evidence for coverage.'
+            : observation?.windowCovered
+                ? 'No earnings events match this view in the latest covered Finviz window.'
+                : 'No stored earnings events match this view. Current calendar coverage is unconfirmed.';
+        return note;
     }
 
     const daySections = new Map();
@@ -638,6 +646,7 @@
     }
 
     // Patch the timeline and evidence rail without disturbing open cards or keyboard focus.
+    // Keep counts explicitly tied to stored rows until the calendar coverage is established.
     function render() {
         if (!latestPayload) return;
         const all = latestPayload.items || [];
@@ -655,7 +664,28 @@
         const visible = new Set(filtered.map(item => item.id));
         for (const id of eventCache.keys()) if (!visible.has(id)) eventCache.delete(id);
         renderNews(latestPayload.news || [], filtered);
-        countLabel.textContent = `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching events${latestPayload.truncated ? " · first 2000 shown" : ""}`;
+        countLabel.textContent = filtered.length || latestPayload.status?.windowCovered
+            ? `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching stored events${latestPayload.truncated ? " · first 2000 shown" : ""}`
+            : 'Current event count unconfirmed';
+    }
+
+    // Name the latest analysis result and show separately when Finviz and each news source were read.
+    function renderObservation(payload) {
+        const reading = payload.status;
+        const heading = document.getElementById("earnings-observation");
+        const completed = reading?.latestAttempt?.completedAtUtc;
+        const label = reading?.state === 'failed' ? 'Analysis failed'
+            : reading?.state === 'partial' ? 'Results are partial'
+            : reading?.state === 'success' ? (payload.items?.length ? 'Results updated' : 'No events match this window')
+            : payload.monitoringActive ? 'First analysis pending' : 'No analysis has run on this host';
+        heading.textContent = label + (completed ? ' · ' + localDateTime(completed, true) : '');
+        document.getElementById("earnings-next-action").textContent = [reading?.detail, reading?.nextAction].filter(Boolean).join(' ');
+        const calendar = reading?.calendar;
+        document.getElementById("earnings-calendar-evidence").textContent = calendar
+            ? `Finviz calendar · ${calendar.fromExchangeDate} through ${calendar.toExchangeDate} New York · ${calendar.eventCount} events received · ${localDateTime(calendar.receivedAtUtc, true)}`
+            : 'Finviz calendar coverage not yet observed.';
+        document.getElementById("earnings-news-evidence").replaceChildren(...(payload.newsRefresh?.sources || []).map(source =>
+            text('li', source.source + ' · ' + source.state + ' · ' + (source.attemptedAtUtc ? localDateTime(source.attemptedAtUtc, true) : 'not queried') + ' · ' + source.detail)));
     }
 
     function markStrip(container, attribute, value) {
@@ -800,12 +830,15 @@
             document.getElementById("earnings-news-window").textContent = latestPayload.newsWindowLabel;
             nextDay.textContent = latestPayload.nextBusinessDateLabel;
 
+            renderObservation(latestPayload);
             render();
             alertNewEpsBeats(latestPayload.items || []);
         } catch (error) {
             if (controller.signal.aborted || sequence !== loadSequence) return;
             status.textContent = error instanceof Error ? error.message : "Unable to load earnings data.";
             status.classList.add("accent-note");
+            document.getElementById("earnings-observation").textContent = forceRefresh ? "Refresh failed" : "Unable to read earnings status";
+            document.getElementById("earnings-next-action").textContent = "Existing rows may be older. Retry the read.";
         } finally {
             if (sequence === loadSequence) {
                 inFlight = null;

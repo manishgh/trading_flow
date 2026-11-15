@@ -8,11 +8,13 @@ using TradingFlow.Domain.News;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Engine.Storage;
+using TradingFlow.Web.Services;
 using TradingFlow.Web.Services.Charts;
+using Xunit.Abstractions;
 
 namespace TradingFlow.Tests;
 
-public sealed class ChartProjectionTests
+public sealed class ChartProjectionTests(ITestOutputHelper output)
 {
     // The two right-side bars and their receipt clock determine when a pivot can appear.
     [Fact]
@@ -129,11 +131,11 @@ public sealed class ChartProjectionTests
         Assert.Equal(last, completed[^1].SessionDate);
         Assert.Equal(earlyClose, completed[^1].EndUtc);
         Assert.NotEqual(completed[0].Continuity, completed[^1].Continuity);
-        Assert.DoesNotContain(ChartContextLevels.Daily(completed, [first, missing, last], last, sources[0].Bar.Timestamp),
-            level => level.Key is "prior_session_high" or "sma50");
+        Assert.DoesNotContain(ChartContextLevels.Daily(completed, [first, missing, last], last),
+            level => level.Key == "prior_session_high");
     }
 
-    // A previous-basis SMA or range cannot supply a current value or distance after a split.
+    // A previous-basis range cannot supply a current value or distance after a split.
     [Fact]
     public void DailySuppressesOldBasisLevelsUntilNewBasisWarmsUp()
     {
@@ -147,12 +149,11 @@ public sealed class ChartProjectionTests
                 "fixture", null, time.AddHours(16));
         }).ToArray();
         var scheduled = daily.Select(bar => bar.SessionDate).ToArray();
-        var beforeBreak = ChartContextLevels.Daily(daily.Take(55).ToArray(), scheduled, scheduled[54], daily[0].Bar.Timestamp);
-        Assert.Contains(beforeBreak, level => level.Key == "sma50");
+        var beforeBreak = ChartContextLevels.Daily(daily.Take(55).ToArray(), scheduled, scheduled[54]);
         Assert.Contains(beforeBreak, level => level.Key == "prior_session_high");
 
-        var latest = ChartContextLevels.Daily(daily, scheduled, scheduled[^1], daily[0].Bar.Timestamp);
-        Assert.DoesNotContain(latest, level => level.Key is "sma50" or "prior_session_high" or "prior_week_high");
+        var latest = ChartContextLevels.Daily(daily, scheduled, scheduled[^1]);
+        Assert.DoesNotContain(latest, level => level.Key is "prior_session_high" or "prior_week_high");
     }
 
     // Several chart modes share one underlying acquisition, including stable reconstructed timestamps across refresh.
@@ -467,12 +468,13 @@ public sealed class ChartProjectionTests
         var intraday = MakeLevelTestSeries(minuteProvider, clock);
         var daily = MakeLevelTestSeries(calendar, clock);
 
-        var minuteSnapshot = (await intraday.ReadAsync(new ChartSeriesKey("TEST", "1m", "regular", "intraday"), cutoff, default)).Snapshot;
+        var minuteSnapshot = (await intraday.ReadAsync(new ChartSeriesKey("TEST", "1m", "regular", "intraday", "vwap"), cutoff, default)).Snapshot;
         Assert.Equal(expectedIntraday, minuteSnapshot.Bars[^1].SessionDate);
-        var vwap = Assert.Single(minuteSnapshot.Levels, level => level.Key == "vwap");
-        Assert.Equal(expectedIntraday, vwap.SourceDate);
-        Assert.Equal(minuteSnapshot.Bars.Count, vwap.Points!.Count);
-        Assert.Equal(minuteSnapshot.Bars[^1].StartUtc, vwap.Points[^1].StartUtc);
+        var vwap = Assert.Single(minuteSnapshot.Indicators!);
+        Assert.Equal("vwap", vwap.Id);
+        Assert.Equal(expectedIntraday, ChartBarProjector.NewYorkDate(vwap.AnchorUtc!.Value));
+        Assert.Equal(minuteSnapshot.Bars.Count, Assert.Single(vwap.Samples).Length);
+        Assert.NotNull(vwap.Samples[0][^1]);
         Assert.Equal(expectedIntraday, Assert.Single(minuteSnapshot.Levels, level => level.Key == "opening_range_high").SourceDate);
         Assert.Equal(expectedIntraday, Assert.Single(minuteSnapshot.Levels, level => level.Key == "premarket_low").SourceDate);
         Assert.Equal(PreviousSessions(expectedIntraday, 1),
@@ -484,8 +486,112 @@ public sealed class ChartProjectionTests
             Assert.Single(dailySnapshot.Levels, level => level.Key == "prior_session_low").SourceDate);
     }
 
+    // Four identical viewers and optional-study toggles reuse the daily source and skip disabled numerical work.
+    [Fact]
+    public async Task WarmHistoryStudyTogglesAndViewerFanoutDoNotAcquireAgain()
+    {
+        var date = new DateOnly(2026, 11, 15);
+        var clock = new MutableChartClock(ChartBarProjector.At(date, new TimeOnly(12, 0)));
+        var provider = new ChartHistoryFixture();
+        var service = MakeLevelTestSeries(provider, clock);
+        var baseline = new ChartSeriesKey("TEST", "1d", "regular", "year");
+        var candlesOnly = await service.ReadAsync(baseline, null, default);
+        Assert.Empty(candlesOnly.Snapshot.Indicators!);
+        Assert.Equal(0, service.MeasureIndicators().Started);
+        var upstream = provider.Requests.Count;
+        Assert.Equal(1, upstream);
+
+        var selected = baseline with { Indicators = "sma50,rsi14,atr14:readout" };
+        var identical = await Task.WhenAll(Enumerable.Range(0, 4)
+            .Select(_ => service.ReadAsync(selected, null, default)));
+        Assert.All(identical, reader => Assert.Same(identical[0].Snapshot.Indicators, reader.Snapshot.Indicators));
+        Assert.Equal(1, service.MeasureIndicators().Started);
+
+        var toggled = await service.ReadAsync(selected with { Indicators = "ema9" }, null, default);
+        Assert.Single(toggled.Snapshot.Indicators!);
+        Assert.Equal(2, service.MeasureIndicators().Started);
+        _ = await service.ReadAsync(baseline, null, default);
+        Assert.Equal(2, service.MeasureIndicators().Started);
+        Assert.Equal(upstream, provider.Requests.Count);
+    }
+
+    // Prewarm two compatible minute windows and one daily window, then toggle studies and structures through four readers.
+    [Fact]
+    public async Task WarmIntradayStudyAndStructureChangesDoNotReadUpstream()
+    {
+        var date = new DateOnly(2026, 11, 15);
+        var clock = new MutableChartClock(ChartBarProjector.At(date, new TimeOnly(12, 0)));
+        var calendar = new ChartHistoryFixture { Pivot = PreviousSessions(date, 3) };
+        var minute = new ArchivedMinuteFixture(clock);
+        var provider = minute.CreateProvider(calendar);
+        using var canonical = new AlpacaMarketStateStreamService(null!, null!,
+            NullLogger<AlpacaMarketStateStreamService>.Instance, null!, null!,
+            new Lazy<IMarketDataProvider>(() => throw new InvalidOperationException("The synthetic stream is never started.")),
+            AlpacaMarketStateStreamOptions.Default, clock);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var token = deadline.Token;
+        var service = MakeLevelTestSeries(provider, clock, canonical);
+        var baseKey = new ChartSeriesKey("TEST", "5m", "regular", "intraday");
+        var cachedPrior = ChartBarProjector.At(PreviousSessions(date, 12), new TimeOnly(20, 0)).AddSeconds(1);
+        _ = await service.ReadAsync(baseKey, cachedPrior, token);
+        var initial = (await service.ReadAsync(baseKey, null, token)).Snapshot;
+        _ = await service.ReadAsync(new("TEST", "1d", "regular", "year"), null, token);
+        Assert.Empty(initial.Indicators!);
+        Assert.Equal(0, service.MeasureIndicators().Started);
+        Assert.Equal(30, minute.Requests.Count);
+        Assert.Single(calendar.Requests);
+        var minuteBefore = minute.Requests.Count;
+        var dailyBefore = calendar.Requests.Count;
+        var calendarsBefore = calendar.CalendarReads;
+
+        var vwap = await ReadFourAsync(baseKey with { Indicators = "vwap" });
+        Assert.NotEmpty(Assert.Single(vwap.Indicators!).Samples);
+        var rvol = await ReadFourAsync(baseKey with { Context = "week", Indicators = "rvol" });
+        var verified = Assert.Single(rvol.Indicators!);
+        Assert.Equal(20, verified.BaselineSampleCount);
+        Assert.Equal(1d, Assert.Single(verified.Samples)[^1]);
+        Assert.NotEmpty(rvol.Zones);
+        Assert.All(rvol.Zones, zone => Assert.Equal("1d", zone.SourceTimeframe));
+        var average = await ReadFourAsync(baseKey with { Context = "month", Indicators = "sma50:1d" });
+        Assert.Equal("1d", Assert.Single(average.Indicators!).SourceInterval);
+        var together = baseKey with { Context = "year", Indicators = "rvol,sma50:1d,vwap" };
+        var combined = await ReadFourAsync(together);
+        Assert.Equal(3, combined.Indicators!.Count);
+        Assert.Equal(4, service.MeasureIndicators().Started);
+
+        // Context selects zone geometry independently of the study inputs and must reuse the same calculation.
+        foreach (var context in new[] { "intraday", "week", "month", "year" })
+        {
+            var view = await ReadFourAsync(together with { Context = context });
+            Assert.Same(combined.Indicators, view.Indicators);
+        }
+        var disabled = await ReadFourAsync(baseKey);
+        Assert.Empty(disabled.Indicators!);
+        var metrics = service.MeasureIndicators();
+        Assert.Equal(4, metrics.Started);
+        Assert.Equal(4, metrics.Profiles);
+        Assert.Equal(minuteBefore, minute.Requests.Count);
+        Assert.Equal(dailyBefore, calendar.Requests.Count);
+        Assert.Equal(calendarsBefore, calendar.CalendarReads);
+        output.WriteLine("Warm intraday four-reader waves=9 minute reads preload={0} after={1} daily preload={2} after={3} calendar preload={4} after={5}",
+            minuteBefore, minute.Requests.Count, dailyBefore, calendar.Requests.Count, calendarsBefore, calendar.CalendarReads);
+        output.WriteLine("Indicator work cold=0 after four distinct profiles={0} after context-only and disabled toggles={1}; profiles={2}, points={3}, accounted bytes={4}; RVOL counterparts={5}",
+            4, metrics.Started, metrics.Profiles, metrics.Points, metrics.Bytes, verified.BaselineSampleCount);
+
+        // All four readers observe the same immutable study result or the same disabled empty collection.
+        async Task<ChartSeriesSnapshot> ReadFourAsync(ChartSeriesKey key)
+        {
+            var pages = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => service.ReadAsync(key, null, token)));
+            var reference = pages[0].Snapshot;
+            Assert.All(pages, page => Assert.Same(reference.Indicators, page.Snapshot.Indicators));
+            Assert.Equal(initial.Bars.Select(bar => bar.StartUtc), reference.Bars.Select(bar => bar.StartUtc));
+            return reference;
+        }
+    }
+
     // Use the normal history projector with empty, independent event repositories for level assertions.
-    private static ChartSeriesService MakeLevelTestSeries(IMarketDataProvider provider, TimeProvider clock)
+    private static ChartSeriesService MakeLevelTestSeries(IMarketDataProvider provider, TimeProvider clock,
+        AlpacaMarketStateStreamService? stream = null)
     {
         var news = new Mock<INewsFeedRepository>();
         news.Setup(repo => repo.QueryAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>()))
@@ -495,7 +601,7 @@ public sealed class ChartProjectionTests
                 It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<EarningsCalendarEvent>());
         return new ChartSeriesService(new Lazy<IMarketDataProvider>(() => provider), NullCandleStore.Instance,
-            null!, StreamingMarketStateOptions.Default, news.Object, earnings.Object, clock, NullLogger<ChartSeriesService>.Instance);
+            stream!, StreamingMarketStateOptions.Default, news.Object, earnings.Object, clock, NullLogger<ChartSeriesService>.Instance);
     }
 
     // Native daily structure has distinct week, month and year windows with the same source evidence.
@@ -633,6 +739,7 @@ public sealed class ChartProjectionTests
     [Theory]
     [InlineData("1m", "regular", "auto", "intraday")]
     [InlineData("15m", "extended", "intraday", "intraday")]
+    [InlineData("5m", "regular", "year", "year")]
     [InlineData("1d", "regular", "auto", "swing")]
     [InlineData("1d", "regular", "week", "week")]
     [InlineData("1d", "regular", "month", "month")]
@@ -649,7 +756,7 @@ public sealed class ChartProjectionTests
     [Theory]
     [InlineData("1w", "regular", "year")]
     [InlineData("1d", "extended", "month")]
-    [InlineData("5m", "regular", "year")]
+    [InlineData("5m", "regular", "calendar-month")]
     public void NormalizeRefusesUnsupportedSeries(string interval, string session, string context) =>
         Assert.Throws<ArgumentException>(() => ChartSeriesService.Normalize(new ChartSeriesKey("TEST", interval, session, context)));
 
@@ -714,11 +821,28 @@ public sealed class ChartProjectionTests
                     It.IsAny<DateTimeOffset>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
                 .Returns((string symbol, string interval, DateTimeOffset start, DateTimeOffset end, long cap, CancellationToken token) =>
                     Task.FromResult(Capture(start, end, cap)));
+            provider.As<IHistoricalMarketDataEvidenceProvider>()
+                .Setup(owner => owner.CaptureHistoricalBarsAsync("TEST", "1d", It.IsAny<DateTimeOffset>(),
+                    It.IsAny<DateTimeOffset>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                .Returns((string symbol, string interval, DateTimeOffset start, DateTimeOffset end, long cap, CancellationToken token) =>
+                    CaptureDailyAsync(calendar, start, end, cap, token));
             provider.As<IMarketDataCompletenessProvider>().SetupGet(owner => owner.OmittedSubDailyIntervalsMeanNoQualifyingTrades).Returns(true);
             provider.As<IMarketSessionScheduleProvider>()
                 .Setup(owner => owner.LoadMarketSessionSchedulesAsync(It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
                 .Returns((DateOnly start, DateOnly end, CancellationToken token) => calendar.LoadMarketSessionSchedulesAsync(start, end, token));
             return provider.Object;
+        }
+
+        // Offer native daily archive rows alongside the minute source while counting each fixture acquisition.
+        private async Task<HistoricalBarsCapture> CaptureDailyAsync(ChartHistoryFixture calendar, DateTimeOffset start,
+            DateTimeOffset end, long cap, CancellationToken token)
+        {
+            Assert.Equal(501L, cap);
+            var bars = new List<OhlcvBar>();
+            await foreach (var bar in calendar.GetBarsAsync(["TEST"], ["1d"], start, end, token))
+                bars.Add(bar);
+            return new HistoricalBarsCapture(bars,
+                new HistoricalQueryEvidence(clock.Now, clock.Now, true, [new RawArchiveReceipt("fixture", "fixture", null!)]));
         }
 
         // Return sparse but explicitly archived SIP windows, including intentional failure and revision cases.
@@ -741,6 +865,7 @@ public sealed class ChartProjectionTests
     private sealed class ChartHistoryFixture : IMarketDataProvider, IMarketSessionScheduleProvider
     {
         public List<(DateTimeOffset Start, DateTimeOffset End)> Requests { get; } = [];
+        public int CalendarReads { get; private set; }
         public DateOnly? FailOnce { get; set; }
         public DateOnly? Pivot { get; set; }
         public DateOnly? Missing { get; set; }
@@ -782,6 +907,7 @@ public sealed class ChartProjectionTests
         public Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
             DateOnly startDateInclusive, DateOnly endDateInclusive, CancellationToken cancellationToken)
         {
+            CalendarReads++;
             IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar = Enumerable
                 .Range(startDateInclusive.DayNumber, endDateInclusive.DayNumber - startDateInclusive.DayNumber + 1)
                 .Select(DateOnly.FromDayNumber).ToDictionary(date => date,

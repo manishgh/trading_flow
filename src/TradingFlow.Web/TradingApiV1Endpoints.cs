@@ -28,6 +28,7 @@ public static class TradingApiV1Endpoints
         // The phone client authenticates through /api/auth/login and carries the
         // same cookie, so this changes nothing for a signed-in client.
         var group = endpoints.MapGroup("/api/v1").RequireAuthorization();
+        group.MapGet("/operations/workspace", ReadWorkspaceStatusAsync);
 
         group.MapGet("/strategies", async (
             string? mode,
@@ -884,6 +885,28 @@ public static class TradingApiV1Endpoints
             default:
                 mode = default;
                 return false;
+        }
+    }
+
+    // Only Desk asks for the owner-scoped preparation projection; a failed read does not hide the runtime status.
+    private static async Task<IResult> ReadWorkspaceStatusAsync(bool? includePreparation, WorkspaceStatusService status,
+        TradingFlow.Application.Preparation.PreparationService preparation, HttpContext context,
+        ILogger<WorkspaceStatusService> logger, CancellationToken token)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        var snapshot = await status.ReadAsync(token);
+        var owner = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (includePreparation != true || String.IsNullOrEmpty(owner)) return Results.Ok(snapshot);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(1));
+        try
+        {
+            return Results.Ok(snapshot with { Preparation = await preparation.ReadWorkspaceSummaryAsync(owner, deadline.Token) });
+        }
+        catch (Exception error) when (!token.IsCancellationRequested)
+        {
+            logger.LogWarning(error, "Unable to read the preparation summary for the workspace.");
+            return Results.Ok(snapshot with { PreparationReadError = "Saved preparation summary unavailable. Open Preparation to retry." });
         }
     }
 }

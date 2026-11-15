@@ -1,0 +1,31 @@
+# Chart indicator availability
+
+TradingFlow chart formula profile `skender-2.7.1-chart-v1` calls the installed Skender.Stock.Indicators 2.7.1 package on completed, compatible adjusted SIP bars. The warm-observation threshold is the first chart-eligible observation counted from the segment's seed, including the seed observations. Price and volume series retain their source interval, session and basis. Only the selected families calculate. The displayed numbers are rounded to six decimal places after calculation.
+
+The counts in the right column are upper bounds for one fully covered regular-session page at the existing history limits. The order is 1m, 5m, 15m, 1d. They assume a matching seed is present and that the formula produces a value. A 1m page shows at most one regular session (390 bars), and a 5m or 15m page shows six (468 or 156 bars). The corresponding 15-session acquisition limits are 5,850, 1,170 and 390 genuine observations before holidays, early closes, quiet periods and gaps. Daily history starts with at most 500 observations and the year display shows at most 252. Extended views have more observations and a 500-candle display limit. They use the same formula thresholds.
+
+| Formula | Pinned package seed or first usable output | Chart warm observations | Regular-page upper bounds (1m / 5m / 15m / 1d) |
+| --- | --- | --- | --- |
+| SMA20, SMA50, SMA200 | 20, 50 or 200 close observations | 20, 50 or 200 | 390 / 468 / 156 / 252 for each |
+| EMA9 | Arithmetic mean of first 9 closes, then alpha 2/10 | 259 | 390 / 468 / 132 / 242 |
+| EMA20 | Arithmetic mean of first 20 closes, then alpha 2/21 | 270 | 390 / 468 / 121 / 231 |
+| EMA50 | Arithmetic mean of first 50 closes, then alpha 2/51 | 300 | 390 / 468 / 91 / 201 |
+| EMA200 | Arithmetic mean of first 200 closes, then alpha 2/201 | 450 | 390 / 468 / 0 / 51 |
+| RSI14 | 14 close changes, first output at observation 15 | 140 | 390 / 468 / 156 / 252 |
+| MACD(12,26,9) | EMA12 and EMA26, full output including signal/histogram at observation 34 | 285 | 390 / 468 / 106 / 216 |
+| ADX14, +DI, −DI | Directional inputs use Wilder smoothing, first ADX at observation 28 | 264 for all columns | 390 / 468 / 127 / 237 |
+| ATR14 and ATR percent | 14 true ranges using previous eligible closes, first output at observation 15 | 264 | 390 / 468 / 127 / 237 |
+| Bollinger(20,2) | 20 closes, population standard deviation | 20 | 390 / 468 / 156 / 252 |
+| OBV | Zero origin, then signed completed volume | 1 | 390 / 468 / 156 / 252 |
+| RTH VWAP | Positive cumulative volume in a verified prefix of completed regular minutes | Per session | 390 / 468 / 156 / unavailable |
+| Cumulative RTH RVOL | Exactly 20 verified prior regular sessions at the matching completed minute, with a positive median | Conditional on already warm coverage | Insufficient baseline from a cold 15-session read, unavailable on 1d |
+
+The EMA display threshold is the period plus 250 observations. The RSI, MACD, ATR and ADX thresholds are conservative display requirements beyond the package's first output. SMA and Bollinger use only their actual finite window. A 15m early close, unresolved gap, newly listed symbol or thin volume can shorten coverage. ATR incorporates the previous eligible regular close across the session boundary. ATR percent divides ATR by the current positive close. On a fully flat zero-range fixture, ATR is zero, RSI is 100 under the pinned package's zero-loss convention, and ADX with its directional components is undefined. On equal closes OBV retains its previous value. A completed observation with zero volume contributes zero signed volume.
+
+Every recursive output belongs to a fixed New York civil-date block. Blocks use absolute calendar-day buckets of 30 days on 1d and three days on intraday intervals. The scheduled seed precedes the block by 365 trading sessions on daily data, or the warm threshold plus five if larger, and by 12 trading sessions on intraday data. The calendar and the eligible source, independent of the screen or request position, determine the seed. Missing seed coverage suppresses that block. A gap or basis boundary observed within eligible coverage starts a separate segment and restarts warm-up. Earlier pages may show an independently anchored segment when their acquired source proves its seed. No line connects separate segments. In particular, OBV's level is measured from each segment's zero anchor and can reset at a boundary. The upper-bound table ignores block boundaries, so the visible warmed suffix can be considerably shorter.
+
+For the same interval, each point carries the latest actual receipt across its dependencies. Reconstructed candles or dependencies received after a page's historical cutoff are labelled accordingly. A daily moving average can be drawn on an intraday candle from the first eligible candle start at or after the required daily receipt. A reconstructed daily download received after the display window cannot populate earlier intraday candles. The date of its exchange close remains separate from the receipt. Exact source revisions and observations can change with accepted corrections. Earlier points use only their own dependency receipts and histories.
+
+RTH VWAP uses the existing bar-based HLC3 calculation on one-minute inputs and resets at each exchange open. Quiet minutes require verification and add no invented OHLC or volume. Unknown minutes stop cumulative calculations for that session. RVOL selects the prior 20 scheduled exchange sessions and reads the same completed minute offset in each session. An early close can remove a counterpart at a later offset. An earlier already-cached archive can supply a verified missing session only when overlapping adjusted SIP observations match and no price-basis boundary crosses the comparison. No RVOL request expands the 15-session acquisition ceiling. The API reports the selected matching-time sample count and the required baseline size.
+
+Daily structural week, month and year lookbacks select the last 5, 21 and 252 completed scheduled sessions for eligible zone confirmations. Daily swing context selects 64 sessions. These are daily-candle structures. Zone bands have current geometry and retain their actual confirmation and effective availability. Intraday views keep their native candle interval and existing bounded page size.

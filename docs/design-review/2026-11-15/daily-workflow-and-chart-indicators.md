@@ -1,6 +1,6 @@
 # TradingFlow: daily workflow and optional chart indicators
 
-15 November 2026. Concrete proposal for review; these UI and indicator additions are not installed yet.
+15 November 2026. Approved by the user after the separate plan/execution and code/design reviews. Implementation is in progress in an isolated local checkout; these additions are not installed in the running app yet.
 
 ## What the review found
 

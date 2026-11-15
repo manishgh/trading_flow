@@ -1,7 +1,6 @@
 @page
-@inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersions
 @inject TradingFlow.Web.Services.TradingEnvironmentService Environments
-@{ ViewData["Title"] = "Desk"; ViewData["MainClass"] = "watch-desk-shell"; ViewData["ShowOperatorClock"] = true; ViewData["EmbeddedPreparation"] = true;
+@{ ViewData["Title"] = "Desk"; ViewData["MainClass"] = "watch-desk-shell"; ViewData["ShowOperatorClock"] = true;
    var environment = Environments.GetState(Environments.Parse(Request.Query["env"])); }
 @* A locked environment shows why it is locked and renders no order control at all. *@
 @if (!environment.IsEnabled)
@@ -17,6 +16,8 @@
     <div><span class="eyebrow">MARKET WORKSPACE</span><h1>Desk<span class="watch-dot" aria-hidden="true"></span></h1><p>Your stocks, strategy checks and market context.</p></div>
     <div class="watch-session"><strong id="watch-session">Reading market session…</strong><span id="watch-connection" role="status">Connecting · live quotes</span><a asp-page="/Orders">Open trading ↗</a><button type="button" id="watch-retry" class="btn btn-secondary" hidden>Retry connection</button></div>
   </header>
+  <partial name="_PreparationSummary" />
+  <p id="watch-prepared-source" class="watch-fine" role="status" hidden></p>
   <div class="watch-toolbar">
     <label class="watch-source-label">Stock group<select id="watch-source"><option value="all">All followed stocks</option></select></label>
     <label class="watch-source-label">Strategy<select id="watch-strategy"><option value="">Select a strategy</option></select></label>
@@ -36,10 +37,13 @@
   <p id="watch-warning" class="watch-warning" role="status" hidden></p>
   <div class="watch-grid">
     <section class="watch-stocks" aria-label="Followed stocks">
-      <div class="watch-table-scroll"><table class="watch-table"><caption class="sr-only">Live quotes, strategy signals, holdings and news</caption><colgroup><col class="watch-stock-col" /><col class="watch-price-col" /><col class="watch-trade-col" /><col class="watch-signal-col" /><col class="watch-holding-col" /><col class="watch-news-col" /><col class="watch-technical-col" /><col class="watch-rvol-col" /><col class="watch-volume-col" /></colgroup><thead><tr><th scope="col">Stock</th><th scope="col" class="watch-num">Change</th><th scope="col">Trade · freshness</th><th scope="col" class="watch-signal-col">Signal</th><th scope="col" class="watch-num">Holding · P&L</th><th scope="col">News</th><th scope="col" class="watch-technical-head" title="Completed daily simple moving averages and RSI">Technical</th><th scope="col" title="Relative volume from the verified completed daily indicator snapshot">RVOL</th><th scope="col" title="Observed SIP daily share volume, including regular and extended hours but excluding the overnight feed">Volume</th></tr></thead><tbody id="watch-rows"></tbody></table></div>
+      <div class="watch-table-scroll"><table class="watch-table"><caption class="sr-only">Stock prices, strategy checks, positions and next actions</caption>
+        <thead><tr><th scope="col">Stock</th><th scope="col">Price · age</th><th scope="col">Strategy</th><th scope="col">Position</th><th scope="col">Next action</th></tr></thead>
+        <tbody id="watch-rows"></tbody>
+      </table></div>
       <div id="watch-empty" class="watch-empty"><strong>Loading your stocks…</strong><p>Your stock groups, screeners and holdings come together here.</p></div>
       <div class="watch-pagination"><button type="button" id="watch-prev" class="btn btn-secondary" disabled>← Previous</button><span id="watch-page">Page 1</span><button type="button" id="watch-next" class="btn btn-secondary" disabled>Next →</button></div>
-      <footer class="watch-table-note">Alpaca SIP quotes · buy is the ask, sell is the bid, spread is ask − bid · Daily technicals use completed bars · news counts cover the last hour of stored stories, with partial coverage · click a row for source times and details</footer>
+      <footer class="watch-table-note">Select a stock for bid and ask, completed daily indicators, holdings and news.</footer>
     </section>
     <aside class="watch-detail" aria-label="Selected stock" id="watch-detail">
       <header class="watch-focus-head">
@@ -50,20 +54,18 @@
         <p id="watch-quote-detail" class="watch-fine"></p>
         <div class="watch-focus-trade"><a id="watch-buy" class="btn btn-primary">Buy</a><a id="watch-sell" class="btn btn-secondary">Sell</a></div>
         <p id="watch-order-help" class="watch-fine" hidden></p>
+        <p id="watch-exit-help" class="watch-fine" hidden></p>
         <partial name="_StockChart" model="String.Empty" />
         <form id="watch-follow"><label>Follow in a stock group<select id="watch-follow-list" required></select></label><button class="btn btn-secondary" type="submit">Follow stock</button><p id="watch-follow-status" role="status"></p></form>
-        <div class="watch-detail-block" id="watch-holding-block"><h3>Holding</h3><dl class="watch-metrics"><dt>Shares</dt><dd id="watch-quantity">—</dd><dt>Average entry</dt><dd id="watch-entry">—</dd><dt>Market value</dt><dd id="watch-value">—</dd><dt>Unrealized P&amp;L</dt><dd id="watch-pl">—</dd></dl></div>
+        <div class="watch-detail-block" id="watch-holding-block"><h3>Holding</h3><dl class="watch-metrics"><dt>Shares</dt><dd id="watch-quantity">—</dd><dt>Average entry</dt><dd id="watch-entry">—</dd><dt>Market value</dt><dd id="watch-value">—</dd><dt>Unrealized P&amp;L</dt><dd id="watch-pl">—</dd></dl><a asp-page="/RunningTrades">View positions and protection</a></div>
         <div class="watch-detail-block" id="watch-strategy-block"><h3>Strategy · <span id="watch-observation"></span></h3><div id="watch-strategy-checks"></div></div>
-        <div class="watch-detail-block"><h3>Daily technicals</h3><p id="watch-tech-time" class="watch-fine"></p><dl class="watch-tech"><div><dt>SMA 10</dt><dd id="watch-sma10">—</dd></div><div><dt>SMA 20</dt><dd id="watch-sma20">—</dd></div><div><dt>SMA 50</dt><dd id="watch-sma50">—</dd></div><div><dt>SMA 200</dt><dd id="watch-sma200">—</dd></div><div><dt>RSI</dt><dd id="watch-rsi">—</dd></div><div><dt>EMA 20 / 50</dt><dd id="watch-ema">—</dd></div><div><dt>EMA 200</dt><dd id="watch-ema200">—</dd></div><div><dt>ATR</dt><dd id="watch-atr">—</dd></div><div><dt>RVOL</dt><dd id="watch-rvol">—</dd></div></dl></div>
+        <div class="watch-detail-block"><h3>Daily technicals</h3><p id="watch-tech-time" class="watch-fine"></p><dl class="watch-tech"><div><dt>SMA 10</dt><dd id="watch-sma10">—</dd></div><div><dt>SMA 20</dt><dd id="watch-sma20">—</dd></div><div><dt>SMA 50</dt><dd id="watch-sma50">—</dd></div><div><dt>SMA 200</dt><dd id="watch-sma200">—</dd></div><div><dt>RSI</dt><dd id="watch-rsi">—</dd></div><div><dt>EMA 20 / 50</dt><dd id="watch-ema">—</dd></div><div><dt>EMA 200</dt><dd id="watch-ema200">—</dd></div><div><dt>ATR</dt><dd id="watch-atr">—</dd></div><div><dt>RVOL</dt><dd id="watch-rvol">—</dd></div></dl><p id="watch-sip-volume" class="watch-fine"></p></div>
+        <p class="watch-context-links"><a id="watch-stock-news" asp-page="/News">Open stock news</a> <a id="watch-stock-earnings" asp-page="/Earnings">Open earnings</a></p>
       </div>
     </aside>
     <section class="watch-news" aria-label="Relevant news"><div class="watch-news-head"><div><span class="watch-kicker">NEWS THAT MATTERS HERE</span><h2 id="watch-news-title">News for this view</h2></div><button id="watch-news-all" class="btn btn-secondary" type="button">All stocks in view</button></div><p id="watch-news-coverage" class="watch-fine"></p><div id="watch-news-list"></div></section>
   </div>
-  @* Preparation and run setup stay available below the stock workspace without displacing live rows. *@
-  <div class="watch-workflow-tools">  <details class="watch-prep" id="watch-preparation" data-script-url="@FileVersions.AddFileVersionToPath(Request.PathBase, Url.Content("~/js/preparation.js"))">
-    <summary><span><span class="watch-kicker">DAILY PREPARATION</span><strong>Nightly preparation & morning review</strong></span><span id="watch-prep-summary">Open preparation →</span></summary>
-    <partial name="_PreparationWorkspace" />
-  </details>
+  <div class="watch-workflow-tools">
   @* Paper strategy runs record which stocks qualify and trigger; their signals authorize strategy entries. *@
   <details class="watch-runs" id="watch-runs"><summary><span class="watch-kicker">STRATEGY RUNS</span><strong>Start or open a paper strategy run</strong></summary><partial name="_CandidateWorkflow" /></details>
   </div>
@@ -74,5 +76,6 @@
     <script src="~/js/order-popup.js" asp-append-version="true"></script>
     <partial name="_StockChartScripts" />
     <script src="~/js/watch-desk.js" asp-append-version="true"></script>
+    <script src="~/js/preparation-summary.js" asp-append-version="true" defer></script>
     <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
 }

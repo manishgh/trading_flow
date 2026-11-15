@@ -28,7 +28,8 @@ public sealed class DurableJobWorkerHostedService(
     IReadOnlyDictionary<string, DurableJobWorkerOptions> optionsByJobType,
     DurableJobHostOptions hostOptions,
     TimeProvider timeProvider,
-    ILogger<DurableJobWorkerHostedService> logger) : BackgroundService
+    ILogger<DurableJobWorkerHostedService> logger,
+    PreparationWorkerCapability? preparation = null) : BackgroundService
 {
     private readonly DurableJobHostOptions validatedHostOptions = hostOptions.Validate();
 
@@ -58,11 +59,22 @@ public sealed class DurableJobWorkerHostedService(
             "Started {WorkerCount} durable job worker(s) for {JobTypes}.",
             workers.Length,
             String.Join(", ", registeredHandlers.Select(handler => handler.JobType)));
-        await Task.WhenAll(workers.Concat(projectionRefreshers));
+        var acceptsPreparation = registeredHandlers.Any(handler => handler.JobType == "preparation");
+        if (acceptsPreparation) preparation?.SetStarted(true);
+        try
+        {
+            await Task.WhenAll(workers.Concat(projectionRefreshers));
+        }
+        finally
+        {
+            if (acceptsPreparation) preparation?.SetStarted(false);
+        }
     }
 
+    // Stop accepting preparation before waiting for outstanding jobs to drain.
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        preparation?.SetStarted(false);
         using var drainBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         drainBudget.CancelAfter(validatedHostOptions.ShutdownDrainTimeout);
         await base.StopAsync(drainBudget.Token);

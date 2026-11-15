@@ -66,6 +66,7 @@ public sealed class NewsModel(
     public IReadOnlyList<TradingFlow.Web.Services.Desk.DeskSource> StockSources { get; private set; } = [];
     public int TotalBeforeFilters { get; private set; }
     public string FeedDescription { get; private set; } = String.Empty;
+    public NewsWindowStatus? RefreshStatus { get; private set; }
     public string CategoryLabel => NewsDisplayTaxonomy.Categories.FirstOrDefault(x => x.Key == Category)?.Label ?? Category;
     public string SectorLabel => NewsDisplayTaxonomy.Sectors.FirstOrDefault(x => x.Key == Sector)?.Label ?? "All sector topics";
     public int AdvancedFilterCount => new[] {
@@ -79,6 +80,7 @@ public sealed class NewsModel(
     /// <summary>False when the feed itself is unavailable, as opposed to merely empty.</summary>
     public bool FeedEnabled { get; private set; } = true;
 
+    // Load stored results and the independent observation that describes which sources refreshed.
     public async Task<IActionResult> OnGetAsync(CancellationToken cancellationToken)
     {
         // Reject failed conversions of bound query values without treating unrelated
@@ -111,6 +113,7 @@ public sealed class NewsModel(
         GroupId = null;
         Scope = null;
         FeedDescription = feed.Message ?? String.Empty;
+        RefreshStatus = feed.Status;
         FeedEnabled = feed.Enabled;
         PageNumber = feed.Page;
         TotalBeforeFilters = feed.TotalMatching ?? feed.Items.Count;

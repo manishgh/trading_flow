@@ -4,23 +4,29 @@ namespace TradingFlow.Tests;
 
 public class NewsFeedServiceTests
 {
+    // The caller can see the failed source even when a second source returns rows.
     [Fact]
     public async Task ProviderFailure_DoesNotAbortOtherFeeds_ButShutdownCancellationEscapes()
     {
-        var service = new NewsFeedService(null!, null!, null!, null!, null!, null!, null!, null!, null!,
+        var service = new NewsFeedService(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger<NewsFeedService>.Instance);
-        Assert.Empty(await service.LoadProviderAsync("failed", () => throw new HttpRequestException("offline"), CancellationToken.None));
+        var failure = await service.ReadSourceAsync("failed", () => throw new HttpRequestException("offline"), "covered", CancellationToken.None);
+        Assert.Empty(failure.Events);
+        Assert.Equal("failed", failure.Reading.State);
         var called = false;
-        var healthy = await service.LoadProviderAsync("healthy", () => {
+        var healthy = await service.ReadSourceAsync("healthy", () => {
             called = true;
             return Task.FromResult<IReadOnlyList<TradingFlow.Domain.Market.CatalystEvent>>([
                 new("AA", DateTimeOffset.UtcNow, TradingFlow.Domain.Market.CatalystType.NewsReport, "Healthy article", 0, "alpaca")]);
-        }, CancellationToken.None);
+        }, "covered", CancellationToken.None);
         Assert.True(called);
-        Assert.Equal("Healthy article", Assert.Single(healthy).Headline);
+        Assert.Equal("Healthy article", Assert.Single(healthy.Events).Headline);
+        Assert.Equal("partial", NewsFeedService.ClassifyRefresh([failure.Reading, healthy.Reading], false));
+        Assert.Equal("failed", NewsFeedService.ClassifyRefresh([failure.Reading], false));
+        Assert.Equal("partial", NewsFeedService.ClassifyRefresh([healthy.Reading], true));
         using var shutdown = new CancellationTokenSource(); shutdown.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.LoadProviderAsync("canceled",
-            () => throw new OperationCanceledException(shutdown.Token), shutdown.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.ReadSourceAsync("canceled",
+            () => throw new OperationCanceledException(shutdown.Token), "covered", shutdown.Token));
     }
 
     [Fact]

@@ -15,7 +15,7 @@ public sealed partial class OfficialMarketNewsProvider
     internal TimeSpan PublicContextRequestTimeout { get; init; } = TimeSpan.FromSeconds(20);
     private readonly TimeProvider newsClock;
     private readonly SemaphoreSlim supplementalGate = new(1, 1);
-    private readonly Dictionary<string, (DateTimeOffset ExpiresAt, IReadOnlyList<CatalystEvent> Items)> supplementalCache = [];
+    private readonly Dictionary<string, (DateTimeOffset ExpiresAt, NewsCollection Collection)> supplementalCache = [];
 
     // These are public context feeds. Their display categories never qualify a strategy.
     // Publication time controls the news window; refreshing an old document cannot make it recent.
@@ -25,7 +25,8 @@ public sealed partial class OfficialMarketNewsProvider
         (GovernmentDocumentsFeedUrl, "us_government", "US Government Publishing Office", TimeSpan.FromHours(1))
     ];
 
-    private async Task<IReadOnlyList<CatalystEvent>> GetSupplementalEventsAsync(
+    // Preserve original attempt times when bounded public feeds are reused instead of fetched again.
+    private async Task<IReadOnlyList<NewsCollection>> GetSupplementalEventsAsync(
         DateTimeOffset sinceUtc, CancellationToken cancellationToken)
     {
         await supplementalGate.WaitAsync(cancellationToken);
@@ -56,22 +57,33 @@ public sealed partial class OfficialMarketNewsProvider
                     }
                     var receivedAt = newsClock.GetUtcNow();
                     var items = ParsePublicRss(Encoding.UTF8.GetString(output.ToArray()), feed.Provider, feed.Source, receivedAt);
-                    return (feed.Provider, ExpiresAt: receivedAt.Add(feed.Lifetime), Items: items);
+                    var reading = new NewsSourceReading(feed.Source, "success", receivedAt, items.Count,
+                        "Rolling feed returned; full window coverage is unverified.");
+                    return (feed.Provider, ExpiresAt: receivedAt.Add(feed.Lifetime), Collection: new NewsCollection(items, reading));
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception error)
                 {
                     logger.LogWarning(error, "Public context news refresh failed for {Provider}; other feeds continue.", feed.Provider);
                     // Do not silently present a failed fetch as newly received evidence.
-                    return (feed.Provider, ExpiresAt: now.AddMinutes(1), Items: (IReadOnlyList<CatalystEvent>)[]);
+                    var reading = new NewsSourceReading(feed.Source, "failed", newsClock.GetUtcNow(), 0,
+                        NewsFeedService.NewsRequestFailure(error));
+                    return (feed.Provider, ExpiresAt: now.AddMinutes(1), Collection: new NewsCollection([], reading));
                 }
             }));
             foreach (var entry in fetched)
-                supplementalCache[entry.Provider] = (entry.ExpiresAt, entry.Items);
+                supplementalCache[entry.Provider] = (entry.ExpiresAt, entry.Collection);
             var availableAt = newsClock.GetUtcNow();
-            return supplementalCache.Values.SelectMany(value => value.Items)
-                .Where(item => item.Timestamp >= sinceUtc && item.Timestamp <= availableAt)
-                .OrderByDescending(item => item.Timestamp).ToArray();
+            var fetchedNames = pending.Select(feed => feed.Provider).ToHashSet(StringComparer.Ordinal);
+            return supplementalCache.Select(pair =>
+            {
+                var collection = pair.Value.Collection;
+                var reading = collection.Reading;
+                if (reading.State == "success" && !fetchedNames.Contains(pair.Key))
+                    reading = reading with { State = "cached", Detail = "Reused the last rolling feed response; no new request on this pass." };
+                return new NewsCollection(collection.Events
+                    .Where(item => item.Timestamp >= sinceUtc && item.Timestamp <= availableAt).ToArray(), reading);
+            }).ToArray();
         }
         finally { supplementalGate.Release(); }
     }

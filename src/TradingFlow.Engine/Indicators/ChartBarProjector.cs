@@ -11,6 +11,8 @@ public sealed class ChartBarProjector(IReadOnlyDictionary<DateOnly, MarketSessio
 {
     private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
     private readonly BarResampler resampler = new(MarketEvidenceProfile.ProductionDefault.WithSessionSchedules(schedules));
+    private readonly DateOnly[] tradingDates = schedules.Where(item => item.Value.IsTradingDay)
+        .Select(item => item.Key).Order().ToArray();
 
     // Map a UTC source timestamp to its New York calendar date without guessing a session.
     public static DateOnly NewYorkDate(DateTimeOffset utc) =>
@@ -28,6 +30,28 @@ public sealed class ChartBarProjector(IReadOnlyDictionary<DateOnly, MarketSessio
         schedules.TryGetValue(date, out var schedule) && schedule.IsTradingDay
             ? new ChartTimeRange(At(date, schedule.RegularOpen), At(date, schedule.RegularClose))
             : null;
+
+    // Fix recursive publishing blocks to civil dates, so source refresh, viewport and paging cannot move their seed.
+    public static int IndicatorBlock(DateOnly date, bool daily) => date.DayNumber / (daily ? 30 : 3);
+
+    // Resolve the scheduled seed before the block starts. Missing calendar coverage cannot establish a new origin.
+    public DateOnly? IndicatorSeed(DateOnly date, bool daily, int warmObservations)
+    {
+        var boundary = DateOnly.FromDayNumber(IndicatorBlock(date, daily) * (daily ? 30 : 3));
+        var insertion = Array.BinarySearch(tradingDates, boundary);
+        if (insertion < 0) insertion = ~insertion;
+        var prior = daily ? Math.Max(365, warmObservations + 5) : 12;
+        return insertion >= prior ? tradingDates[insertion - prior] : null;
+    }
+
+    // Keep exact exchange order when acquiring RVOL evidence from already warm sessions.
+    public IReadOnlyList<DateOnly> PriorTradingDates(DateOnly date, int count)
+    {
+        var insertion = Array.BinarySearch(tradingDates, date);
+        if (insertion < 0) insertion = ~insertion;
+        var start = Math.Max(0, insertion - count);
+        return tradingDates[start..insertion];
+    }
 
     // An as-of classification cannot use an assumed open on an uncovered date.
     public string? Segment(DateTimeOffset timestamp)

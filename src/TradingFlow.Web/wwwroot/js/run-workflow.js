@@ -291,6 +291,8 @@
     function showPlan(plan) {
         if (!planPreview) return;
         planPreview.replaceChildren();
+        const heading = document.createElement('h3');
+        heading.textContent = plan.planId ? 'Saved plan selections' : 'Selections to save';
         const description = document.createElement('p');
         description.textContent = `${plan.run.runName}: ${plan.executionCount} independent portfolios. ${plan.membershipDescription}`;
         const list = document.createElement('ul');
@@ -303,7 +305,7 @@
         exclusions.textContent = 'Excluded stocks: ' + (plan.excludedSymbols?.length ? plan.excludedSymbols.join(', ') : 'None');
         const selection = document.createElement('p');
         selection.textContent = describePlanSelection(plan);
-        planPreview.append(description, exclusions, selection, list);
+        planPreview.append(heading, description, exclusions, selection, list);
         const strategies = document.createElement('p');
         strategies.textContent = 'Strategies: ' + plan.run.strategies.map(item => `${item.strategyId} ${item.semanticVersion} (${item.contentSha256})`).join('; ');
         planPreview.append(strategies);

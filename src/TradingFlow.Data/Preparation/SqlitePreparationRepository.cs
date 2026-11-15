@@ -40,6 +40,62 @@ public sealed class SqlitePreparationRepository(IDbContextFactory<TradingFlowDbC
     }
     public async Task<PreparationOccurrenceRecord[]> OccurrencesAsync(Guid workflowId, CancellationToken token)
     { await using var db=await factory.CreateDbContextAsync(token); return await db.PreparationOccurrences.AsNoTracking().Where(x=>x.WorkflowId==workflowId).OrderByDescending(x=>x.ScheduledTicks).ToArrayAsync(token); }
+
+    // Choose the latest target first, then query its exact phases and latest saved fallback, regardless of other workflows.
+    public async Task<PreparationWorkspaceRecord[]> WorkspaceOccurrencesAsync(string owner, CancellationToken token)
+    {
+        await using var db = await factory.CreateDbContextAsync(token);
+        return await db.Database.SqlQuery<PreparationWorkspaceRecord>($"""
+            WITH latest AS (
+                SELECT o.Id, o.WorkflowId, json_extract(o.SlotJson,'$.targetDate') AS TargetDate
+                FROM preparation_definitions d
+                JOIN preparation_occurrences o ON o.DefinitionId=d.Id
+                WHERE d.OwnerId={owner}
+                ORDER BY o.ScheduledTicks DESC, o.Id DESC LIMIT 1
+            ), chosen AS (
+                SELECT Id FROM latest
+                UNION
+                SELECT Id FROM (
+                    SELECT o.Id FROM preparation_occurrences o JOIN latest l ON l.WorkflowId=o.WorkflowId
+                    WHERE json_extract(o.SlotJson,'$.targetDate')=l.TargetDate
+                    AND json_extract(o.SlotJson,'$.phase')='nightly'
+                    ORDER BY o.ScheduledTicks DESC, o.Id DESC LIMIT 1
+                )
+                UNION
+                SELECT Id FROM (
+                    SELECT o.Id FROM preparation_occurrences o JOIN latest l ON l.WorkflowId=o.WorkflowId
+                    WHERE json_extract(o.SlotJson,'$.targetDate')=l.TargetDate
+                    AND json_extract(o.SlotJson,'$.phase')='morning'
+                    ORDER BY o.ScheduledTicks DESC, o.Id DESC LIMIT 1
+                )
+                UNION
+                SELECT Id FROM (
+                    SELECT o.Id FROM preparation_occurrences o JOIN latest l ON l.WorkflowId=o.WorkflowId
+                    WHERE o.ResultJson IS NOT NULL
+                    ORDER BY o.ScheduledTicks DESC, o.Id DESC LIMIT 1
+                )
+            )
+            SELECT o.Id AS OccurrenceId, o.WorkflowId,
+                json_extract(o.SlotJson,'$.targetDate') AS TargetDate,
+                json_extract(o.SlotJson,'$.phase') AS Phase,
+                json_extract(o.SlotJson,'$.handoffUntilUtc') AS HandoffUntilUtc,
+                json_extract(o.ResultJson,'$.revisionId') AS RevisionId,
+                json_extract(o.ResultJson,'$.expiresAtUtc') AS ExpiresAtUtc,
+                json_extract(o.ResultJson,'$.readiness') AS Readiness,
+                json_extract(o.ResultJson,'$.outcome') AS Outcome,
+                j.Status AS JobStatus, r.IdempotencyKey AS ReviewKey,
+                json_extract(r.Json,'$.expiresAtUtc') AS ReviewExpiresAtUtc
+            FROM chosen c JOIN preparation_occurrences o ON o.Id=c.Id
+            LEFT JOIN Jobs j ON j.Id=o.Id
+            LEFT JOIN preparation_reviews r ON r.Id=(
+                SELECT review.Id FROM preparation_reviews review
+                WHERE review.OwnerId={owner} AND review.OccurrenceId=o.Id
+                AND json_extract(review.Json,'$.universeSnapshotId') IS NOT NULL
+                ORDER BY review.CreatedAtUtc DESC, review.Id DESC LIMIT 1
+            )
+            ORDER BY o.ScheduledTicks DESC, o.Id DESC
+            """).ToArrayAsync(token);
+    }
     public async Task<PreparationOccurrenceRecord?> OccurrenceAsync(Guid id, CancellationToken token)
     { await using var db=await factory.CreateDbContextAsync(token); return await db.PreparationOccurrences.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id,token); }
     public async Task<PreparationOccurrenceRecord?> ReserveAsync(PreparationOccurrenceRecord occurrence, PersistedJob job, CancellationToken token, Wishlist? sourceWishlist = null, PreparationReviewRecord? sourceBinding = null)

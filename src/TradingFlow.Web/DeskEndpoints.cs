@@ -38,7 +38,8 @@ public static class DeskEndpoints
     /// <summary>Streams bounded observation pages and the selected run's recorded strategy checks; never starts an evaluation.</summary>
     private static async Task StreamAsync(HttpContext context, DeskSources sources, DeskReadService reader,
         DeskStrategyAssessmentService assessments, TradingFlow.Web.Services.IDisplayQuoteSubscriptions subscriptions, TradingFlow.Web.Services.LiveQuoteBook quoteBook,
-        ILoggerFactory logs, TradingFlow.Web.Services.Charts.ChartAccessPolicy charts)
+        ILoggerFactory logs, TradingFlow.Web.Services.Charts.ChartAccessPolicy charts,
+        TradingFlow.Application.Preparation.PreparationService preparation)
     {
         var key = context.Request.Query["source"].FirstOrDefault() ?? "all";
         var search = context.Request.Query["search"].ToString();
@@ -59,10 +60,27 @@ public static class DeskEndpoints
             runId = parsedRun;
         }
         var strategy = String.IsNullOrEmpty(strategyId) ? null : new StrategyReference(strategyId, strategyVersion, strategyHash);
+        var ct = context.RequestAborted;
+        TradingFlow.Contracts.Preparation.PreparationHandoff? prepared = null;
+        if (key == "prepared")
+        {
+            var reviewKey = context.Request.Query["preparationKey"].ToString();
+            var owner = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (String.IsNullOrWhiteSpace(owner) || reviewKey.Length is < 1 or > 100)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+            try { prepared = await preparation.ReadHandoffAsync(owner, reviewKey, ct); }
+            catch (KeyNotFoundException)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+        }
         context.Response.ContentType = "text/event-stream";
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers["X-Accel-Buffering"] = "no";
-        var ct = context.RequestAborted;
         // The page's stocks join the one shared Alpaca SIP connection while this view is open.
         var quoteScope = Guid.NewGuid();
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -72,7 +90,8 @@ public static class DeskEndpoints
             // Reconnect bounds lifetime and refreshes authentication.
             for (var i = 0; i < 60 && !ct.IsCancellationRequested; i++)
             {
-                var selection = await sources.ResolveAsync(key, ct, page, search);
+                var selection = prepared is null ? await sources.ResolveAsync(key, ct, page, search) :
+                    await sources.ResolvePreparedAsync(prepared, ct, page, search);
                 var snapshot = await reader.ReadAsync(selection, ct);
                 if (strategy is not null && runId is not null && snapshot.Rows.Count > 0)
                 {

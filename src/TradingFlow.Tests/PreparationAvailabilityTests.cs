@@ -124,7 +124,7 @@ public sealed class PreparationAvailabilityTests
         var authorization=new Mock<IPreparationAuthorization>();
         authorization.Setup(x=>x.StampAsync(It.IsAny<string>(),It.IsAny<CancellationToken>())).ReturnsAsync(()=>harness.Stamp);
         return new(harness.Repository,harness.Jobs,calendar,authorization.Object,Mock.Of<IUniverseSourceResolver>(),
-            Mock.Of<IPreparationEvidence>(),harness.Wishlists,harness.Clock);
+            Mock.Of<IPreparationEvidence>(),harness.Wishlists,harness.Clock,harness.Collection.Object);
     }
 
     private sealed class TestCalendar(CandidateWorkflowTestClock clock) : IPreparationCalendar

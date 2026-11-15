@@ -356,6 +356,18 @@ No.,Ticker,Company,Rel Volume
         Assert.Equal(1, handler.RequestCount);
     }
 
+    // An HTTP success with silently missing rows cannot overwrite the stored window with a false zero.
+    [Fact]
+    public async Task GetEarningsCalendarAsync_RejectsMissingAdvertisedRows()
+    {
+        using var client = new FinvizClient(new HttpClient(new CsvHandler(
+            """{"items":[],"page":1,"pageSize":50,"totalItemsCount":4,"totalPages":1}""")),
+            new FinvizOptions(new Uri("https://elite.finviz.com"), "test-token"), CreateArchiveWriter());
+        var date = new DateOnly(2026, 8, 1);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => client.GetEarningsCalendarAsync(date, date));
+        Assert.Contains("0 rows; 4 were advertised", error.Message);
+    }
+
     private sealed class CsvHandler(
         string csv,
         HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler

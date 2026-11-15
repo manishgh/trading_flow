@@ -58,7 +58,7 @@ const ordersDocument = `<!doctype html><html><body>
   </div>
 </body></html>`;
 
-const positionsDocument = `<!doctype html><html><body>
+const positionsDocument = `<!doctype html><html><body data-stock-chart-url="/Chart">
   <section data-running-trades data-source="all">
     <strong class="metric-value" data-total-pl>$0.00</strong>
     <strong class="metric-value" data-trade-count>0</strong>
@@ -133,9 +133,11 @@ test.describe("incremental live-list membership", () => {
     });
     await page.goto("http://tradingflow.test/RunningTrades");
     await page.addScriptTag({ path: path.join(webRoot, "api-client.js") });
+    await page.addScriptTag({ path: path.join(webRoot, "site.js") });
     await page.addScriptTag({ path: path.join(webRoot, "running-trades.js") });
 
     await expect(page.locator('[data-trade-key$=":AAPL"]')).toContainText("AAPL");
+    await expect(page.getByRole("link", { name: "Open chart for AAPL" })).toHaveAttribute("href", new URL("/Chart?symbol=AAPL", page.url()).href);
     trades = [trade("MSFT", "20000000-0000-0000-0000-000000000002", -8)];
 
     await preserveFocusAndScroll(page, async () => {

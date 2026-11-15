@@ -27,25 +27,41 @@
     const phaseName = phase => phase==='nightly'?'evening':phase;
     // Four everyday settings stay in view; the rest sit under Advanced settings.
     const basicKeys=['nightlyAfterCloseMinutes','morningStartBeforeOpenMinutes','filters.minimumPrice','filters.minimumAverageShares'];
+    // Use the server observation and elapsed browser time for collection and expiry windows.
+    function workflowNow() {
+        return detail?.readAtUtc ? Date.parse(detail.readAtUtc) + Date.now() - receivedAt : Date.now();
+    }
+    // A separate worker observation never changes the saved schedule switch.
+    function workerStatus() {
+        return window.tradingFlowWorkspaceStatus?.preparationWorker ??
+            { canCollect:false, detail:'Preparation worker status is unknown. Review saved evidence.' };
+    }
+    // Render phase evidence without calling a completed evening phase ready to trade.
     function renderTiles() {
         el('tiles').hidden=!definition||!detail||detail.definition.workflowId!==definition.workflowId;if(el('tiles').hidden)return;
         const enabled=detail.definition.settings.enabled;
-        for(const phase of ['nightly','morning']){const next=detail.upcoming.find(x=>x.phase===phase);el('tile-'+phase).textContent=next?when(next.scheduledAtUtc):'Not scheduled';el('tile-'+phase+'-note').textContent=(next?'for '+next.targetDate+' · ':'')+(enabled?'schedule on':'paused');}
+        for(const phase of ['nightly','morning']){const next=detail.upcoming.find(x=>x.phase===phase);el('tile-'+phase).textContent=next?when(next.scheduledAtUtc):'Not scheduled';el('tile-'+phase+'-note').textContent=(next?'for '+next.targetDate+' · ':'')+(enabled?'saved schedule on':'saved schedule paused');}
         const latest=detail.history[0];
         if(!latest){el('tile-latest').textContent='None yet';el('tile-latest-note').textContent='A result appears after the first collection.';return;}
         const snap=latest.snapshot,ready=snap?snap.symbols.filter(x=>x.readiness==='complete').length:0;
-        el('tile-latest').textContent=snap?(snap.readiness==='complete'?'Ready':snap.readiness[0].toUpperCase()+snap.readiness.slice(1))+' · '+ready+' stock'+(ready===1?'':'s'):latest.status[0].toUpperCase()+latest.status.slice(1);
+        el('tile-latest').textContent=snap?(snap.readiness==='complete'?'Collected':snap.readiness[0].toUpperCase()+snap.readiness.slice(1))+' · '+ready+' stock'+(ready===1?'':'s'):latest.status[0].toUpperCase()+latest.status.slice(1);
         el('tile-latest-note').textContent=phaseName(latest.slot.phase)+' · '+when(latest.slot.scheduledAtUtc)+(snap&&snap.symbols.length>ready?' · '+(snap.symbols.length-ready)+' not ready':'');
     }
-    // Explains, beside the buttons, exactly why the list cannot be handed on yet.
+    // Mirror known handoff prerequisites without changing the server's validity and provenance checks.
     function syncHandoff() {
         if(!selectedOccurrence){el('handoff-reason').textContent='';return;}
-        const snap=selectedOccurrence.snapshot;
-        const reason=snap.readiness==='unavailable'?'This result has no usable stocks. Collect a new result.'
-            :selectedOccurrence.slot.phase!=='morning'?'This is the evening result. Collect and review the morning result before continuing.'
-            :Date.now()>=Date.parse(snap.expiresAtUtc)?'This result has expired. Collect a fresh morning result to continue.'
-            :selected.size===0?'Tick at least one ready stock to continue.':'';
-        el('handoff').disabled=el('paper').disabled=!!reason;el('handoff-reason').textContent=reason;
+        const snap=selectedOccurrence.snapshot, slot=selectedOccurrence.slot, now=workflowNow();
+        const invalidPhase=slot.phase!=='morning';
+        const expired=now>=Date.parse(snap?.expiresAtUtc)||now>=Date.parse(slot.handoffUntilUtc);
+        const reason=invalidPhase?'This is the evening result. Collect and review a morning result before continuing.'
+            :!snap?'Collection has not published a stock list yet.'
+            :selectedOccurrence.status==='saved_evidence'?'The job record is unavailable. Collect a new morning result to continue.'
+            :snap.readiness==='unavailable'||!['completed','completed_with_gaps'].includes(selectedOccurrence.status)?'This result did not publish a usable stock list.'
+            :expired?'The morning review window has closed. Collect a fresh result before continuing.'
+            :selected.size===0?'Select at least one included stock to continue.'
+            :!el('reason').value.trim()?'Record why these stocks belong in this review.':'';
+        el('open-desk').disabled=el('handoff').disabled=el('paper').disabled=!!reason;
+        if(el('handoff-reason').textContent!==reason)el('handoff-reason').textContent=reason;
     }
     function value(key) { return key.split('.').reduce((x,k)=>x[k],settings); }
     function set(key,v) { const parts=key.split('.'); let target=settings; for(const part of parts.slice(0,-1)) target=target[part]; target[parts.at(-1)]=v; }
@@ -80,15 +96,30 @@
         // Until a workflow exists the setup card is the only way in, so the workflow picker and tabs stay out of the way.
         for(const part of root.querySelectorAll('.prep-toolbar,.prep-tabs'))part.hidden=!definition&&!available.length;syncCollection();renderTiles();
     }
+    // Use the same runtime snapshot for manual and curated collection; the server checks again before admission.
     function syncCollection(){
         const current=definition&&detail?.definition.workflowId===definition.workflowId;
         const busy=current&&detail.history.some(x=>['queued','running','cancelling'].includes(x.status));
-        const now=detail?.readAtUtc?Date.parse(detail.readAtUtc)+Date.now()-receivedAt:Date.now();
-        const windows=current?(detail.collectionWindows||[]):[];
-        for(const phase of ['nightly','morning'])el(phase).disabled=!current||busy||!windows.some(x=>x.phase===phase&&Date.parse(x.scheduledAtUtc)<=now&&now<Date.parse(x.deadlineUtc));
-        el('collection-status').textContent=!current?'Save and open a workflow to see collection availability.':detail.planningError?detail.planningError:busy?'Collection is queued or running. Results refresh automatically every 10 seconds.':windows.some(x=>Date.parse(x.scheduledAtUtc)<=now&&now<Date.parse(x.deadlineUtc))?'An exchange-session collection window is open. Run manually or enable the saved schedule.':'Manual collection is outside the configured exchange-session window. The next scheduled times are listed below.';
+        const worker=workerStatus(), now=workflowNow(), windows=current?(detail.collectionWindows||[]):[];
+        const open=windows.filter(x=>Date.parse(x.scheduledAtUtc)<=now&&now<Date.parse(x.deadlineUtc));
+        for(const phase of ['nightly','morning'])
+            el(phase).disabled=!worker.canCollect||!current||busy||!open.some(x=>x.phase===phase);
+        const slot=selectedOccurrence?.slot;
+        const curationOpen=slot?.phase==='morning'&&Date.parse(slot.scheduledAtUtc)<=now&&now<Date.parse(slot.deadlineUtc);
+        el('curate').disabled=!worker.canCollect||busy||!curationOpen;
+        const collectionNote=!worker.canCollect?worker.detail
+            :!current?'Save and open a workflow to see collection availability.'
+            :detail.planningError|| (busy?'Collection is queued or running. Results refresh automatically.'
+                :open.length?'An exchange-session collection window is open. Start it manually or use the saved schedule.'
+                :'Manual collection is outside the configured exchange-session window.');
+        const curationNote=!worker.canCollect?worker.detail
+            :busy?'Wait for the current collection to finish.'
+            :!curationOpen?'Curated collection is available only during this result’s morning window.':'';
+        for(const [key,value] of [['worker',worker.detail],['collection-status',collectionNote],['curation-status',curationNote],
+            ['schedule-worker','Saved schedule settings are separate from worker availability. '+worker.detail]])
+            if(el(key).textContent!==value)el(key).textContent=value;
     }
-    async function list() { available=await api('preparation');el('list').replaceChildren();if(!available.length)el('list').add(new Option('No saved workflows',''));for(const row of available)el('list').add(new Option(row.settings.name+(row.settings.enabled?' · enabled':' · paused'),row.workflowId));if(definition&&available.some(x=>x.workflowId===definition.workflowId))el('list').value=definition.workflowId;syncControls();return available; }
+    async function list() { available=await api('preparation');el('list').replaceChildren();if(!available.length)el('list').add(new Option('No saved workflows',''));for(const row of available)el('list').add(new Option(row.settings.name+(row.settings.enabled?' · schedule on':' · schedule paused'),row.workflowId));if(definition&&available.some(x=>x.workflowId===definition.workflowId))el('list').value=definition.workflowId;syncControls();return available; }
     async function load(id, replaceEditor=true, selectLatest=true, silent=false) {
         if(!id){status('Create and save a workflow first.');return;}
         const version=silent?requestVersion:++requestVersion;refreshing++;
@@ -109,7 +140,7 @@
             }
         }
         if(!detail.history.length){line(el('history'),'No collection has run for this workflow yet. Review its schedule or start a manual run when its window opens.');el('empty').textContent='Workflow saved. No preparation result yet. Review the schedule below; results appear automatically after collection.';}
-        if(!silent)status('History refreshed. '+(detail.definition.settings.enabled?'Scheduling enabled.':'Workflow paused.'));
+        if(!silent)status('History refreshed. '+(detail.definition.settings.enabled?'Saved schedule is on.':'Saved schedule is paused.'));
         document.dispatchEvent(new CustomEvent('preparation-changed',{detail:{count:available.length}}));
     }
     function review(row, navigate=true, historical=true) {
@@ -118,9 +149,10 @@
         selectedOccurrence=row;el('reason').value='';el('additions').value='';selected.clear();pendingHandoff=null;pendingCandidate=null;pendingCuration=null;shown=30;const snap=row.snapshot;
         snap.symbols.filter(x=>x.readiness==='complete').forEach(x=>selected.add(x.symbol));el('review').hidden=false;el('audit').replaceChildren();
         line(el('audit'),phaseName(row.slot.phase)+' result for '+row.slot.targetDate+' · '+snap.readiness+(Date.now()>=Date.parse(snap.expiresAtUtc)?' · Expired — collect a fresh result to continue.':''));line(el('audit'),'Data up to '+when(snap.cutoffUtc)+' · usable until '+when(snap.expiresAtUtc));
+        if(row.error)line(el('audit'),row.error);
         snap.reasons.forEach(x=>line(el('audit'),x));const provenance=document.createElement('details'),provenanceTitle=document.createElement('summary');provenanceTitle.textContent='Source provenance and revision';provenance.append(provenanceTitle);line(provenance,'Revision '+snap.revisionId);el('audit').append(provenance);snap.sources.forEach(x=>line(provenance,x.source.kind+' '+x.source.key+' · '+x.status+' · observed '+(x.observedAtUtc?when(x.observedAtUtc):'unavailable')+' · '+(x.reason||x.contentSha256||'')));
         if(row.slot.phase!=='morning')line(el('audit'),'This is the evening result. Collect and review the morning result before continuing.');
-        if(snap.removedSymbols.length)line(el('audit'),'Dropped since the evening result: '+snap.removedSymbols.join(', '));renderMembers();if(navigate)el('review').scrollIntoView({block:'start'});
+        if(snap.removedSymbols.length)line(el('audit'),'Dropped since the evening result: '+snap.removedSymbols.join(', '));renderMembers();syncCollection();if(navigate)el('review').scrollIntoView({block:'start'});
     }
     // Render recorded membership and evidence without fetching a chart for any stock until its link is opened.
     function renderMembers() {
@@ -170,22 +202,32 @@
     for(const phase of ['nightly','morning'])el(phase).onclick=()=>action(async()=>{if(!definition||el(phase).disabled)return;pendingRun??={phase,idempotencyKey:crypto.randomUUID()};if(pendingRun.phase!==phase)pendingRun={phase,idempotencyKey:crypto.randomUUID()};await api(`preparation/${definition.workflowId}/run`,pendingRun);pendingRun=null;await load(definition.workflowId,false);});
     el('latest').onclick=()=>{const latest=detail?.history.find(x=>x.snapshot);if(latest)review(latest,true,false);};
     el('more').onclick=()=>{shown+=30;renderMembers();};el('alerts').onclick=()=>action(alerts);
+    // The existing handoff endpoint freezes reviewed membership for both Desk and research use.
+    async function acceptReview() {
+        reviewDirty=true;
+        pendingHandoff??={revisionId:selectedOccurrence.snapshot.revisionId,symbols:[...selected],reason:el('reason').value,idempotencyKey:crypto.randomUUID()};
+        return api('preparation/'+definition.workflowId+'/occurrences/'+selectedOccurrence.id+'/handoff',pendingHandoff);
+    }
+    // Read the accepted revision on Desk without starting strategy or paper work.
+    el('open-desk').onclick=()=>action(async()=>{
+        await acceptReview();
+        location.href='/Desk?preparationKey='+encodeURIComponent(pendingHandoff.idempotencyKey);
+    });
     el('handoff').onclick=()=>action(async()=>{
         reviewDirty=true;
         const strategy=catalog.strategies[Number(el('strategy').value)];if(!strategy)throw new Error('Select an available research strategy.');
-        pendingHandoff??={revisionId:selectedOccurrence.snapshot.revisionId,symbols:[...selected],reason:el('reason').value,idempotencyKey:crypto.randomUUID()};
-        const handoff=await api(`preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/handoff`,pendingHandoff);
+        const handoff=await acceptReview();
         pendingCandidate??={contractVersion:'1.0',idempotencyKey:crypto.randomUUID(),mode:'backtest',universeSnapshotId:handoff.universeSnapshotId,strategies:[strategy.identity],asOfUtc:selectedOccurrence.snapshot.cutoffUtc};
         const run=await api('candidate-runs',pendingCandidate);pendingCandidate=null;
-        pendingHandoff=null;status('Research candidate run created: '+run.candidateRunId);location.href='/Desk?runId='+encodeURIComponent(run.candidateRunId);
+        const key=pendingHandoff.idempotencyKey;
+        pendingHandoff=null;status('Research candidate run created: '+run.candidateRunId);
+        location.href='/Desk?runId='+encodeURIComponent(run.candidateRunId)+'&preparationKey='+encodeURIComponent(key);
     });
-    el('reason').oninput=()=>{reviewDirty=true;pendingHandoff=null;pendingCandidate=null;pendingCuration=null;};
+    el('reason').oninput=()=>{reviewDirty=true;pendingHandoff=null;pendingCandidate=null;pendingCuration=null;syncHandoff();};
     el('strategy').onchange=()=>{reviewDirty=true;pendingCandidate=null;};
     el('additions').oninput=()=>{reviewDirty=true;pendingCuration=null;};
     el('paper').onclick=()=>action(async()=>{
-        reviewDirty=true;
-        pendingHandoff??={revisionId:selectedOccurrence.snapshot.revisionId,symbols:[...selected],reason:el('reason').value,idempotencyKey:crypto.randomUUID()};
-        await api(`preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/handoff`,pendingHandoff);
+        await acceptReview();
         location.href='/Paper?preparationKey='+encodeURIComponent(pendingHandoff.idempotencyKey);
     });
     el('curate').onclick=()=>action(async()=>{
@@ -193,7 +235,9 @@
         pendingCuration??={parentRevisionId:selectedOccurrence.snapshot.revisionId,addSymbols:el('additions').value.split(/[\s,]+/).filter(Boolean).map(x=>x.toUpperCase()),removeSymbols:selectedOccurrence.snapshot.symbols.filter(x=>!selected.has(x.symbol)).map(x=>x.symbol),reason:el('reason').value,idempotencyKey:crypto.randomUUID()};
         await api(`preparation/${definition.workflowId}/occurrences/${selectedOccurrence.id}/curate`,pendingCuration);pendingCuration=null;await load(definition.workflowId,false);
     });
-    setInterval(()=>{syncCollection();if(selectedOccurrence&&Date.now()>=Date.parse(selectedOccurrence.snapshot.expiresAtUtc))syncHandoff();},1000);
+    // Follow shared capability changes and recheck local evidence windows without extra health requests.
+    document.addEventListener('workspace-status-changed',syncCollection);
+    setInterval(()=>{syncCollection();syncHandoff();},1000);
     async function initialize(){
         initialized=false;el('retry').hidden=true;syncControls();status('Loading workflows…');
         try{
@@ -208,8 +252,12 @@
             try{catalog=await api('strategies?mode=backtest');catalog.strategies.forEach((x,i)=>el('strategy').add(new Option(x.name+' · '+x.identity.semanticVersion+' · '+x.identity.contentSha256,i)));}catch{el('strategy').add(new Option('Strategy catalog unavailable — reload to retry',''));}
             const query=new URLSearchParams(location.search);
             if(query.has('workflow')){
-                await load(query.get('workflow'),true,false);const row=detail.history.find(x=>x.id===query.get('occurrence')&&x.snapshot?.revisionId===query.get('revision'));
-                if(row)review(row);else{clearReview();showView('daily');status('Requested revision unavailable. No other result was substituted.');}
+                const exact=query.has('occurrence')||query.has('revision');
+                await load(query.get('workflow'),true,!exact);
+                if(exact){
+                    const row=detail.history.find(x=>x.id===query.get('occurrence')&&x.snapshot?.revisionId===query.get('revision'));
+                    if(row)review(row);else{clearReview();showView('daily');status('Requested revision unavailable. No other result was substituted.');}
+                }
             }else if(definition){await load(definition.workflowId,false);if(editorDirty)showView('settings');}
             else if(draft){showView('settings');status(missing?'Saved workflow is no longer available. Your settings are kept as an unsaved draft.':'Unsaved workflow restored. Choose sources and save paused.');retain();}
             else if(available.length)await load(available[0].workflowId);

@@ -1,15 +1,28 @@
 import {expect,test} from '@playwright/test';
 import {signIn} from './sign-in.js';
-const workflow='11111111-1111-1111-1111-111111111111',occurrence='22222222-2222-2222-2222-222222222222',revision=occurrence;
+const workflow='11111111-1111-1111-1111-111111111111',occurrence='22222222-2222-2222-2222-222222222222',revision='bbbbbbbb-2222-2222-2222-222222222222';
 const json=(route,data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
 const identity={strategyId:'fixture',semanticVersion:'1.0.0',contentSha256:'a'.repeat(64)};
+const workspaceRoute=/\/api\/v1\/operations\/workspace(?:\?.*)?$/;
+
+// Keep provider and market state deterministic and vary worker capability independently of workflow settings.
+async function workspace(page, {state='enabled',canCollect=true,detail='Preparation worker active.',preparation=null}={}){
+ await page.route(workspaceRoute,r=>json(r,{tradingRuntime:'Trading paused',marketSession:'Market closed',marketFeeds:'Market feeds active',
+  openingRestriction:'Trading is paused.',exitRestriction:'Trading is paused.',observedAtUtc:new Date().toISOString(),
+  preparationWorker:{state,detail,canCollect},preparation}));
+}
+
 async function fixture(page){
  await signIn(page);
+ await workspace(page);
  const meta=await (await page.request.get('/api/v1/preparation/editor')).json();
  const definition={workflowId:workflow,revision:1,contentSha256:'b'.repeat(64),effectiveAtUtc:new Date().toISOString(),settings:{...meta.defaults,name:'Morning fixture',sources:[{kind:'finviz',key:'fixture',required:true}]}};
  const symbol={symbol:'MSFT',change:'new',readiness:'complete',reasons:[],dailyDate:'2026-09-25',historyCount:126,close:100,feed:'sip',adjustment:'all',evidenceSha256:'c'.repeat(64),news:[{headline:'Captured article',url:'https://example.com/captured',publishedAtUtc:new Date().toISOString()}],context:['Same-time volume incomplete.']};
- const snapshot={revisionId:revision,cutoffUtc:new Date().toISOString(),publishedAtUtc:new Date().toISOString(),expiresAtUtc:new Date(Date.now()+120000).toISOString(),readiness:'complete',outcome:'completed',reasons:[],sources:[],symbols:[symbol],removedSymbols:[]};
- const row={id:occurrence,workflowId:workflow,definitionRevision:1,slot:{phase:'morning',targetDate:'2026-09-28',scheduledAtUtc:new Date().toISOString()},status:'completed',snapshot};
+ const observedAtUtc=new Date().toISOString(), expiresAtUtc=new Date(Date.now()+120000).toISOString();
+ const snapshot={revisionId:revision,cutoffUtc:observedAtUtc,publishedAtUtc:observedAtUtc,expiresAtUtc,readiness:'complete',outcome:'completed',reasons:[],
+  sources:[{source:{kind:'finviz',key:'fixture'},status:'complete',observedAtUtc,contentSha256:'d'.repeat(64)}],symbols:[symbol],removedSymbols:[]};
+ const slot={phase:'morning',targetDate:'2026-09-28',scheduledAtUtc:new Date(Date.now()-60000).toISOString(),deadlineUtc:expiresAtUtc,handoffUntilUtc:expiresAtUtc};
+ const row={id:occurrence,workflowId:workflow,definitionRevision:1,slot,status:'completed',snapshot};
  await page.route('**/api/v1/strategies?*',r=>json(r,{strategies:[{identity,name:'Research fixture'}]}));
  await page.route('**/api/v1/preparation',r=>json(r,r.request().method()==='GET'?[definition]:definition));
  await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition,upcoming:[],history:[row]}));
@@ -74,22 +87,118 @@ test('refresh advances latest but retains an edited review until explicitly repl
  await page.locator('#prep-latest').click();await expect(page.locator('#prep-audit')).toContainText(newest.id);
 });
 test('missing exact notification does not substitute latest',async({page})=>{
- await fixture(page);await page.goto('/Preparation?workflow='+workflow+'&occurrence=missing&revision=missing');
+ await fixture(page);await page.goto('/Preparation?workflow='+workflow+'&occurrence='+occurrence+'&revision=missing');
  await expect(page.locator('#prep-status')).toContainText('Requested revision unavailable');await expect(page.locator('#prep-review')).not.toBeVisible();
+ await expect(page.getByRole('button',{name:'Review and open on Desk'})).toBeHidden();
+});
+
+test('Desk opens the exact saved evening evidence while the preparation worker is paused',async({page})=>{
+ const {definition,row}=await fixture(page);
+ const evening={...row,slot:{...row.slot,phase:'nightly'}};
+ await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition,upcoming:[],history:[evening],collectionWindows:[row.slot]}));
+ await workspace(page,{state:'paused',canCollect:false,detail:'Preparation worker paused. Saved evidence is available.',
+  preparation:{workflowId:workflow,workflowName:definition.settings.name,scheduleSavedOn:true,targetDate:row.slot.targetDate,
+   eveningState:'Evening collected',morningState:'Morning collection needed',occurrenceId:occurrence,revisionId:revision,expiresAtUtc:row.snapshot.expiresAtUtc,morningReviewable:false}});
+ let commands=0;
+ await page.route('**/api/v1/preparation/**/handoff',r=>{commands++;return json(r,{});});
+ await page.goto('/Desk');
+ const card=page.locator('[data-preparation-summary]');
+ await expect(card.locator('[data-preparation-target]')).toContainText('Target session '+row.slot.targetDate+' (New York) · evidence valid until');
+ await expect(card.locator('[data-preparation-target]')).toContainText('saved schedule on');
+ await expect(card.locator('[data-preparation-worker]')).toContainText('Preparation worker paused');
+ await expect(card.getByRole('listitem')).toHaveText(['Evening collected','Morning collection needed','Review','Open on Desk']);
+ await card.getByRole('link',{name:'Review saved evidence'}).click();
+ const address=new URL(page.url());
+ expect(address.pathname).toBe('/Preparation');
+ expect(Object.fromEntries(address.searchParams)).toEqual({workflow,occurrence,revision});
+ await expect(page.locator('.prep-page')).toHaveAttribute('data-preparation-owner',/.+/);
+ await expect(page.locator('#prep-audit')).toContainText('usable until');
+ await page.getByText('Source provenance and revision',{exact:true}).click();
+ await expect(page.locator('#prep-audit')).toContainText('Revision '+revision);
+ await expect(page.locator('#prep-audit')).toContainText('finviz fixture · complete · observed');
+ await expect(page.locator('#prep-handoff-reason')).toContainText('Collect and review a morning result');
+ await expect(page.getByRole('button',{name:'Review and open on Desk'})).toBeDisabled();
+ await expect(page.locator('#prep-morning')).toBeDisabled();
+ await expect(page.locator('#prep-curate')).toBeDisabled();
+ expect(commands).toBe(0);
+});
+
+test('reviewed morning membership opens on Desk without starting a candidate run or order',async({page})=>{
+ const {row}=await fixture(page);
+ let handoff, lookupKey, streamQuery;
+ const forbidden=[];
+ for(const path of ['**/api/v1/candidate-runs','**/api/v1/paper/runs','**/OrderTicket?**'])
+  await page.route(path,r=>{forbidden.push(r.request().url());return r.abort();});
+ await page.route('**/api/v1/preparation/**/handoff',r=>{
+  expect(new URL(r.request().url()).pathname).toBe('/api/v1/preparation/'+workflow+'/occurrences/'+occurrence+'/handoff');
+  handoff=r.request().postDataJSON();
+  return json(r,{reviewId:workflow,universeSnapshotId:occurrence,expiresAtUtc:row.snapshot.expiresAtUtc});
+ });
+ await page.route('**/api/v1/preparation/accepted?*',r=>{
+  lookupKey=new URL(r.request().url()).searchParams.get('key');
+  return json(r,{reviewId:workflow,universeSnapshotId:occurrence,parentRevisionId:revision,symbols:['MSFT'],expiresAtUtc:row.snapshot.expiresAtUtc});
+ });
+ await page.route('**/api/desk/sources',r=>json(r,[{key:'all',name:'All followed stocks',group:'',description:'Fixture source'}]));
+ await page.route('**/api/desk/stream?**',r=>{
+  streamQuery=new URL(r.request().url()).searchParams;
+  const now=new Date().toISOString();
+  const snapshot={selection:{source:{key:'prepared',description:'Reviewed preparation'},totalCount:1},
+   rows:[{membership:{symbol:'MSFT',name:'Microsoft',wishlists:[]},observation:{state:'unavailable'},quote:null,holdingsKnown:true,news:[]}],
+   account:{available:true,readAtUtc:now},news:[],newsCoverage:'Stored fixture sources',session:'Closed',readAtUtc:now};
+  return r.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
+ });
+ await page.locator('#prep-reason').fill('Reviewed morning evidence');
+ await page.getByRole('button',{name:'Review and open on Desk'}).click();
+ await expect(page).toHaveURL(/\/Desk\?preparationKey=/);
+ await expect(page.locator('#watch-source')).toHaveValue('prepared');
+ await expect(page.locator('#watch-prepared-source')).toContainText('Saved revision '+revision);
+ await expect(page.locator('#watch-prepared-source')).toContainText('Advisory list');
+ await expect(page.locator('#watch-rows .watch-symbol-button')).toHaveText('MSFT');
+ expect(handoff).toMatchObject({revisionId:revision,symbols:['MSFT'],reason:'Reviewed morning evidence'});
+ expect(lookupKey).toBe(handoff.idempotencyKey);
+ expect(streamQuery.get('source')).toBe('prepared');
+ expect(streamQuery.get('preparationKey')).toBe(handoff.idempotencyKey);
+ expect(forbidden).toEqual([]);
+});
+
+test('an expired exact morning revision is inspectable and cannot hand off',async({page})=>{
+ const {definition,row}=await fixture(page);
+ const expired={...row,snapshot:{...row.snapshot,expiresAtUtc:new Date(Date.now()-1000).toISOString()}};
+ await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition,upcoming:[],history:[expired]}));
+ await page.goto('/Preparation?workflow='+workflow+'&occurrence='+occurrence+'&revision='+revision);
+ await expect(page.locator('#prep-audit')).toContainText('Expired');
+ await page.locator('#prep-reason').fill('Saved result for inspection');
+ await expect(page.getByRole('button',{name:'Review and open on Desk'})).toBeDisabled();
+ await expect(page.locator('#prep-handoff-reason')).toContainText('The morning review window has closed');
+});
+
+test('Desk refuses a review key outside the signed-in owner scope without streaming another stock list', async({page})=>{
+ await signIn(page);
+ await page.goto('/Preparation');
+ await page.route('**/api/desk/sources',r=>json(r,[{key:'all',name:'All followed stocks',group:'',description:'Fixture source'}]));
+ await page.route('**/api/v1/preparation/accepted?*',r=>json(r,{message:'Review unavailable for this owner'},403));
+ let streams=0;
+ await page.route('**/api/desk/stream?**',r=>{streams++;return r.abort();});
+ await page.goto('/Desk?preparationKey=other-owner-key');
+ await expect(page.locator('#watch-connection')).toContainText('This preparation review could not be read');
+ await expect(page.locator('#watch-retry')).toBeVisible();
+ await expect(page.locator('#watch-rows tr')).toHaveCount(0);
+ expect(streams).toBe(0);
 });
 
 test('empty setup guides a paused save, prevents duplicate sources and explains closed collection',async({page})=>{
  await signIn(page);const meta=await(await page.request.get('/api/v1/preparation/editor')).json();let saved=null;
+ await workspace(page);
  await page.route('**/api/v1/wishlists',r=>json(r,[{id:workflow,name:'Core wishlist',items:[]}]));
  await page.route('**/api/v1/preparation/events',r=>json(r,[]));
  await page.route('**/api/v1/preparation',r=>{if(r.request().method()==='GET')return json(r,saved?[saved]:[]);const body=r.request().postDataJSON();expect(body.settings.enabled).toBe(false);saved={workflowId:workflow,revision:1,contentSha256:'a'.repeat(64),settings:body.settings};return json(r,saved);});
  await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition:saved,history:[],upcoming:[{phase:'nightly',targetDate:'2026-09-29',scheduledAtUtc:'2026-09-28T20:45:00Z'}],collectionWindows:[],readAtUtc:new Date().toISOString()}));
- await page.goto('/Desk');await page.locator('#watch-preparation>summary').click();await expect(page.locator('#prep-status')).toContainText('not configured');
+ await page.goto('/Preparation');await expect(page.locator('#prep-status')).toContainText('not configured');
  await expect(page.locator('#prep-open')).toBeDisabled();await expect(page.locator('#prep-refresh')).toBeDisabled();await expect(page.locator('#prep-schedule')).toBeHidden();
  await page.locator('#prep-setup-new').click();await expect(page.locator('#prep-editor')).toBeVisible();await page.locator('#prep-save').click();await expect(page.locator('#prep-status')).toContainText('at least one');
  await page.locator('#prep-add-wishlist').click();await page.locator('#prep-add-wishlist').click();await expect(page.locator('#prep-status')).toContainText('already selected');await expect(page.locator('#prep-sources .prep-card')).toHaveCount(1);await expect(page.locator('#prep-sources')).toContainText('Core wishlist');
- await page.locator('#prep-save').click();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-collection-status')).toContainText('outside');await expect(page.locator('#prep-nightly')).toBeDisabled();await expect(page.locator('#prep-upcoming')).toContainText('evening collection');await expect(page.locator('#watch-prep-summary')).toContainText('1 workflow');
- await page.reload();await page.locator('#watch-preparation>summary').click();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-editor')).toBeHidden();
+ await page.locator('#prep-save').click();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-collection-status')).toContainText('outside');await expect(page.locator('#prep-nightly')).toBeDisabled();await expect(page.locator('#prep-upcoming')).toContainText('evening collection');
+ await page.reload();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-editor')).toBeHidden();
 });
 
 test('startup failure is retryable without requiring a strategy catalog',async({page})=>{
@@ -120,6 +229,7 @@ for(const target of ['handoff','paper'])test('pending '+target+' retains its exa
  await page.route('**/api/v1/preparation/**/handoff',async r=>{started=true;await gate;return json(r,{reviewId:workflow,universeSnapshotId:occurrence});});
  await page.route('**/api/v1/candidate-runs',r=>{candidate=r.request().postDataJSON();return json(r,{candidateRunId:workflow});});
  await page.route('**/api/v1/preparation/accepted?*',r=>json(r,{universeSnapshotId:occurrence,symbols:['MSFT'],expiresAtUtc:new Date(Date.now()+120000).toISOString()}));
+ await page.locator('#prep-reason').fill('Keep this exact morning revision');
  await page.locator('#prep-'+target).click();await expect.poll(()=>started).toBe(true);
  const newer={...row,id:'33333333-3333-3333-3333-333333333333',snapshot:{...row.snapshot,revisionId:'33333333-3333-3333-3333-333333333333',cutoffUtc:new Date(Date.now()+10000).toISOString()}};
  await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition,history:[newer,row],upcoming:[]}));await page.clock.fastForward(10000);await expect(page.locator('#prep-audit')).toContainText(revision);release();
@@ -131,7 +241,7 @@ test('real API saves and reopens a paused preparation workflow',async({page})=>{
  const wishlist=await page.evaluate(async()=>{const csrf=await fetch('/api/auth/csrf').then(r=>r.json());const r=await fetch('/api/v1/wishlists',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf.requestToken},body:JSON.stringify({name:'Preparation API '+crypto.randomUUID(),isObserved:false})});if(!r.ok)throw new Error('Wishlist setup failed');return r.json();});
  await page.reload();await expect(page.locator('#prep-new')).toBeEnabled();
  // With no saved workflow the setup card is the way in; once one exists the toolbar offers New workflow.
- await page.locator(await page.locator('#prep-new').isVisible()?'#prep-new':'#prep-setup-new').click();const name='Paused preparation '+Date.now();await page.locator('#prep-name').fill(name);await page.locator('#prep-wishlist').selectOption(wishlist.id);await page.locator('#prep-add-wishlist').click();await page.locator('#prep-save').click();await expect(page.locator('#prep-status')).toContainText('Workflow paused');await expect(page.locator('#prep-list')).toContainText(name);
+ await page.locator(await page.locator('#prep-new').isVisible()?'#prep-new':'#prep-setup-new').click();const name='Paused preparation '+Date.now();await page.locator('#prep-name').fill(name);await page.locator('#prep-wishlist').selectOption(wishlist.id);await page.locator('#prep-add-wishlist').click();await page.locator('#prep-save').click();await expect(page.locator('#prep-status')).toContainText('Saved schedule is paused');await expect(page.locator('#prep-list')).toContainText(name);
  const definitions=await(await page.request.get('/api/v1/preparation')).json();const stored=definitions.find(x=>x.settings.name===name);expect(stored.settings.enabled).toBe(false);expect(stored.settings.sources[0].wishlistId).toBe(wishlist.id);
  await page.reload();await expect(page.locator('#prep-empty')).toContainText('Workflow saved');await expect(page.locator('#prep-editor')).toBeHidden();
 });
@@ -140,25 +250,31 @@ test('lost candidate response retains retry identity across a newer automatic re
  await page.clock.install();const {definition,row}=await fixture(page);const commands=[];
  await page.route('**/api/v1/preparation/**/handoff',r=>json(r,{reviewId:workflow,universeSnapshotId:occurrence}));
  await page.route('**/api/v1/candidate-runs',r=>{commands.push(r.request().postDataJSON());return commands.length===1?r.abort('failed'):json(r,{candidateRunId:workflow});});
+ await page.locator('#prep-reason').fill('Retain this morning list');
  await page.locator('#prep-handoff').click();await expect.poll(()=>commands.length).toBe(1);await expect(page.locator('.prep-page')).not.toHaveAttribute('aria-busy','true');
  const newer={...row,id:'33333333-3333-3333-3333-333333333333',snapshot:{...row.snapshot,revisionId:'33333333-3333-3333-3333-333333333333',cutoffUtc:new Date(Date.now()+10000).toISOString()}};
  await page.route('**/api/v1/preparation/'+workflow,r=>json(r,{definition,history:[newer,row],upcoming:[]}));await page.clock.fastForward(10000);await expect(page.locator('#prep-update')).toContainText('newer result');await page.locator('#prep-handoff').click();await expect.poll(()=>commands.length).toBe(2);expect(commands[1]).toEqual(commands[0]);
 });
 
-test('embedded preparation uses a versioned script and recovers a failed script load',async({page})=>{
- await signIn(page);let failed=false;await page.route('**/js/preparation.js*',r=>{if(!failed){failed=true;return r.abort('failed');}return r.continue();});
- await page.goto('/Desk');await expect(page.locator('#watch-preparation')).toHaveAttribute('data-script-url',/preparation\.js\?v=/);
- await page.locator('#watch-preparation>summary').click();await expect(page.locator('#prep-retry')).toBeVisible();await expect(page.locator('#prep-status')).toContainText('could not load');await page.locator('#prep-retry').click();await expect(page.locator('#prep-new')).toBeEnabled();await expect(page.locator('#prep-status')).not.toContainText('could not load');
+test('only the dedicated Preparation page loads its versioned editor script',async({page})=>{
+ await signIn(page);await page.goto('/Desk');
+ await expect(page.locator('script[src*="/js/preparation.js"]')).toHaveCount(0);
+ await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link',{name:'Preparation',exact:true}).click();
+ await expect(page).toHaveURL(/\/Preparation$/);
+ await expect(page.locator('script[src*="/js/preparation.js"]')).toHaveAttribute('src',/preparation\.js\?v=/);
+ await expect(page.locator('#prep-new')).toBeEnabled();
 });
 
 test('the page explains itself: status tiles, one time format, and why continuing is unavailable',async({page})=>{
  await fixture(page);
  await expect(page.getByRole('heading',{name:'Morning preparation'})).toBeVisible();
- await expect(page.locator('#prep-tiles')).toBeVisible();await expect(page.locator('#prep-tile-latest')).toHaveText('Ready · 1 stock');
+ await expect(page.locator('#prep-tiles')).toBeVisible();await expect(page.locator('#prep-tile-latest')).toHaveText('Collected · 1 stock');
  await expect(page.locator('#prep-audit')).toContainText('New York');await expect(page.locator('#prep-audit')).not.toContainText(' local');
- await expect(page.locator('#prep-handoff')).toBeEnabled();await expect(page.locator('#prep-handoff-reason')).toBeHidden();
+ await expect(page.locator('#prep-handoff')).toBeDisabled();await expect(page.locator('#prep-handoff-reason')).toHaveText('Record why these stocks belong in this review.');
+ await page.locator('#prep-reason').fill('Reviewed completed source evidence');
+ await expect(page.locator('#prep-handoff')).toBeEnabled();
  await page.getByRole('checkbox',{name:'Include MSFT'}).uncheck();
- await expect(page.locator('#prep-handoff')).toBeDisabled();await expect(page.locator('#prep-handoff-reason')).toHaveText('Tick at least one ready stock to continue.');
+ await expect(page.locator('#prep-handoff')).toBeDisabled();await expect(page.locator('#prep-handoff-reason')).toHaveText('Select at least one included stock to continue.');
  await page.getByRole('button',{name:'Workflow settings',exact:true}).click();
  await expect(page.locator('#prep-basic-fields input')).toHaveCount(4);await expect(page.locator('#prep-fields input').first()).toBeHidden();
  await page.getByText('Advanced settings',{exact:true}).click();await expect(page.locator('#prep-fields input').first()).toBeVisible();

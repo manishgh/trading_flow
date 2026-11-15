@@ -214,11 +214,24 @@ test.describe("order ticket breadth", () => {
     await expect(page.locator("[name=stop]")).toBeVisible();
 
     await page.goto("/OrderTicket?ticker=AAPL&side=sell");
+    await expect(page.locator("[data-order-entry-restriction]")).toHaveCount(0);
     await expect(page.locator("[name=orderType] option")).toHaveCount(4);
     await page.locator("[name=orderType]").selectOption("stop");
     await expect(page.locator("[name=trigger]")).toBeVisible();
     // An exit carries no bracket; protection belonged to the entry.
     await expect(page.locator("[name=stop]")).toBeHidden();
+  });
+
+  test("an uppercase side query keeps the entry warning on the default Buy ticket", async ({ page }) => {
+    await page.goto("/OrderTicket?ticker=AAPL&side=SELL");
+    await expect(page.locator("[data-order-entry-restriction]")).toContainText("New entries are paused");
+    await expect(page.locator("#OrderWorkflowForm")).toBeVisible();
+    await expect(page.locator("[name=side]")).toHaveValue("Buy");
+    await expect(page.locator("[name=orderType] option")).toHaveCount(1);
+
+    await page.goto("/OrderTicket?ticker=AAPL&side=sell&side=buy");
+    await expect(page.locator("[data-order-entry-restriction]")).toHaveCount(0);
+    await expect(page.locator("[name=side]")).toHaveValue("Sell");
   });
 
   test("time in force is selectable on both sides", async ({ page }) => {
@@ -279,9 +292,16 @@ test.describe("strategy lab", () => {
     await expect(page.locator(".lab-rail")).toContainText("research-only");
   });
 
-  test("the integrated decision is stated and defaults to retaining research", async ({ page }) => {
+  test("an unselected or missing job does not acquire an integrated decision", async ({ page }) => {
     await page.goto("/Backtests");
-    await expect(page.locator(".lab-head-tail")).toContainText("RETAIN_RESEARCH");
+    await expect(page.locator(".lab-head-tail")).toContainText("Research only");
+    await expect(page.locator(".lab-head-tail")).not.toContainText(/RETAIN_RESEARCH|FAILED_GATE/);
+    const missing = "190e84bf-1509-43c4-94b1-53d97d2e4cca";
+    await page.goto("/Backtests?jobId=" + missing);
+    await expect(page.getByRole("heading", { name: "Result unavailable", exact: true })).toBeVisible();
+    await expect(page.getByText("No execution record was found for job " + missing, { exact: false })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Research snapshots", exact: true })).toBeVisible();
+    await expect(page.locator(".lab-head-tail")).not.toContainText(/RETAIN_RESEARCH|FAILED_GATE/);
   });
 
   test("a promoted strategy is distinguishable from a research-only one", async ({ page }) => {

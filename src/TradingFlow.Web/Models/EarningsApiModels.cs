@@ -16,7 +16,12 @@ public sealed record EarningsCalendarResponse(
     EarningsFilterStateResponse Filters,
     IReadOnlyList<EarningsNewsEvidenceResponse> News,
     IReadOnlyList<EarningsCalendarItemResponse> Items,
-    int TotalMatching = 0, bool Truncated = false);
+    int TotalMatching = 0, bool Truncated = false, EarningsFeedStatus? Status = null,
+    TradingFlow.Web.Services.NewsRefreshStatus? NewsRefresh = null);
+
+public sealed record EarningsFeedStatus(string State, string Detail, string NextAction,
+    bool WindowCovered, TradingFlow.Earnings.EarningsCalendarEvidence? Calendar,
+    TradingFlow.Earnings.EarningsAnalysisAttempt? LatestAttempt);
 
 public sealed record EarningsFilterStateResponse(
     string Session,

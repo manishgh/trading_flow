@@ -49,8 +49,8 @@ test.describe("approved UI baseline", () => {
 
     const primaryLabels = await page.locator(".primary-nav a").evaluateAll(nodes =>
       nodes.map(node => node.textContent.trim()));
-    // The same six destinations stay visible across the signed-in workspace.
-    expect(primaryLabels).toEqual(["Desk", "Trading", "Strategies", "Earnings", "News", "Stock groups"]);
+    // Preparation and the other six destinations stay visible across the signed-in workspace.
+    expect(primaryLabels).toEqual(["Desk", "Preparation", "Trading", "Strategies", "Earnings", "News", "Stock groups"]);
 
     await page.goto("/RunningTrades");
     await expect(page.locator('.primary-nav [aria-current="page"]')).toHaveText("Trading");

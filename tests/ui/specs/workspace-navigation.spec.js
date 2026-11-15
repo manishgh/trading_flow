@@ -5,7 +5,7 @@ for(const width of [320,412,1280,1440]) test('workspace navigation stays availab
  await page.setViewportSize({width,height:915});await signIn(page);await page.goto('/');await expect(page).toHaveURL(/Desk/);
  await expect(page.locator('#watch-source')).toContainText('All followed stocks');
  const navigation=()=>page.getByRole('navigation',{name:'Primary navigation'});
- const destinations=[['Desk','/Desk'],['Trading','/Orders'],['Strategies','/Paper'],['Earnings','/Earnings'],['News','/News'],['Stock groups','/Wishlists']];
+ const destinations=[['Desk','/Desk'],['Preparation','/Preparation'],['Trading','/Orders'],['Strategies','/Paper'],['Earnings','/Earnings'],['News','/News'],['Stock groups','/Wishlists']];
  await expect(navigation().getByRole('link')).toHaveText(destinations.map(([name])=>name));
  for(const [name,path] of destinations){
   const link=navigation().getByRole('link',{name,exact:true});await expect(link).toBeInViewport();await expect(link).toHaveAttribute('href',path);await link.click();

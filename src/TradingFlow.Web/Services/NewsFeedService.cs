@@ -40,11 +40,52 @@ public sealed class NewsFeedService : BackgroundService
     private readonly ArticleTextFetcher articleTextFetcher;
     private readonly IEarningsRepository earningsRepository;
     private readonly OfficialMarketNewsProvider officialNews;
+    private readonly FinvizClient finviz;
     private readonly TimeProvider clock;
     private readonly ILogger<NewsFeedService> logger;
     private readonly IWishlistRepository? wishlists;
     private int alpacaSweepOffset;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
+    private volatile bool running;
+    private sealed record RefreshObservation(string State, DateTimeOffset? CompletedAtUtc,
+        IReadOnlyList<NewsSourceReading> Sources, IReadOnlyDictionary<string, NewsSourceReading> AlpacaSymbols, string Detail);
+    private volatile RefreshObservation latest = new("pending", null, [], new Dictionary<string, NewsSourceReading>(),
+        "The first provider refresh has not completed on this host.");
+
+    // Return one immutable refresh observation. The worker state alone says nothing about its coverage.
+    public NewsRefreshStatus GetRefreshStatus() => View(latest);
+
+    // Copy the current worker state alongside the finished pass, whose provider facts are immutable.
+    private NewsRefreshStatus View(RefreshObservation observation) =>
+        new(running, observation.State, observation.CompletedAtUtc, observation.Sources, observation.Detail);
+
+    // Claim an empty result only for the selected Alpaca ticker and actual covered portion of the window.
+    public NewsWindowStatus DescribeWindow(string? provider, string? ticker, DateTimeOffset sinceUtc, int matching,
+        bool maySeeTickerCoverage)
+    {
+        var observation = latest;
+        var refresh = View(observation);
+        if (maySeeTickerCoverage && matching == 0 && refresh.State is ("success" or "partial") &&
+            String.Equals(provider, "alpaca", StringComparison.OrdinalIgnoreCase) && ticker is not null &&
+            observation.AlpacaSymbols.TryGetValue(ticker, out var evidence) &&
+            evidence is { State: "success", WindowStartUtc: { } start, WindowEndUtc: { } end } &&
+            start <= sinceUtc && end >= sinceUtc && clock.GetUtcNow() - end <= TimeSpan.FromMinutes(2))
+            return new("No matching news through the last refresh",
+                $"Alpaca checked {ticker} from {sinceUtc:yyyy-MM-dd HH:mm:ss} to {end:yyyy-MM-dd HH:mm:ss} UTC. Later articles may still arrive.", refresh);
+        var heading = refresh.State switch
+        {
+            "pending" when refresh.Running => "First refresh pending",
+            "pending" => "News refresh has not run on this host",
+            "failed" => "News refresh failed",
+            "partial" => "News refresh has partial results",
+            _ when matching == 0 => "No matching stored headlines",
+            _ => "News results updated"
+        };
+        var detail = matching > 0
+            ? "Rows are from the retained news store and can predate the latest feed attempt."
+            : "No stored headlines match these filters. Coverage of this source, ticker and time window has not been established.";
+        return new(heading, detail, refresh);
+    }
 
     public NewsFeedService(
         SimpleYamlReader yamlReader,
@@ -56,6 +97,7 @@ public sealed class NewsFeedService : BackgroundService
         ArticleTextFetcher articleTextFetcher,
         IEarningsRepository earningsRepository,
         OfficialMarketNewsProvider officialNews,
+        FinvizClient finviz,
         TimeProvider clock,
         ILogger<NewsFeedService> logger,
         IWishlistRepository? wishlists = null)
@@ -69,6 +111,7 @@ public sealed class NewsFeedService : BackgroundService
         this.articleTextFetcher = articleTextFetcher;
         this.earningsRepository = earningsRepository;
         this.officialNews = officialNews;
+        this.finviz = finviz;
         this.clock = clock;
         this.logger = logger;
         this.wishlists = wishlists;
@@ -142,29 +185,28 @@ public sealed class NewsFeedService : BackgroundService
         return new MobileNewsFeedResponse(true, provider.ProviderName, null, items);
     }
 
+    // Collect and store each successful source independently; publish attempt evidence only after the store write.
     public async Task RefreshOnceAsync(CancellationToken cancellationToken)
     {
         await refreshGate.WaitAsync(cancellationToken);
+        var readings = new List<NewsSourceReading>();
+        IReadOnlyDictionary<string, NewsSourceReading> alpacaSymbols = new Dictionary<string, NewsSourceReading>();
         try
         {
             var nowUtc = clock.GetUtcNow();
             var evidenceWindow = EarningsNewsWindowPolicy.Resolve(nowUtc);
             var displayStartUtc = nowUtc.Subtract(DisplayWindow);
             var earningsTickers = await GetCurrentEarningsTickersAsync(nowUtc, cancellationToken);
-            var events = new List<CatalystEvent>();
-            events.AddRange(await LoadProviderAsync("finviz", () => LoadFinvizNewsAsync(cancellationToken), cancellationToken));
+            var collections = new List<NewsCollection>();
+            collections.AddRange(await LoadFinvizNewsAsync(cancellationToken));
             // The Alpaca websocket delivers live items only and cannot replay what it missed, so a
             // disconnect silently loses every article published while it was down. This rolling REST
             // sweep is the gap-fill, and the dedupe below drops whatever the socket already delivered.
-            events.AddRange(await LoadProviderAsync("alpaca", () => LoadAlpacaNewsAsync(
-                earningsTickers,
-                nowUtc.Subtract(AlpacaGapFillWindow),
-                nowUtc,
-                cancellationToken), cancellationToken));
-            events.AddRange(await LoadProviderAsync("official", () => officialNews.GetEventsAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken), cancellationToken));
-            events = events
-                .Where(item => item.Timestamp >= displayStartUtc)
-                .ToList();
+            var alpaca = await LoadAlpacaNewsAsync(earningsTickers, nowUtc.Subtract(AlpacaGapFillWindow), nowUtc, cancellationToken);
+            collections.Add(alpaca.Collection);
+            alpacaSymbols = alpaca.Symbols;
+            collections.AddRange(await officialNews.ReadSourcesAsync(earningsTickers, evidenceWindow.StartUtc, cancellationToken));
+            readings.AddRange(collections.Select(x => x.Reading));
 
             // Dedupe before capping. Capping first would let already-stored items crowd out the
             // gap-filled ones, which are the whole point of the Alpaca sweep.
@@ -172,13 +214,20 @@ public sealed class NewsFeedService : BackgroundService
             var existingKeys = existing
                 .Select(StorageDedupeKey)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var unseenEvents = events
-                .Where(item => !existingKeys.Contains(StorageDedupeKey(item)))
+            var unseen = collections.SelectMany(item => item.Events)
+                .Where(item => item.Timestamp >= displayStartUtc && !existingKeys.Contains(StorageDedupeKey(item)))
                 .OrderByDescending(item => item.Timestamp)
-                .Take(500)
+                .Take(501)
                 .ToArray();
+            var unseenEvents = unseen.Take(500).ToArray();
             // Publish provider headlines immediately; article enrichment must not hold up the live feed.
             await repository.UpsertAsync(unseenEvents, cancellationToken);
+            var capped = unseen.Length > unseenEvents.Length;
+            var state = ClassifyRefresh(readings, capped);
+            latest = new(state, clock.GetUtcNow(), readings.ToArray(),
+                capped ? new Dictionary<string, NewsSourceReading>() : alpacaSymbols,
+                capped ? "The 500-new-headline storage limit was reached; this pass does not prove empty coverage."
+                    : "Source readings reflect the latest completed refresh; retained headlines are displayed separately.");
             var enrichedEvents = await EnrichNewsAsync(unseenEvents, cancellationToken);
             await repository.UpsertAsync(enrichedEvents, cancellationToken);
             // The rolling window limits this view; original stored news must not expire automatically.
@@ -188,10 +237,25 @@ public sealed class NewsFeedService : BackgroundService
                 enrichedEvents.Count,
                 String.Join(",", enrichedEvents.Select(x => x.Provider ?? "unknown").Distinct(StringComparer.OrdinalIgnoreCase)));
         }
+        catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            latest = new("failed", clock.GetUtcNow(), readings.ToArray(), new Dictionary<string, NewsSourceReading>(),
+                "The refresh did not finish. See the source attempts below; stored rows can still be read.");
+            throw;
+        }
         finally
         {
             refreshGate.Release();
         }
+    }
+
+    // A failure or a cap cannot become an all-sources success, even when other sources returned rows.
+    internal static string ClassifyRefresh(IReadOnlyList<NewsSourceReading> readings, bool storageCapped)
+    {
+        var attempted = readings.Where(reading => reading.State is not ("not queried" or "cached")).ToArray();
+        if (attempted.Length == 0) return "partial";
+        if (attempted.All(reading => reading.State == "failed")) return "failed";
+        return storageCapped || attempted.Any(reading => reading.State != "success") ? "partial" : "success";
     }
 
 /// <summary>
@@ -247,26 +311,22 @@ public sealed class NewsFeedService : BackgroundService
             .ToArray();
     }
 
+    // Track worker lifetime separately from the freshness and coverage of an individual pass.
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await DelayStartupAsync(stoppingToken);
-        while (!stoppingToken.IsCancellationRequested)
+        running = true;
+        try
         {
-            try
+            await DelayStartupAsync(stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await RefreshOnceAsync(stoppingToken);
+                try { await RefreshOnceAsync(stoppingToken); }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (Exception error) { logger.LogWarning(error, "Rolling news feed refresh failed."); }
+                await Task.Delay(PollInterval, stoppingToken);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(exception, "Rolling news feed refresh failed.");
-            }
-
-            await Task.Delay(PollInterval, stoppingToken);
         }
+        finally { running = false; }
     }
 
     private static async Task DelayStartupAsync(CancellationToken stoppingToken)
@@ -274,52 +334,36 @@ public sealed class NewsFeedService : BackgroundService
         await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
     }
 
-    private async Task<IReadOnlyList<CatalystEvent>> LoadFinvizNewsAsync(CancellationToken cancellationToken)
+    // The two Finviz exports are independent attempts and do not establish rolling date-window coverage.
+    private async Task<NewsCollection[]> LoadFinvizNewsAsync(CancellationToken cancellationToken)
     {
-        var token = Environment.GetEnvironmentVariable("FINVIZ_API_KEY");
-        if (String.IsNullOrWhiteSpace(token))
+        if (!finviz.IsConfigured)
         {
-            token = Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User);
+            return [NotQueried("Finviz market", "FINVIZ_API_KEY is not configured."),
+                NotQueried("Finviz stocks", "FINVIZ_API_KEY is not configured.")];
         }
 
-        if (String.IsNullOrWhiteSpace(token))
-        {
-            logger.LogDebug("Skipping Finviz rolling news refresh because FINVIZ_API_KEY is not configured.");
-            return Array.Empty<CatalystEvent>();
-        }
-
-        using var client = new FinvizClient(
-            new HttpClient(),
-            FinvizOptions.CreateDefault() with { AuthToken = token },
-            runtimeFactory.RawArchiveWriter);
-
-        var marketNews = await client.GetNewsExportAsync(1, cancellationToken);
-        var stockNews = await client.GetNewsExportAsync(3, cancellationToken);
-        return marketNews.Concat(stockNews)
-            .GroupBy(NewsDedupeKey, StringComparer.OrdinalIgnoreCase)
-            .Select(x => x.First())
-            .ToArray();
+        const string detail = "Rolling export returned; date-window and pagination coverage are unverified.";
+        return [await ReadSourceAsync("Finviz market", () => finviz.GetNewsExportAsync(1, cancellationToken), detail, cancellationToken),
+            await ReadSourceAsync("Finviz stocks", () => finviz.GetNewsExportAsync(3, cancellationToken), detail, cancellationToken)];
     }
 
-    private async Task<IReadOnlyList<CatalystEvent>> LoadAlpacaNewsAsync(
+    // Preserve each queried ticker's coverage; a rotating batch cannot establish market-wide coverage.
+    private async Task<(NewsCollection Collection, IReadOnlyDictionary<string, NewsSourceReading> Symbols)> LoadAlpacaNewsAsync(
         IReadOnlyCollection<string> earningsTickers,
         DateTimeOffset windowStart,
         DateTimeOffset windowEnd,
         CancellationToken cancellationToken)
     {
+        var none = new Dictionary<string, NewsSourceReading>(StringComparer.OrdinalIgnoreCase);
         if (!alpacaCredentials.IsConfigured)
-        {
-            logger.LogDebug("Skipping Alpaca rolling news refresh because Alpaca credentials are not configured.");
-            return Array.Empty<CatalystEvent>();
-        }
+            return (NotQueried("Alpaca REST", "Alpaca credentials are not configured."), none);
 
         var lists = wishlists is null ? [] : await wishlists.ListAsync(cancellationToken);
         var (tickers, nextOffset) = SelectNewsTargets(lists.SelectMany(x => x.Items).Where(x => x.Active).Select(x => x.Ticker), earningsTickers, alpacaSweepOffset);
         alpacaSweepOffset = nextOffset;
         if (tickers.Count == 0)
-        {
-            return Array.Empty<CatalystEvent>();
-        }
+            return (NotQueried("Alpaca REST", "No followed or earnings tickers were selected for this sweep."), none);
 
         var provider = new AlpacaNewsProvider(
             AlpacaHttpClient,
@@ -334,17 +378,37 @@ public sealed class NewsFeedService : BackgroundService
             maxArticlesPerTicker: 25);
 
         using var throttle = new SemaphoreSlim(8);
-        var tasks = tickers.Select(async ticker => {
-            await throttle.WaitAsync(cancellationToken);
-            try { return await LoadProviderAsync("alpaca:" + ticker,
-                () => provider.GetCatalystsAsync(ticker, windowStart, windowEnd, cancellationToken), cancellationToken); }
-            finally { throttle.Release(); }
-        });
-        return (await Task.WhenAll(tasks))
-            .SelectMany(x => x)
-            .GroupBy(NewsDedupeKey, StringComparer.OrdinalIgnoreCase)
-            .Select(x => x.First())
-            .ToArray();
+        var rows = await Task.WhenAll(tickers.Select(ticker =>
+            ReadAlpacaSymbolAsync(provider, ticker, windowStart, windowEnd, throttle, cancellationToken)));
+        var evidence = rows.ToDictionary(row => row.Reading.Source, row => row.Reading, StringComparer.OrdinalIgnoreCase);
+        var events = rows.SelectMany(row => row.Events).GroupBy(NewsDedupeKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First()).ToArray();
+        var complete = rows.Count(row => row.Reading.State == "success");
+        var failures = rows.Count(row => row.Reading.State == "failed");
+        var state = failures == rows.Length ? "failed" : complete == rows.Length ? "success" : "partial";
+        var detail = $"{rows.Length} selected ticker(s) checked; {complete} complete, {rows.Length - complete - failures} partial, {failures} failed. Coverage is ticker-specific.";
+        return (new(events, new("Alpaca REST", state, clock.GetUtcNow(), events.Length, detail, windowStart, windowEnd)), evidence);
+    }
+
+    // Report the actual pages read; only a finished query with no cap or error establishes coverage.
+    private async Task<NewsCollection> ReadAlpacaSymbolAsync(AlpacaNewsProvider provider, string ticker,
+        DateTimeOffset start, DateTimeOffset end, SemaphoreSlim throttle, CancellationToken token)
+    {
+        await throttle.WaitAsync(token);
+        try
+        {
+            var result = await provider.GetCatalystEvidenceAsync(ticker, start, end, token);
+            var state = result.Complete ? "success" : result.PagesRead > 0 ? "partial" : "failed";
+            return new(result.Events, new(ticker, state, clock.GetUtcNow(), result.Events.Count,
+                $"{ticker}: {result.Detail} Pages received: {result.PagesRead}.", start, end));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            logger.LogWarning(error, "Alpaca news collection failed for {Ticker}.", ticker);
+            return new([], new(ticker, "failed", clock.GetUtcNow(), 0, $"{ticker}: {NewsRequestFailure(error)}", start, end));
+        }
+        finally { throttle.Release(); }
     }
 
     internal static (IReadOnlyList<string> Symbols, int NextOffset) SelectNewsTargets(
@@ -358,16 +422,34 @@ public sealed class NewsFeedService : BackgroundService
         return (batch, (start + batch.Length) % all.Length);
     }
 
-    internal async Task<IReadOnlyList<CatalystEvent>> LoadProviderAsync(string provider,
-        Func<Task<IReadOnlyList<CatalystEvent>>> load, CancellationToken cancellationToken)
+    // Keep provider failures distinct from a successful attempt that returned zero rows.
+    internal async Task<NewsCollection> ReadSourceAsync(string provider,
+        Func<Task<IReadOnlyList<CatalystEvent>>> load, string detail, CancellationToken cancellationToken)
     {
-        try { return await load(); }
+        try
+        {
+            var events = await load();
+            return new(events, new(provider, "success", clock.GetUtcNow(), events.Count, detail));
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception error) {
+        catch (Exception error)
+        {
             logger.LogWarning(error, "News collection failed for {Provider}; other provider feeds continue.", provider);
-            return [];
+            return new([], new(provider, "failed", clock.GetUtcNow(), 0, NewsRequestFailure(error)));
         }
     }
+
+    // Do not expose provider exception messages, which can contain credential-bearing URLs.
+    internal static string NewsRequestFailure(Exception error) => error switch
+    {
+        HttpRequestException { StatusCode: { } status } => $"Provider returned HTTP {(int)status}; no coverage established.",
+        OperationCanceledException => "The provider request timed out; no coverage established.",
+        _ => "The request or response could not be read; no coverage established."
+    };
+
+    // No request is a different observation from a request that failed.
+    internal static NewsCollection NotQueried(string source, string detail) =>
+        new([], new(source, "not queried", null, 0, detail));
 
     private async Task<IReadOnlyList<CatalystEvent>> EnrichNewsAsync(
         IReadOnlyList<CatalystEvent> events,

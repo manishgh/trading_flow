@@ -1,9 +1,11 @@
 @page
 @using TradingFlow.Web.Pages.Shared
 @model TradingFlow.Web.Pages.RunningTradesModel
+@inject TradingFlow.Web.Services.RuntimeHostedServiceOptions Runtime
 @{
     ViewData["Title"] = "Positions";
     ViewData["MainClass"] = "shell-flush positions-page";
+    var exitReviewAllowed = Model.EnvironmentState.IsEnabled && !Runtime.TradingMutationsPaused;
 
     // Broker symbols identify rows independently of whether local ownership details are available.
     string TradeKey(TradingFlow.Contracts.Operator.AccountPosition trade) => $"account:{trade.Ticker}";
@@ -65,6 +67,10 @@
 @if (!String.IsNullOrWhiteSpace(Model.ErrorMessage))
 {
     <div class="status-banner error" role="alert" tabindex="-1" data-trades-banner data-account-read-error="@(!Model.AccountAvailable ? "true" : "false")">@Model.ErrorMessage</div>
+}
+@if (Runtime.TradingMutationsPaused && Model.EnvironmentState.IsEnabled)
+{
+    <p class="status-banner">Trading is paused. Holdings and protection are shown below. This host rejects exits and protection changes.</p>
 }
 
 <section class="metric-strip metric-strip-lg positions-summary" data-running-trades data-source="@Model.Source"
@@ -200,7 +206,7 @@
                             <td class="num" data-trade-actions>
                                 @* Fail closed: a locked environment renders no exit control at all,
                                    rather than a disabled one that the client could re-enable. *@
-                                @if (Model.EnvironmentState.IsEnabled && trade.CanReviewExit)
+                                @if (exitReviewAllowed && trade.CanReviewExit)
                                 {
                                     <button type="button"
                                             class="btn btn-danger btn-sm"
@@ -215,7 +221,7 @@
                                         Review exit
                                     </button>
                                 }
-                                else if (Model.EnvironmentState.IsEnabled)
+                                else if (exitReviewAllowed)
                                 {
                                     <a class="btn btn-secondary btn-sm" asp-page="/Orders">Review in Orders</a>
                                 }
@@ -236,7 +242,7 @@
     </p>
 </div>
 
-@if (Model.EnvironmentState.IsEnabled)
+@if (exitReviewAllowed)
 {
     <dialog id="ExitReviewDialog" class="dialog" aria-labelledby="ExitReviewHeading">
         <form method="post" asp-page-handler="Close">

@@ -64,3 +64,9 @@ public sealed record PreparationAlert(long EventSequence, DateTimeOffset Occurre
 public sealed record PreparationAlertTarget(Guid WorkflowId, Guid OccurrenceId, Guid RevisionId, string Readiness);
 public sealed record PreparationHandoff(Guid ReviewId, Guid WishlistId, Guid UniverseSnapshotId, DateTimeOffset ExpiresAtUtc,
     Guid ParentRevisionId, string[] Symbols, string Reason);
+
+/// <summary>Daily Desk card. The link refers to retained evidence and does not authorize an order.</summary>
+public sealed record PreparationWorkspaceSummary(Guid? WorkflowId, string? WorkflowName,
+    bool ScheduleSavedOn, string? TargetDate, string EveningState, string MorningState,
+    Guid? OccurrenceId, Guid? RevisionId, DateTimeOffset? ExpiresAtUtc, bool MorningReviewable,
+    string? ReviewKey);

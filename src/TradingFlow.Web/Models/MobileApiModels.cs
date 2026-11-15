@@ -88,7 +88,8 @@ public sealed record MobileNewsFeedResponse(
     string Provider,
     string? Message,
     IReadOnlyList<MobileNewsItem> Items,
-    int? TotalMatching = null, int Page = 1, int PageSize = 50);
+    int? TotalMatching = null, int Page = 1, int PageSize = 50,
+    TradingFlow.Web.Services.NewsWindowStatus? Status = null);
 
 public sealed record MobileNewsItem(
     string Ticker,

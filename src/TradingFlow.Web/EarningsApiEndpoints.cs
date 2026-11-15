@@ -67,7 +67,7 @@ public static class EarningsApiEndpoints
                 onlyShortHorizon: true,
                 filter,
                 dateScope,
-                sectors.Find), viewQuery, user, views, cancellationToken);
+                sectors.Find) with { NewsRefresh = newsFeed.GetRefreshStatus() }, viewQuery, user, views, cancellationToken);
         }).AllowAnonymous();
 
         group.MapGet("/calendar", async (
@@ -110,7 +110,7 @@ public static class EarningsApiEndpoints
                 onlyShortHorizon: false,
                 filter,
                 "custom",
-                sectors.Find), viewQuery, user, views, cancellationToken);
+                sectors.Find) with { NewsRefresh = newsFeed.GetRefreshStatus() }, viewQuery, user, views, cancellationToken);
         }).AllowAnonymous();
 
         group.MapGet("/status", (EarningsMonitor monitor) => Results.Ok(monitor.GetStatus()))
@@ -169,6 +169,7 @@ public static class EarningsApiEndpoints
         }).RequireAuthorization();
     }
 
+    // Map retained rows together with separate evidence of calendar coverage and analysis results.
     internal static EarningsCalendarResponse MapSnapshot(
         EarningsCalendarSnapshot snapshot,
         EarningsMonitorStatus monitorStatus,
@@ -211,7 +212,26 @@ public static class EarningsApiEndpoints
             newsWindow.Label,
             BuildFilterState(mapped, filter),
             FilterNews(news, items),
-            items);
+            items,
+            Status: DescribeFeed(monitorStatus, requestAtUtc,
+                onlyShortHorizon ? (dateScope == "nextBusinessDay" ? nextBusinessDate : exchangeToday) : snapshot.FromExchangeDate,
+                onlyShortHorizon ? (dateScope == "today" ? exchangeToday : nextBusinessDate) : snapshot.ToExchangeDate));
+    }
+
+    // Empty-state permission follows the latest covered Finviz window and fails closed on a failed analysis pass.
+    internal static EarningsFeedStatus DescribeFeed(EarningsMonitorStatus monitor, DateTimeOffset now, DateOnly from, DateOnly to)
+    {
+        var latest = monitor.LatestAttempt;
+        var calendar = monitor.CalendarCoverage;
+        var covered = calendar is not null && calendar.FromExchangeDate <= from && calendar.ToExchangeDate >= to && now < calendar.RefreshDueAtUtc;
+        var next = monitor.IsRunning ? "The monitor retries automatically." : "Check the monitor in Operations or refresh if signed in.";
+        if (latest is null)
+            return new("pending", "The first analysis on this host has not finished. Any rows shown are retained events.", next, false, calendar, null);
+        if (latest.State == "failed")
+            return new("failed", latest.Detail, next, false, calendar, latest);
+        if (!covered)
+            return new("partial", "A recent Finviz refresh does not cover every date in this view. Any rows shown are stored events.", "Choose Today or Next business day to check the monitored dates.", false, calendar, latest);
+        return new(latest.State, latest.Detail, next, true, calendar, latest);
     }
 
     private static EarningsCalendarItemResponse MapItem(

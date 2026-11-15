@@ -51,6 +51,8 @@
 .lab-page .lab-run > .btn-block { width: 100%; margin: 0; min-height: 40px; }
 .lab-page .lab-run > label { margin: 0; }
 .lab-page .lab-run > .note, .lab-page .lab-run > [data-backtest-plan-preview] { grid-column: 1 / -1; margin: 0; }
+.lab-page .lab-freeze-heading { grid-column: 1 / -1; margin: 0; }
+.lab-page .lab-run-list a { flex-wrap: wrap; }
 .lab-page .lab-main { padding: 0; display: grid; gap: 16px; }
 .lab-page .lab-panel { border: 1px solid var(--workspace-border); border-radius: 10px; padding: 18px 20px; background: var(--color-surface, var(--panel, #fff)); }
 .lab-page .lab-panel .table-scroll { margin: 0; }

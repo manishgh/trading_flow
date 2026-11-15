@@ -28,7 +28,8 @@ public sealed class NewsHubQuery
 
 /// <summary>Shared public market filters; private scopes require a signed-in operator.</summary>
 public sealed class NewsQueryService(INewsFeedRepository news, IWishlistRepository groups,
-    IDeskAccountReader account, TimeProvider clock, NewsStockSourceService? stockSources = null)
+    IDeskAccountReader account, TimeProvider clock, NewsStockSourceService? stockSources = null,
+    NewsFeedService? feed = null)
 {
     // Scoped to one request: the Razor membership list uses the same observation as its news filter.
     public NewsStockSelection? StockSelection { get; private set; }
@@ -43,6 +44,7 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
             throw new InvalidOperationException("Choose one stock source; the wishlist and scope filters conflict.");
         return String.IsNullOrEmpty(key) ? legacy : key;
     }
+    // Keep provider refresh evidence separate from the filtered retained rows.
     public async Task<MobileNewsFeedResponse> QueryAsync(NewsHubQuery query, ClaimsPrincipal user, CancellationToken token)
     {
         StockSelection = null;
@@ -126,6 +128,7 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
         var context = filter.IncludeMarketNews && symbols is not null && String.IsNullOrWhiteSpace(query.Ticker) && query.StockLinkedOnly != true
             ? " Broad MARKET context is included alongside stock-source stories; topic labels do not identify affected stocks." : "";
         return new(true, "stored", $"{stockDescription} Rolling {hours}h news feed.{context} Matching records are counted before duplicate articles on each page are combined.".Trim(),
-            items, page.TotalMatching, number, size);
+            items, page.TotalMatching, number, size, feed?.DescribeWindow(query.Provider, query.Ticker, filter.SinceUtc,
+                page.TotalMatching, privateScope && symbols?.Count > 0));
     }
 }

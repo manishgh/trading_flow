@@ -26,23 +26,69 @@
                 <option value="extended">Extended</option>
             </select>
         </label>
-        <label>Zone context
-            <select class="input" data-chart-context>
+        <label>Structure source
+            <select class="input" data-chart-structure>
                 <option value="auto">Auto</option>
-                <option value="intraday" selected>Intraday</option>
-                <option value="swing" disabled>Swing</option>
-                <option value="week" disabled>Week</option>
-                <option value="month" disabled>Month</option>
-                <option value="year" disabled>Year</option>
+                <option value="intraday">Intraday · 15m</option>
+                <option value="daily">Daily · 1d</option>
+            </select>
+        </label>
+        <label data-chart-lookback-control hidden>Daily lookback
+            <select class="input" data-chart-lookback>
+                <option value="swing">64 sessions</option>
+                <option value="week">Week · 5 sessions</option>
+                <option value="month">Month · 21 sessions</option>
+                <option value="year">Year · 252 sessions</option>
             </select>
         </label>
     </div>
+    <div class="stock-chart-study-toolbar">
+        <label>Indicator preset
+            <select class="input" data-chart-preset>
+                <option value="custom">Custom</option>
+                <option value="intraday">Intraday</option>
+                <option value="swing">Swing · 1d</option>
+            </select>
+        </label>
+        <button type="button" class="btn btn-secondary" data-chart-reset>Reset chart settings</button>
+        <details class="stock-chart-library" data-chart-library>
+            <summary>Indicator library</summary>
+            <div class="stock-chart-study-picker">
+                <label>Indicator
+                    <select class="input" data-chart-study-choice></select>
+                </label>
+                <label data-chart-study-source-control hidden>Source interval
+                    <select class="input" data-chart-study-source>
+                        <option value="">Candle interval</option>
+                        <option value="1d">Daily · 1d</option>
+                    </select>
+                </label>
+                <label data-chart-study-display-control hidden>Display
+                    <select class="input" data-chart-study-display>
+                        <option value="readout">Readout</option>
+                        <option value="">Separate pane</option>
+                    </select>
+                </label>
+                <label data-chart-study-replace-control hidden>Replace indicator
+                    <select class="input" data-chart-study-replace></select>
+                </label>
+                <button type="button" class="btn btn-secondary" data-chart-study-add>Add indicator</button>
+            </div>
+            <p class="stock-chart-study-description" data-chart-study-description></p>
+            <p class="stock-chart-study-feedback" data-chart-study-feedback role="status"></p>
+        </details>
+    </div>
+    <p class="visually-hidden" data-chart-settings-announcement role="status"></p>
+    <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
     <p class="stock-chart-context" data-chart-context-label></p>
     <p class="stock-chart-source" data-chart-source></p>
     <ul class="stock-chart-zone-key" data-chart-zone-key aria-label="Current support and resistance zones" hidden></ul>
+    <label class="stock-chart-pane-control" data-chart-pane-control hidden>Visible indicator pane
+        <select class="input" data-chart-pane-choice></select>
+    </label>
     <div class="stock-chart-stage">
         <div class="stock-chart-plot" data-chart-plot tabindex="0" role="region"
-             aria-label="Candlestick and volume plot. Use left and right arrows to inspect candles, or Home and End for the first and last loaded candle."></div>
+             aria-label="Candlestick, volume and indicator plot. Use left and right arrows to inspect candles, or Home and End for the first and last loaded candle."></div>
         <div class="stock-chart-empty" data-chart-empty>Loading completed candles…</div>
     </div>
     <div class="stock-chart-navigation">
@@ -62,6 +108,7 @@
         </div>
         <p class="visually-hidden" data-chart-inspection role="status"></p>
         <dl class="stock-chart-values" data-chart-values></dl>
+        <dl class="stock-chart-values stock-chart-study-values" data-chart-study-values hidden></dl>
         <p data-chart-candle-evidence></p>
         <p data-chart-distances hidden></p>
     </div>

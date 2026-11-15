@@ -21,6 +21,11 @@
     --stock-chart-level-a: var(--color-accent-600);
     --stock-chart-level-b: var(--warn);
     --stock-chart-level-c: var(--muted);
+    --stock-chart-study-0: var(--color-accent-600);
+    --stock-chart-study-1: var(--warn-ink);
+    --stock-chart-study-2: var(--color-gain);
+    --stock-chart-study-3: var(--color-loss);
+    --stock-chart-study-4: var(--muted);
 }
 
 .watch-detail .stock-chart {
@@ -59,14 +64,21 @@
 .stock-chart[data-state="reconnecting"] .stock-chart-status,
 .stock-chart[data-state="unavailable"] .stock-chart-status { color: var(--warn-ink); }
 
-.stock-chart-controls {
+.stock-chart-controls,
+.stock-chart-study-toolbar,
+.stock-chart-study-picker {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+}
+
+.stock-chart-controls {
     margin-top: 12px;
 }
 
-.stock-chart-controls label {
+.stock-chart-controls label,
+.stock-chart-study-toolbar label,
+.stock-chart-pane-control {
     display: grid;
     flex: 1 1 112px;
     min-width: 0;
@@ -78,9 +90,116 @@
     font-weight: 600;
 }
 
-.stock-chart-controls select {
+.stock-chart-controls select,
+.stock-chart-study-toolbar select,
+.stock-chart-pane-control select {
     width: 100%;
     min-height: 38px;
+}
+
+.stock-chart-study-toolbar {
+    align-items: end;
+    margin-top: 10px;
+}
+
+.stock-chart-library { min-width: 0; }
+.stock-chart-library[open] { flex: 1 0 100%; }
+
+.stock-chart-library > summary {
+    box-sizing: border-box;
+    min-height: 38px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--panel-subtle);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.stock-chart-study-toolbar > button { min-height: 38px; }
+
+.stock-chart-study-picker {
+    align-items: end;
+    margin-top: 6px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--panel-subtle);
+}
+
+.stock-chart-study-picker > label:first-child { flex-basis: 180px; max-width: 245px; }
+.stock-chart-study-picker .btn { min-height: 38px; }
+
+.stock-chart-study-description,
+.stock-chart-study-feedback {
+    padding-top: 4px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.stock-chart-study-feedback:empty { display: none; }
+
+.stock-chart-studies {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: start;
+    gap: 6px;
+    padding: 0;
+    margin: 10px 0;
+    list-style: none;
+}
+
+.stock-chart-studies li {
+    --study-color: var(--stock-chart-study-4);
+    position: relative;
+    min-width: 0;
+    max-width: min(100%, 29rem);
+    padding: 4px 38px 4px 8px;
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--study-color);
+    border-radius: var(--radius-sm);
+    background: var(--panel-subtle);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.stock-chart-studies [data-study-slot="0"],
+.stock-chart-studies [data-study-slot="5"] { --study-color: var(--stock-chart-study-0); }
+.stock-chart-studies [data-study-slot="1"],
+.stock-chart-studies [data-study-slot="6"] { --study-color: var(--stock-chart-study-1); }
+.stock-chart-studies [data-study-slot="2"],
+.stock-chart-studies [data-study-slot="7"] { --study-color: var(--stock-chart-study-2); }
+.stock-chart-studies [data-study-slot="3"],
+.stock-chart-studies [data-study-slot="8"] { --study-color: var(--stock-chart-study-3); }
+.stock-chart-studies summary { font-weight: 600; cursor: pointer; }
+.stock-chart-studies small,
+.stock-chart-study-state { display: block; color: var(--muted); }
+.stock-chart-study-state { color: var(--warn-ink); }
+.stock-chart-studies details { min-height: 20px; }
+
+.stock-chart-study-remove {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    width: 32px;
+    height: 30px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.stock-chart-study-remove:hover { background: var(--panel); }
+
+.stock-chart-pane-control {
+    max-width: 225px;
+    margin-block: 7px;
 }
 
 p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
@@ -137,10 +256,10 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
 
 .stock-chart-plot {
     width: 100%;
-    height: clamp(300px, 46vh, 540px);
+    height: calc(clamp(300px, 46vh, 540px) + var(--stock-chart-panes, 0) * 108px);
 }
 
-.watch-detail .stock-chart-plot { height: clamp(270px, 40vh, 420px); }
+.watch-detail .stock-chart-plot { height: calc(clamp(270px, 40vh, 420px) + var(--stock-chart-panes, 0) * 100px); }
 .stock-chart-plot:focus-visible { outline-offset: -3px; }
 
 .stock-chart-empty {
@@ -204,6 +323,19 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
 .stock-chart-values dd {
     overflow-wrap: anywhere;
     font-weight: 600;
+}
+
+.stock-chart-study-values {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+    gap: 7px 12px;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+}
+
+.stock-chart-study-values small {
+    display: block;
+    color: var(--muted);
+    overflow-wrap: anywhere;
 }
 
 .stock-chart-details > details {
@@ -275,13 +407,21 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
 }
 
 @media (max-width: 600px) {
-    .stock-chart-controls label { flex-basis: 100px; max-width: none; }
+    .stock-chart-controls label,
+    .stock-chart-study-toolbar label { flex-basis: 100px; max-width: none; }
     .stock-chart-controls select,
+    .stock-chart-study-toolbar select,
+    .stock-chart-study-toolbar .btn,
+    .stock-chart-library > summary,
+    .stock-chart-pane-control select,
     .stock-chart-navigation .btn,
     .stock-chart-candle-nav .btn,
     .stock-chart-head .btn { min-height: 44px; }
     .stock-chart-toggles label { min-height: 36px; }
-    .stock-chart-plot { height: clamp(260px, 45vh, 400px); }
+    .stock-chart-plot { height: calc(clamp(260px, 45vh, 400px) + var(--stock-chart-panes, 0) * 94px); }
+    .stock-chart-studies li { min-height: 44px; padding: 12px 45px 8px 8px; }
+    .stock-chart-study-remove { width: 44px; height: 44px; }
     .stock-chart-values { grid-template-columns: repeat(auto-fit, minmax(min(100%, 96px), 1fr)); }
     .stock-chart-values dd { white-space: nowrap; overflow-x: auto; }
+    .stock-chart-study-values dd { white-space: normal; overflow-x: visible; }
 }

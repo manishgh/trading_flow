@@ -1,4 +1,5 @@
 @inject TradingFlow.Web.Services.TradingEnvironmentService Environments
+@inject TradingFlow.Web.Services.RuntimeHostedServiceOptions Runtime
 @using TradingFlow.Web.Pages.Shared
 @{
     var currentPage = ViewContext.RouteData.Values["page"]?.ToString() ?? String.Empty;
@@ -14,9 +15,9 @@
     var destination = IsCurrent("/News") ? "News" : IsCurrent("/Earnings") ? "Earnings"
         : IsCurrent("/RunningTrades", "/Orders", "/OrderTicket") ? "Trading"
         : IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/CandidateAudit") ? "Strategies"
-        : IsCurrent("/Wishlists") ? "Stock groups"
+        : IsCurrent("/Preparation") ? "Preparation" : IsCurrent("/Wishlists") ? "Stock groups"
         : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
-    var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Trading", "/Orders", "trending-up"),
+    var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Preparation", "/Preparation", "calendar"), ("Trading", "/Orders", "trending-up"),
         ("Strategies", "/Paper", "layers"), ("Earnings", "/Earnings", "calendar"),
         ("News", "/News", "newspaper"), ("Stock groups", "/Wishlists", "briefcase") };
     var systemPages = User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
@@ -168,6 +169,21 @@
         </div>
     </header>
     <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
+        @if (signedIn)
+        {
+            <div class="workspace-status" data-workspace-status data-trading-paused="@Runtime.TradingMutationsPaused.ToString().ToLowerInvariant()" aria-label="Workspace status">
+                <strong>@environment.Environment</strong>
+                <strong data-workspace-runtime>@(Runtime.TradingMutationsPaused ? "Trading paused" : "Trading state unknown")</strong>
+                <span data-workspace-market>Market session unknown</span>
+                <span data-workspace-feeds>Market feed state unknown</span>
+                <details>
+                    <summary>Source freshness</summary>
+                    <p data-workspace-checked role="status">Reading server status…</p>
+                    <p data-workspace-orders></p>
+                    <ul data-workspace-sources></ul>
+                </details>
+            </div>
+        }
         @if (signedIn && IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit"))
         {
             @* Strategy runs and their backtests share one destination and two local views. *@
@@ -192,6 +208,7 @@
     @if (signedIn)
     {
         <script src="~/js/account-strip.js" asp-append-version="true" defer></script>
+        <script src="~/js/workspace-status.js" asp-append-version="true" defer></script>
     }
     @await RenderSectionAsync("Scripts", required: false)
 </body>
