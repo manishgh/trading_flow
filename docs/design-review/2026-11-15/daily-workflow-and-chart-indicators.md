@@ -1,6 +1,6 @@
 # TradingFlow: daily workflow and optional chart indicators
 
-15 November 2026. Approved by the user after the separate plan/execution and code/design reviews. Implementation is in progress in an isolated local checkout; these additions are not installed in the running app yet.
+15 November 2026. Approved by the user after the separate plan/execution and code/design reviews. Implemented, independently reviewed and installed locally as commit 57ee499, with trading paused and feeds enabled. Final verification: 3,995 backend cases and 226 browser cases passed; four explicit profiling opt-ins were unrun. The tracking plan and real-data acceptance record contain the evidence and remaining scope.
 
 ## What the review found
 
