@@ -1,6 +1,6 @@
 # TradingFlow chart information density
 
-15 November 2026 · Below-chart layout approved; implementation in progress
+15 November 2026 · Below-chart layout implemented, reviewed and published
 
 The user approved the presented below-chart arrangement on 15 November with “Let's finish all” explicitly naming chart decluttering approval. The optional above-chart zone-card refinement remains separate. Independent plan/execution reviewer A and code/design reviewer B remain separate from implementation.
 
@@ -55,8 +55,8 @@ A focused shared front-end change and chart browser checks cover the work. Expan
 2. Reuse its paging, same-time amendment, reconnect and empty cases. Confirm that selected evidence follows the selected candle after paging and revisions and clears on symbol/interval reset or an empty joined view; retain actual selected historical evidence when compatible older candles remain plotted after an empty current update. Assert distinct visible states for closed or history-only charts, delayed/repairing data, last available candles, partial candle coverage, partial indicator history and unavailable point values. Confirm older reconstructed values retain their observed and available times and keep historical gaps. If the zone refinement is included, keep the existing right-edge band and toggle assertions and check the remaining price labels at phone width.
 3. Using an authorized build and read-only browser session, inspect one real intraday and one real daily chart at desktop and phone widths. Capture the full compact readout and one expanded **Data evidence** state from each interval. Compare the selected timestamps, price values and study states with the same chart response. Reconnect and empty states can be proven with the isolated fixture. A closed-market screenshot establishes layout and labels for the data shown.
 
-This review used the saved published MU, intraday, daily and phone screenshots, earlier real-data readout captures, and the shared chart source and user guide at `ef1169f`, whose chart implementation is from `57ee499`. That was the proposal evidence. The user has since approved the below-chart layout; implementation and the specified browser checks are in progress.
+This review used the saved published MU, intraday, daily and phone screenshots, earlier real-data readout captures, and the shared chart source and user guide at `ef1169f`, whose chart implementation is from `57ee499`. That was the proposal evidence. The user has since approved the below-chart layout; implementation and the specified browser checks are complete, including the real resize correction recorded in the tracking plan.
 
 ## Independent reviews
 
-Separate plan/execution reviewer A and code/design reviewer B accepted this proposal for presentation on 15 November 2026. Their clarifications above preserve literal daily session dates, series-level reconstruction semantics, visible selected-candle clocks and evidence tied to the actual joined plotted selection. The optional above-plot zone refinement remains a separate follow-on. The below-chart implementation was subsequently approved on 15 November and is being checked separately by the same two review roles.
+Separate plan/execution reviewer A and code/design reviewer B accepted this proposal for presentation on 15 November 2026. Their clarifications above preserve literal daily session dates, series-level reconstruction semantics, visible selected-candle clocks and evidence tied to the actual joined plotted selection. The optional above-plot zone refinement remains a separate follow-on. The below-chart implementation was subsequently approved on 15 November and has been accepted separately by both review roles after focused tests and real published checks.

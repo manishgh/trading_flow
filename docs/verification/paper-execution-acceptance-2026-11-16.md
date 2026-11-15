@@ -1,6 +1,6 @@
 # Bounded paper execution acceptance — 16 November 2026
 
-Status: independently accepted by separate plan/execution reviewer A and code/design reviewer B on 15 November; awaiting user approval. No broker write or temporary runtime/policy change has occurred. This refreshes the historical September smoke recipe; its old broker snapshot is not current evidence.
+Status: independently accepted by separate plan/execution reviewer A and code/design reviewer B on 15 November; user approved the exact bounded paper test on 15 November. No broker write or temporary runtime/policy change has occurred. This refreshes the historical September smoke recipe; its old broker snapshot is not current evidence.
 
 ## What the test proves
 
@@ -39,4 +39,4 @@ A plan/execution reviewer checks authorization, timing, quantities, exact covera
 
 Current provider behavior was checked against [Alpaca order documentation](https://docs.alpaca.markets/us/docs/orders-at-alpaca) on 15 November 2026: a buy limit caps its purchase price but may not fill; sell stop-market execution can slip; streamed updates are the recommended order-state feed. Application-specific stop handoff behavior comes from the reviewed source, not an assumption that a bracket cancellation preserves protection.
 
-The approved remaining-Fable design says: “market-open acceptance needs an exact proposed symbol/account, quantity, maximum risk, entry/protection/exit sequence and authorization before any broker write.” This document makes that final authorization concrete. Trading stays paused until the user approves these temporary changes and bounded paper sequence.
+The approved remaining-Fable design says: “market-open acceptance needs an exact proposed symbol/account, quantity, maximum risk, entry/protection/exit sequence and authorization before any broker write.” This document makes that final authorization concrete. The user answered “Approve the bounded paper test” on 15 November to the exact linked sequence, including temporary host/policy changes. Authorization is recorded; trading remains paused tonight. Execution must still wait for the specified Monday window and successful fresh preflight. No order is queued or scheduled automatically; no separate reapproval is needed for this unchanged authorized sequence.
