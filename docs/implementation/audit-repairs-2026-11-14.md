@@ -7,11 +7,11 @@ Source: [Fable audit](../research/tradingflow-audit-2026-11-14.md).
 
 ## Current status
 
-**Authoritative checkpoint, 15 November 2026, 22:31 UTC.** Local compiled Release `bdb3dfd` is installed in `C:\project\tradingflow-site` and running on port 10088 with the explicitly authorized paper runtime enabled, normal strategy-gated submission, market feeds and scheduled Finviz capture enabled. Ngrok is stopped because its previous approval covered paused trading. The actual database has 32 migrations. The final release passed 4,126 backend tests (zero failures; five explicit opt-ins skipped) and 238 browser tests, with separate A/B acceptance. Signed-in Desk, Buy/Sell ticket opening, remembered view, Chart details, real retained weekly/intraday candles, News and Earnings were inspected. No broker order, new strategy run, economic experiment or GitHub sync occurred.
+**Authoritative checkpoint, 16 November 2026, 00:18 Berlin (15 November, 23:18 UTC).** Compiled Release `d77e22b` is installed in `C:\project\tradingflow-site\bin` and running at http://127.0.0.1:10088 with the explicitly authorized paper runtime enabled, normal strategy-gated submission, market feeds and scheduled Finviz capture enabled. Ngrok is stopped because its previous approval covered paused trading. The actual database has 32 migrations. The final release passed 4,164 backend tests (zero failures; five explicit opt-ins skipped) and 240 browser tests; separate A/B reviewers independently accepted both receipts. Signed-in Desk, remembered view, optional forming control, Chart details, real candles, News and Earnings were checked on the installed build. No broker order, new strategy run, economic experiment or GitHub sync occurred. [Final release evidence](../verification/release-2026-11-15-final.md).
 
-**Startup preservation repair in verification:** the additive migration preserved all existing rows. Enabling the host exposed an older startup retention prune that removed 14 terminal job rows. All 14 were restored from the pre-start snapshot; all 15 original job records and every column now match. The automatic pruning implementation/API has been removed in the release checkout and a real SQLite restart regression is in verification. The corrected compiled Release must be published and its restart verified before this repair is complete. The currently running host has already executed the once-per-instance prune; it will not be restarted until the correction is installed.
+**Startup preservation repair installed and verified:** the additive migration preserved all existing rows. Enabling the earlier host exposed an old startup retention prune that removed 14 terminal job rows. Exact insert-only recovery restored them. The obsolete pruning path is now removed from the running Release; the actual restart preserved all 15 original jobs across all 20 columns. The paper account remains flat, with no orders or intents; synchronization and completed recovery-cycle checks passed. Prior binaries and recovery snapshots remain retained. The old defective binary must not be restarted with paper runtime enabled.
 
-**Remaining implementation/evidence:** forming SIP previews and protected private paper markers are implemented in an isolated branch, with 155 affected backend and 14 browser passes; separate A plan/execution and B code/design reviews are active. Their actual live-stream/fill reconciliation remains unverified, and they are not deployed. The first scheduled Finviz outcomes are due Monday 16 November at 15:00 Berlin; the exact approved one-share AAPL paper test may begin after 15:35 Berlin with its preflight. Neither observation has occurred. The paper test proves execution plumbing, not strategy performance or permission to activate automated stock trading.
+**Remaining external evidence:** forming SIP previews and scoped private paper markers are now installed. The preview is optional and off by default; private grants remain empty. Their actual live-stream/fill reconciliation is still unverified. Normal and holiday-shortened weekly candles were reconciled independently against every retained daily constituent and the exchange calendar. Real open-week/basis-break acceptance remains pending. The first scheduled Finviz outcomes are due Monday 16 November at 15:00 Berlin; the exact approved one-share AAPL paper test may begin after 15:35 Berlin with its preflight. Neither future observation has occurred. The paper test proves execution plumbing, not strategy performance or permission to activate automated stock trading.
 
 The user selected beating SPY after costs with no larger drawdown and excluded dividends from the current swing scope. Matched price-only study definitions and prospective screen/research outcomes remain to verify. Plan 192's real-data replay was verified at its prior checkpoint. Rotation stays disabled. The broker does not provide an atomic cancellation guarantee for linked protection; tested containment remains in force. The approved [audit closure inventory](../design-review/2026-11-15/fable-audit-closure.md), [paper source/timing/loss-replay design](../design-review/2026-11-15/paper-automation-completion.md) and [remaining chart layers](../design-review/2026-11-15/chart-remaining-layers.md) define the scope.
 
@@ -697,3 +697,31 @@ The isolated forming SIP and private paper chart implementation passed 155 affec
 The receive-loop regression proves unchanged upstream commands, completed bars, trading observations and halt handling while optional preview reads are enabled; a newly detected repair suppresses preview prices even when a previously captured canonical copy looked healthy. Exact private protective evidence now bounds replacement history to the verified owner/root and opening provenance. Without that proof, acknowledgement details remain available but no active stop is asserted.
 
 The startup-retention repair 9c92ae5 was integrated before the final chart checks. No grants, strategy authorizations, economic studies or broker orders were added. Live SIP matching, real private execution reconciliation, and normal/shortened-week constituent reconciliation remain external acceptance items. The combined source now proceeds to the full backend/browser release checks and a new compiled Release installation, followed by exact 15-job/20-column preservation and live host verification.
+
+At 22:51 UTC the normal and holiday-shortened weekly views were independently
+reconciled to every retained MU daily constituent and the archived exchange
+calendar. The installed UI matches all OHLCV fields for 9–13 November and
+8–11 September. The [final local release record](../verification/release-2026-11-15-final.md)
+retains exact receipt identities, hashes and values, and distinguishes this result
+from still-pending live forming/private-fill acceptance. A also accepted the final
+161-case component execution, separately from B's code/design acceptance. Full
+integrated testing and corrected release installation remain in progress.
+
+### Final local release accepted — 16 November, shortly after midnight Berlin
+
+Release `d77e22b` passed 4,164 backend and 240 browser tests, compiled successfully,
+and replaced the separate local site's binary. Both independent reviewers then
+checked the installed DLL/process/listener and independently compared the live
+operator database with the original snapshot: all 15 restored jobs and all 20
+fields survived the corrected startup, with 32 migrations and empty order journals.
+The paper runtime remains enabled with normal submission checks; no strategy run
+or order was started. The signed-in updated Desk, optional forming control, Orders,
+News and Earnings were verified. Both reviewers accepted final local release.
+
+The [release record](../verification/release-2026-11-15-final.md) contains the exact
+binary identity, receipts, real normal/shortened-week reconciliation, transient
+recovery observations, startup incident/restoration and bounded cleanup. The app
+stays running at http://127.0.0.1:10088. The standing compile/copy/verify instruction
+is saved in AGENTS.md. The first scheduled Finviz slot, bounded AAPL test and real
+live forming/private-fill observations remain explicitly pending. Nothing was
+synced to GitHub.
