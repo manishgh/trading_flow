@@ -49,9 +49,14 @@
                 @foreach (var order in Model.Orders)
                 {
                     var admission = order.Admission;
-                    <tr>
+                    <tr id="paper-order-@order.Intent.ClientOrderId">
                         <td>
                             <strong>@order.Intent.Symbol</strong> · @order.Intent.Side · @order.State
+                            @if (ViewData["PrivatePaperChart"] is true)
+                            {
+                                <button type="button" class="btn btn-secondary btn-sm"
+                                        data-paper-chart-symbol="@order.Intent.Symbol" data-paper-chart-order="@order.Intent.ClientOrderId">Paper chart</button>
+                            }
                             <span class="cell-sub">@order.Intent.Kind · @Number(order.Intent.RequestedQuantity) requested</span>
                             <span class="cell-sub" title="@order.Intent.IntentId">@order.Intent.ClientOrderId</span>
                             <span class="cell-sub" title="@order.Intent.AccountId">@order.Identity?.StrategyId @order.Identity?.SemanticVersion</span>

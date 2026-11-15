@@ -130,6 +130,75 @@ public sealed class ChartTransportTests
         reader.Verify(x => x.ReadAsync(key, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // The optional frame keeps the signed history boundary, completed payload and source-read cadence.
+    [Fact]
+    public async Task FormingFrameFollowsBaselineAndDuplicateTickOnlyEmitsHeartbeat()
+    {
+        var clock = new Clock();
+        var user = User("reader");
+        var access = new ChartAccessPolicy(Mock.Of<IDbContextFactory<TradingFlowDbContext>>(), clock);
+        access.RecordDisplayed(user, ["AAPL"]);
+        var key = new ChartSeriesKey("AAPL", "5m", "regular", "intraday");
+        var options = new ChartWatchOptions(true);
+        var snapshot = Snapshot(key, clock);
+        var before = clock.Now.AddDays(-2);
+        var preview = new ChartFormingCandle("waiting_for_trade", StartUtc: clock.Now, EndUtc: clock.Now.AddMinutes(5));
+        var read = new ChartSeriesPage(snapshot, before) { ReadForming = () => preview };
+        var reader = new Mock<IChartSeriesReader>(MockBehavior.Strict);
+        reader.Setup(x => x.ReadWatchedAsync(key, options, It.IsAny<CancellationToken>())).ReturnsAsync(read);
+        reader.Setup(x => x.ReadAsync(key, null, It.IsAny<CancellationToken>())).ReturnsAsync(new ChartSeriesPage(snapshot, before));
+        var cursors = new ChartHistoryCursor(new EphemeralDataProtectionProvider(), clock);
+        var hub = new StockChartHub(reader.Object, access, new ChartTransportLimits(clock), cursors, clock,
+            NullLogger<StockChartHub>.Instance) { Context = Context(user).Object };
+
+        ChartSeriesSnapshot after;
+        await using (var optedIn = hub.WatchWithOptions(key, options, default).GetAsyncEnumerator())
+        {
+            after = await Baseline(optedIn);
+            Assert.True(await optedIn.MoveNextAsync());
+            var side = optedIn.Current;
+            Assert.Equal("preview", side.Kind);
+            Assert.Equal(after.Epoch, side.Epoch);
+            Assert.Equal(after.Sequence, side.Sequence);
+            Assert.Equal(1L, side.PreviewSequence);
+            Assert.InRange(JsonSerializer.SerializeToUtf8Bytes(side, StockChartHub.Json).Length, 1, StockChartHub.MaximumPreviewBytes);
+            Assert.Equal(preview, JsonSerializer.Deserialize<ChartFormingCandle>(side.Payload, StockChartHub.Json));
+
+            Assert.True(await optedIn.MoveNextAsync());
+            Assert.Equal("heartbeat", optedIn.Current.Kind);
+            Assert.True(await optedIn.MoveNextAsync());
+            Assert.Equal("heartbeat", optedIn.Current.Kind);
+            preview = new ChartFormingCandle("not_streaming");
+            Assert.True(await optedIn.MoveNextAsync());
+            Assert.Equal("preview", optedIn.Current.Kind);
+            Assert.Equal(2L, optedIn.Current.PreviewSequence);
+            Assert.Equal(after.Sequence, optedIn.Current.Sequence);
+        }
+
+        await using var completed = hub.Watch(key, default).GetAsyncEnumerator();
+        var baseline = await Baseline(completed);
+        Assert.Equal(before, cursors.Read(after.HistoryCursor!, "reader", key));
+        Assert.Equal(before, cursors.Read(baseline.HistoryCursor!, "reader", key));
+        Assert.Equal(JsonSerializer.Serialize(baseline with { Epoch = null, HistoryCursor = null }, StockChartHub.Json),
+            JsonSerializer.Serialize(after with { Epoch = null, HistoryCursor = null }, StockChartHub.Json));
+        reader.Verify(x => x.ReadWatchedAsync(key, options, It.IsAny<CancellationToken>()), Times.Exactly(3));
+        reader.Verify(x => x.ReadAsync(key, null, It.IsAny<CancellationToken>()), Times.Once);
+
+        // Read only a complete ordered baseline to ensure a preview could not arrive between chunks.
+        static async Task<ChartSeriesSnapshot> Baseline(IAsyncEnumerator<ChartFrame> stream)
+        {
+            var parts = new List<ChartFrame>();
+            do
+            {
+                Assert.True(await stream.MoveNextAsync());
+                Assert.Equal("snapshot", stream.Current.Kind);
+                parts.Add(stream.Current);
+            } while (parts.Count < parts[0].Parts);
+            return JsonSerializer.Deserialize<ChartSeriesSnapshot>(String.Concat(parts.Select(frame => frame.Payload)),
+                StockChartHub.Json)!;
+        }
+    }
+
     // A replacement selection cancels the previous source stream before a different context can arrive.
     [Fact]
     public async Task SelectionReplacementCancelsOldViewAndDoesNotRemoveNewOwner()

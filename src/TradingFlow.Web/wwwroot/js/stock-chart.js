@@ -15,6 +15,12 @@
         streaming: 'Streaming completed candles', delayed: 'Delayed candles', repairing: 'Repairing data',
         history_only: 'History only', closed: 'Market closed', unavailable: 'Candles unavailable'
     };
+    const formingLabels = {
+        forming: 'Forming · SIP', not_streaming: 'Not streaming', coverage_unverified: 'SIP minute coverage is unverified',
+        suppressed: 'SIP preview withheld while trade evidence is unresolved or exceeds its limit',
+        waiting_for_trade: 'Waiting for eligible SIP trades', closed: 'Outside the selected exchange session',
+        unsupported: 'Forming candles are available on 1m, 5m and 15m charts'
+    };
     const horizonLabels = {
         swing: '64-session lookback', week: 'week lookback', month: 'month lookback', year: 'year lookback'
     };
@@ -128,7 +134,7 @@
     }
 
     // Mount one read-only chart instance with scoped controls, data and disposal.
-    function mount(root) {
+    function mount(root, { privateContext } = {}) {
         // Find the component's elements inside this instance so other hosts remain independent.
         const get = name => root.querySelector('[data-chart-' + name + ']');
         const transport = window.TradingFlowStockChartTransport;
@@ -152,6 +158,12 @@
         let shownPane = null;
         let pointerMoved = false;
         let preservedSession;
+        let forming;
+        let drawnForming;
+        let privateReady = false;
+        let privateLayer = privateContext?.symbol === root.dataset.symbol
+            ? window.TradingFlowPrivateChart?.mount(root, privateContext, events => plot?.setPrivateEvents(events), timestamp)
+            : null;
 
         // Add handlers whose lifetime is no longer than this chart host.
         function on(node, event, handler) {
@@ -201,6 +213,52 @@
             if (showSessions) source.append(' · Shading: ',
                 element('span', 'Premarket', 'stock-chart-early'), ' / ',
                 element('span', 'Postmarket', 'stock-chart-late'));
+        }
+
+        // Present preview evidence independently and never inspect it as a completed candle.
+        function renderForming(preview, fallback = 'Waiting for SIP candle preview…') {
+            const enabled = layers.forming;
+            const supported = ['1m', '5m', '15m'].includes(get('interval').value);
+            const start = Date.parse(preview?.startUtc);
+            const end = Date.parse(preview?.endUtc);
+            const latest = currentBars.at(-1);
+            if (preview?.status === 'forming' && latest && start < latest.endMs) preview = null;
+            forming = enabled && supported ? preview : null;
+            const candidate = forming?.status === 'forming' ? forming : null;
+            if (drawnForming !== candidate) {
+                drawnForming = candidate;
+                plot?.setForming(candidate);
+            }
+            const status = get('forming-status');
+            status.hidden = !enabled;
+            const label = supported ? formingLabels[forming?.status] || fallback : formingLabels.unsupported;
+            if (enabled && status.textContent !== label) status.textContent = label;
+            const completedNote = candidate ? 'Readout shows completed candles' : 'Completed candles only';
+            if (get('completed-note').textContent !== completedNote) get('completed-note').textContent = completedNote;
+            get('forming-section').hidden = !enabled;
+            fields(get('forming-evidence'), !enabled ? [] : [
+                ['Status', label],
+                ...(forming ? [['Feed', 'SIP'],
+                    ...(Number.isFinite(start) && Number.isFinite(end) ? [
+                        ['Bucket opens', timestamp(forming.startUtc)], ['Bucket ends', timestamp(forming.endUtc)],
+                        ['Exchange segment', forming.segment]
+                    ] : []),
+                    ['Last source event', timestamp(forming.lastEventAtUtc, true)],
+                    ['Last source observation', timestamp(forming.lastObservedAtUtc, true)]] : []),
+                ...(candidate ? [['Open', prices.format(candidate.open)], ['High', prices.format(candidate.high)],
+                    ['Low', prices.format(candidate.low)], ['Close', prices.format(candidate.close)],
+                    ['Eligible volume', candidate.eligibleVolume == null ? 'Unavailable' : numbers.format(candidate.eligibleVolume)]] : [])
+            ]);
+            if (snapshot && !currentBars.length) get('empty').hidden = Boolean(candidate);
+        }
+
+        // A private window follows displayed completed candles and the last authorized baseline clock.
+        function updatePrivateWindow(bounds) {
+            if (!privateLayer || !privateReady || key?.symbol !== privateContext.symbol) return;
+            if (key.interval === '1w') { privateLayer.setWindow(null, 'weekly'); return; }
+            const asOfMs = Date.parse(snapshot?.asOfUtc);
+            const toMs = Math.min(bounds?.toMs, asOfMs);
+            privateLayer.setWindow(bounds?.fromMs < toMs ? { fromMs: bounds.fromMs, toMs, asOfMs } : null);
         }
 
         // Present compact prices and keep the matching selected study values in the chart details.
@@ -465,6 +523,7 @@
             plot.setData({ bars: currentBars, zones, levels: currentLevels, events, interval: key.interval,
                 basisBreaks: recent.flatMap(page => page.evidence.basisBreaks || []),
                 reconstructed, studies: selectedStudies, shownPane }, retainPosition);
+            updatePrivateWindow(plot.visibleBounds());
             const hasBars = currentBars.length > 0;
             get('empty').hidden = hasBars;
             get('empty').textContent = key.interval === '1w'
@@ -479,6 +538,7 @@
             renderLevels(currentLevels);
             renderEvents(events);
             renderEvidence();
+            renderForming(forming);
             refreshSource();
             refreshPager();
         }
@@ -539,6 +599,7 @@
             get('levels').hidden = weekly;
             for (const input of layerFields) {
                 if (['sessions', 'support', 'resistance'].includes(input.dataset.chartLayer)) input.disabled = weekly;
+                if (input.dataset.chartLayer === 'forming') input.disabled = daily || weekly;
             }
             const showDaily = !weekly && (daily || structure.value === 'daily');
             get('lookback-control').hidden = !showDaily;
@@ -554,6 +615,8 @@
         function startSelection(reset = true, reloadEarlier = false) {
             const closed = stop();
             const request = new AbortController();
+            privateReady = false;
+            privateLayer?.reset();
             const interval = get('interval').value;
             const profile = interval === '1w' ? '' : studies.tokens().sort().join(',');
             let profileChanged = !reset && snapshot?.seriesKey.indicators !== profile;
@@ -570,6 +633,7 @@
                 refreshStatus();
             }
             const context = configureInterval(interval);
+            renderForming(null);
             if (!root.dataset.symbol) {
                 stop = () => closed;
                 get('empty').textContent = 'Select a stock to open its chart.';
@@ -593,13 +657,14 @@
                 if (!pointerMoved) return;
                 pointerMoved = false;
                 if (start !== selected) inspect(start);
-            });
+            }, privateLayer ? updatePrivateWindow : undefined);
             if (reset) {
                 plot.setData({ bars: [], zones: [], levels: [], events: [], basisBreaks: [], interval });
                 plot.setLayers(layers, hiddenLevels, hiddenZones);
                 setStatus('loading', 'Loading completed candles…');
             }
-            stop = transport.watch(paths, key, request, {
+            const watchOptions = { formingPreview: Boolean(layers.forming && ['1m', '5m', '15m'].includes(interval)) };
+            stop = transport.watch(paths, key, watchOptions, request, {
                 // Apply a fresh baseline only while its exact selection is mounted.
                 snapshot(received, live) {
                     if (active !== request || request.signal.aborted) return;
@@ -625,6 +690,7 @@
                     }
                     const followNewest = currentBars.at(-1)?.startMs === selected;
                     snapshot = received;
+                    privateReady = true;
                     if (followNewest) selected = null;
                     if (live) {
                         streamStatus = '';
@@ -633,9 +699,16 @@
                     refreshStatus();
                     paint(false);
                 },
+                // Preview frames never trigger a baseline paint or replace the selected completed candle.
+                preview(value) {
+                    if (active === request && !request.signal.aborted) renderForming(value);
+                },
                 // Display connection failures without erasing valid candles or implying a live quote.
                 status(text, retrying) {
                     if (active !== request || request.signal.aborted) return;
+                    privateReady = false;
+                    privateLayer?.reset();
+                    renderForming(null, formingLabels.not_streaming);
                     streamStatus = text;
                     get('retry').hidden = retrying;
                     if (reloadEarlier && !retrying) {
@@ -691,6 +764,11 @@
             const normalized = (symbol || '').trim().toUpperCase().replaceAll('.', '-');
             if (root.dataset.symbol === normalized && active) return;
             details.close();
+            if (privateLayer && normalized !== privateContext.symbol) {
+                privateLayer.dispose();
+                privateLayer = null;
+                plot?.setPrivateEvents([]);
+            }
             root.dataset.symbol = normalized;
             hiddenZones.clear();
             startSelection();
@@ -823,8 +901,14 @@
             renderZoneKey(snapshot?.zones || []);
         });
         for (const checkbox of layerFields) on(checkbox, 'change', () => {
-            // Toggle a layer without querying the source again.
-            layers[checkbox.dataset.chartLayer] = checkbox.checked;
+            // The forming switch replaces the watch options while retaining the completed selection and earlier pages.
+            const layer = checkbox.dataset.chartLayer;
+            layers[layer] = checkbox.checked;
+            if (layer === 'forming') {
+                savePreferences();
+                startSelection(!snapshot);
+                return;
+            }
             plot?.setLayers(layers, hiddenLevels, hiddenZones);
             renderZoneKey(snapshot?.zones || []);
             refreshSource();
@@ -837,6 +921,8 @@
             // Close the details and release network work and canvases when the chart host is absent.
             dispose() {
                 details.close();
+                privateReady = false;
+                privateLayer?.dispose();
                 controller.abort();
                 clearInterval(sourceAge);
                 const result = stop();

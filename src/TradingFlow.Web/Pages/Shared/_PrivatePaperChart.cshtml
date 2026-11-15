@@ -1,0 +1,18 @@
+@model string
+<link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
+<div data-paper-chart-host data-selection-url="@Model"
+     data-evidence-url="@Url.Content("~/api/v1/charts/paper-evidence")"
+     data-source-url="@(Context.Request.PathBase.Add(Context.Request.Path))">
+    <p class="note" data-paper-chart-message role="status" hidden></p>
+    <section class="panel" data-paper-chart-panel hidden aria-labelledby="PrivatePaperChartTitle">
+        <header class="stock-chart-head">
+            <div>
+                <h2 id="PrivatePaperChartTitle" data-paper-chart-title tabindex="-1">Paper chart</h2>
+                <p class="note" data-paper-chart-selection></p>
+                <a data-paper-chart-source>Open the underlying journal detail</a>
+            </div>
+            <button type="button" class="btn btn-secondary" data-paper-chart-close>Close chart</button>
+        </header>
+        <partial name="_StockChart" model="String.Empty" />
+    </section>
+</div>

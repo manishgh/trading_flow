@@ -92,6 +92,7 @@ public sealed class OrdersModel(
     public bool HasBanner => !String.IsNullOrWhiteSpace(StatusMessage) || !String.IsNullOrWhiteSpace(ErrorMessage);
 
     public IReadOnlyList<OrderActivitySnapshot> Items { get; private set; } = [];
+    public bool CanSelectPrivateChart { get; private set; }
     public int WorkingCount { get; private set; }
     public int FilledCount { get; private set; }
     public int RejectedCount { get; private set; }
@@ -101,6 +102,8 @@ public sealed class OrdersModel(
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
         Filter = NormalizeFilter(Filter);
+        CanSelectPrivateChart = IsPaperChartEnvironment(Env) &&
+            await PrivatePaperChartEndpoints.ShowSelectorsAsync(HttpContext, null, cancellationToken);
         var all = await orders.ListRecentAsync(limit: 500, cancellationToken: cancellationToken);
         WorkingCount = all.Count(item => IsWorking(item.State));
         FilledCount = all.Count(item => item.State == OrderState.Filled);
@@ -122,6 +125,14 @@ public sealed class OrdersModel(
             .ToArray();
         await LoadAccountAsync(all, cancellationToken);
     }
+
+    // The selected order or position resolves exclusively from durable local paper evidence.
+    public Task<IActionResult> OnGetPrivateChartAsync(string? clientOrderId, string? symbol, CancellationToken token) =>
+        PrivatePaperChartEndpoints.IssueAsync(HttpContext, null, clientOrderId, symbol, IsPaperChartEnvironment(Env), token);
+
+    // A named unsupported or live environment cannot issue a paper context.
+    private static bool IsPaperChartEnvironment(string? environment) =>
+        String.IsNullOrEmpty(environment) || String.Equals(environment, "paper", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Read only the account/status and symbol suggestions shown in the journal.

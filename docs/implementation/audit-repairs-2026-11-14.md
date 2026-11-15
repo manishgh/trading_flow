@@ -688,3 +688,12 @@ The user now explicitly requires publishing every completed, reviewed product ch
 
 
 Retention component verification: all 70 focused paper service, durable repository, preparation and runtime tests passed with zero skips in `retention-startup-focused-final.trx`. The first attempt passed 69 and found a fixture collision on the existing unique JobType/RunName constraint; each synthetic type/status now owns a distinct name, preserving the constraint and every regression assertion. B accepted the production removal and actual SQLite regression design; A separately verified the recovery receipt and execution scope. Fixed published restart and full integrated release remain pending.
+
+
+### Remaining chart component reviewed; integrated release gate
+
+The isolated forming SIP and private paper chart implementation passed 155 affected backend tests and 14 browser cases initially. Independent A accepted plan/execution scope; independent B found and reviewed corrections for an exact protective stop's verified successor, missing/invalid calendar evidence being labelled closed, a same-fence repair freshness race, and preservation of the existing trade/status receive-loop behavior. The corrected, rebuilt suite passed 161 tests with zero failures/skips in 44.44 seconds; all 6 private cases, four calendar cases and the actual receive-loop regression passed. B accepted the frozen source. The unchanged frontend retains its 14 passing browser cases. Harness failures and fixture corrections remain in the verification notes.
+
+The receive-loop regression proves unchanged upstream commands, completed bars, trading observations and halt handling while optional preview reads are enabled; a newly detected repair suppresses preview prices even when a previously captured canonical copy looked healthy. Exact private protective evidence now bounds replacement history to the verified owner/root and opening provenance. Without that proof, acknowledgement details remain available but no active stop is asserted.
+
+The startup-retention repair 9c92ae5 was integrated before the final chart checks. No grants, strategy authorizations, economic studies or broker orders were added. Live SIP matching, real private execution reconciliation, and normal/shortened-week constituent reconciliation remain external acceptance items. The combined source now proceeds to the full backend/browser release checks and a new compiled Release installation, followed by exact 15-job/20-column preservation and live host verification.

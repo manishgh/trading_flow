@@ -9,7 +9,8 @@ using TradingFlow.Web.Services.Charts;
 
 namespace TradingFlow.Web;
 
-public sealed record ChartFrame(string Kind, ChartSeriesKey Key, string Epoch, long Sequence, int Part, int Parts, string Payload);
+public sealed record ChartFrame(string Kind, ChartSeriesKey Key, string Epoch, long Sequence, int Part, int Parts, string Payload,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? PreviewSequence = null);
 
 /// <summary>Read-only, backpressured chart snapshots over the existing server-owned market source.</summary>
 [Authorize]
@@ -17,6 +18,7 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
     ChartHistoryCursor cursors, TimeProvider clock, ILogger<StockChartHub> logger) : Hub
 {
     public const int MaximumSnapshotBytes = 256 * 1024;
+    internal const int MaximumPreviewBytes = 2 * 1024;
     internal const string BoundedSnapshotReason = "Chart exceeds the bounded snapshot size. Choose fewer indicators or a smaller view.";
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -52,8 +54,16 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
         await base.OnDisconnectedAsync(exception);
     }
 
+    // Retain the existing completed-only invocation for callers that do not opt into display options.
+    public IAsyncEnumerable<ChartFrame> Watch(ChartSeriesKey requested, CancellationToken cancellationToken) =>
+        WatchCore(requested, new(), cancellationToken);
+
+    // Opt-in uses the same watch and connection, with a bounded side frame after the completed update.
+    public IAsyncEnumerable<ChartFrame> WatchWithOptions(ChartSeriesKey requested, ChartWatchOptions? options,
+        CancellationToken cancellationToken) => WatchCore(requested, options ?? new(), cancellationToken);
+
     // Every changed view is a complete atomic baseline, so no missing delta can leave an incorrect candle or zone.
-    public async IAsyncEnumerable<ChartFrame> Watch(ChartSeriesKey requested,
+    private async IAsyncEnumerable<ChartFrame> WatchCore(ChartSeriesKey requested, ChartWatchOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var user = ChartAccessPolicy.UserId(Context.User!);
@@ -73,12 +83,14 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
             await RequireAccessAsync(key, linked.Token);
             var epoch = Guid.NewGuid().ToString("N");
             long sequence = 0;
+            long previewSequence = 0;
             string? fingerprint = null;
+            string? previousPreview = null;
             var expires = clock.GetUtcNow().AddMinutes(5);
             while (!linked.IsCancellationRequested && clock.GetUtcNow() < expires)
             {
                 await RequireAccessAsync(key, linked.Token);
-                var page = await ReadPageAsync(key, linked.Token);
+                var page = await ReadPageAsync(key, options, linked.Token);
                 await RequireAccessAsync(key, linked.Token);
                 var content = JsonSerializer.Serialize(page.Snapshot with { AsOfUtc = default, Epoch = null, Sequence = 0 }, Json);
                 var current = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content)));
@@ -100,6 +112,21 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
                     fingerprint = current;
                 }
                 else yield return new ChartFrame("heartbeat", key, epoch, sequence, 0, 1, clock.GetUtcNow().ToString("O"));
+                if (options.FormingPreview)
+                {
+                    linked.Token.ThrowIfCancellationRequested();
+                    var preview = JsonSerializer.Serialize(page.ReadForming?.Invoke() ?? new("coverage_unverified"), Json);
+                    if (preview != previousPreview)
+                    {
+                        var frame = new ChartFrame("preview", key, epoch, sequence, 0, 1, preview, previewSequence + 1);
+                        if (JsonSerializer.SerializeToUtf8Bytes(frame, Json).Length <= MaximumPreviewBytes)
+                        {
+                            previousPreview = preview;
+                            previewSequence++;
+                            yield return frame;
+                        }
+                    }
+                }
                 await Task.Delay(TimeSpan.FromSeconds(5), linked.Token);
             }
         }
@@ -133,13 +160,14 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
     }
 
     // Keep provider exceptions out of the browser while preserving the server-side diagnostic.
-    private async Task<ChartSeriesPage> ReadPageAsync(ChartSeriesKey key, CancellationToken token)
+    private async Task<ChartSeriesPage> ReadPageAsync(ChartSeriesKey key, ChartWatchOptions options, CancellationToken token)
     {
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(25));
-            return await series.ReadAsync(key, null, deadline.Token);
+            return options.FormingPreview ? await series.ReadWatchedAsync(key, options, deadline.Token)
+                : await series.ReadAsync(key, null, deadline.Token);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
         {

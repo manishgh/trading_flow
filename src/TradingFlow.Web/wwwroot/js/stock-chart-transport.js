@@ -2,10 +2,18 @@
     'use strict';
 
     const maxPayloadBytes = 256 * 1024;
+    const maxPreviewBytes = 2 * 1024;
     const maxParts = 40;
     const maxRetries = 5;
     const encoder = new TextEncoder();
     const boundedResponse = 'Chart exceeds the bounded snapshot size. Choose fewer indicators or a smaller view.';
+    const previewStatuses = new Set(['forming', 'not_streaming', 'coverage_unverified', 'suppressed',
+        'waiting_for_trade', 'closed', 'unsupported']);
+
+    // The server writes explicit UTC clocks, including original sub-millisecond source precision.
+    function utcClock(value) {
+        return typeof value === 'string' && value.endsWith('Z') && Number.isFinite(Date.parse(value));
+    }
 
     // Compare the normalized server identity with the exact active chart selection.
     function sameKey(actual, selected) {
@@ -100,18 +108,55 @@
         return readSnapshot(await response.text(), key);
     }
 
-    // Reassemble a bounded series epoch atomically, ignoring duplicates and retired epochs.
-    function assembler(key) {
+    // A preview must be a small, self-contained observation compatible with the selected intraday view.
+    function readPreview(frame, key) {
+        if (frame.part !== 0 || frame.parts !== 1 || typeof frame.payload !== 'string' ||
+            frame.payload.length > maxPreviewBytes || encoder.encode(JSON.stringify(frame)).length > maxPreviewBytes) return null;
+        let preview;
+        try { preview = JSON.parse(frame.payload); } catch { return null; }
+        if (!previewStatuses.has(preview?.status) || preview.feed !== 'sip' ||
+            [preview.lastEventAtUtc, preview.lastObservedAtUtc].some(value => value != null && !utcClock(value))) return null;
+        if ((preview.startUtc != null || preview.endUtc != null) && !(utcClock(preview.startUtc) && utcClock(preview.endUtc))) return null;
+        if (preview.status !== 'forming') return preview;
+        const { open, high, low, close, eligibleVolume } = preview;
+        const duration = Date.parse(preview.endUtc) - Date.parse(preview.startUtc);
+        const window = Number.parseInt(key.interval, 10) * 60_000;
+        if (!(duration > 0 && duration <= window) || !['1m', '5m', '15m'].includes(key.interval) ||
+            !(key.sessionView === 'regular' ? preview.segment === 'regular' :
+                ['regular', 'premarket', 'postmarket'].includes(preview.segment)) ||
+            !preview.lastEventAtUtc || !preview.lastObservedAtUtc ||
+            ![open, high, low, close].every(value => Number.isFinite(value) && value > 0) ||
+            low > Math.min(open, close) || high < Math.max(open, close) ||
+            (eligibleVolume != null && !(Number.isFinite(eligibleVolume) && eligibleVolume > 0))) return null;
+        return preview;
+    }
+
+    // Reassemble a bounded series epoch atomically, then admit at most one preview for that completed tick.
+    function assembler(key, forming) {
         let epoch;
         let sequence = 0;
+        let previewSequence = 0;
+        let previewAllowed = false;
         let pending = null;
         const retired = new Set();
 
         // Accept only complete snapshots whose inner and outer identities agree.
         return function accept(frame) {
-            if (!sameKey(frame.key, key) || typeof frame.epoch !== 'string' || retired.has(frame.epoch) ||
+            if (!sameKey(frame?.key, key) || typeof frame.epoch !== 'string' || retired.has(frame.epoch) ||
                 !Number.isSafeInteger(frame.sequence) || frame.sequence <= 0) return null;
-            if (frame.kind === 'heartbeat') return null;
+            if (frame.kind === 'heartbeat') {
+                if (epoch === frame.epoch && sequence === frame.sequence && !pending) previewAllowed = true;
+                return null;
+            }
+            if (frame.kind === 'preview') {
+                if (!forming || !previewAllowed || pending || epoch !== frame.epoch || sequence !== frame.sequence ||
+                    !Number.isSafeInteger(frame.previewSequence) || frame.previewSequence <= previewSequence) return null;
+                const preview = readPreview(frame, key);
+                if (!preview) return null;
+                previewAllowed = false;
+                previewSequence = frame.previewSequence;
+                return { preview };
+            }
             if (frame.kind !== 'snapshot' || !Number.isInteger(frame.part) || !Number.isInteger(frame.parts) ||
                 frame.parts < 1 || frame.parts > maxParts || frame.part < 0 || frame.part >= frame.parts ||
                 typeof frame.payload !== 'string' || frame.payload.length > 8000) {
@@ -123,11 +168,14 @@
                 if (retired.size > maxParts) throw new Error('Too many chart resets.');
                 epoch = frame.epoch;
                 sequence = 0;
+                previewSequence = 0;
+                previewAllowed = false;
                 pending = null;
             }
             if (frame.sequence <= sequence || (pending && frame.sequence < pending.sequence)) return null;
             if (!pending || frame.sequence > pending.sequence) {
                 if (frame.part !== 0) return null;
+                previewAllowed = false;
                 pending = { sequence: frame.sequence, parts: frame.parts, chunks: [] };
             }
             if (frame.part < pending.chunks.length) return null;
@@ -140,12 +188,13 @@
             if (snapshot.epoch !== epoch || snapshot.sequence !== pending.sequence) throw new Error('Invalid chart baseline.');
             sequence = pending.sequence;
             pending = null;
-            return snapshot;
+            previewAllowed = true;
+            return { snapshot };
         };
     }
 
     // Isolate one connection and retry loop for the selected key, cancelling all work on teardown.
-    function watch(paths, key, abort, callbacks, afterClose) {
+    function watch(paths, key, options, abort, callbacks, afterClose) {
         let connection;
         let subscription;
         let retry;
@@ -210,22 +259,24 @@
                 .build();
             connection = active;
             active.serverTimeoutInMilliseconds = 45_000;
-            const accept = assembler(key);
+            const accept = assembler(key, options.formingPreview);
             // Ended streams and closed sockets share one guarded reconnect path.
             active.onclose(() => reconnect(active));
             try {
                 await active.start();
                 if (stopped || connection !== active) return;
-                subscription = active.stream('Watch', key).subscribe({
+                const output = options.formingPreview ? active.stream('WatchWithOptions', key, options) : active.stream('Watch', key);
+                subscription = output.subscribe({
                     // Keep a partial or superseded frame out of the displayed series.
                     next(frame) {
                         if (stopped || connection !== active) return;
                         try {
-                            const snapshot = accept(frame);
-                            if (!snapshot) return;
+                            const update = accept(frame);
+                            if (!update) return;
+                            if (update.preview) { callbacks.preview(update.preview); return; }
                             received = true;
                             attempt = 0;
-                            callbacks.snapshot(snapshot, true);
+                            callbacks.snapshot(update.snapshot, true);
                         } catch {
                             reconnect(active);
                         }

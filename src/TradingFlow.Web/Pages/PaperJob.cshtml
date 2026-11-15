@@ -4,8 +4,13 @@
 @model TradingFlow.Web.Pages.PaperJobModel
 @{
     ViewData["Title"] = "Strategy run";
+    ViewData["PrivatePaperChart"] = Model.CanSelectPrivateChart;
 }
 
+@if (Model.CanSelectPrivateChart && Model.Job is { } chartJob)
+{
+    <partial name="_PrivatePaperChart" model='Url.Page("/PaperJob", "PrivateChart", new { id = chartJob.JobId })!' />
+}
 @if (Model.Job is { } candidateJob)
 {
     <p class="panel"><a href="/Desk?runId=@candidateJob.JobId">Open this run's signals on the Desk</a></p>
@@ -35,6 +40,11 @@
     </section>
 }
 @section Scripts {
+    @if (Model.CanSelectPrivateChart)
+    {
+        <partial name="_StockChartScripts" />
+        <script src="~/js/stock-chart-private.js" asp-append-version="true" defer></script>
+    }
     <script>
         (function () {
             const jobId = window.tradingFlowJobId;

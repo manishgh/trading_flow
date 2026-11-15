@@ -133,6 +133,7 @@
 
     function createRow(item) {
         const row = document.createElement("tr");
+        row.id = "paper-order-" + item.clientOrderId;
         row.dataset.clientOrderId = item.clientOrderId;
         row.dataset.quoteRow = String(item.symbol || "").toUpperCase();
         const updated = append(row, "td");
@@ -144,6 +145,12 @@
         symbolLink.setAttribute("aria-label", `Open ticket for ${item.symbol}`);
         append(symbolLink, "strong", item.symbol);
         append(symbol, "span", String(item.side || "").toUpperCase(), "cell-sub");
+        if (summary.dataset.paperChart === "true") {
+            const paperChart = append(symbol, "button", "Paper chart", "btn btn-secondary btn-sm");
+            paperChart.type = "button";
+            paperChart.dataset.paperChartSymbol = item.symbol;
+            paperChart.dataset.paperChartOrder = item.clientOrderId;
+        }
         append(append(row, "td", null, "num"), "span", "—").dataset.quoteField = "mid";
         append(append(row, "td"), "span", "").dataset.orderState = "";
         append(row, "td", quantity(item.requestedQuantity), "num");

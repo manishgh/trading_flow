@@ -42,6 +42,7 @@ public sealed class PaperJobModel : PageModel
     public string MarketDataFeedLabel { get; private set; } = "Market data feed: unknown";
     public PaperExecutionComparisonResult? ExecutionComparison { get; private set; }
     public PaperMembershipReview? MembershipReview { get; private set; }
+    public bool CanSelectPrivateChart { get; private set; }
 
     // Load the durable comparison once on the full detail page alongside the existing run views.
     public async Task OnGetAsync(Guid id)
@@ -53,6 +54,7 @@ public sealed class PaperJobModel : PageModel
 
         if (Job != null)
         {
+            CanSelectPrivateChart = await PrivatePaperChartEndpoints.ShowSelectorsAsync(HttpContext, id, HttpContext.RequestAborted);
             MembershipReview = await jobs.GetMembershipReviewAsync(Job.JobId, HttpContext.RequestAborted);
             ExecutionComparison = await executionComparison.ReadAsync(Job.JobId, HttpContext.RequestAborted);
             try
@@ -78,6 +80,10 @@ public sealed class PaperJobModel : PageModel
             return new OrderDisplayViewModel(o, currentPx);
         }).ToList();
     }
+
+    // Resolve the selected durable order on this paper job without entering the regular page's broker reads.
+    public Task<IActionResult> OnGetPrivateChartAsync(Guid id, string? clientOrderId, string? symbol, CancellationToken token) =>
+        PrivatePaperChartEndpoints.IssueAsync(HttpContext, id, clientOrderId, symbol, paper: true, token);
 
     // Project durable worker status and pipeline health for the auto-refreshing run page.
     public async Task<IActionResult> OnGetSnapshotAsync(Guid id)

@@ -128,14 +128,15 @@
         <span class="metric-value @(status.BuyingPower is null ? "unknown" : null)" title="@status.AccountDetail">@Money(status.BuyingPower)</span>
     </div>
 </section>
-
-
-
+@if (Model.CanSelectPrivateChart)
+{
+    <partial name="_PrivatePaperChart" model='Url.Page("/Orders", "PrivateChart", new { env = "paper" })!' />
+}
 <div class="orders-shell" data-orders-stream-tickers="@String.Join(",", streamTickers)">
 <div class="orders-body">
     @if (Model.EnvironmentState.IsEnabled && Model.EnvironmentState.Environment == TradingFlow.Web.Services.TradingEnvironment.Paper)
     {
-    <section id="TradingPositions" class="trading-positions" data-trading-positions data-read-at="@(Model.Account.Available ? Model.Account.ReadAtUtc.ToUniversalTime().ToString("O") : null)" data-env="@Model.Env" data-can-review="@mutationsAllowed.ToString().ToLowerInvariant()" aria-labelledby="TradingPositionsTitle">
+    <section id="TradingPositions" class="trading-positions" data-trading-positions data-read-at="@(Model.Account.Available ? Model.Account.ReadAtUtc.ToUniversalTime().ToString("O") : null)" data-env="@Model.Env" data-can-review="@mutationsAllowed.ToString().ToLowerInvariant()" data-paper-chart="@Model.CanSelectPrivateChart.ToString().ToLowerInvariant()" aria-labelledby="TradingPositionsTitle">
         <div class="execution-section-head">
             <div><span class="eyebrow">Account holdings</span><h2 id="TradingPositionsTitle">Positions <span class="execution-count" data-position-count>@(Model.Account.Available ? Model.Account.Holdings.Count.ToString() : "Unknown")</span></h2></div>
             <p class="note" data-position-status role="status" aria-live="polite" data-state="@(Model.Account.Available ? "loading" : "stale")">@Model.Account.Detail · @Model.Account.ReadAtUtc.ToUniversalTime().ToString("dd MMM HH:mm:ss") UTC</p>
@@ -150,7 +151,14 @@
                     @foreach (var holding in Model.Account.Holdings)
                     {
                         <tr data-position-symbol="@holding.Symbol">
-                            <td><a data-position-chart asp-page="/Chart" asp-route-symbol="@holding.Symbol" stock-chart-symbol="@holding.Symbol" asp-route-env="@Model.Env" aria-label="Open chart for @holding.Symbol"><strong>@holding.Symbol</strong></a></td>
+                            <td>
+                                <a data-position-chart asp-page="/Chart" asp-route-symbol="@holding.Symbol" stock-chart-symbol="@holding.Symbol" asp-route-env="@Model.Env" aria-label="Open chart for @holding.Symbol"><strong>@holding.Symbol</strong></a>
+                                @if (Model.CanSelectPrivateChart)
+                                {
+                                    <button type="button" class="btn btn-secondary btn-sm"
+                                            data-paper-chart-symbol="@holding.Symbol">Paper chart</button>
+                                }
+                            </td>
                             <td class="num">@holding.Quantity.ToString("0.####")</td>
                             <td class="num">@Money(holding.AverageEntry)</td>
                             <td class="num">@Money(holding.MarketValue)</td>
@@ -178,6 +186,7 @@
 
     <div class="execution-section-head orders-journal-head"><div><span class="eyebrow">Broker lifecycle</span><h2>Orders</h2></div></div>
 <section class="metric-strip metric-strip-lg orders-summary" data-orders-page data-filter="@Model.Filter"
+         data-paper-chart="@Model.CanSelectPrivateChart.ToString().ToLowerInvariant()"
          aria-label="Order summary">
     <div>
         <span class="micro-label">Working</span>
@@ -282,7 +291,7 @@
                     @foreach (var item in Model.Items)
                     {
                         var isSelected = Model.Ticker?.Equals(item.Symbol, StringComparison.OrdinalIgnoreCase) == true;
-                        <tr data-client-order-id="@item.ClientOrderId" data-quote-row="@item.Symbol.ToUpperInvariant()"
+                        <tr id="paper-order-@item.ClientOrderId" data-client-order-id="@item.ClientOrderId" data-quote-row="@item.Symbol.ToUpperInvariant()"
                             aria-selected="@(isSelected ? "true" : null)">
                             <td>
                                 <time data-order-time datetime="@item.UpdatedAtUtc.ToUniversalTime().ToString("O")">
@@ -298,6 +307,11 @@
                                    aria-haspopup="dialog" aria-label="Open ticket for @item.Symbol"><strong>@item.Symbol</strong></a>
                                 <span class="cell-sub">@item.Side.ToUpperInvariant()</span>
                                 <a class="cell-sub" asp-page="/Chart" asp-route-symbol="@item.Symbol" stock-chart-symbol="@item.Symbol" asp-route-env="@Model.Env" aria-label="Open chart for @item.Symbol">Chart</a>
+                                @if (Model.CanSelectPrivateChart)
+                                {
+                                    <button type="button" class="btn btn-secondary btn-sm"
+                                            data-paper-chart-symbol="@item.Symbol" data-paper-chart-order="@item.ClientOrderId">Paper chart</button>
+                                }
                             </td>
                             <td class="num"><span data-quote-field="mid">—</span></td>
                             <td><span class="@StateTagClass(item.State)" data-order-state>@StateLabel(item.State)</span></td>
@@ -369,6 +383,11 @@ else if (mutationsAllowed)
 <link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
 
 @section Scripts {
+    @if (Model.CanSelectPrivateChart)
+    {
+        <partial name="_StockChartScripts" />
+        <script src="~/js/stock-chart-private.js" asp-append-version="true" defer></script>
+    }
     <script src="~/js/trading-positions.js" asp-append-version="true" defer></script>
     <script src="~/js/order-replacement.js" asp-append-version="true" defer></script>
     <script src="~/js/orders.js" asp-append-version="true"></script>

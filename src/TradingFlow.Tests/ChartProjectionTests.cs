@@ -558,6 +558,12 @@ public sealed partial class ChartProjectionTests(ITestOutputHelper output)
         var combined = await ReadFourAsync(together);
         Assert.Equal(3, combined.Indicators!.Count);
         Assert.Equal(4, service.MeasureIndicators().Started);
+        var formingWatch = await service.ReadWatchedAsync(together, new(true), token);
+        Assert.Equal("not_streaming", Assert.IsType<Func<ChartFormingCandle>>(formingWatch.ReadForming)().Status);
+        Assert.Same(combined.Indicators, formingWatch.Snapshot.Indicators);
+        Assert.Equal(combined.Bars, formingWatch.Snapshot.Bars);
+        Assert.Equal(combined.SeriesKey, formingWatch.Snapshot.SeriesKey);
+        Assert.Equal(combined.Bars[0].StartUtc, formingWatch.NextBeforeUtc);
 
         // Context selects zone geometry independently of the study inputs and must reuse the same calculation.
         foreach (var context in new[] { "intraday", "week", "month", "year" })

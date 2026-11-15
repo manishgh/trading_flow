@@ -175,9 +175,9 @@ async function chartWire(page, historyStatus = 200) {
             for (const wire of message.toString().split(separator).filter(Boolean)) {
                 const input = JSON.parse(wire);
                 if (input.protocol === 'json') ws.send('{}' + separator);
-                if (input.type !== 4 || input.target !== 'Watch') continue;
+                if (input.type !== 4 || !['Watch', 'WatchWithOptions'].includes(input.target)) continue;
                 watched = { ws, invocationId: input.invocationId, key: canonical(input.arguments[0]),
-                    epoch: 'fixture-' + watches.length, sequence: 0, closed: false };
+                    options: input.arguments[1], epoch: 'fixture-' + watches.length, sequence: 0, closed: false };
                 watches.push(watched);
             }
         });
@@ -209,6 +209,20 @@ function frames(watch, supplied = fixtureSnapshot(watch.key)) {
 // Deliver an atomic baseline or individually staged chunks through the active fixture socket.
 function send(watch, messages = frames(watch)) {
     for (const message of messages) watch.ws.send(JSON.stringify(message) + separator);
+}
+
+// Place one optional observation at an explicit baseline and preview sequence.
+function previewFrame(watch, preview, previewSequence, fields = {}) {
+    return { type: 2, invocationId: watch.invocationId,
+        item: { kind: 'preview', key: watch.key, epoch: watch.epoch, sequence: watch.sequence,
+            part: 0, parts: 1, payload: JSON.stringify(preview), previewSequence, ...fields } };
+}
+
+// A completed tick admits the next independent preview frame without changing its baseline.
+function heartbeat(watch) {
+    return { type: 2, invocationId: watch.invocationId,
+        item: { kind: 'heartbeat', key: watch.key, epoch: watch.epoch, sequence: watch.sequence,
+            part: 0, parts: 1, payload: '2026-11-12T17:42:00Z' } };
 }
 
 // Inspect actual canvas pixels so an empty canvas or fake renderer cannot pass the plot test.
@@ -310,6 +324,80 @@ async function deskSource(page) {
 }
 
 test.beforeEach(async ({ page }) => { await signIn(page); });
+
+test('keeps SIP preview outside completed evidence, history and selection', async ({ page }) => {
+    const wire = await chartWire(page);
+    await page.goto('/Chart?symbol=AAPL');
+    await expect.poll(() => wire.watches.length).toBe(1);
+    const initial = wire.watches[0];
+    expect(initial.options).toBeUndefined();
+    send(initial);
+
+    const chart = page.getByRole('region', { name: 'Stock price chart' });
+    const graph = chart.locator('[data-chart-plot]');
+    const candleTime = chart.locator('[data-chart-candle-time]');
+    const formingStatus = chart.locator('[data-chart-forming-status]');
+    const formingEvidence = chart.locator('[data-chart-forming-evidence]');
+    const details = chart.getByRole('button', { name: 'Chart details', exact: true });
+    const dialog = chart.getByRole('dialog', { name: 'Chart details' });
+    const close = dialog.getByRole('button', { name: 'Close', exact: true });
+    const toggle = dialog.getByRole('checkbox', { name: 'Forming candle preview', exact: true });
+    await expect(candleTime).not.toBeEmpty();
+    await graph.press('Home');
+    const taken = await candleTime.textContent();
+
+    await details.click();
+    await toggle.check();
+    await expect.poll(() => wire.watches.length).toBe(2);
+    const watch = wire.watches[1];
+    expect(watch.options).toEqual({ formingPreview: true });
+    expect(watch.key).toEqual(initial.key);
+    const baseline = fixtureSnapshot(watch.key);
+    const startUtc = baseline.bars.at(-1).endUtc;
+    const endUtc = iso(Date.parse(startUtc) + 5 * minute);
+    const forming = { status: 'forming', feed: 'sip', startUtc, endUtc, segment: 'regular',
+        open: 201, high: 208, low: 199, close: 207.33, eligibleVolume: 456,
+        lastEventAtUtc: '2026-11-12T17:41:02.123456789Z', lastObservedAtUtc: '2026-11-12T17:41:02.4321000Z' };
+
+    const baselineFrames = frames(watch, baseline);
+    send(watch, [baselineFrames[0], previewFrame(watch, forming, 1)]);
+    await expect(formingStatus).toHaveText('Waiting for SIP candle preview…');
+    send(watch, [...baselineFrames.slice(1), previewFrame(watch, forming, 1)]);
+    await expect(formingStatus).toHaveText('Forming · SIP');
+    await expect(formingEvidence).toContainText('17:41:02.123456789Z');
+    await expect(formingEvidence).toContainText('456');
+    await expect(candleTime).toHaveText(taken);
+
+    const amended = { ...forming, close: 206.44, lastObservedAtUtc: '2026-11-12T17:41:02.6000Z' };
+    send(watch, [heartbeat(watch), previewFrame(watch, amended, 1),
+        previewFrame(watch, amended, 2, { sequence: 0 }), previewFrame(watch, amended, 2, { epoch: initial.epoch }),
+        previewFrame(watch, amended, 2, { payload: JSON.stringify({ ...amended, extra: 'a'.repeat(2048) }) })]);
+    await expect(formingEvidence).toContainText('$207.33');
+    send(watch, [previewFrame(watch, amended, 2)]);
+    await expect(formingEvidence).toContainText('$206.44');
+    await expect(candleTime).toHaveText(taken);
+
+    await close.click();
+    await chart.getByRole('button', { name: 'Load earlier', exact: true }).click();
+    await expect(chart.locator('[data-chart-history-status]')).toHaveText('38 earlier candles loaded');
+    expect(wire.history).toEqual([{ key: watch.key, older: true }]);
+    await expect(formingStatus).toHaveText('Forming · SIP');
+    await expect(candleTime).toHaveText(taken);
+
+    const bar = { ...baseline.bars.at(-1), startUtc, endUtc };
+    send(watch, frames(watch, { ...baseline, bars: [...baseline.bars, bar] }));
+    await expect(formingStatus).not.toHaveText('Forming · SIP');
+    send(watch, [previewFrame(watch, { status: 'not_streaming', feed: 'sip' }, 3)]);
+    await expect(formingStatus).toHaveText('Not streaming');
+    await expect(candleTime).toHaveText(taken);
+
+    await chart.getByRole('combobox', { name: 'Candle interval' }).selectOption('1d');
+    await expect.poll(() => wire.watches.length).toBe(3);
+    expect(wire.watches[2].options).toBeUndefined();
+    await details.click();
+    await expect(toggle).toBeDisabled();
+    await expect(formingEvidence).toContainText('available on 1m, 5m and 15m');
+});
 
 test('plots completed candles and volume with keyboard, event evidence and a responsive viewport', async ({ page }) => {
     const wire = await chartWire(page);

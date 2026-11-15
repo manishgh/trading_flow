@@ -10,11 +10,18 @@ using TradingFlow.Engine.Pipeline;
 
 namespace TradingFlow.Web.Services.Charts;
 
-public sealed record ChartSeriesPage(ChartSeriesSnapshot Snapshot, DateTimeOffset? NextBeforeUtc);
+public sealed record ChartSeriesPage(ChartSeriesSnapshot Snapshot, DateTimeOffset? NextBeforeUtc)
+{
+    internal Func<ChartFormingCandle>? ReadForming { get; init; }
+}
 
 public interface IChartSeriesReader
 {
     Task<ChartSeriesPage> ReadAsync(ChartSeriesKey key, DateTimeOffset? beforeUtc, CancellationToken token);
+
+    // A watch may read a separate display option alongside the normal completed series key.
+    Task<ChartSeriesPage> ReadWatchedAsync(ChartSeriesKey key, ChartWatchOptions options, CancellationToken token) =>
+        ReadAsync(key, null, token);
 }
 
 /// <summary>Projects one authorized observational chart without changing provider subscriptions.</summary>
@@ -71,8 +78,17 @@ public sealed partial class ChartSeriesService(
     [GeneratedRegex("^[A-Z][A-Z0-9]{0,9}(?:-[A-Z0-9]{1,4})?$", RegexOptions.CultureInvariant)]
     private static partial Regex SymbolPattern();
 
+    // History always reads the completed page without attaching a forming observation.
+    public Task<ChartSeriesPage> ReadAsync(ChartSeriesKey key, DateTimeOffset? beforeUtc, CancellationToken token) =>
+        ReadPageAsync(key, beforeUtc, false, token);
+
+    // The watch keeps all completed source acquisitions and calculation keys identical for either option.
+    public Task<ChartSeriesPage> ReadWatchedAsync(ChartSeriesKey key, ChartWatchOptions options, CancellationToken token) =>
+        ReadPageAsync(key, null, options.FormingPreview, token);
+
     // Read a bounded visible page with a stable source acquisition and current canonical versions.
-    public async Task<ChartSeriesPage> ReadAsync(ChartSeriesKey key, DateTimeOffset? beforeUtc, CancellationToken token)
+    private async Task<ChartSeriesPage> ReadPageAsync(ChartSeriesKey key, DateTimeOffset? beforeUtc, bool forming,
+        CancellationToken token)
     {
         key = Normalize(key);
         var requestedAt = clock.GetUtcNow().ToUniversalTime();
@@ -83,7 +99,8 @@ public sealed partial class ChartSeriesService(
         }
         if (key.Interval == "1w")
         {
-            return await ReadWeeklyPageAsync(key, cutoff, beforeUtc is not null, requestedAt, token);
+            return AttachForming(await ReadWeeklyPageAsync(key, cutoff, beforeUtc is not null, requestedAt, token),
+                key, null, forming);
         }
 
         var daily = key.Interval == "1d";
@@ -105,11 +122,11 @@ public sealed partial class ChartSeriesService(
         catch (Exception exception) when (!token.IsCancellationRequested)
         {
             logger.LogWarning(exception, "Chart sources unavailable for {Symbol} {Interval}.", key.Symbol, key.Interval);
-            return Unavailable(key, requestedAt);
+            return AttachForming(Unavailable(key, requestedAt), key, null, forming);
         }
         if (history.Sessions.Count == 0)
         {
-            return Unavailable(key, requestedAt);
+            return AttachForming(Unavailable(key, requestedAt), key, null, forming);
         }
 
         var projector = history.Projector;
@@ -121,7 +138,8 @@ public sealed partial class ChartSeriesService(
         var visible = projection.Visible;
         if (visible.Count == 0)
         {
-            return Unavailable(key, asOf, "There are no completed, compatible SIP candles in this window.");
+            return AttachForming(Unavailable(key, asOf, "There are no completed, compatible SIP candles in this window."),
+                key, canonical, forming);
         }
 
         var last = visible[^1];
@@ -134,7 +152,7 @@ public sealed partial class ChartSeriesService(
             levels.Any(level => level.AvailableAtUtc > cutoff);
         var coverage = projection.IsCovered ? "complete" : "partial";
         var notes = BuildNotes(history, projection.BasisBreaks, key, zones.Count, levels.Count, reconstructed, projector, requestedAt);
-        return new ChartSeriesPage(new ChartSeriesSnapshot(
+        var page = new ChartSeriesPage(new ChartSeriesSnapshot(
                 key, asOf, status, reason,
                 new ChartSeriesEvidence("alpaca", "sip", "all", coverage,
                     liveThrough ?? history.CoveredThroughUtc, last.EndUtc,
@@ -144,6 +162,16 @@ public sealed partial class ChartSeriesService(
                 visible.Select(ToCandle).ToArray(), zones, levels.Select(level => ToLevel(level, last.Bar.Close)).ToArray(), markerRows,
                 Indicators: calculated),
             beforeUtc is null || visible[0].Bar.Timestamp < cutoff ? visible[0].Bar.Timestamp : null);
+        return AttachForming(page, key, canonical, forming);
+    }
+
+    // Keep the source copy request-local and read the fence again immediately before the separate watch frame.
+    private ChartSeriesPage AttachForming(ChartSeriesPage page, ChartSeriesKey key, ChartCanonicalSession? canonical,
+        bool forming)
+    {
+        if (!forming) return page;
+        return page with { ReadForming = key.Interval is "1m" or "5m" or "15m"
+            ? () => stream.ReadChartForming(key, canonical) : () => new("unsupported") };
     }
 
     // Higher-context prices use the same existing bounded daily entry. A failed daily read leaves intraday candles available.

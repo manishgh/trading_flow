@@ -113,6 +113,14 @@
                         if (chart) chart.dataset.positionChart = '';
                         td.replaceChildren(chart ?? value);
                     }
+                    if (root.dataset.paperChart === 'true' && !td.querySelector('[data-paper-chart-symbol]')) {
+                        const paperChart = document.createElement('button');
+                        paperChart.type = 'button';
+                        paperChart.className = 'btn btn-secondary btn-sm';
+                        paperChart.dataset.paperChartSymbol = trade.ticker;
+                        paperChart.textContent = 'Paper chart';
+                        td.append(paperChart);
+                    }
                 } else {
                     td.textContent = value;
                 }

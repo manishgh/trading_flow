@@ -148,6 +148,9 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             cancellationToken);
     }
 
+    public DateTimeOffset? CurrentBatchReceivedAtUtc { get; private set; }
+
+    // Every item in one WebSocket message shares its original receipt time before JSON decoding.
     public async IAsyncEnumerable<JsonElement> ReadMessagesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = new byte[8192];
@@ -168,6 +171,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
                 break;
             }
 
+            CurrentBatchReceivedAtUtc = TimeProvider.System.GetUtcNow();
             var messageJson = Encoding.UTF8.GetString(ms.ToArray());
 
             using var doc = JsonDocument.Parse(messageJson);

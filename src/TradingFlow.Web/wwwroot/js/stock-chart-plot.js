@@ -373,7 +373,7 @@
     }
 
     // Build the real Lightweight Charts panes once per mounted control and expose plot operations.
-    function createPlot(element, onInspect) {
+    function createPlot(element, onInspect, onVisibleRange) {
         const library = window.LightweightCharts;
         const chartRoot = element.closest('[data-stock-chart]');
         const colors = palette(chartRoot);
@@ -410,6 +410,9 @@
         const scale = chart.timeScale();
         const candles = chart.addSeries(library.CandlestickSeries, { priceLineVisible: false, lastValueVisible: false });
         let volume;
+        let formingSeries;
+        let privateMarkers;
+        let privateEvents = [];
         let plotted = [];
         const markers = library.createSeriesMarkers(candles, [], { autoScale: false });
         const refreshShading = attachShading(candles, scale, model, colors);
@@ -437,6 +440,57 @@
             markers.setMarkers(shapes.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)));
         }
 
+        // Keep private events in their own marker collection and group only on displayed completed candles.
+        function paintPrivateEvents() {
+            if (!privateMarkers) return;
+            const matching = new Set();
+            for (const event of privateEvents) {
+                const index = eventCandleIndex(model.bars, event, model.interval);
+                if (index >= 0) matching.add(model.bars[index].time);
+            }
+            privateMarkers.setMarkers([...matching].sort((one, two) => one - two).map(time => ({
+                time, position: 'belowBar', shape: 'square', color: colors.levelC, size: .8
+            })));
+        }
+
+        // Create private chart markers only for an explicit private page context.
+        function setPrivateEvents(events) {
+            privateEvents = model.interval !== '1w' && Array.isArray(events) ? events : [];
+            if (!privateMarkers && privateEvents.length) privateMarkers = library.createSeriesMarkers(candles, [], { autoScale: false });
+            paintPrivateEvents();
+        }
+
+        // Exclude whitespace slots and the separate preview when resolving private window endpoints.
+        function visibleBounds() {
+            const range = scale.getVisibleLogicalRange();
+            if (!range) return null;
+            const first = model.bars.find(bar => bar.plotIndex + .5 > range.from);
+            const last = model.bars.findLast(bar => bar.plotIndex - .5 < range.to);
+            return first && last && first.startMs < last.endMs ? { fromMs: first.startMs, toMs: last.endMs } : null;
+        }
+
+        // Only page-owned contexts observe the visible completed range as it pans or zooms.
+        function reportVisibleRange() { onVisibleRange?.(visibleBounds()); }
+
+        if (onVisibleRange) scale.subscribeVisibleLogicalRangeChange(reportVisibleRange);
+
+        // Draw an outlined candle in its own series without changing completed candles, studies or cursor selection.
+        function setForming(preview) {
+            if (!preview && !formingSeries) return;
+            const range = scale.getVisibleLogicalRange();
+            if (!formingSeries) {
+                formingSeries = chart.addSeries(library.CandlestickSeries, {
+                    priceLineVisible: false, lastValueVisible: false, upColor: 'transparent', downColor: 'transparent',
+                    borderUpColor: colors.up, borderDownColor: colors.down, wickUpColor: colors.up, wickDownColor: colors.down
+                });
+            }
+            const time = preview ? Date.parse(preview.startUtc) / 1000 : null;
+            formingSeries.setData(preview ? [{
+                time, open: preview.open, high: preview.high, low: preview.low, close: preview.close
+            }] : []);
+            if (range && model.bars.length) scale.setVisibleLogicalRange(range);
+        }
+
         // Use workspace direction colours while retaining independent volume and wick encodings.
         function paintTheme() {
             Object.assign(colors, palette(chartRoot));
@@ -450,6 +504,8 @@
                 upColor: colors.up, borderUpColor: colors.up, wickUpColor: colors.up,
                 downColor: colors.down, borderDownColor: colors.down, wickDownColor: colors.down
             });
+            formingSeries?.applyOptions({ borderUpColor: colors.up, borderDownColor: colors.down,
+                wickUpColor: colors.up, wickDownColor: colors.down });
             for (const component of plotted) {
                 component.series.applyOptions({ color: colors[component.color] });
                 for (const line of component.referenceLines) line.applyOptions({ color: colors.grid });
@@ -570,6 +626,7 @@
             paintVolume();
             paintStudies();
             paintMarkers();
+            paintPrivateEvents();
             if (!model.bars.length) return;
             const wasAtLatest = range && range.to >= oldBars.at(-1)?.plotIndex;
             if ((!wasAtLatest || retainPosition) && preserveRange(scale, oldBars, model.bars, range)) return;
@@ -631,6 +688,7 @@
             paintVolume();
             paintStudies();
             paintMarkers();
+            paintPrivateEvents();
             refreshShading();
         }
 
@@ -642,12 +700,13 @@
         // Pointer inspection updates the shared candle readout using its real interval start.
         chart.subscribeCrosshairMove(({ time }) => { if (typeof time === 'number') onInspect(time * 1000); });
         return {
-            setData, setLayers, latest, reveal, clearStudies, setShownPane,
+            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, visibleBounds,
             // Stop observing theme changes and detach pane rendering when the component is removed.
             dispose() {
                 theme.disconnect();
                 media.removeEventListener('change', themeChanged);
                 scale.unsubscribeSizeChange(clearCrosshair);
+                if (onVisibleRange) scale.unsubscribeVisibleLogicalRangeChange(reportVisibleRange);
                 chart.remove();
             }
         };

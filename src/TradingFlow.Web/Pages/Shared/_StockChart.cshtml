@@ -88,6 +88,7 @@
     <p class="stock-chart-context" data-chart-context-label></p>
     <p class="stock-chart-note" data-chart-weekly-availability hidden>Indicators, price levels and session shading are available on daily or intraday charts.</p>
     <p class="stock-chart-source" data-chart-source></p>
+    <p class="stock-chart-source" data-chart-forming-status role="status" hidden></p>
     <ul class="stock-chart-zone-key" data-chart-zone-key aria-label="Current support and resistance zones" hidden></ul>
     <label class="stock-chart-pane-control" data-chart-pane-control hidden>Visible indicator pane
         <select class="input" data-chart-pane-choice></select>
@@ -138,6 +139,10 @@
                 <h4>Selected candle</h4>
                 <dl class="stock-chart-evidence" data-chart-candle-evidence></dl>
             </div>
+            <div class="stock-chart-evidence-section" data-chart-forming-section hidden>
+                <h4>Forming candle preview</h4>
+                <dl class="stock-chart-evidence" data-chart-forming-evidence></dl>
+            </div>
             <div class="stock-chart-evidence-section" data-chart-selected-indicators hidden>
                 <h4>Selected indicator evidence</h4>
                 <ul class="stock-chart-detail-list" data-chart-indicator-evidence></ul>
@@ -147,6 +152,7 @@
             <h3>Layers &amp; price levels</h3>
             <div class="stock-chart-toggles">
                 <label><input type="checkbox" data-chart-layer="volume" checked /> Volume</label>
+                <label title="Available on 1m, 5m and 15m charts"><input type="checkbox" data-chart-layer="forming" /> Forming candle preview</label>
                 <label><input type="checkbox" data-chart-layer="sessions" checked /> Extended-hours shading</label>
                 <label><input type="checkbox" data-chart-layer="support" checked /> Support</label>
                 <label><input type="checkbox" data-chart-layer="resistance" checked /> Resistance</label>

@@ -328,6 +328,7 @@ builder.Services.AddOptions<TradingFlow.Web.Services.Charts.ChartTransportOption
         "ChartTransport:MaximumConnectionsPerUser must be between 1 and 8.").ValidateOnStart();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartTransportLimits>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartHistoryCursor>();
+builder.Services.AddPrivatePaperChart(builder.Configuration);
 builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.ChartSeriesService>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Charts.IChartSeriesReader>(services =>
     services.GetRequiredService<TradingFlow.Web.Services.Charts.ChartSeriesService>());
@@ -884,6 +885,7 @@ app.UseRouting();
 // Order matters: routing selects the endpoint, authentication establishes who is
 // asking, authorization then reads that endpoint's requirements. Placed before
 // UseRouting these two run without an endpoint and enforce nothing.
+app.UsePrivatePaperChartNoStore();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseApiMutationSecurity();
@@ -910,6 +912,7 @@ app.MapTradingFlowAuthApi();
 app.MapTradingFlowApiV1();
 app.MapDeskEndpoints();
 app.MapChartEndpoints();
+app.MapPrivatePaperChart();
 app.MapAccountLossReviewEndpoints();
 app.MapTradingFlowEarningsApi();
 // Health probes stay open: a readiness check that needs a session cannot tell a

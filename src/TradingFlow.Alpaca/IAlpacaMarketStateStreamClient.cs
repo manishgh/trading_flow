@@ -25,6 +25,9 @@ public interface IAlpacaMarketStateStreamClient : IDisposable
 
     IAsyncEnumerable<JsonElement> ReadMessagesAsync(CancellationToken cancellationToken);
 
+    /// <summary>Receipt time of the current batch before parsing; alternate in-process streams may supply their own clock.</summary>
+    DateTimeOffset? CurrentBatchReceivedAtUtc => null;
+
     /// <summary>Display-only quote subscriptions, outside the market-state acknowledgement.</summary>
     Task SubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) => Task.CompletedTask;
 

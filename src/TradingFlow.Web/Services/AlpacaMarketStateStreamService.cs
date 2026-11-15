@@ -1,12 +1,14 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using TradingFlow.Alpaca;
+using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Pipeline;
+using TradingFlow.Web.Services.Charts;
 
 namespace TradingFlow.Web.Services;
 
@@ -80,6 +82,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
     private long subscriptionGeneration;
     private string runtimeStage = "created";
     private ConcurrentDictionary<string, long>? chartMembership;
+    private SipFormingBook? chartPreview;
 
     public AlpacaMarketStateStreamService(
         AlpacaCredentialProvider credentials,
@@ -151,6 +154,35 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         var evidence = await marketState.ReadChartCanonicalAsync(symbol, generation, start, end, asOf, cancellationToken);
         return ReferenceEquals(membership, Volatile.Read(ref chartMembership)) &&
             membership.TryGetValue(symbol, out var current) && current == generation ? evidence : null;
+    }
+
+    // Read only the preview from the same active generation as the completed chart copy, without any additional source read.
+    internal ChartFormingCandle ReadChartForming(ChartSeriesKey key, ChartCanonicalSession? canonical)
+    {
+        var membership = Volatile.Read(ref chartMembership);
+        var preview = Volatile.Read(ref chartPreview);
+        if (membership is null || preview is null || !membership.TryGetValue(key.Symbol, out var generation))
+            return new("not_streaming");
+
+        var result = preview.Read(key, canonical, timeProvider.GetUtcNow());
+        if (!ReferenceEquals(preview, Volatile.Read(ref chartPreview)) ||
+            !ReferenceEquals(membership, Volatile.Read(ref chartMembership)) ||
+            !membership.TryGetValue(key.Symbol, out var current) || current != generation)
+            return new("not_streaming");
+
+        // The processor may discover a gap after the completed copy and before scheduling its repair.
+        if (result.Status == "forming" && IsChartSymbolRepairing(key.Symbol))
+            return new("coverage_unverified");
+        return result;
+    }
+
+    // Match the chart's spelling and the provider's class-share spelling against existing in-memory repair flags.
+    private bool IsChartSymbolRepairing(string symbol)
+    {
+        if (repairsInProgress.ContainsKey(symbol) || marketState.RequiresRepair(symbol)) return true;
+        var providerSymbol = AlpacaSymbolMapper.ToProviderSymbol(symbol);
+        return providerSymbol != symbol &&
+            (repairsInProgress.ContainsKey(providerSymbol) || marketState.RequiresRepair(providerSymbol));
     }
 
     internal Task RuntimeCompletion => ExecuteTask ?? Task.CompletedTask;
@@ -411,6 +443,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         ApplyTradingStatusMessage(message, observedAtUtc);
     }
 
+    // Own one transport, canonical processor view and ephemeral preview under the same lease lifetime.
     private async Task RunOwnedConnectionAsync(
         MarketStreamLease lease,
         CancellationToken stoppingToken)
@@ -422,8 +455,11 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         var workTracker = new ConnectionWorkTracker((operation, exception) =>
             logger.LogError(exception, "Provider-connection work failed. Operation={Operation}", operation));
         var renewal = RenewLeaseAsync(leaseState, connectionCts);
-        await RefreshMarketCalendarAsync(connectionCts.Token);
-        var calendarRefresh = RefreshMarketCalendarLoopAsync(connectionCts.Token);
+        var connectionToken = connectionCts.Token;
+        var calendar = await RefreshMarketCalendarAsync(connectionToken);
+        var preview = new SipFormingBook(lease.FencingToken,
+            now => !connectionToken.IsCancellationRequested && now < leaseState.Current.ExpiresAtUtc, calendar);
+        var calendarRefresh = RefreshMarketCalendarLoopAsync(preview, connectionToken);
         Task receive = Task.CompletedTask;
         Task subscriptions = Task.CompletedTask;
         Task displayQuotes = Task.CompletedTask;
@@ -438,10 +474,12 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             await stream.ConnectAsync(connectionCts.Token);
             await RevalidateLeaseOwnershipAsync(leaseState, connectionCts.Token);
             marketState.ActivateOwnership(leaseState.Current.FencingToken);
+            Volatile.Write(ref chartPreview, preview);
             receive = ReceiveMessagesAsync(
                 stream,
                 leaseState,
                 activeSubscriptions,
+                preview,
                 workTracker,
                 connectionCts.Token);
             var initial = await GetDesiredSymbolsAsync(connectionCts.Token);
@@ -460,6 +498,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                     initial,
                     receive,
                     activeSubscriptions,
+                    preview,
                     connectionCts.Token);
                 var startupCompleted = await Task.WhenAny(subscriptions, renewal, receive);
                 if (startupCompleted != subscriptions)
@@ -481,6 +520,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 initial,
                 receive,
                 activeSubscriptions,
+                preview,
                 workTracker,
                 connectionCts.Token);
             var completed = await Task.WhenAny(receive, renewal, subscriptions, calendarRefresh);
@@ -488,6 +528,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
         finally
         {
+            Volatile.Write(ref chartPreview, null);
+            preview.Retire();
             Volatile.Write(ref chartMembership, null);
             marketState.InvalidateOwnership(leaseState.Current.FencingToken);
             Volatile.Write(ref runtimeStage, "cleanup_connection_tasks");
@@ -554,16 +596,19 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
-    private async Task RefreshMarketCalendarLoopAsync(CancellationToken cancellationToken)
+    // Reuse the existing calendar refresh for preview and canonical processing.
+    private async Task RefreshMarketCalendarLoopAsync(SipFormingBook preview, CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromHours(6), timeProvider);
         while (await timer.WaitForNextTickAsync(cancellationToken))
         {
-            await RefreshMarketCalendarAsync(cancellationToken);
+            var calendar = await RefreshMarketCalendarAsync(cancellationToken);
+            preview.UpdateCalendar(calendar, timeProvider.GetUtcNow());
         }
     }
 
-    private async Task RefreshMarketCalendarAsync(CancellationToken cancellationToken)
+    // Build both views from the same authoritative provider response.
+    private async Task<SipFormingCalendar> RefreshMarketCalendarAsync(CancellationToken cancellationToken)
     {
         if (marketDataProvider.Value is not IMarketSessionScheduleProvider scheduleProvider)
         {
@@ -585,6 +630,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             schedules.Count,
             start,
             end);
+        return new(schedules);
     }
 
     private async Task RevalidateLeaseOwnershipAsync(
@@ -607,6 +653,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         leaseState.Update(renewed);
     }
 
+    // Keep the existing lease lifecycle and expire the preview's closed minute on a silent connection.
     private async Task RenewLeaseAsync(
         OwnedLeaseState leaseState,
         CancellationTokenSource connectionCts)
@@ -634,6 +681,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 }
 
                 leaseState.Update(renewed);
+                Volatile.Read(ref chartPreview)?.ExpireClosedMinute(timeProvider.GetUtcNow());
             }
         }
         catch (OperationCanceledException) when (connectionCts.IsCancellationRequested)
@@ -647,11 +695,13 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
+    // Follow the existing market scopes and retire chart observations before unsubscribing.
     private async Task ForwardSubscriptionChangesAsync(
         IAlpacaMarketStateStreamClient stream,
         IReadOnlyCollection<string> initial,
         Task receive,
         ConcurrentDictionary<string, long> activeSubscriptions,
+        SipFormingBook preview,
         ConnectionWorkTracker workTracker,
         CancellationToken cancellationToken)
     {
@@ -669,6 +719,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                     additions,
                     receive,
                     activeSubscriptions,
+                    preview,
                     cancellationToken);
             }
 
@@ -677,6 +728,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 foreach (var removal in removals)
                 {
                     activeSubscriptions.TryRemove(removal, out _);
+                    preview.Untrack(AlpacaSymbolMapper.ToCanonicalSymbol(removal));
                 }
 
                 await stream.UnsubscribeMarketStateAsync(removals, cancellationToken);
@@ -700,16 +752,20 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
+    // Preview admission waits for both existing stream acknowledgement and successful canonical warming.
     private async Task SubscribeAndWarmAsync(
         IAlpacaMarketStateStreamClient stream,
         IReadOnlyCollection<string> symbols,
         Task receive,
         ConcurrentDictionary<string, long> activeSubscriptions,
+        SipFormingBook preview,
         CancellationToken cancellationToken)
     {
         foreach (var symbol in symbols)
         {
-            activeSubscriptions[Normalize(symbol)] = Interlocked.Increment(ref subscriptionGeneration);
+            var generation = Interlocked.Increment(ref subscriptionGeneration);
+            activeSubscriptions[Normalize(symbol)] = generation;
+            preview.Track(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), generation);
         }
 
         try
@@ -720,13 +776,23 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 activeSubscriptions.Keys.ToArray(),
                 receive,
                 cancellationToken);
-            await WarmAdditionsAsync(symbols, cancellationToken);
+            if (await WarmAdditionsAsync(symbols, cancellationToken))
+            {
+                var warmed = timeProvider.GetUtcNow();
+                foreach (var symbol in symbols)
+                {
+                    if (activeSubscriptions.TryGetValue(Normalize(symbol), out var generation) &&
+                        !repairsInProgress.ContainsKey(Normalize(symbol)) && !marketState.RequiresRepair(symbol))
+                        preview.MarkWarm(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), generation, warmed);
+                }
+            }
         }
         catch
         {
             foreach (var symbol in symbols)
             {
                 activeSubscriptions.TryRemove(Normalize(symbol), out _);
+                preview.Untrack(AlpacaSymbolMapper.ToCanonicalSymbol(symbol));
             }
 
             throw;
@@ -752,10 +818,12 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         await acknowledgement;
     }
 
+    // Dispatch trade observations under the same lease check as canonical messages.
     private async Task ReceiveMessagesAsync(
         IAlpacaMarketStateStreamClient stream,
         OwnedLeaseState leaseState,
         ConcurrentDictionary<string, long> activeSubscriptions,
+        SipFormingBook preview,
         ConnectionWorkTracker workTracker,
         CancellationToken cancellationToken)
     {
@@ -802,7 +870,24 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             }
 
             ApplyTradingStatusMessage(message, observedAt);
+            var receivedAt = stream.CurrentBatchReceivedAtUtc ?? observedAt;
+            ObservePreviewMessage(preview, message, activeSubscriptions, receivedAt, observedAt);
         }
+    }
+
+    // Do not enter any observation from a display quote, alternate source or inactive market-state symbol.
+    private static void ObservePreviewMessage(SipFormingBook preview, System.Text.Json.JsonElement message,
+        ConcurrentDictionary<string, long> activeSubscriptions, DateTimeOffset receipt, DateTimeOffset observed)
+    {
+        if (AlpacaMarketDataMessageParser.TryParseSipTrade(message, out var supplied, out var failure) && supplied is { } trade)
+        {
+            if (activeSubscriptions.TryGetValue(trade.Symbol, out var generation) ||
+                activeSubscriptions.TryGetValue(AlpacaSymbolMapper.ToProviderSymbol(trade.Symbol), out generation))
+                preview.Observe(trade, generation, receipt, observed);
+            return;
+        }
+        if (failure is not null) preview.ObserveFailure(failure, receipt, observed);
+        else preview.ApplyAcknowledgement(message, receipt);
     }
 
     private void LogMalformedBar(AlpacaBarParseFailure failure) =>
@@ -875,6 +960,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
+    // Clear partial trade coverage before dispatching the existing canonical repair.
     private void ScheduleRepair(
         string symbol,
         long subscriptionGeneration,
@@ -888,6 +974,9 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             return;
         }
 
+        var preview = Volatile.Read(ref chartPreview);
+        preview?.MarkWarm(AlpacaSymbolMapper.ToCanonicalSymbol(normalized), subscriptionGeneration, null);
+
         if (!workTracker.TryRun(
                 normalized,
                 "market-state-repair",
@@ -895,16 +984,19 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                     normalized,
                     subscriptionGeneration,
                     activeSubscriptions,
+                    preview,
                     cancellationToken)))
         {
             repairsInProgress.TryRemove(normalized, out _);
         }
     }
 
+    // Successful, still-owned reconciliation establishes a fresh start for full-minute preview coverage.
     private async Task RepairAsync(
         string symbol,
         long subscriptionGeneration,
         ConcurrentDictionary<string, long> activeSubscriptions,
+        SipFormingBook? preview,
         CancellationToken cancellationToken)
     {
         try
@@ -929,6 +1021,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 return;
             }
 
+            if (!marketState.RequiresRepair(symbol))
+                preview?.MarkWarm(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), subscriptionGeneration, timeProvider.GetUtcNow());
             logger.LogInformation("Repaired market-state history for {Symbol} from REST.", symbol);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -970,13 +1064,14 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         return additions;
     }
 
-    private async Task WarmAdditionsAsync(
+    // Keep the prior warm failure handling and tell the preview whether reconciliation completed.
+    private async Task<bool> WarmAdditionsAsync(
         IReadOnlyCollection<string> additions,
         CancellationToken cancellationToken)
     {
         if (additions.Count == 0)
         {
-            return;
+            return false;
         }
 
         foreach (var addition in additions)
@@ -990,6 +1085,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 additions,
                 marketDataProvider.Value,
                 cancellationToken);
+            return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1001,6 +1097,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 exception,
                 "Initial batched market-state backfill failed for {SymbolCount} symbol(s); live bars remain subscribed and REST evaluation stays available.",
                 additions.Count);
+            return false;
         }
     }
 

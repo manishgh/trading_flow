@@ -4,6 +4,15 @@ namespace TradingFlow.Contracts.V1;
 
 public sealed record ChartSeriesKey(string Symbol, string Interval, string SessionView, string Context = "auto", string Indicators = "");
 
+public sealed record ChartWatchOptions(bool FormingPreview = false);
+
+/// <summary>A display-only update on the live watch, outside every completed chart payload.</summary>
+public sealed record ChartFormingCandle(
+    string Status, string Feed = "sip", DateTimeOffset? StartUtc = null, DateTimeOffset? EndUtc = null,
+    string? Segment = null, decimal? Open = null, decimal? High = null, decimal? Low = null,
+    decimal? Close = null, decimal? EligibleVolume = null, string? LastEventAtUtc = null,
+    DateTimeOffset? LastObservedAtUtc = null);
+
 public sealed record ChartSeriesEvidence(
     string Provider,
     string Feed,

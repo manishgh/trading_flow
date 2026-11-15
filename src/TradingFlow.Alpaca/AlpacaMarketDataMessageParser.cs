@@ -3,7 +3,7 @@ using TradingFlow.Domain.Market;
 
 namespace TradingFlow.Alpaca;
 
-public static class AlpacaMarketDataMessageParser
+public static partial class AlpacaMarketDataMessageParser
 {
     public static bool TryParseBar(
         JsonElement message,
