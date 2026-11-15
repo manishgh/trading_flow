@@ -72,7 +72,6 @@ public sealed class PaperJobService : IDurableJobHandler
     private readonly IPaperJobRecoveryService? recoveryService;
     private readonly PaperJobServiceOptions jobOptions;
     private readonly IPaperRunLifecycleRepository? runLifecycle;
-    private int retentionPruned;
 
     // Compose the paper worker and its lease-fenced journal without starting runtime work.
     public PaperJobService(
@@ -136,12 +135,7 @@ public sealed class PaperJobService : IDurableJobHandler
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        if (Interlocked.Exchange(ref retentionPruned, 1) == 0)
-        {
-            await durableJobs.PruneTerminalJobsOlderThanAsync(
-                DateTimeOffset.UtcNow.Subtract(MobileAutomationSessionStore.RetentionWindow),
-                cancellationToken);
-        }
+        // Terminal jobs retain their immutable settings and published result provenance across restarts.
         var allJobs = await durableJobs.GetJobsAsync(JobType, cancellationToken);
 
         foreach (var pJob in allJobs)

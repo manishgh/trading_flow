@@ -333,22 +333,6 @@ public sealed partial class SqliteJobRepository : IDurableJobRepository, IPaperR
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task PruneTerminalJobsOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken)
-    {
-        using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
-        var jobs = await context.Jobs.ToArrayAsync(cancellationToken);
-        var staleJobs = jobs
-            .Where(job => IsTerminal(job.Status) && (job.FinishedAt ?? job.CreatedAt) < cutoff)
-            .ToArray();
-        if (staleJobs.Length == 0)
-        {
-            return;
-        }
-
-        context.Jobs.RemoveRange(staleJobs);
-        await context.SaveChangesAsync(cancellationToken);
-    }
-
     private static bool IsTerminal(string status)
     {
         return status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||

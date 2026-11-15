@@ -78,6 +78,7 @@ When discussing missing market data or research evidence:
 ## Non-Negotiable Design Rules
 
 - Do not sync GitHub unless explicitly asked.
+- User instruction, 15 November 2026: after each completed and independently reviewed product change, compile the Release build, install it in the existing separate `C:\project\tradingflow-site` folder, and verify that the running local site serves that build. Keep the site updated and running. Preserve operator data and prior binaries; check account exposure and queued work before any restart. This publication instruction does not authorize a new strategy or broker order, GitHub synchronization, or wider public exposure.
 - Preserve local secrets, `appsettings.local.json`, `tradingflow.db`, and paper-trading state. Core data deletion requires the separate dataset-specific confirmation described below.
 - Preserve cached candle/history data. Challenge deletion requests and obtain fresh dataset-specific confirmation under Core Data Deletion Requires Specific Approval.
 - Strategy behavior must be config-driven. Do not hard-code strategy-specific rules into base engine code except for generic indicator/signal primitives.

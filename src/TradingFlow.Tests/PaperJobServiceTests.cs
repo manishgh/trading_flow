@@ -1,9 +1,13 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using TradingFlow.Application.Jobs;
 using TradingFlow.Backtesting;
+using TradingFlow.Data.Context;
+using TradingFlow.Data.Jobs;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Web.Models;
 using TradingFlow.Domain.Jobs;
@@ -20,6 +24,53 @@ public sealed class PaperJobServiceTests
         "configs",
         "paper",
         "alpaca-paper.yaml");
+
+    // Starting the paper host must retain old outcomes of every job type and their immutable evidence.
+    [Fact]
+    public async Task InitializeAndRefresh_RetainEveryColumnOfOldTerminalJobsAcrossRestart()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<TradingFlowDbContext>().UseSqlite(connection).Options;
+        var factory = new RetainedJobContextFactory(options);
+        var old = new DateTimeOffset(2020, 1, 2, 12, 0, 0, TimeSpan.Zero);
+        await using (var db = factory.CreateDbContext())
+        {
+            await db.Database.EnsureCreatedAsync();
+            foreach (var type in new[] { "backtest", "paper", "preparation" })
+            foreach (var status in new[] { "completed", "failed", "cancelled", "interrupted" })
+            {
+                var job = CreatePersisted(Guid.NewGuid(), status);
+                job.JobType = type;
+                job.RunName = $"retained-{type}-{status}";
+                job.CreatedAt = old;
+                job.CreatedAtUtcTicks = old.UtcTicks;
+                job.StartedAt = old.AddMinutes(1);
+                job.FinishedAt = old.AddMinutes(2);
+                job.RequestJson = "{\"immutableIdentity\":\"retained\"}";
+                job.ResultReference = $"retained-result-{job.Id:N}.json";
+                job.ErrorMessage = status == "failed" ? "Retained failure reason" : null;
+                job.AttemptCount = 2;
+                db.Jobs.Add(job);
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var durable = new SqliteJobRepository(factory);
+        var before = await durable.GetAllJobsAsync(default);
+        var original = JsonSerializer.Serialize(before.OrderBy(job => job.Id));
+        var firstHost = CreateService(durableRepository: durable);
+        await firstHost.InitializeAsync();
+        await firstHost.RefreshProjectionAsync(default);
+        var restartedHost = CreateService(durableRepository: durable);
+        await restartedHost.InitializeAsync();
+        await restartedHost.RefreshProjectionAsync(default);
+
+        var after = await durable.GetAllJobsAsync(default);
+        Assert.Equal(12, after.Count);
+        Assert.Equal(original, JsonSerializer.Serialize(after.OrderBy(job => job.Id)));
+        Assert.Equal(4, restartedHost.List().Count);
+    }
 
     [Fact]
     public async Task StartAsync_AtomicallyEnqueuesWithoutStartingDetachedExecution()
@@ -88,10 +139,6 @@ public sealed class PaperJobServiceTests
     public async Task InitializeAsync_LoadsRecoverableRunningJobWithoutMarkingItInterrupted()
     {
         var persisted = CreatePersisted(Guid.NewGuid(), "running");
-        repository.Setup(candidate => candidate.PruneTerminalJobsOlderThanAsync(
-                It.IsAny<DateTimeOffset>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
         repository.Setup(candidate => candidate.GetJobsAsync("paper", It.IsAny<CancellationToken>()))
             .ReturnsAsync([persisted]);
         var service = CreateService();
@@ -134,10 +181,6 @@ public sealed class PaperJobServiceTests
         var persisted = CreatePersisted(Guid.NewGuid(), "failed");
         persisted.ConfigPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.yaml");
         persisted.ErrorMessage = "The captured configuration is unavailable.";
-        repository.Setup(candidate => candidate.PruneTerminalJobsOlderThanAsync(
-                It.IsAny<DateTimeOffset>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
         repository.Setup(candidate => candidate.GetJobsAsync("paper", It.IsAny<CancellationToken>()))
             .ReturnsAsync([persisted]);
         var service = CreateService();
@@ -155,10 +198,6 @@ public sealed class PaperJobServiceTests
     {
         PersistedJob? persisted = null;
         PaperJobService? service = null;
-        repository.Setup(candidate => candidate.PruneTerminalJobsOlderThanAsync(
-                It.IsAny<DateTimeOffset>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
         repository.Setup(candidate => candidate.GetJobsAsync("paper", It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => persisted is null ? [] : [persisted]);
         repository.Setup(candidate => candidate.TryEnqueueAsync(
@@ -339,7 +378,8 @@ public sealed class PaperJobServiceTests
 
     // Compose a paper handler using only synthetic recovery and lease persistence.
     private PaperJobService CreateService(
-        IPaperJobRecoveryService? recoveryService = null, IPaperRunLifecycleRepository? lifecycle = null)
+        IPaperJobRecoveryService? recoveryService = null, IPaperRunLifecycleRepository? lifecycle = null,
+        IDurableJobRepository? durableRepository = null)
     {
         var credentials = new AlpacaCredentialProvider(new ConfigurationBuilder().Build());
         var repositoryRoot = TestRepository.FindRoot();
@@ -366,7 +406,7 @@ public sealed class PaperJobServiceTests
             credentials,
             new ProjectPaths(repositoryRoot),
             configCatalog: configCatalog,
-            durableJobs: repository.Object,
+            durableJobs: durableRepository ?? repository.Object,
             recoveryService: recoveryService,
             runLifecycle: lifecycle);
     }
@@ -382,4 +422,12 @@ public sealed class PaperJobServiceTests
         CreatedAt = DateTimeOffset.UtcNow,
         StartedAt = status == "running" ? DateTimeOffset.UtcNow : null
     };
+
+    private sealed class RetainedJobContextFactory(DbContextOptions<TradingFlowDbContext> options)
+        : IDbContextFactory<TradingFlowDbContext>
+    {
+        public TradingFlowDbContext CreateDbContext() => new(options);
+        public Task<TradingFlowDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
 }

@@ -246,9 +246,9 @@ public sealed class PreparationWorkflowTests
         Assert.Equal("queued", detail.History.Single(item => item.Id == next.Row.Id).Status);
     }
 
-    // Friday's terminal job can age out before its Monday target without erasing collected evening evidence.
+    // An already-missing historical job must not erase its retained evening evidence.
     [Fact]
-    public async Task WorkspaceSummary_PreservesFridayEvidenceAfterPruning()
+    public async Task WorkspaceSummary_PreservesFridayEvidenceWithMissingHistoricalJob()
     {
         await using var h = await Harness.Create();
         h.Clock.Now = DateTimeOffset.Parse("2026-11-13T22:00:00Z");
@@ -268,7 +268,8 @@ public sealed class PreparationWorkflowTests
         Assert.NotNull(await h.Repository.ReserveAsync(evening.Row, evening.Job, default));
 
         h.Clock.Now = mondayOpen.AddMinutes(-90);
-        await h.Jobs.PruneTerminalJobsOlderThanAsync(h.Clock.Now.AddDays(-2), default);
+        await using (var db = h.Database.CreateDbContext())
+            Assert.Equal(1, await db.Jobs.Where(job => job.Id == evening.Row.Id).ExecuteDeleteAsync());
         Assert.Null(await h.Jobs.GetJobAsync(evening.Row.Id, default));
         var summary = await h.Service.ReadWorkspaceSummaryAsync(h.Owner, default);
         Assert.Equal("2026-11-16", summary.TargetDate);
