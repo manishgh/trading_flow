@@ -404,6 +404,13 @@
         const markers = library.createSeriesMarkers(candles, [], { autoScale: false });
         const refreshShading = attachShading(candles, scale, model, colors);
 
+        // Drop the native marker when its old coordinates no longer identify the selected candle.
+        function clearCrosshair() {
+            chart.clearCrosshairPosition();
+        }
+
+        scale.subscribeSizeChange(clearCrosshair);
+
         // Plot news and earnings only in matching candle intervals. The list keeps every original event.
         function paintMarkers() {
             const shapes = [];
@@ -514,7 +521,7 @@
         }
 
         // Retain the graph's present time span and put its right edge just beyond newest data.
-        function latest() {
+        function scrollToLatest() {
             const range = scale.getVisibleLogicalRange();
             if (!model.bars.length) return;
             const span = range ? range.to - range.from : Math.min(model.bars.length, 62);
@@ -522,8 +529,15 @@
             scale.setVisibleLogicalRange({ from: right - span, to: right });
         }
 
+        // A request to show the latest candle leaves its readout selected and clears the old marker.
+        function latest() {
+            clearCrosshair();
+            scrollToLatest();
+        }
+
         // Rebuild the bounded plotted data and preserve a manually panned or prepended time range.
         function setData(data, retainPosition) {
+            clearCrosshair();
             const oldBars = model.bars;
             const range = scale.getVisibleLogicalRange();
             Object.assign(model, data, buildTimeline(data.bars));
@@ -552,7 +566,7 @@
             scale.applyOptions({ timeVisible: data.interval !== '1d' });
             if (model.bars.length < 65 && !oldBars.length) {
                 scale.setVisibleLogicalRange({ from: -.5, to: model.timeline.length + 2 });
-            } else latest();
+            } else scrollToLatest();
         }
 
         // A disabled volume layer clears the series and releases its native pane.
@@ -623,6 +637,7 @@
             dispose() {
                 theme.disconnect();
                 media.removeEventListener('change', themeChanged);
+                scale.unsubscribeSizeChange(clearCrosshair);
                 chart.remove();
             }
         };

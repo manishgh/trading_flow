@@ -9,6 +9,7 @@ const minute = 60_000;
 const currentRevision = 'fixture-current-' + 'a'.repeat(96);
 const earlierRevision = 'fixture-earlier-' + 'b'.repeat(96);
 const earlierObserved = '2026-11-12T13:58:00Z';
+const crosshairColor = '#d41bf7';
 
 // Use sub-minute availability and distinct UTC exchange sessions in fixture evidence.
 const iso = value => new Date(value).toISOString();
@@ -199,6 +200,33 @@ function coloredPanes(plot) {
     });
 }
 
+// Give the real renderer a distinct test-only crosshair color for canvas assertions.
+function colorCrosshair(page) {
+    return page.addInitScript(color => {
+        let api;
+        Object.defineProperty(window, 'LightweightCharts', {
+            get: () => api,
+            set(library) {
+                const line = { color, width: 2, style: library.LineStyle.Solid };
+                api = { ...library, createChart: (element, options) => library.createChart(element,
+                    { ...options, crosshair: { vertLine: line, horzLine: line } }) };
+            }
+        });
+    }, crosshairColor);
+}
+
+// Read the actual canvas overlay rather than treating a method call as proof of cleared pixels.
+function crosshairVisible(plot) {
+    const channels = crosshairColor.slice(1).match(/../g).map(hex => Number.parseInt(hex, 16));
+    return plot.locator('canvas').evaluateAll((canvases, [red, green, blue]) => canvases.some(canvas => {
+        if (!canvas.width || !canvas.height) return false;
+        const pixels = canvas.getContext('2d').getImageData(0, Math.floor(canvas.height / 2), canvas.width, 1).data;
+        for (let offset = 0; offset < pixels.length; offset += 4)
+            if (pixels[offset] === red && pixels[offset + 1] === green && pixels[offset + 2] === blue && pixels[offset + 3] === 255) return true;
+        return false;
+    }), channels);
+}
+
 // Hash the native price pane's left and right regions separately to catch misplaced or missing overlays.
 function overlayPixels(plot) {
     return plot.locator('canvas').evaluateAll(canvases => {
@@ -249,6 +277,7 @@ test.beforeEach(async ({ page }) => { await signIn(page); });
 
 test('plots completed candles and volume with keyboard, event evidence and a responsive viewport', async ({ page }) => {
     const wire = await chartWire(page);
+    await colorCrosshair(page);
     await page.emulateMedia({ colorScheme: 'light' });
     await page.clock.install({ time: new Date('2026-11-12T17:41:00Z') });
     await page.setViewportSize({ width: 1440, height: 1050 });
@@ -288,6 +317,7 @@ test('plots completed candles and volume with keyboard, event evidence and a res
     await plot.hover({ position: { x: 320, y: 110 } });
     await expect(caption).not.toHaveText(firstHovered);
     await expect(values).not.toHaveText(firstValues);
+    await expect.poll(() => crosshairVisible(plot)).toBe(true);
     expect([wire.watches.length, wire.history.length]).toEqual(requestCount);
 
     await plot.focus();
@@ -311,6 +341,18 @@ test('plots completed candles and volume with keyboard, event evidence and a res
     await expect(reading.locator('[data-chart-candle-time]')).toContainText('15:35:00 Berlin');
     await expect(candle).not.toContainText('2026-11-12T14:30:00.000Z');
     await expect(plot).toBeFocused();
+    await expect.poll(() => crosshairVisible(plot)).toBe(true);
+    const selectedBeforeUpdate = await caption.textContent();
+    send(watch, frames(watch, { ...fixtureSnapshot(watch.key), status: 'delayed', reason: 'Waiting for the next completed candle.' }));
+    await expect(chart.locator('[data-chart-status]')).toContainText('Delayed candles');
+    await expect(caption).toHaveText(selectedBeforeUpdate);
+    await expect.poll(() => crosshairVisible(plot)).toBe(false);
+    await plot.press('ArrowRight');
+    await expect.poll(() => crosshairVisible(plot)).toBe(true);
+    await chart.getByRole('button', { name: 'Go to latest', exact: true }).press('Enter');
+    await expect(caption).toHaveText(latest);
+    await expect.poll(() => crosshairVisible(plot)).toBe(false);
+    await plot.focus();
     await page.keyboard.press('End');
     await expect(reading.getByRole('button', { name: 'Next candle' })).toBeDisabled();
 
@@ -339,7 +381,13 @@ test('plots completed candles and volume with keyboard, event evidence and a res
     await expect(chart.locator('[data-chart-events]')).toContainText('Outside loaded candle intervals');
     expect([wire.watches.length, wire.history.length]).toEqual(requestCount);
 
+    await plot.press('End');
+    await expect.poll(() => crosshairVisible(plot)).toBe(true);
+    const selectedBeforeResize = await caption.textContent();
     await page.setViewportSize({ width: 390, height: 830 });
+    await expect.poll(() => plot.locator('canvas').first().evaluate(canvas => canvas.width)).toBeLessThan(390);
+    await expect(caption).toHaveText(selectedBeforeResize);
+    await expect.poll(() => crosshairVisible(plot)).toBe(false);
     await data.focus();
     await data.press('Enter');
     await expect(candle).toBeHidden();
