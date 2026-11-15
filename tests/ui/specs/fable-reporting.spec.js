@@ -1,8 +1,30 @@
 import { expect, test } from "@playwright/test";
 import { signIn } from "./sign-in.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const statusPath = "/api/finviz-screen-capture/status";
 const disabledMessage = "Scheduled capture is disabled in UI fixtures.";
+
+test("Operations distinguishes archive-root presence from verified writes", async ({ page }) => {
+  const runId = process.env.TRADINGFLOW_UI_OWNED_RUN_ID;
+  expect(runId).toMatch(/^[0-9a-f-]{36}$/i);
+  const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const fixture = path.join(repository, ".tmp", "ui-tests", "test-runs", `run-${runId}`, "raw", "fixture", "2001-01-01");
+  await fs.mkdir(fixture, { recursive: true });
+  // These deliberately incomplete synthetic bytes cannot establish a successful provider receipt.
+  await fs.writeFile(path.join(fixture, "unverified.manifest.json"), '{"synthetic":true}');
+  await signIn(page);
+  await page.goto("/Operations");
+  const row = page.getByRole("row").filter({ hasText: "IRawArchiveWriter" });
+  await expect(row.getByText("Root found", { exact: true })).toBeVisible();
+  await expect(row).toContainText("this check does not verify successful writes");
+  await expect(row).toContainText("Historical manifest totals and last-write time are not queried on this page");
+  await expect(row).toContainText("automatic deletion is disabled");
+  await expect(row).not.toContainText("newest write");
+  await expect(page.getByRole("region", { name: "Scheduled Finviz capture", exact: true })).toContainText(disabledMessage);
+});
 
 test("Finviz capture status requires sign-in", async ({ request }) => {
   const response = await request.get(statusPath, { maxRedirects: 0 });

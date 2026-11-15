@@ -347,7 +347,7 @@ public sealed class OperationsHealthService
             warmupReport.ManifestWrittenAtUtc);
     }
 
-    /// <summary>Reports the archive location and recent writes while making explicit that originals never expire automatically.</summary>
+    /// <summary>Checks the archive root without walking retained history; provider receipt status is reported separately.</summary>
     private SubsystemHealth BuildRawArchiveRow(DateTimeOffset now)
     {
         var root = rawArchiveOptions.RootPath;
@@ -359,24 +359,18 @@ public sealed class OperationsHealthService
                     "Raw archive",
                     "IRawArchiveWriter",
                     SubsystemState.Failing,
-                    "Missing",
-                    $"Archive root {root} does not exist, so provider payloads cannot be archived before parse.",
+                    "Root unavailable",
+                    $"The archive directory could not be confirmed at {root}; it may be missing or inaccessible.",
                     now);
             }
 
-            var documents = Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories).Take(100_001).Count();
-            var newest = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                .Select(File.GetLastWriteTimeUtc)
-                .DefaultIfEmpty()
-                .Max();
             return new SubsystemHealth(
                 "Raw archive",
                 "IRawArchiveWriter",
                 SubsystemState.Healthy,
-                "Archiving",
-                $"Payloads are archived before parse under {root}. " +
-                $"{(documents > 100_000 ? "over 100,000" : documents.ToString())} manifest(s); " +
-                $"newest write {(newest == default ? "none yet" : $"{newest:yyyy-MM-dd HH:mm} UTC")}. " +
+                "Root found",
+                $"Archive directory found at {root}; this check does not verify successful writes. " +
+                "Historical manifest totals and last-write time are not queried on this page. " +
                 $"Minimum preservation period {rawArchiveOptions.RetentionDays} days; automatic deletion is disabled.",
                 now);
         }
