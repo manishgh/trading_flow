@@ -89,7 +89,7 @@ public sealed class LivePipelineHealthTests
     public void FormatPipelineHealth_ShowsFailedSourceAndItsRecovery()
     {
         var now = new DateTimeOffset(2026, 8, 26, 14, 0, 0, TimeSpan.Zero);
-        var model = new TradingFlow.Web.Pages.PaperJobModel(null!, null!, null!);
+        var model = new TradingFlow.Web.Pages.PaperJobModel(null!, null!, null!, null!);
         var outcome = new DiscoverySourceRefreshOutcome("finviz", "screen", now, null, "fixture timeout");
         var failed = new LivePipelineHealth().RecordDiscoveryRefresh(Snapshot(now, [outcome]));
         Assert.Contains("finviz/screen refresh failed", model.FormatPipelineHealth(failed), StringComparison.Ordinal);
@@ -103,7 +103,7 @@ public sealed class LivePipelineHealthTests
     public void FormatPipelineHealth_ReportsLegacyFailureWithoutInventingScope()
     {
         var now = new DateTimeOffset(2026, 8, 26, 14, 0, 0, TimeSpan.Zero);
-        var model = new TradingFlow.Web.Pages.PaperJobModel(null!, null!, null!);
+        var model = new TradingFlow.Web.Pages.PaperJobModel(null!, null!, null!, null!);
         var legacy = new LivePipelineHealth(1, 1, now, LastFailureAtUtc: now, LastFailure: "Ticker warning");
         var status = model.FormatPipelineHealth(legacy);
 

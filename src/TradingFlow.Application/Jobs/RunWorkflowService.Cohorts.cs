@@ -14,6 +14,7 @@ public sealed partial class RunWorkflowService
     /// <summary>Removes a losing attempt's files while retaining every input owned by the durable winner, including on cancellation.</summary>
     internal async Task DiscardUnacceptedInputsAsync(PersistedJob prepared)
     {
+        if (await research.OwnsInputsAsync(prepared, CancellationToken.None)) return;
         var retained = await jobs.GetJobAsync(prepared.Id, CancellationToken.None);
         if (retained?.ConfigPath == prepared.ConfigPath) return;
         var retainedPaths = retained is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)

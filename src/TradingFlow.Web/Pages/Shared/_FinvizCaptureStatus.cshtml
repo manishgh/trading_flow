@@ -1,0 +1,62 @@
+@using TradingFlow.Web.Services.ScreenCaptures
+@model FinvizScreenCaptureStatus
+
+<section aria-labelledby="FinvizCaptureHeading">
+    <h2 id="FinvizCaptureHeading" class="section-heading">Scheduled Finviz capture</h2>
+    @if (Model.Message is { } message)
+    {
+        <p class="note">@message</p>
+    }
+    @if (Model.NextSlotAtUtc is { } next)
+    {
+        <p class="note">Next slot <time datetime="@next.ToString("O")">@FinvizScreenCaptureStatus.ExchangeStamp(next)</time></p>
+    }
+    @if (Model.Screens.Count > 0)
+    {
+        <div class="table-scroll">
+            <table class="grid-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Screen</th>
+                        <th scope="col">Latest slot</th>
+                        <th scope="col">Last capture received</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var screen in Model.Screens)
+                    {
+                        <tr>
+                            <th scope="row">@screen.Name</th>
+                            <td>
+                                <strong>@screen.State</strong>
+                                @if (screen.LatestSlotAtUtc is { } slot)
+                                {
+                                    <time datetime="@slot.ToString("O")">@FinvizScreenCaptureStatus.ExchangeStamp(slot)</time>
+                                }
+                                @if (screen.Reason is { } reason)
+                                {
+                                    <span class="cell-sub">@reason</span>
+                                }
+                            </td>
+                            <td>
+                                @if (screen.LastCaptureAtUtc is { } received)
+                                {
+                                    <time datetime="@received.ToString("O")">@FinvizScreenCaptureStatus.ExchangeStamp(received)</time>
+                                    <span class="cell-sub">@screen.LastCaptureRows CSV rows</span>
+                                    @if (screen.LastCaptureReason is { } lastReason)
+                                    {
+                                        <span class="cell-sub">@lastReason</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="muted">No capture recorded</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>

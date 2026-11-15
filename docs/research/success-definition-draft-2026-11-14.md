@@ -3,6 +3,10 @@
 Status: draft. The numbers marked **to confirm** are proposals; the user sets them. Once confirmed, every new strategy
 test, paper run and real-money decision is judged against this page, so each test ends in a clear yes or no.
 
+Factual corrections: 15 November 2026, approved NEXT-1 documentation scope. This edit does not adopt the proposed
+investment targets or authorize a study, paper order, rotation strategy or live trading. The current paper controls
+use 2% daily, 4% weekly and 10% observed-peak entry stops; the draft risk numbers below do not replace them.
+
 ## Why this page exists
 
 **What was tested:**
@@ -10,9 +14,14 @@ test, paper run and real-money decision is judged against this page, so each tes
 - Same-day opening-range breakout: ORB 1.2.0, 2.0.0 and 2.1.0.
 - Two monthly fund rules: the 10-month trend rule and the sector rotation.
 
-**What the tests found:** all of them were measured with point-in-time stock lists, real costs and no hindsight.
-- **Single-stock rules and ORB:** none beat simply holding the same stocks.
-- **Fund rules:** they trade return for smaller falls, as published.
+**What the tests found and what their stock lists establish:**
+- **Single-stock reversal rules:** the published 2017–2023 signal study used point-in-time eligible lists and did not
+  establish a reliable advantage over holding the comparison stocks.
+- **ORB:** the October test used a fixed, selected stock list; it did not apply the published daily top-20 selection.
+  Every reported October group lost money, including the audit's zero-slippage comparison. This is diagnostic evidence,
+  not proof that the paper's complete point-in-time method has been tested.
+- **Fund rules:** their published price-only tests trade return for smaller falls. These fixed fund-universe comparisons
+  are distinct from a historical stock-screen membership claim. Neither strategy nor benchmark includes cash dividends.
 
 **What was missing:** a definition of what result would be good enough. Without one, research keeps going and data
 keeps growing without a decision.
@@ -20,8 +29,10 @@ keeps growing without a decision.
 ## 1. The money
 
 - **Capital for automated trading:** **to confirm** (for example $10,000 to $25,000 to start).
-- **Benchmark:** simply holding SPY over the same months, with dividends. A strategy that does not beat this after costs,
-  or does not clearly reduce risk against it, is not worth running.
+- **Proposed benchmark, to confirm:** simply holding SPY over the same months, with dividends. Comparable strategy
+  dividend accounting and verified corporate-action coverage are required before claiming that total-return comparison.
+  Current published comparisons are price-only and must remain labelled that way. The user still needs to select the
+  return/risk objective below; benchmark choice is not implied by approval of software repairs.
 
 ## 2. Acceptable risk
 
@@ -37,8 +48,11 @@ keeps growing without a decision.
 - **(b) Match SPY with smaller falls:** at least 80% of SPY's return with at most 60% of its worst fall.
 - **(c) Steady income:** a positive return in at least 9 of 12 months, whatever SPY does.
 
-**The rotation measured against these:** 93% of buy-and-hold's return with 64% of its worst fall. That is close to (b)
-but not inside it.
+**The rotation's audited comparisons:** the approximately 93% return ratio and 64% worst-fall ratio refer to the
+11-sector buy-and-hold basket, not SPY. Against price-only SPY over the matched evaluation window, Fable measured
+approximately 70% of its annualized return and 65% of its worst fall. Against the proposed option (b)'s 80%/60% lines,
+that misses both thresholds. These are descriptions of existing research, not adopted success rules. Rotation is
+disabled and deferred. See the [Fable audit, F3](tradingflow-audit-2026-11-14.md#26-new-findings-from-this-audit).
 
 ## 4. How often to trade
 

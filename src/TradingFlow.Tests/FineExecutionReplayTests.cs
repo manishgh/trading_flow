@@ -34,12 +34,15 @@ public sealed class FineExecutionReplayTests
     [Fact]
     public void EntrySliceTouchIsUnprotected_ThenLaterSliceStopWinsOverTargetAndUsesGapOpen()
     {
-        var runner = Run([Bar(0, 10, 13, 8), Bar(5, 8, 13, 7), Bar(10)], quantity: 10);
+        var evidence = new BacktestExitEvidence(Start.AddMinutes(5), Start.AddMinutes(10), Start.AddMinutes(10),
+            [BacktestExitCondition.CloseAboveSma5]);
+        var runner = Run([Bar(0, 10, 13, 8), Bar(5, 8, 13, 7), Bar(10)], Candidate() with { ExitEvidence = evidence });
         Assert.Empty(runner.Failures);
         var trade = Assert.Single(runner.CompletedTrades);
         Assert.Equal(Start.AddMinutes(10), trade.ExitTimestamp);
         Assert.Equal("stop_loss", trade.ExitReason);
         Assert.Equal(8, trade.ExitPrice);
+        Assert.Null(trade.ExitEvidence);
     }
 
     [Fact]
@@ -216,6 +219,8 @@ public sealed class FineExecutionReplayTests
         var result = FineExecutionTiming.DailyExit(strategy, daily, snaps, 0, daily[^1].Timestamp, _ => true, t => t.AddHours(9.5));
         Assert.Equal(6, result.Index);
         Assert.Equal("max_hold_bars", result.Reason);
+        Assert.Equal([BacktestExitCondition.MaxHoldBars], result.Evidence!.Conditions);
+        Assert.Null(result.Evidence.DecisionCloseUtc);
         snaps[1] = snaps[1] with { Sma5 = 9 };
         result = FineExecutionTiming.DailyExit(strategy, daily, snaps, 0, daily[^1].Timestamp, _ => true, t => t.AddHours(9.5));
         Assert.Equal(2, result.Index);
@@ -224,6 +229,7 @@ public sealed class FineExecutionReplayTests
         result = FineExecutionTiming.DailyExit(strategy, daily, snaps, 0, daily[^1].Timestamp,
             _ => true, t => t.AddHours(9.5));
         Assert.Equal(2, result.Index); // known before next mapped open, despite being after daily source midnight
+        Assert.Equal(daily[1].KnownAtUtc, result.Evidence!.AvailableAtUtc);
         daily[1] = daily[1] with { KnownAtUtc = daily[^1].Timestamp.AddDays(2) };
         result = FineExecutionTiming.DailyExit(strategy, daily, snaps, 0, daily[^1].Timestamp,
             _ => true, t => t.AddHours(9.5));
@@ -251,9 +257,9 @@ public sealed class FineExecutionReplayTests
         snaps[1] = snaps[1] with { Sma5 = 9 };
         var fillDayExit = FineExecutionTiming.DailyExit(strategy, daily, snaps, 1, daily[^1].Timestamp, _ => true, t => t.AddHours(9.5));
 
-        Assert.Equal((6, "max_hold_bars"), held);
-        Assert.Equal((7, "max_hold_bars"), withoutSetting);
-        Assert.Equal((2, "technical_exit_above_sma5"), fillDayExit);
+        Assert.Equal((6, "max_hold_bars"), (held.Index, held.Reason));
+        Assert.Equal((7, "max_hold_bars"), (withoutSetting.Index, withoutSetting.Reason));
+        Assert.Equal((2, "technical_exit_above_sma5"), (fillDayExit.Index, fillDayExit.Reason));
     }
 
     [Fact]

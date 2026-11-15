@@ -106,7 +106,12 @@ public sealed record RunPendingOrder(string CandidateId, string StrategyId, stri
     string OrderId, string Side, string OrderType, int RemainingQuantity, string Status,
     decimal ReservedNotional, DateTimeOffset KnownAtUtc);
 public sealed record RunPendingExit(string CandidateId, string StrategyId, string Ticker,
-    DateTimeOffset KnownAtUtc, string Reason);
+    DateTimeOffset KnownAtUtc, string Reason)
+{
+    public RunExitEvidence? ExitEvidence { get; init; }
+}
+public sealed record RunExitEvidence(DateTimeOffset? DecisionCloseUtc, DateTimeOffset AvailableAtUtc,
+    IReadOnlyList<string> Conditions);
 public sealed record RunHistoryEligibility(string Ticker, string StrategyId, int RequiredBars,
     int AvailableAtStart, int AvailableAtCutoff, DateTimeOffset? FirstEligibleDecisionUtc, string Status);
 

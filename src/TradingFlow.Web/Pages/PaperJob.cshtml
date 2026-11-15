@@ -559,4 +559,8 @@ else
             </div>
         </section>
     </div>
+    @if (Model.ExecutionComparison is { } comparison)
+    {
+        <partial name="_PaperExecutionComparison" model="comparison" />
+    }
 }

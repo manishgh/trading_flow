@@ -189,7 +189,7 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
             if (stateStore is not null)
             {
                 try { return Task.FromResult(stateStore.GetTransitions(candidateId)); }
-                catch (SqliteException exception)
+                catch (Exception exception) when (exception is SqliteException or InvalidDataException or JsonException)
                 {
                     persistenceFailure = new AuditPersistenceException("Candidate transition index read failed.", exception);
                     throw persistenceFailure;
@@ -277,16 +277,17 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
 
         try
         {
+            // Commit immutable fragments before publishing references; any later journal failure poisons this run.
+            var encoded = stateStore!.Save(candidate, appendedTransitions);
             durableWriter.WriteLine(JsonSerializer.Serialize(new BacktestCandidateJournalEntry(
                 recordType,
                 DateTimeOffset.UtcNow,
                 Clone(candidate),
-                appendedTransitions.Select(Clone).ToArray())));
+                encoded)));
             durableWriter.Flush();
             durableStream.Flush(flushToDisk: true);
-            stateStore?.Save(candidate, appendedTransitions);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SqliteException or JsonException or InvalidDataException)
         {
             persistenceFailure = new AuditPersistenceException("Candidate audit append failed; the run cannot claim complete evidence.", exception);
             throw persistenceFailure;
@@ -300,7 +301,7 @@ internal sealed class BacktestCandidateJournal : ICandidateRepository, IDisposab
             return stateStore is not null ? stateStore.Get(candidateId)
                 : candidates.TryGetValue(candidateId, out var value) ? Clone(value) : null;
         }
-        catch (SqliteException exception)
+        catch (Exception exception) when (exception is SqliteException or InvalidDataException or JsonException)
         {
             persistenceFailure = new AuditPersistenceException("Candidate audit index read failed.", exception);
             throw persistenceFailure;

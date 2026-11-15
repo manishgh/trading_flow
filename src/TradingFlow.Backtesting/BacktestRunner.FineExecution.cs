@@ -29,14 +29,14 @@ public sealed partial class BacktestRunner
         if (distance <= 0 || strategy.ExitRules.HasProtectiveStop && plan.InitialStopPrice <= 0) return null;
         var target = ResolveTakeProfitPrice(plan, reference, distance);
         if (strategy.ExitRules.HasProfitTarget && target <= reference) return null;
-        var (exitIndex, reason) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
+        var (exitIndex, reason, evidence) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
             run.Engine.PrecommittedLiquidationSourceUtc.Value,
             bar => _sessionClock.ValidateExecutionWindow(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session),
-            source => FineExecutionTiming.SessionOpen(source, strategy.Session.ExchangeTimezone, schedules));
+            source => FineExecutionTiming.SessionOpen(source, strategy.Session.ExchangeTimezone, schedules), schedules);
         var exit = FineExecutionTiming.SessionOpen(daily[exitIndex].Timestamp, strategy.Session.ExchangeTimezone, schedules);
         var candidate = BuildCandidate(candidateId, strategy, signal, "long", entry, reference,
             plan.InitialStopPrice, target, exit, 0m, reason, distance, daily[entryIndex - 1].Volume) with
-        { ExecutionReplay = new(ExecutionReplayPolicy.DailyRthSipPortfolioV1, daily[entryIndex].Timestamp,
+        { ExitEvidence = evidence, ExecutionReplay = new(ExecutionReplayPolicy.DailyRthSipPortfolioV1, daily[entryIndex].Timestamp,
             daily[exitIndex].Timestamp, terminal, [])
             { EventExecutionEndUtc = FineExecutionTiming.SessionClose(daily[exitIndex].Timestamp, strategy.Session.ExchangeTimezone, schedules) } };
         auditor.LogEvent(signal.Ticker, strategy.StrategyName, plan.TriggeredAtUtc, ExecutionState.SignalGenerated,
@@ -73,9 +73,9 @@ public sealed partial class BacktestRunner
         var target = ResolveTakeProfitPrice(plan, planningPrice, distance);
         if (strategy.ExitRules.HasProfitTarget && target <= planningPrice) return null;
 
-        var (exitIndex, reason) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
+        var (exitIndex, reason, evidence) = FineExecutionTiming.DailyExit(strategy, daily, snapshots, entryIndex,
             terminalSource, bar => _sessionClock.ValidateExecutionWindow(bar.Timestamp, strategy.Execution.Timeframe, strategy.Session),
-            source => FineExecutionTiming.SessionOpen(source, strategy.Session.ExchangeTimezone, schedules));
+            source => FineExecutionTiming.SessionOpen(source, strategy.Session.ExchangeTimezone, schedules), schedules);
         var exitSource = daily[exitIndex].Timestamp;
         var exitOpen = FineExecutionTiming.SessionOpen(exitSource, strategy.Session.ExchangeTimezone, schedules);
         var required = FineExecutionTiming.RequiredSlices(entryOpen, terminalOpen,
@@ -84,6 +84,7 @@ public sealed partial class BacktestRunner
             entryPrice, plan.InitialStopPrice, target, exitOpen, 0m, reason, distance,
             daily[entryIndex - 1].Volume) with
         {
+            ExitEvidence = evidence,
             ExecutionReplay = new(ExecutionReplayPolicy.DailyRthFiveMinuteV1,
                 entrySource, exitSource, terminalOpen, required)
         };
@@ -119,9 +120,11 @@ internal static class FineExecutionTiming
             throw new InvalidDataException($"No authoritative closing session for {dailySource:O}.");
         return At(date, session.RegularClose, zone);
     }
-    public static (int Index, string Reason) DailyExit(StrategyDefinition strategy,
+    // Determine the existing route and report all matches at its source close, prior to replaying finer protection.
+    public static (int Index, string Reason, BacktestExitEvidence? Evidence) DailyExit(StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> daily, IReadOnlyList<IndicatorSnapshot> snapshots, int entryIndex,
-        DateTimeOffset terminalSource, Func<OhlcvBar, bool> eligible, Func<DateTimeOffset, DateTimeOffset> sessionOpen)
+        DateTimeOffset terminalSource, Func<OhlcvBar, bool> eligible, Func<DateTimeOffset, DateTimeOffset> sessionOpen,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null)
     {
         var entrySource = daily[entryIndex].Timestamp;
         var engine = new TechnicalExecutionEngine();
@@ -133,6 +136,7 @@ internal static class FineExecutionTiming
         {
             var bar = daily[i];
             var exitIndex = i;
+            BacktestExitEvidence? evidence = null;
             string? reason;
             if (i > entryIndex && bar.Timestamp == terminalSource) reason = "scheduled_study_exit";
             else
@@ -142,9 +146,14 @@ internal static class FineExecutionTiming
                     strategy.ExitRules.ExitLogPriceLookbackBars, b => b.Close, false);
                 var volumeTrend = TechnicalExecutionEngine.ComputeLogTrend(daily, i,
                     strategy.ExitRules.ExitLogVolumeLookbackBars, b => b.Volume, true);
-                reason = engine.GetTechnicalOrTimeExitReason(strategy, snapshots[i], held++,
+                var barsHeld = held++;
+                reason = engine.GetTechnicalOrTimeExitReason(strategy, snapshots[i], barsHeld,
                     bar.Timestamp, entrySource, priceTrend?.Slope, volumeTrend?.Slope, snapshots[i - 1]);
                 if (reason is null) continue;
+                var observations = new List<BacktestExitCondition>();
+                engine.GetTechnicalOrTimeExitReason(strategy, snapshots[i], barsHeld, bar.Timestamp, entrySource,
+                    priceTrend?.Slope, volumeTrend?.Slope, snapshots[i - 1], observations);
+                evidence = BacktestDecisionTiming.DescribeCompletedExit(bar, strategy, observations, schedules);
                 var available = bar.Timestamp.AddDays(1);
                 if (bar.KnownAtUtc > available) available = bar.KnownAtUtc.Value;
                 exitIndex = Enumerable.Range(i + 1, daily.Count - i - 1)
@@ -155,7 +164,7 @@ internal static class FineExecutionTiming
                     reason = "scheduled_study_exit";
                 }
             }
-            return (exitIndex, reason);
+            return (exitIndex, reason, evidence);
         }
         throw new InvalidOperationException("Daily technical/terminal exit horizon unavailable.");
     }

@@ -1,0 +1,192 @@
+@using TradingFlow.Web.Models
+@model PaperExecutionComparisonResult
+@functions {
+    private static string Price(decimal? value) => value?.ToString("0.####") ?? "Unavailable";
+    private static string Number(decimal? value) => value?.ToString("0.##") ?? "Unavailable";
+    private static string Time(DateTimeOffset? value) => value is { } instant
+        ? TradingFlow.Web.Services.UiDisplayFormatter.FormatAuditInstant(instant, includeMilliseconds: true) : "Unavailable";
+    private static string Delay(TimeSpan? value) => value is { } elapsed ? elapsed.TotalSeconds.ToString("0.###") + " s" : "Unavailable";
+    private static string ReferenceLabel(PaperPriceReference kind) => kind switch
+    {
+        PaperPriceReference.AdmissionAsk => "Admission ask",
+        PaperPriceReference.AdmissionBid => "Admission bid",
+        PaperPriceReference.ModeledExecutable => "Modeled executable price",
+        PaperPriceReference.Decision => "Decision price",
+        _ => kind.ToString()
+    };
+}
+
+<section class="panel">
+    <h2>Paper fill comparison</h2>
+    @if (Model.UnavailableReason is { } unavailable)
+    {
+        <p class="warn">@unavailable</p>
+    }
+    else if (Model.OrderCount == 0)
+    {
+        <p class="muted">This run has no durable orders yet.</p>
+    }
+    else
+    {
+        <p class="muted">Durable order records for this run. The local pre-POST stamp records an attempt before the broker call. Admission quotes were observed earlier. Fill coverage uses broker execution IDs and unit quantities.</p>
+        @if (Model.OrderCount > Model.Orders.Count)
+        {
+            <p class="muted">Showing the latest @Model.Orders.Count of @Model.OrderCount orders. The monthly summary uses all available unit fills.</p>
+        }
+        <details>
+            <summary>Order status and evidence coverage</summary>
+            <ul>
+                @foreach (var status in Model.Coverage)
+                {
+                    <li>@status.State · @status.OrderCount orders · @status.WithoutUnitFills without unit fills · @status.MissingUnits with incomplete unit coverage · @status.FillsWithoutClock fills without an execution time · @status.WithoutAdmissionQuote without admission quotes · @status.WithoutDecisionReference without decision references</li>
+                }
+            </ul>
+        </details>
+        <div class="table-scroll">
+            <table class="table data-grid-table">
+                <thead><tr><th>Order</th><th>Decision and limit</th><th>Admission quote at dispatch</th><th>Local pre-POST attempts</th><th>Broker unit fills</th></tr></thead>
+                <tbody>
+                @foreach (var order in Model.Orders)
+                {
+                    var admission = order.Admission;
+                    <tr>
+                        <td>
+                            <strong>@order.Intent.Symbol</strong> · @order.Intent.Side · @order.State
+                            <span class="cell-sub">@order.Intent.Kind · @Number(order.Intent.RequestedQuantity) requested</span>
+                            <span class="cell-sub" title="@order.Intent.IntentId">@order.Intent.ClientOrderId</span>
+                            <span class="cell-sub" title="@order.Intent.AccountId">@order.Identity?.StrategyId @order.Identity?.SemanticVersion</span>
+                            @if (order.Identity is { } identity)
+                            {
+                                <details><summary>Exact strategy hash</summary><code>@identity.ContentSha256</code></details>
+                            }
+                            else
+                            {
+                                <span class="cell-sub">Strategy identity unavailable</span>
+                            }
+                        </td>
+                        <td>
+                            Decision @Price(admission?.DecisionPrice)
+                            <span class="cell-sub">@Time(admission?.DecisionAtUtc)</span>
+                            <span class="cell-sub">Modeled executable @Price(admission?.ModeledExecutablePrice)</span>
+                            <span class="cell-sub">Limit @Price(order.Intent.LimitPrice)</span>
+                        </td>
+                        <td>
+                            @if (admission?.QuoteObservedAtUtc is { } observed)
+                            {
+                                <span>Bid @Price(admission.Bid) · ask @Price(admission.Ask) · @admission.QuoteFeed</span>
+                                <span class="cell-sub">Observed @Time(observed)</span>
+                                <span class="cell-sub">Provider quote @Time(admission.QuoteProviderTimestampUtc)</span>
+                                @if (admission.QuoteReceiptId is { } receipt)
+                                {
+                                    <details><summary>Archived quote receipt</summary>
+                                        <span class="cell-sub">@receipt</span>
+                                        <span class="cell-sub">@Time(admission.QuoteReceiptAtUtc)</span>
+                                        <code>@admission.QuoteReceiptSha256</code>
+                                    </details>
+                                }
+                                else
+                                {
+                                    <span class="cell-sub">Raw quote receipt unavailable</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>Admission quote unavailable</span>
+                            }
+                        </td>
+                        <td>
+                            @foreach (var attempt in order.Attempts)
+                            {
+                                var timing = order.QuoteTiming(attempt.PrePostAtUtc);
+                                <details open="@(attempt.AttemptNumber == 1)">
+                                    <summary>Attempt @attempt.AttemptNumber · @Time(attempt.PrePostAtUtc)</summary>
+                                    <span class="cell-sub">Decision-to-attempt @Delay(PaperExecutionComparison.Elapsed(admission?.DecisionAtUtc, attempt.PrePostAtUtc))</span>
+                                    @if (timing.ObservationDelay is { })
+                                    {
+                                        <span class="cell-sub">Admission quote at dispatch, observed @Delay(timing.ObservationDelay) earlier</span>
+                                    }
+                                    <span class="cell-sub">Provider quote age @Delay(timing.ProviderQuoteAge)</span>
+                                    @if (timing.Stale == true)
+                                    {
+                                        <span class="warn">Beyond the configured @admission?.QuoteFreshnessLimitMilliseconds ms freshness threshold</span>
+                                    }
+                                </details>
+                            }
+                            @if (order.Attempts.Count < order.Intent.DispatchAttemptCount)
+                            {
+                                <span class="cell-sub">@order.Intent.DispatchAttemptCount recorded attempts · latest @Time(order.Intent.LastDispatchAttemptAtUtc)</span>
+                                <span class="cell-sub">Separate attempt evidence unavailable for @(order.Intent.DispatchAttemptCount - order.Attempts.Count).</span>
+                            }
+                            else if (order.Attempts.Count == 0)
+                            {
+                                <span>No local pre-POST attempt recorded</span>
+                            }
+                        </td>
+                        <td>
+                            @Number(order.UnitFillQuantity) units with broker execution evidence · weighted price @Price(order.WeightedFillPrice)
+                            @if (order.BrokerFilledQuantity is { } brokerQuantity && brokerQuantity > order.UnitFillQuantity)
+                            {
+                                <span class="cell-sub">Broker cumulative total @Number(brokerQuantity) · unit evidence incomplete</span>
+                            }
+                            @foreach (var fill in order.Fills)
+                            {
+                                <details>
+                                    <summary>@Number(fill.Quantity) at @Price(fill.Price) · execution time @Time(fill.AtUtc)</summary>
+                                    <span class="cell-sub">Execution <code>@fill.ExecutionId</code></span>
+                                    <span class="cell-sub">Broker order <code>@fill.BrokerOrderId</code></span>
+                                    <span class="cell-sub">Decision-to-fill @Delay(PaperExecutionComparison.Elapsed(admission?.DecisionAtUtc, fill.AtUtc))</span>
+                                    @foreach (var kind in Enum.GetValues<PaperPriceReference>())
+                                    {
+                                        @if (order.Reference(kind) is { } reference)
+                                        {
+                                            <span class="cell-sub">@ReferenceLabel(kind) @Price(reference) · @Number(PaperExecutionComparison.AdverseBps(order.Intent.Side, reference, fill.Price)) adverse bps</span>
+                                        }
+                                    }
+                                </details>
+                            }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+
+        <h3>New York fill months</h3>
+        @if (Model.Months.Count == 0)
+        {
+            <p class="muted">No fills have a broker execution ID and a source fill time for monthly attribution.</p>
+        }
+        else
+        {
+            <div class="table-scroll">
+                <table class="table data-grid-table">
+                    <thead><tr><th>Month and strategy</th><th>Reference</th><th>Orders and fills covered</th><th>Units covered</th><th>Weighted fill price</th><th>Adverse bps</th><th>Decision to attempt and fill</th></tr></thead>
+                    <tbody>
+                    @foreach (var row in Model.Months)
+                    {
+                        <tr>
+                            <td title="@row.ContentSha256">@row.Month · @row.StrategyId @(row.Version ?? "(version unavailable)")
+                                @if (row.UnidentifiedIntentId is { } intent)
+                                {
+                                    <span class="cell-sub">Order @intent</span>
+                                }
+                            </td>
+                            <td>@ReferenceLabel(row.ReferenceKind)</td>
+                            <td>@row.CoveredOrderCount / @row.OrderCount orders · @row.CoveredFillCount / @row.FillCount fills
+                                @if (row.StaleAtFirstAttemptFillCount > 0 && row.ReferenceKind is PaperPriceReference.AdmissionAsk or PaperPriceReference.AdmissionBid)
+                                {
+                                    <span class="cell-sub">@row.StaleAtFirstAttemptFillCount with stale quote at first attempt</span>
+                                }
+                            </td>
+                            <td>@Number(row.CoveredFillQuantity) / @Number(row.FillQuantity)</td>
+                            <td>@Price(row.WeightedFillPrice)</td>
+                            <td>@Number(row.AdverseBps)</td>
+                            <td>@Number(row.DecisionToAttemptSeconds) / @Number(row.DecisionToFillSeconds) seconds</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+</section>

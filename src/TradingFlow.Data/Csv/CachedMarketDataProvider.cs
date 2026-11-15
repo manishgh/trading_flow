@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
 
@@ -401,6 +402,8 @@ public sealed partial class CachedMarketDataProvider :
         {
             throw new ArgumentOutOfRangeException(nameof(end), "Cache range end must not precede start.");
         }
+        if (ResearchObservationBoundary.Current is { } cutoff && requestEndUtc > cutoff)
+            throw new InvalidDataException("The candle request reaches beyond the frozen research observation boundary.");
 
         foreach (var ticker in tickers)
         {
@@ -533,7 +536,7 @@ public sealed partial class CachedMarketDataProvider :
         try
         {
             var manifest = await MarketDataCacheManifestStore.ReadAsync(manifestPath, cancellationToken);
-            if (manifest is null || !manifest.MatchesRequest(
+            if (manifest is null || !IsWithinResearchCutoff(manifest) || !manifest.MatchesRequest(
                 descriptor,
                 ticker,
                 timeframe,

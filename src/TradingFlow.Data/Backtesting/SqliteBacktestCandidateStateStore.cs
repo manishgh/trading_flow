@@ -10,6 +10,7 @@ public sealed class SqliteBacktestCandidateStateStore : IDisposable
 {
     public const int MaximumRecordCharacters = 4 * 1024 * 1024;
     private readonly SqliteConnection connection;
+    public CandidateEvidenceIndex Evidence { get; }
 
     public SqliteBacktestCandidateStateStore(string path, bool readOnly = false)
     {
@@ -35,6 +36,7 @@ public sealed class SqliteBacktestCandidateStateStore : IDisposable
                         PRIMARY KEY(candidate_id, sequence));
                     """);
             }
+            Evidence = new CandidateEvidenceIndex(connection, create: !readOnly);
         }
         catch { connection.Dispose(); throw; }
     }
@@ -52,7 +54,11 @@ public sealed class SqliteBacktestCandidateStateStore : IDisposable
     public IReadOnlyList<CandidateTransitionRecord> GetTransitions(Guid id)
         => ReadTransitions(id).ToArray();
 
-    public IEnumerable<CandidateTransitionRecord> ReadTransitions(Guid id)
+    /// <summary>Preserves the repository's exact inline evidence contract while reading its deduplicated disk representation.</summary>
+    public IEnumerable<CandidateTransitionRecord> ReadTransitions(Guid id) => ReadEncodedTransitions(id).Select(Evidence.Hydrate);
+
+    /// <summary>Streams stored references for publication; ordinary strategy consumers use the hydrated reader.</summary>
+    public IEnumerable<CandidateTransitionRecord> ReadEncodedTransitions(Guid id)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT payload FROM transitions WHERE candidate_id=$id ORDER BY sequence";
@@ -62,9 +68,13 @@ public sealed class SqliteBacktestCandidateStateStore : IDisposable
             ?? throw new InvalidDataException("Null candidate transition in audit index.");
     }
 
-    public void Save(CandidateRecord candidate, IReadOnlyList<CandidateTransitionRecord> appended)
+    /// <summary>Commits fragments, transitions and candidate version together, returning references for the durable journal.</summary>
+    public IReadOnlyList<CandidateTransitionRecord> Save(CandidateRecord candidate, IReadOnlyList<CandidateTransitionRecord> appended)
     {
         using var transaction = connection.BeginTransaction();
+        if (appended.Any(item => item.EvidenceJson.Length > MaximumRecordCharacters))
+            throw new InvalidDataException("Candidate audit record exceeds the supported size; evidence was not truncated.");
+        var encoded = appended.Select(item => Evidence.Encode(item, transaction)).ToArray();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -76,7 +86,7 @@ public sealed class SqliteBacktestCandidateStateStore : IDisposable
         command.Parameters.AddWithValue("$symbol", candidate.Symbol);
         command.Parameters.AddWithValue("$payload", SerializeBounded(candidate));
         command.ExecuteNonQuery();
-        foreach (var item in appended)
+        foreach (var item in encoded)
         {
             command.Parameters.Clear();
             command.CommandText = "INSERT INTO transitions(candidate_id,sequence,payload) VALUES($id,$sequence,$payload)";
@@ -86,6 +96,7 @@ public sealed class SqliteBacktestCandidateStateStore : IDisposable
             command.ExecuteNonQuery();
         }
         transaction.Commit();
+        return encoded;
     }
 
     /// <summary>Reads one candidate at a time using the chronology index, without sorting history in memory.</summary>

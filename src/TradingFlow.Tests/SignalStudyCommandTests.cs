@@ -90,7 +90,27 @@ public sealed class SignalStudyCommandTests
         Assert.False(File.Exists(Path.Combine(output.Path, "study", SignalStudyCommand.ManifestFileName)));
     }
 
-    // The same inputs give byte-identical reports, tables and manifests.
+    /// <summary>A screen advertising protected membership is refused from its manifest before the invalid member bytes could be opened.</summary>
+    [Fact]
+    public async Task ProtectedMembership_IsRefusedBeforeOpeningPublishedObservations()
+    {
+        using var market = new SyntheticEvidenceCatalog();
+        using var output = new TemporaryFolder();
+        var screen = await PublishScreenAsync(Path.Combine(output.Path, "screen"), "bars", "splits", "sessions");
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(screen.ManifestPath))!;
+        manifest["to"] = "2024-01-05";
+        await File.WriteAllTextAsync(screen.ManifestPath, manifest.ToJsonString());
+        await File.WriteAllTextAsync(Path.Combine(screen.Folder, "eligible.csv"), "deliberately unreadable protected fixture");
+        var registry = TradingFlow.Data.Evidence.Governance.SqliteResearchTrialRegistry.OpenLocal(output.Path);
+        var provider = market.Provider(new(market.CatalogPath, market.ObjectRoot, screen.RankedListSha256, "bars", "sessions", [], [], "splits"));
+        var request = new SignalStudyCommand.Request(market.CatalogPath, market.ObjectRoot, screen.Folder, "bars", "splits", [],
+            SignalStudyEntry.NextOpen, 10m, From, To, Path.Combine(output.Path, "study"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => SignalStudyCommand.RunAsync(request, provider, registry, TextWriter.Null, default));
+        Assert.Contains("protected dates", error.Message);
+        Assert.Empty((await registry.ReadLedgerAsync(default)).Trials);
+    }
+
+    // Separate destinations retain separate trial identities while the same rule and evidence produce identical study tables.
     [Fact]
     public async Task SameInputs_GiveIdenticalOutputs()
     {
@@ -99,8 +119,9 @@ public sealed class SignalStudyCommandTests
         using var second = new TemporaryFolder();
         await RunAsync(market, first.Path, SignalStudyEntry.NextOpen, repeatInto: Path.Combine(second.Path, "study"));
 
-        var files = Directory.GetFiles(Path.Combine(first.Path, "study")).Select(Path.GetFileName).Order().ToArray();
-        Assert.Equal(4, files.Length);
+        var files = Directory.GetFiles(Path.Combine(first.Path, "study")).Select(Path.GetFileName)
+            .Where(name => name!.EndsWith(".csv", StringComparison.Ordinal) || name.EndsWith("-report.json", StringComparison.Ordinal)).Order().ToArray();
+        Assert.Equal(3, files.Length);
         foreach (var file in files)
             Assert.Equal(File.ReadAllText(Path.Combine(first.Path, "study", file!)), File.ReadAllText(Path.Combine(second.Path, "study", file!)));
     }
@@ -121,8 +142,11 @@ public sealed class SignalStudyCommandTests
             [strategy], entry, 10m, from ?? From, to ?? To, Path.Combine(folder, "study"));
         var provider = market.Provider(new(market.CatalogPath, market.ObjectRoot, screen.RankedListSha256, bars.DatasetId, sessions.DatasetId, [], [],
             actions.DatasetId));
-        await SignalStudyCommand.RunAsync(request, screen, provider, TextWriter.Null, default);
-        if (repeatInto is not null) await SignalStudyCommand.RunAsync(request with { OutFolder = repeatInto }, screen, provider, TextWriter.Null, default);
+        var registry = TradingFlow.Data.Evidence.Governance.SqliteResearchTrialRegistry.OpenLocal(folder);
+        var manifest = await SignalStudyCommand.RunAsync(request, provider, registry, TextWriter.Null, default);
+        Assert.Equal(manifest, await SignalStudyCommand.RunAsync(request, provider, registry, TextWriter.Null, default));
+        Assert.Single((await registry.ReadLedgerAsync(default)).Trials);
+        if (repeatInto is not null) await SignalStudyCommand.RunAsync(request with { OutFolder = repeatInto }, provider, registry, TextWriter.Null, default);
         var csv = Assert.Single(Directory.GetFiles(Path.Combine(folder, "study"), "*-outcomes.csv"));
         var lines = File.ReadAllLines(csv);
         var header = lines[0].Split(',');

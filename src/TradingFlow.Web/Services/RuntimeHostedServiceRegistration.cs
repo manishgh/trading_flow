@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using TradingFlow.Application.Preparation;
+using TradingFlow.Data.ScreenCaptures;
+using TradingFlow.Web.Services.ScreenCaptures;
 using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Services;
@@ -20,6 +22,20 @@ public sealed record RuntimeHostedServiceOptions(
 /// </summary>
 public static class RuntimeHostedServiceRegistration
 {
+    // A paused trading host may collect only if market feeds and capture were explicitly enabled.
+    public static IServiceCollection AddFinvizScreenCapture(this IServiceCollection services, FinvizScreenCaptureOptions options)
+    {
+        services.AddSingleton(options);
+        services.AddSingleton<SqliteFinvizCaptureCatalog>();
+        services.AddSingleton<FinvizScreenCaptureStatusReader>();
+        if (options.Enabled)
+        {
+            services.AddSingleton<FinvizScreenCaptureScheduler>();
+            services.AddHostedService<FinvizScreenCaptureHostedService>();
+        }
+        return services;
+    }
+
     // Register runtime ownership ahead of the services that create orders or journal broker state.
     public static IServiceCollection AddTradingFlowRuntimeHostedServices(
         this IServiceCollection services,

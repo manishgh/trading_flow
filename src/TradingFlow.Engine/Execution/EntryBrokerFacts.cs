@@ -1,3 +1,5 @@
+using TradingFlow.Domain.Persistence;
+
 namespace TradingFlow.Engine.Execution;
 
 /// <summary>
@@ -40,6 +42,8 @@ public sealed record BrokerMarketObservation(
     DateTimeOffset? LastTradeTimestampUtc,
     DateTimeOffset ObservedAtUtc)
 {
+    public AdmissionQuoteReceipt? QuoteReceipt { get; init; }
+
     public decimal? MidPrice => BidPrice is > 0m && AskPrice is > 0m
         ? (BidPrice.Value + AskPrice.Value) / 2m
         : null;

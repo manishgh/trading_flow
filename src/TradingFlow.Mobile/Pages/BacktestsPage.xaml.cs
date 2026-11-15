@@ -647,7 +647,12 @@ public partial class BacktestsPage : ContentPage
             StrategyGroupsStack.Add(new Label { Text = $"Waiting for execution: {order.Ticker} · {order.Side} {order.OrderType} · {order.RemainingQuantity} remaining · {order.Status}" +
                 $"\nReserved {order.ReservedNotional:C2} · known UTC {order.KnownAtUtc:u}", FontSize = 12 });
         foreach (var exit in state.PendingExits)
-            StrategyGroupsStack.Add(new Label { Text = $"Exit awaiting execution: {exit.Ticker} · {exit.Reason} · known UTC {exit.KnownAtUtc:u}", FontSize = 12 });
+        {
+            var evidence = exit.ExitEvidence is { } observed
+                ? $"\nDecision close UTC {observed.DecisionCloseUtc?.ToString("u") ?? "Unavailable"} · {String.Join(", ", observed.Conditions)}"
+                : "";
+            StrategyGroupsStack.Add(new Label { Text = $"Exit awaiting execution: {exit.Ticker} · {exit.Reason} · known UTC {exit.KnownAtUtc:u}{evidence}", FontSize = 12 });
+        }
         if (state.IntradayDecisionCount > 0)
             StrategyGroupsStack.Add(new Label { Text = $"Day entry and protection evidence · latest {state.IntradayDecisions?.Count ?? 0} of {state.IntradayDecisionCount} hypotheses. Complete journals retain all events; planned prices do not establish fills.", FontSize = 12 });
         foreach (var decision in state.IntradayDecisions ?? [])

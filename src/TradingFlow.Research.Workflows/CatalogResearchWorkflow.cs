@@ -3,6 +3,7 @@ using TradingFlow.Data.Evidence.Governance;
 using TradingFlow.Data.Evidence.Labeling;
 using TradingFlow.Data.Evidence.Research;
 using TradingFlow.Domain.Research;
+using TradingFlow.Research;
 using TradingFlow.Engine.Research;
 using TradingFlow.Research.Catalysts;
 using TradingFlow.Research.Momentum;
@@ -20,21 +21,23 @@ public sealed partial class CatalogResearchWorkflow
     private readonly IEvidenceCatalog catalog;
     private readonly IEvidencePartitionDataReader partitionReader;
     private readonly EvidenceResearchRunArtifactPackager packager;
-    private readonly SqliteResearchTrialRegistry? trialRegistry;
+    private readonly SqliteResearchTrialRegistry trialRegistry;
 
+    /// <summary>Requires a durable registry even for development studies and diagnostics.</summary>
     public CatalogResearchWorkflow(
         IEvidenceCatalog catalog,
         IEvidencePartitionDataReader partitionReader,
         EvidenceResearchRunArtifactPackager packager,
-        SqliteResearchTrialRegistry? trialRegistry = null)
+        SqliteResearchTrialRegistry trialRegistry)
     {
         this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         this.partitionReader = partitionReader ??
             throw new ArgumentNullException(nameof(partitionReader));
         this.packager = packager ?? throw new ArgumentNullException(nameof(packager));
-        this.trialRegistry = trialRegistry;
+        this.trialRegistry = trialRegistry ?? throw new ArgumentNullException(nameof(trialRegistry));
     }
 
+    /// <summary>Registers a development trial before opening its inputs; explicit holdout still uses its one-use reservation.</summary>
     public async Task<CatalogMomentumWorkflowResult> RunMomentumAsync(
         CatalogMomentumWorkflowRequest request,
         CancellationToken cancellationToken = default)
@@ -42,7 +45,24 @@ public sealed partial class CatalogResearchWorkflow
         ArgumentNullException.ThrowIfNull(request);
         EnsureUtc(request.CreatedAtUtc, nameof(request.CreatedAtUtc));
         ValidateMomentumPartitions(request);
+        if (request.Phase == CatalogResearchPhase.Holdout)
+            return await ComputeMomentumAsync(request, null, cancellationToken);
+        if (request.Phase != CatalogResearchPhase.DevelopmentValidation || request.FrozenTrial is not null)
+            throw new InvalidOperationException("A previously frozen trial identity is accepted only for explicit holdout execution.");
+        var frozen = FreezeCatalogStudy(request.ResearchRunId, "catalog.momentum",
+            "Cross-sectional momentum on contemporaneously eligible equities predicts forward net slot performance.", request,
+            [request.Study.ResearchAdjustedBarsDatasetId, request.Study.AsTradedBarsDatasetId, request.Study.UniverseMembershipDatasetId],
+            request.StudyPartitions, request.Assumptions, "observation_count", CatalogResearchTrialBinding.ComputeMomentumRequestSha256(request));
+        return await RunRegisteredCatalogAsync(frozen, request.ResearchRunId, (start, token) => ComputeMomentumAsync(request, start, token),
+            (manifest, token) => ReadMomentumAsync(request, manifest, token), result => result.Manifest,
+            (result, window) => result.Study.Report.FormationLedger.Count(entry => entry.Segment == window.Name && entry.IsPrimarySelection),
+            cancellationToken);
+    }
 
+    /// <summary>Evaluates only the phase already authorized by a development registration or the exact holdout reservation.</summary>
+    private async Task<CatalogMomentumWorkflowResult> ComputeMomentumAsync(CatalogMomentumWorkflowRequest request, ResearchStart? start,
+        CancellationToken cancellationToken)
+    {
         var adjustedManifest = await RequireDatasetAsync(
             request.Study.ResearchAdjustedBarsDatasetId,
             EvidenceDatasetKind.MarketBarsResearchAdjusted,
@@ -81,6 +101,11 @@ public sealed partial class CatalogResearchWorkflow
             CatalogResearchTrialBinding.ComputeMomentumRequestSha256(request),
             holdout,
             cancellationToken);
+        if (start is not null)
+        {
+            var trial = start.Binding.Trials.Single();
+            phaseState = phaseState with { ExperimentId = trial.ExperimentId, TrialDefinitionSha256 = trial.DefinitionSha256 };
+        }
         var phaseReader = ReaderForPhase(
             request.Phase,
             request.StudyPartitions);
@@ -126,7 +151,8 @@ public sealed partial class CatalogResearchWorkflow
             .Append(new EvidenceResearchNamedOutput(
                 "research-phase",
                 Json(phaseState)))
-            .ToArray();
+            .ToList();
+        if (start is not null) canonicalMomentumOutputs.Add(RegistrationArtifact(start));
         var package = await packager.PackageAsync(
             new EvidenceResearchRunPackageRequest(
                 request.ResearchRunId,
@@ -172,6 +198,16 @@ public sealed partial class CatalogResearchWorkflow
         {
             PhaseState = phaseState
         };
+    }
+
+    /// <summary>Replays the exact catalog publication by loading verified outputs, never the source observations.</summary>
+    private async Task<CatalogMomentumWorkflowResult> ReadMomentumAsync(CatalogMomentumWorkflowRequest request, EvidenceResearchRunManifest manifest,
+        CancellationToken token)
+    {
+        var (report, audit) = await ReadMomentumResultsAsync(manifest, token);
+        var phase = await packager.ReadOutputAsync<CatalogResearchPhaseState>(manifest, "research-phase", token);
+        return new(new CatalogMomentumStudyResult(request.Study.ResearchAdjustedBarsDatasetId, request.Study.AsTradedBarsDatasetId,
+            request.Study.UniverseMembershipDatasetId, report, audit), manifest, true) { PhaseState = phase };
     }
 
     private async Task<EvidenceDatasetManifest> RequireDatasetAsync(

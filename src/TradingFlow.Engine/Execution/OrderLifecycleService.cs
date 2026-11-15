@@ -187,6 +187,7 @@ public sealed class OrderLifecycleService : IOrderLifecycleService
         return current;
     }
 
+    // The lifecycle has a monotonic broker order stamp. Keep the event's optional execution time separately.
     private static OrderTransitionRequest CreateRequest(
         OrderStateSnapshot current,
         OrderState target,
@@ -220,7 +221,8 @@ public sealed class OrderLifecycleService : IOrderLifecycleService
                 status = update.Status.ToString(),
                 update.FilledQuantity,
                 update.FilledPrice,
-                update.Timestamp
+                update.Timestamp,
+                update.ExecutionTimestampUtc
             }),
             PositionFill: positionFill);
 

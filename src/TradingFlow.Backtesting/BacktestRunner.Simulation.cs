@@ -44,6 +44,7 @@ public sealed partial class BacktestRunner
         return longRejection;
     }
 
+    // Replay a long candidate using the existing order precedence and collect evidence only for the chosen completed close.
     private (BacktestCandidateTrade Candidate, int ExitIndex)? CreateCandidate(
         string candidateId,
         BacktestRunConfig run,
@@ -206,32 +207,16 @@ public sealed partial class BacktestRunner
                 return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, takeProfitPrice, "take_profit", stopDistance, bars[entryIndex - 1].Volume), i);
             }
 
-            if (technicalEngine.ShouldExitLongOnConfirmedVwapFailure(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Max(highestHighSinceEntry, bar.High), barsHeld))
-            {
-                var nextExitIndex = FindNextValidExecutionBarIndex(
-                    bars,
-                    i + 1,
-                    strategy);
-                var hasNextExitBar = nextExitIndex < bars.Count;
-                if (!hasNextExitBar)
-                {
-                    pendingExit ??= PendingExitDecision(run, strategy, bar, "confirmed_vwap_failure");
-                    continue;
-                }
-
-                var exitBar = hasNextExitBar ? bars[nextExitIndex] : bar;
-                var exitSnapshot = hasNextExitBar ? snapshots[nextExitIndex] : snapshots[i];
-                var exitBasis = hasNextExitBar ? exitBar.Open : exitBar.Close;
-                var confirmedExitPrice = ApplyLongExitSlippage(exitBasis, (run.Engine.PrecommittedLiquidationSourceUtc == exitBar.Timestamp ? snapshots[i].RelativeVolume : exitSnapshot.RelativeVolume) ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via confirmed_vwap_failure at {confirmedExitPrice}", candidateId);
-                return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_failure", stopDistance, bars[entryIndex - 1].Volume), hasNextExitBar ? nextExitIndex : i);
-            }
-
+            var confirmedVwapFailure = technicalEngine.ShouldExitLongOnConfirmedVwapFailure(strategy, snapshots, i,
+                entryIndex, entryPrice, stopDistance, Math.Max(highestHighSinceEntry, bar.High), barsHeld);
             var strategyWithoutTrailing = strategy with
             {
                 ExitRules = strategy.ExitRules with { EnableAtrTrailingStop = false }
             };
-            var (exitPrice, exitReason) = technicalEngine.EvaluateBarForExit(
+            var previousSnapshot = previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null;
+            var (exitPrice, exitReason) = confirmedVwapFailure
+                ? ((decimal?)bar.Close, "confirmed_vwap_failure")
+                : technicalEngine.EvaluateBarForExit(
                 strategyWithoutTrailing,
                 bar,
                 snapshots[i],
@@ -245,7 +230,7 @@ public sealed partial class BacktestRunner
                 ref highestHighSinceEntry,
                 exitPriceLogTrend?.Slope,
                 exitVolumeLogTrend?.Slope,
-                previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null);
+                previousSnapshot);
             // The entry-factor and off-list exits are completed-close technical exits, judged after the stop, target and other
             // exits and filled at the next open.
             if (exitReason is null && EntryFactorExitReason(strategy, bars, snapshots, i) is { } factorExit)
@@ -258,13 +243,19 @@ public sealed partial class BacktestRunner
                 // In backtest, for technical exit, we exit on next bar open
                 if (!IsPriceTriggeredExitReason(exitReason))
                 {
+                    var observations = new List<BacktestExitCondition>();
+                    if (confirmedVwapFailure) observations.Add(BacktestExitCondition.ConfirmedVwapFailure);
+                    technicalEngine.GetTechnicalOrTimeExitReason(strategy, snapshots[i], barsHeld, bar.Timestamp,
+                        entryTimestamp, exitPriceLogTrend?.Slope, exitVolumeLogTrend?.Slope, previousSnapshot, observations);
+                    ObserveLongScheduledExits(strategy, bars, snapshots, i, membership, exitReason, observations);
+                    var evidence = BacktestDecisionTiming.DescribeCompletedExit(bar, strategy, observations, candidateSessionSchedules);
                     var nextExitIndex = FindNextValidExecutionBarIndex(
                         bars,
                         i + 1,
                         strategy);
                     if (nextExitIndex >= bars.Count)
                     {
-                        pendingExit ??= PendingExitDecision(run, strategy, bar, exitReason);
+                        pendingExit ??= PendingExitDecision(run, exitReason, evidence);
                         continue;
                     }
 
@@ -274,7 +265,8 @@ public sealed partial class BacktestRunner
                         : snapshots[nextExitIndex].RelativeVolume ?? relativeVolume;
                     var nextExitPrice = ApplyLongExitSlippage(nextBar.Open, nextRelativeVolume, strategy, approximateTradeAmount);
                     auditor.LogEvent(signal.Ticker, strategy.StrategyName, nextBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Exit via {exitReason} at {nextExitPrice}", candidateId);
-                    return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, nextBar.Timestamp, nextExitPrice, exitReason, stopDistance, bars[entryIndex - 1].Volume), nextExitIndex);
+                    return (BuildCandidate(candidateId, strategy, signal, "long", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, nextBar.Timestamp, nextExitPrice, exitReason, stopDistance, bars[entryIndex - 1].Volume)
+                        with { ExitEvidence = evidence }, nextExitIndex);
                 }
 
                 var isProtectiveExit = IsPriceTriggeredExitReason(exitReason);
@@ -405,32 +397,16 @@ public sealed partial class BacktestRunner
                 return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, bar.Timestamp, takeProfitPrice, "take_profit", stopDistance, bars[entryIndex - 1].Volume), i);
             }
 
-            if (ShouldExitShortOnConfirmedVwapReclaim(strategy, snapshots, i, entryIndex, entryPrice, stopDistance, Math.Min(lowestLowSinceEntry, bar.Low), barsHeld))
-            {
-                var nextExitIndex = FindNextValidExecutionBarIndex(
-                    bars,
-                    i + 1,
-                    strategy);
-                var hasNextExitBar = nextExitIndex < bars.Count;
-                if (!hasNextExitBar)
-                {
-                    pendingExit ??= PendingExitDecision(run, strategy, bar, "confirmed_vwap_reclaim");
-                    continue;
-                }
-
-                var exitBar = hasNextExitBar ? bars[nextExitIndex] : bar;
-                var exitSnapshot = hasNextExitBar ? snapshots[nextExitIndex] : snapshots[i];
-                var exitBasis = hasNextExitBar ? exitBar.Open : exitBar.Close;
-                var confirmedExitPrice = ApplyShortExitSlippage(exitBasis, (run.Engine.PrecommittedLiquidationSourceUtc == exitBar.Timestamp ? snapshots[i].RelativeVolume : exitSnapshot.RelativeVolume) ?? relativeVolume, strategy, approximateTradeAmount);
-                auditor.LogEvent(signal.Ticker, strategy.StrategyName, exitBar.Timestamp, TradingFlow.Engine.Execution.ExecutionState.PositionClosed, $"Short exit via confirmed_vwap_reclaim at {confirmedExitPrice}", candidateId);
-                return (BuildCandidate(candidateId, strategy, signal, "short", entryTimestamp, entryPrice, initialStopLossPrice, takeProfitPrice, exitBar.Timestamp, confirmedExitPrice, "confirmed_vwap_reclaim", stopDistance, bars[entryIndex - 1].Volume), hasNextExitBar ? nextExitIndex : i);
-            }
-
+            var confirmedVwapReclaim = ShouldExitShortOnConfirmedVwapReclaim(strategy, snapshots, i, entryIndex,
+                entryPrice, stopDistance, Math.Min(lowestLowSinceEntry, bar.Low), barsHeld);
             var strategyWithoutTrailing = strategy with
             {
                 ExitRules = strategy.ExitRules with { EnableAtrTrailingStop = false }
             };
-            var (exitPrice, exitReason) = EvaluateShortBarForExit(
+            var previousSnapshot = previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null;
+            var (exitPrice, exitReason) = confirmedVwapReclaim
+                ? ((decimal?)bar.Close, "confirmed_vwap_reclaim")
+                : EvaluateShortBarForExit(
                 strategyWithoutTrailing,
                 bar,
                 snapshots[i],
@@ -442,19 +418,24 @@ public sealed partial class BacktestRunner
                 barsHeld,
                 ref currentStopLossPrice,
                 ref lowestLowSinceEntry,
-                previousEligibleIndex >= 0 ? snapshots[previousEligibleIndex] : null);
+                previousSnapshot);
 
             if (exitPrice.HasValue && exitReason is not null)
             {
                 if (!IsPriceTriggeredExitReason(exitReason))
                 {
+                    var observations = new List<BacktestExitCondition>();
+                    if (confirmedVwapReclaim) observations.Add(BacktestExitCondition.ConfirmedVwapReclaim);
+                    TechnicalExecutionEngine.GetShortTechnicalOrTimeExitReason(strategy, snapshots[i], barsHeld,
+                        bar.Timestamp, entryTimestamp, previousSnapshot, observations);
+                    var evidence = BacktestDecisionTiming.DescribeCompletedExit(bar, strategy, observations, candidateSessionSchedules);
                     var nextExitIndex = FindNextValidExecutionBarIndex(
                         bars,
                         i + 1,
                         strategy);
                     if (nextExitIndex >= bars.Count)
                     {
-                        pendingExit ??= PendingExitDecision(run, strategy, bar, exitReason);
+                        pendingExit ??= PendingExitDecision(run, exitReason, evidence);
                         continue;
                     }
 
@@ -487,7 +468,7 @@ public sealed partial class BacktestRunner
                         nextExitPrice,
                         exitReason,
                         stopDistance,
-                        bars[entryIndex - 1].Volume), nextExitIndex);
+                        bars[entryIndex - 1].Volume) with { ExitEvidence = evidence }, nextExitIndex);
                 }
 
                 var isProtectiveExit = IsPriceTriggeredExitReason(exitReason);
@@ -780,14 +761,12 @@ public sealed partial class BacktestRunner
             stopPrice, targetPrice, null, null, "open_at_study_end", distance, volume);
     }
 
-    // A pending intention is known only when its completed source and any delayed receipt are both available.
-    private static BacktestPendingExitDecision? PendingExitDecision(BacktestRunConfig run, StrategyDefinition strategy,
-        OhlcvBar source, string reason)
-    {
-        var completed = source.Timestamp.Add(ParseTimeframe(strategy.Execution.Timeframe));
-        var known = source.KnownAtUtc is { } receipt && receipt > completed ? receipt : completed;
-        return run.TimeWindow.End is { } cutoff && known > cutoff ? null : new(known.ToUniversalTime(), reason);
-    }
+    // Retain a pending intention only when its source was available by the frozen study cutoff.
+    private static BacktestPendingExitDecision? PendingExitDecision(BacktestRunConfig run, string reason,
+        BacktestExitEvidence evidence) =>
+        run.TimeWindow.End is { } cutoff && evidence.AvailableAtUtc > cutoff
+            ? null
+            : new(evidence.AvailableAtUtc, reason) { ExitEvidence = evidence };
 
     private static string ResolveInitialStopKind(StrategyDefinition strategy) =>
         NormalizeRuleName(strategy.ExitRules.InitialStopMode) switch

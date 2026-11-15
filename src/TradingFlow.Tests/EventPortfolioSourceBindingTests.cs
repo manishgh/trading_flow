@@ -238,7 +238,7 @@ public sealed class EventPortfolioSourceBindingTests
         var repository = new SqliteJobRepository(database);
         var catalog = RetiredStrategyFixtures.Catalog(reader);
         var executor = new Mock<IBacktestRunExecutor>(MockBehavior.Strict);
-        var service = new BacktestJobService(executor.Object, repository, reader, BacktestJobServiceOptions.Default, catalog);
+        var service = new BacktestJobService(executor.Object, repository, reader, BacktestJobServiceOptions.Default, catalog, SyntheticResearchQueue.For(repository));
         var started = await service.StartAsync("frozen-source", configPath);
         var job = await repository.GetJobAsync(started.JobId, default);
         Assert.Contains(DurableFileJobRequest.Deserialize(job!.RequestJson).Files,

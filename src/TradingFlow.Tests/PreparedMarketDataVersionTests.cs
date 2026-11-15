@@ -1,6 +1,7 @@
 using System.Net;
 using TradingFlow.Alpaca;
 using TradingFlow.Data.Csv;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Abstractions;
@@ -54,6 +55,24 @@ public sealed class PreparedMarketDataVersionTests
         await File.AppendAllTextAsync(rawPayload.Path, "synthetic corruption");
         await Assert.ThrowsAsync<InvalidDataException>(() => CachedMarketDataProvider.ReadPreparedBarsAsync(selected, 10, default));
         Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>Neither a pinned containing cache nor candidate discovery opens a parent with protected source coverage.</summary>
+    [Fact]
+    public async Task ProtectedCutoff_RejectsPinnedAndContainingHistoryBeforePayloadVerification()
+    {
+        using var owner = new OwnedAlpacaTestArchive();
+        using var handler = new FixtureHandler(twoRows: true);
+        using var http = new HttpClient(handler);
+        var cache = new CachedMarketDataProvider(CreateSource(http, owner), Path.Combine(owner.Root, "normalized"), "use_cache");
+        var parent = await cache.SelectPreparedBarsAsync("AMD", "5m", Start, End, 10, default);
+        using var hiddenPayload = new FileStream(parent.DataPath, FileMode.Open, FileAccess.Read, FileShare.None);
+        using var development = ResearchObservationBoundary.Enter(Start.AddMinutes(15));
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => CachedMarketDataProvider.ReadPreparedBarsAsync(parent, 10, default));
+        Assert.Contains("protected observations", exception.Message);
+        var admitted = await cache.SelectPreparedBarsAsync("AMD", "5m", Start, Start.AddMinutes(15), 10, default);
+        Assert.NotEqual(parent.ManifestPath, admitted.ManifestPath);
+        Assert.Equal(2, handler.Calls);
     }
 
     /// <summary>Price bases, exact ranges and parser source identity cannot share the same prepared request directory.</summary>

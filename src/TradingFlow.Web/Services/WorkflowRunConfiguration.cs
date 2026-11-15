@@ -38,15 +38,29 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
         UniversePreviewResponse source, CancellationToken token)
     {
         var screens = researchScreens ?? throw new InvalidOperationException("Research screens are not available in this host.");
-        var evidence = source.Members.SelectMany(member => member.Sources).ToArray();
-        var references = evidence.Select(item => item.ProviderReference).Distinct(StringComparer.Ordinal).ToArray();
-        if (evidence.Any(item => item.SourceKind != TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen) || references.Length != 1)
-            throw new InvalidOperationException("A research screen must be the plan's only stock source.");
-        var (name, manifestSha, rankedSha) = ResearchScreenSources.ParseProviderReference(references[0]);
+        var (name, manifestSha, rankedSha) = FrozenScreenIdentity(source);
         var screen = screens.Read(name, manifestSha);
         if (!screen.RankedListSha256.Equals(rankedSha, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The ranked list changed since the plan was saved (research screen '{name}').");
         return (screen, await screens.ResolveReferenceAsync(screen, token));
+    }
+
+    /// <summary>Identifies the source's exact manifests without opening member observations before admission.</summary>
+    public Task<ResearchScreenReference> ResolveResearchScreenReferenceAsync(UniversePreviewResponse source, CancellationToken token)
+    {
+        var screens = researchScreens ?? throw new InvalidOperationException("Research screens are not available in this host.");
+        var (name, manifestSha, rankedSha) = FrozenScreenIdentity(source);
+        return screens.ResolveReferenceFromMetadataAsync(name, manifestSha, rankedSha, token);
+    }
+
+    /// <summary>Extracts the one immutable source identity already recorded by the stock preview.</summary>
+    private static (string Name, string ManifestSha256, string MembershipSha256) FrozenScreenIdentity(UniversePreviewResponse source)
+    {
+        var evidence = source.Members.SelectMany(member => member.Sources).ToArray();
+        var references = evidence.Select(item => item.ProviderReference).Distinct(StringComparer.Ordinal).ToArray();
+        if (evidence.Any(item => item.SourceKind != TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen) || references.Length != 1)
+            throw new InvalidOperationException("A research screen must be the plan's only stock source.");
+        return ResearchScreenSources.ParseProviderReference(references[0]);
     }
 
     /// <summary>

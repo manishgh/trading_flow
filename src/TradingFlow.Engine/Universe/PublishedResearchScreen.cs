@@ -193,16 +193,13 @@ public sealed class PublishedResearchScreen
     public static PublishedResearchScreen Read(string folder, string? expectedManifestSha256 = null)
     {
         var full = Path.GetFullPath(folder);
-        var manifestBytes = File.ReadAllBytes(Path.Combine(full, ResearchScreenManifest.FileName));
-        var manifestSha = ResearchScreenManifest.Sha256(manifestBytes);
-        if (expectedManifestSha256 is not null && !manifestSha.Equals(expectedManifestSha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"The ranked list changed since the plan was saved: research screen '{Path.GetFileName(full)}' " +
-                $"now has manifest SHA-256 {manifestSha}, the plan recorded {expectedManifestSha256}.");
-        var manifest = JsonSerializer.Deserialize<ResearchScreenManifest>(manifestBytes, ResearchScreenManifest.Json)
-            ?? throw new InvalidDataException($"{ResearchScreenManifest.FileName} in '{full}' is empty.");
-        var listFile = manifest.RankingRules is null ? EligibleFileName : ResearchScreenManifest.RankedListFileName;
-        if (manifest.SchemaVersion != ResearchScreenManifest.CurrentSchemaVersion || manifest.Outputs is null || !manifest.Outputs.ContainsKey(listFile))
-            throw new InvalidDataException($"Research screen '{Path.GetFileName(full)}' has no {listFile} or an unsupported manifest schema.");
+        var (manifest, manifestSha, _) = ReadDefinition(full, expectedManifestSha256);
+        if (TradingFlow.Domain.Research.ResearchObservationBoundary.Current is { } cutoff)
+        {
+            var lastFullyVisible = TimeZoneInfo.ConvertTime(cutoff, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
+            if (manifest.To >= DateOnly.FromDateTime(lastFullyVisible.DateTime))
+                throw new InvalidDataException("The published screen includes protected membership dates. Use a separately published development-only list.");
+        }
         foreach (var (name, sha) in manifest.Outputs)
         {
             var actual = ResearchScreenManifest.Sha256(File.ReadAllBytes(Path.Combine(full, name)));
@@ -218,6 +215,25 @@ public sealed class PublishedResearchScreen
             manifest.Outputs.ContainsKey(ResearchScreenManifest.RankedCountsFileName)
                 ? ReadQualified(Path.Combine(full, ResearchScreenManifest.RankedCountsFileName)) : new Dictionary<DateOnly, int>(),
             new Dictionary<string, HashSet<DateOnly>>());
+    }
+
+    /// <summary>Reads only the frozen input and output fingerprints. Does not open a membership or observation file.</summary>
+    public static (ResearchScreenManifest Manifest, string ManifestSha256, string MembershipSha256) ReadDefinition(
+        string folder, string? expectedManifestSha256 = null)
+    {
+        var full = Path.GetFullPath(folder);
+        var manifestBytes = File.ReadAllBytes(Path.Combine(full, ResearchScreenManifest.FileName));
+        var manifestSha = ResearchScreenManifest.Sha256(manifestBytes);
+        if (expectedManifestSha256 is not null && !manifestSha.Equals(expectedManifestSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"The ranked list changed since the plan was saved: research screen '{Path.GetFileName(full)}' " +
+                $"now has manifest SHA-256 {manifestSha}, the plan recorded {expectedManifestSha256}.");
+        var manifest = JsonSerializer.Deserialize<ResearchScreenManifest>(manifestBytes, ResearchScreenManifest.Json)
+            ?? throw new InvalidDataException($"{ResearchScreenManifest.FileName} in '{full}' is empty.");
+        var listFile = manifest.RankingRules is null ? EligibleFileName : ResearchScreenManifest.RankedListFileName;
+        if (manifest.SchemaVersion != ResearchScreenManifest.CurrentSchemaVersion || manifest.Outputs is null ||
+            !manifest.Outputs.TryGetValue(listFile, out var hash) || manifest.Outputs.Keys.Any(name => Path.GetFileName(name) != name))
+            throw new InvalidDataException($"Research screen '{Path.GetFileName(full)}' has no {listFile} or an unsupported manifest schema.");
+        return (manifest, manifestSha, hash);
     }
 
     /// <summary>Stocks selected (ranked, or eligible when the screen does not rank) on at least one session from <paramref name="from"/> to <paramref name="to"/> (New York dates), sorted.</summary>

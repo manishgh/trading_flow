@@ -211,7 +211,10 @@ public sealed record OrderIntentReservation(
     PortfolioRiskReservationRequest? PortfolioRisk = null,
     int? CandidateExpectedVersion = null,
     string? CandidateSemanticDecisionSha256 = null,
-    long? PositionGenerationEventId = null);
+    long? PositionGenerationEventId = null)
+{
+    public OrderAdmissionEvidence? AdmissionEvidence { get; init; }
+}
 
 public sealed class PositionExitReservationRejectedException(
     Guid intentId,

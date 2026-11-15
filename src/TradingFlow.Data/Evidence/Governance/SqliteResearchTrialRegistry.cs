@@ -13,23 +13,22 @@ public sealed record ResearchRegistryCommitResult(string SubjectId, bool Already
 /// Durable append-only registry for frozen research trials and canonical results.
 /// Existing identifiers are idempotent only when their canonical content is identical.
 /// </summary>
-public sealed class SqliteResearchTrialRegistry
+public sealed partial class SqliteResearchTrialRegistry
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
     private readonly string connectionString;
     private readonly ResearchTrialRegistryOpenMode openMode;
-    private readonly SemaphoreSlim initialization = new(1, 1);
+    private static readonly SemaphoreSlim Initialization = new(1, 1);
     private volatile bool initialized;
 
-    public SqliteResearchTrialRegistry(ResearchTrialRegistryOptions options)
+    /// <summary>Opens a separate registry, using deployment-owned review records for portfolio admission.</summary>
+    public SqliteResearchTrialRegistry(ResearchTrialRegistryOptions options, ResearchAdmissionReviews? reviews = null, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        this.reviews = reviews ?? ResearchAdmissionReviews.Empty;
+        this.clock = clock ?? TimeProvider.System;
+        databasePath = options.DatabasePath;
         openMode = options.OpenMode;
-        var directory = Path.GetDirectoryName(options.DatabasePath);
-        if (!String.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
 
         if (openMode == ResearchTrialRegistryOpenMode.BootstrapNew &&
             File.Exists(options.DatabasePath))
@@ -49,11 +48,11 @@ public sealed class SqliteResearchTrialRegistry
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = options.DatabasePath,
-            Mode = openMode == ResearchTrialRegistryOpenMode.BootstrapNew
-                ? SqliteOpenMode.ReadWriteCreate
-                : SqliteOpenMode.ReadWrite,
-            Cache = SqliteCacheMode.Shared,
-            Pooling = true
+            Mode = openMode == ResearchTrialRegistryOpenMode.OpenExisting
+                ? SqliteOpenMode.ReadWrite
+                : SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false
         }.ToString();
     }
 
@@ -586,10 +585,11 @@ public sealed class SqliteResearchTrialRegistry
         await EnsureInitializedAsync(cancellationToken);
         var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
-        await SqliteDurability.ConfigureDatabaseAsync(connection, cancellationToken);
+        await SqliteDurability.ConfigureConnectionAsync(connection, cancellationToken);
         return connection;
     }
 
+    /// <summary>Bootstraps or upgrades the independent registry in one transaction, preserving canonical v2 records.</summary>
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (initialized)
@@ -597,7 +597,7 @@ public sealed class SqliteResearchTrialRegistry
             return;
         }
 
-        await initialization.WaitAsync(cancellationToken);
+        await Initialization.WaitAsync(cancellationToken);
         try
         {
             if (initialized)
@@ -605,32 +605,28 @@ public sealed class SqliteResearchTrialRegistry
                 return;
             }
 
+            Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync(cancellationToken);
             await SqliteDurability.ConfigureDatabaseAsync(connection, cancellationToken);
-            if (openMode == ResearchTrialRegistryOpenMode.BootstrapNew)
+            await using var transaction = connection.BeginTransaction(deferred: false);
+            var version = await ReadSchemaVersionAsync(connection, transaction, cancellationToken);
+            if (version is not null && openMode == ResearchTrialRegistryOpenMode.BootstrapNew)
+                throw new IOException($"A research trial registry already exists at '{databasePath}'.");
+            if (version is null && openMode is ResearchTrialRegistryOpenMode.BootstrapNew or ResearchTrialRegistryOpenMode.OpenOrCreate)
             {
-                // One transaction: a cancelled first request rolls the whole schema back instead of leaving
-                // half-created tables that make every later initialization fail with "table already exists".
-                await using var bootstrap = connection.BeginTransaction(deferred: false);
-                await ExecuteAsync(connection, bootstrap, SchemaSql, cancellationToken);
+                await ExecuteAsync(connection, transaction, SchemaSql + StartsSchemaSql, cancellationToken);
                 await ExecuteAsync(
                     connection,
-                    bootstrap,
+                    transaction,
                     "INSERT INTO research_registry_metadata(singleton, schema_version) VALUES(1, $version);",
                     cancellationToken,
                     ("$version", SchemaVersion));
-                await bootstrap.CommitAsync(cancellationToken);
             }
             else
             {
-                var version = await ReadScalarAsync(
-                    connection,
-                    null,
-                    "SELECT CAST(schema_version AS TEXT) FROM research_registry_metadata WHERE singleton = 1;",
-                    cancellationToken);
                 if (!Int32.TryParse(version, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ||
-                    parsed != SchemaVersion)
+                    parsed is not (2 or SchemaVersion))
                 {
                     throw new InvalidDataException(
                         $"Research trial registry schema '{version ?? "missing"}' is unsupported.");
@@ -638,7 +634,7 @@ public sealed class SqliteResearchTrialRegistry
 
                 var integrity = await ReadScalarAsync(
                     connection,
-                    null,
+                    transaction,
                     "PRAGMA quick_check;",
                     cancellationToken);
                 if (!String.Equals(integrity, "ok", StringComparison.OrdinalIgnoreCase))
@@ -646,14 +642,34 @@ public sealed class SqliteResearchTrialRegistry
                     throw new InvalidDataException(
                         $"Research trial registry integrity check failed: {integrity ?? "missing"}.");
                 }
+                if (parsed == 2)
+                {
+                    await ExecuteAsync(connection, transaction, StartsSchemaSql, cancellationToken);
+                    await ExecuteAsync(connection, transaction,
+                        "UPDATE research_registry_metadata SET schema_version=$version WHERE singleton=1;",
+                        cancellationToken, ("$version", SchemaVersion));
+                }
             }
 
+            transaction.Commit();
             initialized = true;
         }
         finally
         {
-            initialization.Release();
+            Initialization.Release();
         }
+    }
+
+    /// <summary>Distinguishes an empty first-open file from a nonempty database with missing registry metadata.</summary>
+    private static async Task<string?> ReadSchemaVersionAsync(SqliteConnection connection, SqliteTransaction? transaction, CancellationToken token)
+    {
+        var count = await ReadCountAsync(connection, transaction,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%';", token);
+        if (count == 0) return null;
+        if (await ReadCountAsync(connection, transaction,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='research_registry_metadata';", token) != 1) return "missing";
+        return await ReadScalarAsync(connection, transaction,
+            "SELECT CAST(schema_version AS TEXT) FROM research_registry_metadata WHERE singleton=1;", token) ?? "missing";
     }
 
     private static void RequireCanonicalMatch(

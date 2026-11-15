@@ -417,7 +417,11 @@ public sealed partial class MobileAutomationService
                         : null,
                     ExitPolicyIdentity: execution.OperatorOverride
                         ? runtimeStrategy.Identity
-                        : null),
+                        : null)
+                {
+                    DecisionReference = !execution.OperatorOverride && execution.OrderPlan is { } plan
+                        ? new(plan.TriggerReferencePrice, plan.TriggeredAtUtc) : null
+                },
                 brokerClient,
                 cancellationToken);
             var orderId = submission.BrokerOrderId;

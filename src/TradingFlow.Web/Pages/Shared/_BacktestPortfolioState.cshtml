@@ -30,6 +30,10 @@
     @foreach (var exit in Model.PendingExits)
     {
         <p>@exit.Ticker · exit awaiting execution · @exit.Reason · known UTC @exit.KnownAtUtc.ToString("u")</p>
+        @if (exit.ExitEvidence is { } evidence)
+        {
+            <p class="note">Decision close @(evidence.DecisionCloseUtc is { } close ? TradingFlow.Web.Services.UiDisplayFormatter.FormatAuditInstant(close) : "unavailable") · @String.Join(", ", evidence.Conditions)</p>
+        }
     }
     @if (Model.IntradayDecisionCount > 0)
     {

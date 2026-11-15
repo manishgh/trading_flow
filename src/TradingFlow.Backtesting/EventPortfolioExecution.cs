@@ -450,7 +450,7 @@ public static partial class EventPortfolioExecution
             else quotes.Remove(batch.Symbol);
         }
 
-        /// <summary>Construct one closed-parent record from cumulative fills, preserving actual fees and partial-fill quantity.</summary>
+        /// <summary>Construct one closed-parent record from cumulative fills and evidence observed while it was open.</summary>
         private static BacktestTrade BuildCompletedTrade(PositionIntent intent)
         {
             var c = intent.Candidate;
@@ -468,7 +468,8 @@ public static partial class EventPortfolioExecution
                 StrategyId: c.StrategyId, CandidateId: c.CandidateId)
             {
                 EntryFillTiming = DescribeEventFill(entryAt),
-                ExitFillTiming = DescribeEventFill(exitAt)
+                ExitFillTiming = DescribeEventFill(exitAt),
+                ExitEvidence = BacktestDecisionTiming.EvidenceWhileHeld(c.ExitEvidence, entryAt, exitAt)
             };
         }
 

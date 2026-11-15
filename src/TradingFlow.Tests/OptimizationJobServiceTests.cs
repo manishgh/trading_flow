@@ -76,7 +76,7 @@ parameters:
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.StartAsync("second-optimization", optimizationPath));
 
-        Assert.Contains("maximum of 1", error.Message, StringComparison.Ordinal);
+        Assert.Contains("queue is full", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Unsupported objectives are rejected at admission, without leaving a queued job behind.</summary>
@@ -93,13 +93,12 @@ parameters:
     {
         var reader = new SimpleYamlReader();
         var repositoryRoot = TestRepository.FindRoot();
-        var runner = new BacktestRunner(
-            reader,
-            new StrategyArtifactCatalog(
+        var catalog = new StrategyArtifactCatalog(
                 repositoryRoot,
                 Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
-                reader));
-        return new OptimizationJobService(reader, runner, repository, options);
+                reader);
+        var runner = new BacktestRunner(reader, catalog);
+        return new OptimizationJobService(reader, runner, repository, options, SyntheticResearchQueue.For(repository), catalog);
     }
 
     private static void CopyDirectory(string source, string destination)

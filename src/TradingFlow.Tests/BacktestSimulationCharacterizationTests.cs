@@ -220,6 +220,49 @@ public sealed class BacktestSimulationCharacterizationTests
         Assert.DoesNotContain(sink.Events,item=>item.State==ExecutionState.PositionClosed&&item.Timestamp==bars[2].Timestamp);
     }
 
+    // Minimum hold and missing inputs can suppress a second match without suppressing a valid time exit.
+    [Theory]
+    [InlineData("long", 1, true)]
+    [InlineData("short", 1, true)]
+    [InlineData("long", 2, true)]
+    [InlineData("short", 2, true)]
+    [InlineData("long", 1, false)]
+    [InlineData("short", 1, false)]
+    public void CompletedTechnicalAndTimeExits_RetainOnlyProvenConditions(string direction, int minHold, bool knownSma)
+    {
+        var original = AtrStopStrategy();
+        var strategy = original with
+        {
+            Direction = direction,
+            EntryRules = original.EntryRules with { EnableShort = direction == "short" },
+            ExitRules = original.ExitRules with
+            {
+                MaxHoldBars = 1, MinHoldBarsBeforeTechnicalExit = minHold,
+                ExitOnCloseAboveSma5 = direction == "long", ExitOnCloseBelowSma5 = direction == "short"
+            }
+        };
+        var bars = new[] { Bar("2026-06-01T13:30:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:35:00Z", 100, 101, 99, 100),
+            Bar("2026-06-01T13:40:00Z", 100, 101, 99, 100), Bar("2026-06-01T13:45:00Z", 100.5m, 101, 99, 100) };
+        var snapshots = bars.Select(bar => Snapshot(bar.Timestamp.ToString("O")) with
+        {
+            CurrentPrice = 100m,
+            Sma5 = !knownSma ? null : direction == "long" ? 99m : 101m
+        }).ToArray();
+        var result = Assert.IsType<(BacktestCandidateTrade Candidate, int ExitIndex)>(InvokeCreateCandidate(
+            strategy, LongSignal(), BuildOrderPlan(strategy, direction, direction == "long" ? 98m : 102m, 2m),
+            bars, snapshots, new CollectingExecutionSink()));
+
+        var technical = knownSma && minHold == 1;
+        Assert.Equal(technical ? direction == "long" ? "technical_exit_above_sma5" : "technical_exit_below_sma5" : "max_hold_bars",
+            result.Candidate.ExitReason);
+        Assert.Equal(bars[3].Timestamp, result.Candidate.ExitTimestamp);
+        var expected = new List<BacktestExitCondition>();
+        if (technical)
+            expected.Add(direction == "long" ? BacktestExitCondition.CloseAboveSma5 : BacktestExitCondition.CloseBelowSma5);
+        expected.Add(BacktestExitCondition.MaxHoldBars);
+        Assert.Equal(expected, result.Candidate.ExitEvidence!.Conditions);
+    }
+
     [Theory]
     [InlineData("long", "2026-06-01T13:50:00Z", "confirmed_vwap_failure")]
     [InlineData("short", "2026-06-01T13:50:00Z", "confirmed_vwap_reclaim")]
@@ -241,7 +284,15 @@ public sealed class BacktestSimulationCharacterizationTests
             BuildOrderPlan(strategy,direction,direction=="long"?98:102,2),bars,snapshots,new CollectingExecutionSink())).Candidate;
         Assert.Null(candidate.ExitTimestamp);Assert.Null(candidate.ExitPrice);
         Assert.Equal(reason,candidate.PendingExitDecision?.Reason);
-        if(reason is not null)Assert.Equal(DateTimeOffset.Parse(knownAt),candidate.PendingExitDecision!.KnownAtUtc);
+        if (reason is not null)
+        {
+            var pending = candidate.PendingExitDecision!;
+            Assert.Equal(DateTimeOffset.Parse(knownAt), pending.KnownAtUtc);
+            Assert.Equal(bars[^1].Timestamp.AddMinutes(5), pending.ExitEvidence!.DecisionCloseUtc);
+            Assert.Equal(pending.KnownAtUtc, pending.ExitEvidence.AvailableAtUtc);
+            Assert.Equal(direction == "long" ? BacktestExitCondition.ConfirmedVwapFailure : BacktestExitCondition.ConfirmedVwapReclaim,
+                Assert.Single(pending.ExitEvidence.Conditions));
+        }
     }
 
     [Theory]

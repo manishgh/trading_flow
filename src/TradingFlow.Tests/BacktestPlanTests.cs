@@ -11,14 +11,35 @@ using TradingFlow.Application.Jobs;
 using TradingFlow.Contracts.Transport;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Data.Jobs;
+using TradingFlow.Data.Evidence.Governance;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Research;
 using TradingFlow.Web;
 
 namespace TradingFlow.Tests;
 
 public sealed class BacktestPlanTests
 {
+    /// <summary>Uses the production SQLite gate on the saved-plan command before generated execution files or jobs can exist.</summary>
+    [Fact]
+    public async Task SavedPlanWithoutReview_RecordsRefusalBeforePreparingAnyJobs()
+    {
+        using var owner = new TemporaryFolder();
+        var registry = new SqliteResearchTrialRegistry(new(Path.Combine(owner.Path, "research-trials.db"),
+            ResearchTrialRegistryOpenMode.OpenOrCreate));
+        await using var fixture = await Fixture.CreateAsync(8, 2, registry: registry);
+        var plan = await fixture.Service.SaveAsync(new(fixture.Request, 4));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.StartAsync(plan.PlanId, new("1.0", "no-evidence")));
+        Assert.Empty(fixture.Written);
+        Assert.Empty(await fixture.Jobs.GetAllJobsAsync(default));
+        var start = Assert.Single((await registry.ReadLedgerAsync(default)).Starts).Start;
+        Assert.Equal(ResearchStartState.Refused, start.State);
+        Assert.Equal(2, start.Binding.Request.Variants.Count);
+        Assert.Equal(4, start.Binding.Request.Executions.Count);
+        Assert.Empty(start.Binding.Trials);
+    }
+
     /// <summary>The server-selected execution assumption survives save, reopen and every independently generated cohort command.</summary>
     [Fact]
     public async Task SavedPlan_RetainsResolvedExecutionChoiceAcrossReopenAndStart()
@@ -32,9 +53,9 @@ public sealed class BacktestPlanTests
         Assert.All(fixture.Written, item => Assert.Equal(fixture.ResolvedReplayPolicy, item.Run.ExecutionReplayPolicyId));
     }
 
-    /// <summary>All books share one live opaque scope through capture; command replay creates and disposes a fresh operation scope.</summary>
+    /// <summary>All books share one live scope through first capture; retry reuses the exact durable input graph.</summary>
     [Fact]
-    public async Task Start_RetainsOneVerificationScopeAcrossAllBooksAndReopensOnReplay()
+    public async Task Start_RetainsOneVerificationScopeAcrossAllBooksAndReusesDurableBinding()
     {
         await using var fixture = await Fixture.CreateAsync(4, 2);
         var saved = await fixture.Service.SaveAsync(new(fixture.Request, 2));
@@ -45,9 +66,7 @@ public sealed class BacktestPlanTests
         Assert.Equal(1 + 3 * first.Jobs.Count, fixture.ScopeUses.Count);
         Assert.All(fixture.ScopeUses, used => Assert.Same(scope, used));
         await fixture.Service.StartAsync(saved.PlanId, new("1.0", "scoped-start"));
-        Assert.Equal(2, fixture.VerificationScopes.Count);
-        Assert.NotSame(scope, fixture.VerificationScopes[1]);
-        Assert.True(fixture.VerificationScopes[1].Disposed);
+        Assert.Single(fixture.VerificationScopes);
     }
 
     /// <summary>Plan exclusions retain all source evidence while only the selected stocks receive independently funded jobs.</summary>
@@ -212,9 +231,9 @@ public sealed class BacktestPlanTests
         Assert.True(await fixture.Jobs.TryEnqueueAsync(existing, 4, default));
         await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.StartAsync(saved.PlanId, new("1.0", "start")));
         Assert.Equal(existing.Id, Assert.Single(await fixture.Jobs.GetAllJobsAsync(default)).Id);
-        Assert.Empty(fixture.ExistingInputs);
+        Assert.NotEmpty(fixture.ExistingInputs);
         Assert.NotEmpty(fixture.PreparedRequests);
-        Assert.All(fixture.PreparedRequests, reference => Assert.False(File.Exists(reference.Path)));
+        Assert.All(fixture.PreparedRequests, reference => Assert.True(File.Exists(reference.Path)));
     }
 
     /// <summary>Saving cannot silently accept a different profile after preview; a fresh preview freezes the newly reviewed hash.</summary>
@@ -446,7 +465,7 @@ public sealed class BacktestPlanTests
 
         /// <summary>Creates isolated persistence and immutable configuration/comparison evidence without provider collection.</summary>
         public static async Task<Fixture> CreateAsync(int symbols, int strategies, int maximum = 32, IReadOnlyList<string>? sourceSymbols = null,
-            string sourceKind = "wishlist")
+            string sourceKind = "wishlist", IResearchStartRegistry? registry = null)
         {
             var fixture = new Fixture();
             Directory.CreateDirectory(fixture.root);
@@ -515,9 +534,10 @@ public sealed class BacktestPlanTests
                 .ReturnsAsync(() => fixture.ScreenPool ?? throw new InvalidOperationException("No research screen in this fixture."));
             fixture.Jobs = new(fixture.Database);
             var limits = new RunQueueLimits(maximum, 16);
-            var workflow = new RunWorkflowService(fixture.Jobs, fixture.Database.Workflows, fixture.Identities.Object, configuration.Object, fixture.Clock, limits);
+            var research = registry is null ? SyntheticResearchQueue.For(fixture.Jobs) : new ResearchQueue(registry, fixture.Jobs, new string('a', 64));
+            var workflow = new RunWorkflowService(fixture.Jobs, fixture.Database.Workflows, fixture.Identities.Object, configuration.Object, fixture.Clock, limits, research);
             fixture.Workflow = workflow;
-            fixture.Service = new(fixture.Database.Workflows, fixture.Database.Workflows, fixture.Jobs, workflow, configuration.Object, limits, fixture.Clock);
+            fixture.Service = new(fixture.Database.Workflows, fixture.Database.Workflows, workflow, configuration.Object, limits, fixture.Clock);
             return fixture;
         }
 

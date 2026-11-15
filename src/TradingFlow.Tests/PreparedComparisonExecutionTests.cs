@@ -132,8 +132,8 @@ public sealed class PreparedComparisonExecutionTests
             Assert.Equal(accepted.Cohort!.Strategy, month.Strategy);
             Assert.Equal(accepted.Cohort.CohortName, month.CohortName);
         });
-        var preparedDecisions = JsonSerializer.Deserialize<BacktestCandidateDecisionAudit[]>(await File.ReadAllTextAsync(prepared.CandidateDecisionAuditPath!), json)!;
-        var directDecisions = JsonSerializer.Deserialize<BacktestCandidateDecisionAudit[]>(await File.ReadAllTextAsync(direct.Result.CandidateDecisionAuditPath!), json)!;
+        var preparedDecisions = await CandidateAuditFixtureReader.ReadAsync(prepared);
+        var directDecisions = await CandidateAuditFixtureReader.ReadAsync(direct.Result);
         Assert.NotEmpty(preparedDecisions);
         Assert.Equal(preparedDecisions.OrderBy(item => item.Candidate.CandidateId).Select(item =>
             (item.Candidate.CandidateId, item.Candidate.DiscoveredAtUtc, item.Candidate.RevalidatedAtUtc, item.Candidate.State, item.Candidate.SemanticDecisionSha256)),

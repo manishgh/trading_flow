@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Engine.Risk;
+using TradingFlow.Data.Backtesting;
 
 namespace TradingFlow.Backtesting.Artifacts;
 
@@ -50,14 +51,15 @@ public static class BacktestArtifactIntegrity
         var root = NormalizeRoot(artifactRoot);
         var fullPath = ConfineRelativePath(root, reference.Path);
         RejectReparsePoints(root, fullPath);
-        var actualCount = await CountRecordsAsync(reference.Kind, fullPath, cancellationToken);
-        var actual = await CreateReferenceAsync(root, reference.Kind, fullPath, actualCount, cancellationToken);
-        if (actual.RecordCount != reference.RecordCount ||
-            actual.ByteLength != reference.ByteLength ||
+        var actual = await CreateReferenceAsync(root, reference.Kind, fullPath, reference.RecordCount, cancellationToken);
+        if (actual.ByteLength != reference.ByteLength ||
             !actual.Sha256.Equals(reference.Sha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException($"Artifact integrity check failed for '{reference.Kind}'.");
         }
+        // Verify immutable bytes before a format reader, including SQLite, interprets an artifact.
+        if (await CountRecordsAsync(reference.Kind, fullPath, cancellationToken) != reference.RecordCount)
+            throw new InvalidDataException($"Artifact record count differs for '{reference.Kind}'.");
     }
 
     public static async Task<BacktestArtifactManifest> VerifyManifestAsync(
@@ -80,6 +82,7 @@ public static class BacktestArtifactIntegrity
 
     private static void ValidateManifest(BacktestArtifactManifest manifest)
     {
+        CandidateAuditReader.ValidateEncoding(manifest);
         if (manifest.SchemaVersion != 1 || !manifest.PublicationComplete)
             throw new InvalidDataException("Backtest artifact manifest is incomplete or unsupported.");
         if (!Guid.TryParse(manifest.ArtifactSetId, out _))
@@ -143,8 +146,12 @@ public static class BacktestArtifactIntegrity
                 "CREATE TABLE terminal_states(candidate_id TEXT PRIMARY KEY, payload TEXT NOT NULL);", cancellationToken);
 
             var decisions = RequiredPath(artifactRoot, manifest, "candidate_decisions");
+            using var candidateEvidence = await CandidateAuditReader.OpenEvidenceAsync(artifactRoot, manifest, cancellationToken);
             await foreach (var item in ReadJsonFileArrayAsync(decisions, cancellationToken))
             {
+                if (candidateEvidence is not null)
+                    CandidateAuditReader.Verify(item.Deserialize<BacktestCandidateDecisionAudit>()
+                        ?? throw new InvalidDataException("Candidate audit is empty."), candidateEvidence);
                 var candidate = RequireProperty(item, "Candidate");
                 var candidateId = RequireString(candidate, "CandidateId");
                 await InsertCandidateAsync(connection, candidateId, candidate, cancellationToken);
@@ -916,6 +923,15 @@ public static class BacktestArtifactIntegrity
         string path,
         CancellationToken cancellationToken)
     {
+        if (kind == "candidate_evidence")
+        {
+            await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM candidate_evidence";
+            return (long)(await command.ExecuteScalarAsync(cancellationToken))!;
+        }
         if (kind is "candidate_raw_journal" or "zone_evaluations")
         {
             long lines = 0;
@@ -949,6 +965,17 @@ public static class BacktestArtifactIntegrity
         {
             yield return element;
         }
+    }
+
+    /// <summary>Resolves only a relative artifact path within an ordinary, unlinked publication directory.</summary>
+    public static string ResolveArtifactPath(string artifactRoot, string relativePath)
+    {
+        var root = NormalizeRoot(artifactRoot);
+        if ((File.GetAttributes(Path.TrimEndingDirectorySeparator(root)) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Artifact root cannot be a reparse point.");
+        var path = ConfineRelativePath(root, relativePath);
+        RejectReparsePoints(root, path);
+        return path;
     }
 
     private static string NormalizeRoot(string root) =>

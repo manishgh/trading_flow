@@ -710,12 +710,15 @@ public sealed class ChronologicalBacktestExecutionCoordinatorTests
     public void FixedCutoff_PreservesPendingExitDecisionWithoutInventingExecution()
     {
         var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio(maxParticipationPct:100),[Bar(0,10,1000)]);
+        var evidence = new BacktestExitEvidence(Start, Start.AddMinutes(5), Start.AddMinutes(5),
+            [BacktestExitCondition.CloseAboveSma5, BacktestExitCondition.MaxHoldBars]);
         var candidate = Candidate("pending",0,5) with { ExitTimestamp=null,ExitPrice=null,ExitReason="open_at_study_end",
-            PendingExitDecision=new(Start.AddMinutes(5),"technical_exit_above_sma5") };
+            PendingExitDecision=new(Start.AddMinutes(5),"technical_exit_above_sma5") { ExitEvidence = evidence } };
         Assert.True(coordinator.TrySchedule(new(candidate,Strategy(),10),out _));
         coordinator.Complete(Start.AddMinutes(5));
         var state=coordinator.Snapshot(Start.AddMinutes(5));
-        Assert.Single(state.PendingExits);Assert.Single(state.Fills);Assert.Empty(coordinator.CompletedTrades);
+        Assert.Equal(evidence, Assert.Single(state.PendingExits).ExitEvidence);
+        Assert.Single(state.Fills);Assert.Empty(coordinator.CompletedTrades);
     }
 
     [Fact]

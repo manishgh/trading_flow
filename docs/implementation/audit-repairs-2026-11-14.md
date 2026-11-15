@@ -505,11 +505,58 @@ This documentation pass created no disposable scratch files; 0 additional bytes 
 
 | Checkpoint | Current state | Owned scope and acceptance |
 | --- | --- | --- |
-| NEXT-1 | Implementing | Dedicated observational Finviz collector, frozen slot/query/receipt catalog, bounded capture and status UI, real capability/capture acceptance; factual catalog/success-draft corrections |
-| NEXT-2 A6 | Implementing | All actual completed-close exit conditions with unchanged execution and accounting |
-| NEXT-2 A7 | Planned after A6 boundary settles | Run-scoped exact evidence references at journal/export, strict hash hydration and measured storage reduction |
-| NEXT-3 | Planned | Separate immutable admission-quote telemetry and actual local dispatch-attempt stamps joined to unit fills; monthly comparison |
-| NEXT-4 | Planned | Frozen trial registration before computation, every start route, recoverable job binding and read-only Research ledger |
-| Chart information density | Independent review requested | User finds the area below the chart too dense; propose a concrete arrangement before a new UI change |
+| NEXT-1 | Source reviewed; real export and 4 browser cases passed | Scheduled capture implemented; actual scheduled slot and local activation still pending |
+| NEXT-2 A6 | Source reviewed; focused tests passed | Completed-close exit evidence uses actual exchange close where known; execution parity verified in synthetic fixtures |
+| NEXT-2 A7 | Source reviewed; exact-byte/storage fixtures passed | Run-scoped deduplicated evidence, bounded hydration, original semantic hashes preserved; final integrated checks pending |
+| NEXT-3 | Source reviewed; corrected telemetry tests passed | Paper/shadow/experiment admission and pre-POST telemetry, separate monthly references; no real broker fill claimed |
+| NEXT-4 | Independently reviewed; backend and browser checks passed | Frozen registrations and protected-data guards across start routes, read-only Research ledger; local rollout pending |
+| Chart information density | A/B reviews accepted; concrete layout approval requested | User finds the area below the chart too dense; propose a concrete arrangement before a new UI change |
 
 The user explicitly approved all four batches twice, including: “Let's implement all 4, also review chart screen in parallel agents. I think below chart it's too much information”. The published app stays on reviewed code while the next branch is edited. Heavy tests remain serialized; independent plan/execution and code/design reviewers do not implement.
+
+### Active implementation update
+
+NEXT-1 collector C# is prepared; NEXT-2 A6 source and economic parity fixtures are ready for the serialized focused build/test. NEXT-2 A7 implements exact-byte, immutable content-addressed evidence at persistence/export without changing the kernel. NEXT-4 route inventory includes generic Web and legacy job starts as well as saved plans, CLI backtest/optimization, signal-study and catalog paths; all require consistent registration. NEXT-3 follows as an implementation slot opens. No new economic run, broker write or GitHub synchronization has occurred.
+
+The separate chart-density proposal was accepted for presentation by reviewers A and B, with series/page reconstruction wording, literal exchange-session daily dates and selected-candle evidence preservation across joined historical pages. The user has been asked to approve only the below-chart rearrangement. Above-chart zone cards remain separate. Published app/ngrok continue on reviewed 57ee499; these uncommitted changes are isolated from them.
+
+### NEXT-2 A6 focused verification
+
+The completed-close exit-evidence change passed 163 focused cases with zero failures, covering ETF month-end/rotation fixtures (rotation remains disabled operationally), shared technical predicates, simulator characterization, chronological/native accounting, fine execution, research-screen holding rules, artifact integrity, monthly presentation and event execution. The parity fixture compares execution events, trade economics apart from the new evidence, fills, fees/cash, daily equity and monthly projection. An earlier testhost launch failed to establish its local runner connection before any case ran; the same compiled tests passed with authorized loopback access. Independent implementation plan/code reviews are still pending; this result is not a new economic study. NEXT-3 implementation has started after A6 handoff.
+
+### Independent NEXT-1/NEXT-2 code and design review
+
+Reviewer B accepted the implementation after the following corrections: daily exit evidence uses authoritative regular/early exchange closes where known, with modeled availability kept separate; exact-byte audit hydration uses one root-sized output buffer, active-path cycle checks and bounded recipe reads; corrupt/oversized journal evidence raises a fatal audit persistence error; kernel transitions must retain their semantic object and hash; artifact bytes are verified before opening SQLite; Web audit readers show unavailable evidence rather than returning an unhandled error. Added focused cycle-allocation, missing semantic, oversized journal, old inline preservation and exact-byte/as-of/storage fixtures. Reviewer A plan/execution review is in progress. The integrated test rerun and actual authenticated Finviz export-shape acceptance remain pending. No collector activation or new runtime deployment is claimed.
+
+### NEXT-1 actual provider acceptance and NEXT-2 measured storage
+
+The independently approved opt-in real Finviz check passed 1/1 with no skips on 15 November at 17:41:57 UTC (12:41:57 New York / 18:41:57 Berlin). It read both saved presets through SQLite read-only mode, received HTTP 200 for each actual default export, and verified retained raw receipts. Mean revision Average pullback returned 2 CSV rows / 347 bytes; Mean revision snapback returned 5 rows / 627 bytes. Both returned the expected 11-column shape. Matching-row completeness remains unverified because the export supplies no independent terminal/count/cap proof. The check did not mutate operator records, claim a scheduled slot, or enable the collector. Raw provider receipts under work/finviz-real-acceptance-20261115/raw are core evidence and must be retained. Export: TradingFlow-Finviz-export-acceptance-2026-11-15.json.
+
+The combined NEXT-1/NEXT-2/NEXT-3 synthetic slice ran 354 cases: 350 passed, four fixture checks failed (new migration table expectations and the same future trigger timestamp in three paper profiles). Those fixture defects are corrected; their rerun is pending. A7's executed deterministic fixture measured worker SQLite plus journal 19,098,972 → 642,336 bytes and published artifact plus sidecar 9,481,469 → 392,385 bytes, 387 immutable fragments, zero retained run cache. Exact per-transition JSON and semantic hashes matched. These are measured synthetic repeated-history figures, not a claim about an economic run's original 71 MiB artifact.
+
+Reviewer B accepted NEXT-3 after normal paper/shadow/experiment telemetry coverage, mobile typed-plan propagation and verified persisted-trigger fallback for reviewed entries were added. Actual broker fill acceptance remains unperformed; no orders have been sent. NEXT-4 review is still resolving protected-observation preflight/cache and durable result-linkage issues. UI verification is using only its isolated synthetic host; published operator app/ngrok remain on 57ee499.
+
+### NEXT-1–4 final integration checkpoint
+
+Separate reviewer A accepted NEXT-4 route, protected-data and ledger coverage. Reviewer B accepted the final process-date handling, development/validation-only public CLI and SQLite startup/publication race corrections. The corrected focused suite passed 174/174 without skips. Eight signed-in navigation/ledger browser cases passed, including unknown historic counts, empty durable starts, the draft policy document and zero mutation requests from the ledger. The four Finviz browser cases also passed after correcting Operations page wrapping at phone width.
+
+Both telemetry consumers now hash the exact kernel semantic JSON bytes; serializing a JsonElement again can change a typed timestamp's plus sign and invalidate an otherwise identical decision. The fixture includes typed timestamps. New registry connections use private SQLite cache, with cold schema creation fenced by the database write transaction; equal completion evidence compares canonical contents, including optimization arrays.
+
+A consistent read-only backup of the actual operator database was retained before migration rehearsal: 512,036,864 bytes, SHA-256 b175b11f32d06c67b484f353cc5a2558669b00d836135c27cfb0d0cbac31d985, SQLite integrity ok, 29 migrations and zero active jobs. The original app is still running on 57ee499. A separate rehearsal copy is prepared; neither operator migration nor new collector activation is claimed yet.
+
+The full backend regression run is now in progress. It found older intraday assertions searching the compressed reference file directly; these are being updated to verify and hydrate the published evidence before asserting the original rule and parity. The completed 174-case result does not substitute for that broader check. Guide export now includes scheduled capture, the paper comparison and the Research ledger.
+
+### Migration rehearsal accepted independently
+
+The side-effect-free EF design-time factory applied only AddScheduledFinvizCaptures and AddOrderExecutionTelemetry to the retained database copy. All 45 original non-EF tables, their columns and 304,363 ordered rows matched the pre-migration snapshot exactly; all five new tables are empty. Migration count is 31, integrity_check is ok and foreign_key_check returns no violations. Reviewer A additionally compared all 29 old migration ID/version rows and all 153 original named non-system schema objects. The report is exported as TradingFlow-Fable-migration-rehearsal.json. This is copy-only evidence; the operator still runs the preceding build and schema.
+
+Reviewer B accepted the final test-consumer correction, including preservation of the exposed CandidateDecisionAuditPath assertion, and the use of the existing three-clock formatter for new A6 and Research ledger displays. Ledger tables reuse horizontal scrolling. These are awaiting the final compiled/browser check; the backend full run uses the earlier test binaries and will be followed by the corrected affected cases.
+
+### Final backend regression accepted
+
+The full backend run recorded 4,048 passes, three failures in stale inline-audit assertions, and five explicit opt-outs across 4,056 distinct test IDs. The independently reviewed correction keeps the original ORB/parity assertions, verifies the full manifest and exposed result path, and reads the exact hydrated transitions. All 11 affected/formatter cases passed after rebuilding final source. Combining by stable test ID yields 4,051 passes and no unresolved failure; the separately executed real Finviz case brings the evidence to 4,052 passed with only four explicit profiling opt-outs. Original TRXs and the per-ID evidence inventory are retained. Independent reviewer A checked the count and coverage; B checked the correction. The complete 231-case browser suite is in progress before local commit/cutover.
+
+
+### Browser suite and implementation checkpoint accepted
+
+The complete isolated browser suite passed all 231 cases, covering navigation, responsive pages, shared charts and indicators, Finviz status, research ledger, workflow and authorization checks. The owned host stopped and the fixture database/cache/artifacts were removed by the test cleanup reporter. Source review B and plan/execution review A have accepted NEXT-1–4 and the exact backend evidence; the migration rehearsal is accepted. The separate chart-density document remains a proposal only, included because the user requested that independent screen review. Local commit and paused rollout follow; no GitHub sync or broker write is authorized by this checkpoint.

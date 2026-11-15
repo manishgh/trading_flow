@@ -3,7 +3,8 @@ namespace TradingFlow.Data.Evidence.Governance;
 public enum ResearchTrialRegistryOpenMode
 {
     BootstrapNew = 1,
-    OpenExisting = 2
+    OpenExisting = 2,
+    OpenOrCreate = 3
 }
 
 public sealed class ResearchTrialRegistryOptions

@@ -14,7 +14,7 @@
     var signedIn = User.Identity?.IsAuthenticated == true;
     var destination = IsCurrent("/News") ? "News" : IsCurrent("/Earnings") ? "Earnings"
         : IsCurrent("/RunningTrades", "/Orders", "/OrderTicket") ? "Trading"
-        : IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/CandidateAudit") ? "Strategies"
+        : IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/CandidateAudit", "/ResearchLedger") ? "Strategies"
         : IsCurrent("/Preparation") ? "Preparation" : IsCurrent("/Wishlists") ? "Stock groups"
         : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
     var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Preparation", "/Preparation", "calendar"), ("Trading", "/Orders", "trending-up"),
@@ -184,12 +184,13 @@
                 </details>
             </div>
         }
-        @if (signedIn && IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit"))
+        @if (signedIn && IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/ResearchLedger"))
         {
             @* Strategy runs and their backtests share one destination and two local views. *@
             <nav class="strategy-local-nav" aria-label="Strategy views">
                 <a asp-page="/Paper" aria-current="@(IsCurrent("/Paper", "/PaperJob") ? "page" : null)">Strategy runs</a>
                 <a asp-page="/Backtests" aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Backtests</a>
+                <a asp-page="/ResearchLedger" aria-current="@(IsCurrent("/ResearchLedger") ? "page" : null)">Research ledger</a>
             </nav>
         }
         @RenderBody()

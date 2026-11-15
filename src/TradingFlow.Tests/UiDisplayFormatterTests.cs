@@ -6,6 +6,14 @@ namespace TradingFlow.Tests;
 
 public sealed class UiDisplayFormatterTests
 {
+    /// <summary>Audit clocks retain both dates when New York is on the previous day, with real DST offsets.</summary>
+    [Fact]
+    public void FormatAuditInstant_ShowsNewYorkBerlinAndUtcAcrossMidnight()
+    {
+        var result = UiDisplayFormatter.FormatAuditInstant(new DateTimeOffset(2026, 6, 8, 1, 2, 3, TimeSpan.Zero));
+        Assert.Equal("2026-06-07 21:02:03 NY · 2026-06-08 03:02:03 Berlin · 2026-06-08 01:02:03 UTC", result);
+    }
+
     [Fact]
     public void NormalizeRejectionReasonKey_RemovesMeasuredDetails()
     {

@@ -7,6 +7,7 @@ using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Research;
 
 namespace TradingFlow.Application.Jobs;
 
@@ -44,24 +45,61 @@ public interface IWorkflowRunConfiguration
     /// </summary>
     Task<ResearchScreenPool> ResolveResearchScreenPoolAsync(StartBacktestRequest request, UniversePreviewResponse source, CancellationToken token) =>
         throw new InvalidOperationException("Research screens are not available in this host.");
+    /// <summary>Resolves only frozen screen metadata before a research start is registered.</summary>
+    Task<ResearchScreenReference> ResolveResearchScreenReferenceAsync(UniversePreviewResponse source, CancellationToken token) =>
+        throw new InvalidOperationException("Research screens are not available in this host.");
 }
 
 /// <summary>One durable command boundary for browser and device run requests.</summary>
 public sealed partial class RunWorkflowService(
     IDurableJobRepository jobs, IUniversePreviewRepository previews, IStrategyIdentityResolver strategies,
-    IWorkflowRunConfiguration configuration, TimeProvider clock, RunQueueLimits limits)
+    IWorkflowRunConfiguration configuration, TimeProvider clock, RunQueueLimits limits, ResearchQueue research)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    internal ResearchQueue Research => research;
 
     /// <summary>Admits the selected research book with its exact requested dates and a comparison-wide immutable input request.</summary>
     public async Task<RunJobResponse> StartAsync(StartBacktestRequest request, CancellationToken token = default)
     {
         ValidateBacktest(request, clock.GetUtcNow());
-        using var scope = await configuration.OpenEvidenceVerificationScopeAsync(request, token);
-        var evidence = await configuration.GetDecisionContextEvidenceAsync(request, token, scope);
-        return await StartCoreAsync("backtest", request.IdempotencyKey, request.RunName, request.UniverseSnapshotId, request.Strategies,
-            JsonSerializer.Serialize(request, Json), (universe, name) => configuration.WriteAsync(request, universe, name, token, scope), token,
-            request.TestWindowEndUtc, evidence, scope);
+        request = await configuration.NormalizeBacktestRequestAsync(request with { IdempotencyKey = request.IdempotencyKey.Trim() }, token);
+        var profileHash = await configuration.GetBacktestConfigurationHashAsync(request.ConfigurationKey, token);
+        if (request.ConfigurationSha256 is { } reviewed && !profileHash.Equals(reviewed, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The selected portfolio profile differs from the reviewed configuration.");
+        request = request with { ConfigurationSha256 = profileHash };
+        var settings = await configuration.GetBacktestResolvedSettingsAsync(request, token);
+        var stored = await previews.GetAsync(request.UniverseSnapshotId, token)
+            ?? throw new InvalidOperationException("Universe preview is missing.");
+        var source = UniverseDiscoveryService.ReadPreview(stored, request.UniverseSnapshotId);
+        ResearchScreenReference? screen = null;
+        if (source.Members.Any(member => member.Sources.Any(item => item.SourceKind == DiscoverySourceKinds.ResearchScreen)))
+            screen = await configuration.ResolveResearchScreenReferenceAsync(source, token);
+        var variants = request.Strategies.Select(strategy => ResearchQueue.WorkflowVariant(strategy, request, screen, settings)).ToArray();
+        var jobId = ResearchQueue.WorkflowJobId(request.IdempotencyKey);
+        var start = new FrozenResearchStart(ResearchStartIdentity.StartId("web-backtest", request.IdempotencyKey), ResearchStartKind.Portfolio,
+            EvidenceCanonicalJson.ComputeSha256(new { Run = request with { IdempotencyKey = "" }, Source = source, Screen = screen, Settings = settings }),
+            research.CodeSha256, variants, new Dictionary<string, string[]> { [jobId.ToString("N")] = variants.Select(value => value.VariantKey).ToArray() });
+        PersistedJob? staged = null;
+        try
+        {
+            var queued = await research.AdmitAsync(start, limits.Backtest, async (_, ct) =>
+            {
+                using var scope = await configuration.OpenEvidenceVerificationScopeAsync(request, ct);
+                var evidence = await configuration.GetDecisionContextEvidenceAsync(request, ct, scope);
+                staged = await PrepareCoreAsync("backtest", request.IdempotencyKey, request.RunName, request.UniverseSnapshotId,
+                    request.Strategies, JsonSerializer.Serialize(request, Json),
+                    (universe, name) => configuration.WriteAsync(request, universe, name, ct, scope), ct,
+                    evidenceSummary: evidence, evidenceScope: scope);
+                await AttachPreparedComparisonAsync("run-" + jobId.ToString("N"), [staged], request.TestWindowEndUtc, ct);
+                return [staged];
+            }, token);
+            return Project(queued.Single());
+        }
+        finally
+        {
+            if (staged is not null) await DiscardUnacceptedInputsAsync(staged);
+        }
     }
 
     /// <summary>Validates research choices before saving, preparing files or admitting any jobs.</summary>
@@ -129,7 +167,7 @@ public sealed partial class RunWorkflowService(
             identities.Distinct().Count() != identities.Count) throw new InvalidOperationException("Select distinct exact strategy identities.");
         var kind = mode == "backtest" ? "backtest" : "paper";
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
-        var id = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes("workflow-job:" + key.Trim())).AsSpan(0, 16));
+        var id = ResearchQueue.WorkflowJobId(key);
         var existing = await jobs.GetJobAsync(id, token);
         if (existing is not null)
         {

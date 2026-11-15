@@ -7,6 +7,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Universe;
 
@@ -87,6 +88,7 @@ public sealed class EtfRotationTests
         Assert.True(result.EconomicResultsComplete);
         var sold = Assert.Single(result.CompletedTrades);
         Assert.Equal(("CCC", BacktestRunner.OffListExitReason), (sold.Ticker, sold.ExitReason));
+        Assert.Equal([BacktestExitCondition.OffList], sold.ExitEvidence!.Conditions);
         Assert.Equal(Midnight(new(2026, 7, 1)).AddHours(9.5), sold.EntryFillTiming!.EconomicTimestampUtc);
         Assert.Equal(Midnight(Swap).AddHours(9.5), sold.ExitFillTiming!.EconomicTimestampUtc);
         Assert.Equal(("research_screen", "screen", "raw"), (result.Validation.BiasRisk.UniverseSource,
@@ -105,6 +107,34 @@ public sealed class EtfRotationTests
         // 30 October is the last month-end; the list (and run) has no session after it, so nothing is marked as off the list.
         Assert.Empty(result.PortfolioState.PendingExits);
         Assert.Equal(["AAA", "BBB", "DDD"], result.PortfolioState.OpenPositions.Select(position => position.Ticker).Order());
+    }
+
+    // A dip at the scheduled close proves both conditions. The same dip a day earlier is off schedule.
+    [Theory]
+    [InlineData(30, false, 16)]
+    [InlineData(31, true, 16)]
+    [InlineData(31, true, 13)]
+    public async Task Rotation_ReportsFactorAndOffListOnlyWhenBothAreProven(int julyDay, bool simultaneous, int closeHour)
+    {
+        var dip = Midnight(new(2026, 7, julyDay));
+        var result = await RunAsync(portfolio => portfolio, bar => bar.Ticker == "CCC" && bar.Timestamp == dip
+            ? bar with { Low = bar.Low - 25m, Close = bar.Close - 25m }
+            : bar, closeHour);
+
+        Assert.True(result.EconomicResultsComplete);
+        var sold = Assert.Single(result.CompletedTrades);
+        Assert.Equal("CCC", sold.Ticker);
+        Assert.Equal(simultaneous ? TechnicalExecutionEngine.EntryFactorExitReason : BacktestRunner.OffListExitReason,
+            sold.ExitReason);
+        Assert.Equal(simultaneous
+            ? [BacktestExitCondition.EntryFactorAtOrBelowThreshold, BacktestExitCondition.OffList]
+            : new[] { BacktestExitCondition.OffList }, sold.ExitEvidence!.Conditions);
+        Assert.Equal(Midnight(new(2026, 7, 31)).AddHours(closeHour), sold.ExitEvidence.DecisionCloseUtc);
+        Assert.Equal(Midnight(new(2026, 8, 1)), sold.ExitEvidence.AvailableAtUtc);
+        Assert.Equal(Midnight(Swap).AddHours(9.5), sold.ExitFillTiming!.EconomicTimestampUtc);
+        var fills = result.PortfolioState!.Fills;
+        Assert.Equal(Swap, Assert.Single(fills, fill => !fill.IsEntry && fill.Ticker == "CCC").SourceSessionDate);
+        Assert.Equal(Swap, Assert.Single(fills, fill => fill.IsEntry && fill.Ticker == "DDD").SourceSessionDate);
     }
 
     // Paper/live paths and the signal study refuse the off-list exit; the file needs a decision schedule for it.
@@ -162,7 +192,8 @@ public sealed class EtfRotationTests
         result.PortfolioState!.Fills.Where(fill => fill.IsEntry).ToDictionary(fill => fill.Ticker, fill => fill.SourceSessionDate);
 
     // Run the catalog rotation with its profile (portfolio adjusted by the caller) on the fixture list for July to October 2026.
-    private static async Task<BacktestResult> RunAsync(Func<PortfolioConfig, PortfolioConfig> portfolio, Func<OhlcvBar, OhlcvBar>? transform = null)
+    private static async Task<BacktestResult> RunAsync(Func<PortfolioConfig, PortfolioConfig> portfolio,
+        Func<OhlcvBar, OhlcvBar>? transform = null, int closeHour = 16)
     {
         using var root = new TemporaryFolder();
         var repo = TestRepository.FindRoot();
@@ -191,7 +222,7 @@ public sealed class EtfRotationTests
                 WishlistName = "retired profile list", SelectedSourceTickers = Pool, ResolvedAtUtc = start,
                 RankedMembership = new(screen.ManifestPath, screen.ManifestSha256) }
         };
-        var runner = new BacktestRunner(reader, catalog, marketDataProviderFactory: _ => new FixtureProvider(transform));
+        var runner = new BacktestRunner(reader, catalog, marketDataProviderFactory: _ => new FixtureProvider(transform, closeHour));
         var resultPath = Path.Combine(run.ResultsRoot, "result.json");
         BacktestResult result;
         try
@@ -247,7 +278,8 @@ public sealed class EtfRotationTests
         new(ticker, Midnight(day), "1d", close, close + 0.5m, close - 0.5m, close, 2_000_000m, "sip", "raw");
 
     /// <summary>Serves the fixture's daily bars and its weekday calendar; no network and no real data.</summary>
-    private sealed class FixtureProvider(Func<OhlcvBar, OhlcvBar>? transform = null) : IMarketDataProvider, IMarketSessionScheduleProvider, IShareSplitProvider
+    private sealed class FixtureProvider(Func<OhlcvBar, OhlcvBar>? transform, int closeHour)
+        : IMarketDataProvider, IMarketSessionScheduleProvider, IShareSplitProvider
     {
         private readonly OhlcvBar[] bars = DailyBars().Select(bar => transform?.Invoke(bar) ?? bar).ToArray();
 
@@ -269,6 +301,8 @@ public sealed class EtfRotationTests
         public Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(DateOnly start, DateOnly end,
             CancellationToken token) => Task.FromResult<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>>(
                 Enumerable.Range(start.DayNumber, end.DayNumber - start.DayNumber + 1).Select(DateOnly.FromDayNumber).ToDictionary(day => day,
-                    day => day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday ? MarketSessionSchedule.Closed(day) : MarketSessionSchedule.RegularDay(day)));
+                    day => day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday ? MarketSessionSchedule.Closed(day)
+                        : day == new DateOnly(2026, 7, 31) ? MarketSessionSchedule.RegularDay(day) with { RegularClose = new TimeOnly(closeHour, 0) }
+                        : MarketSessionSchedule.RegularDay(day)));
     }
 }

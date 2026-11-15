@@ -213,6 +213,8 @@ public sealed class CatalogStaticUniverseMomentumWorkflowTests : IDisposable
             "ordering-as-traded");
         var bars = BuildBars();
         var catalog = new Mock<IEvidenceCatalog>(MockBehavior.Strict);
+        catalog.Setup(value => value.GetResearchRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((EvidenceResearchRunManifest?)null);
         catalog
             .Setup(value => value.GetDatasetAsync(
                 It.IsAny<string>(),
@@ -301,12 +303,15 @@ public sealed class CatalogStaticUniverseMomentumWorkflowTests : IDisposable
             new EvidenceResearchRunArtifactPackager(
                 new FileSystemImmutableArtifactStore(
                     new ImmutableArtifactStoreOptions(
-                        Path.Combine(root, objectFolder)))));
+                        Path.Combine(root, objectFolder)))),
+            TradingFlow.Data.Evidence.Governance.SqliteResearchTrialRegistry.OpenLocal(root));
 
     private static Mock<IEvidenceCatalog> DatasetCatalog(
         params EvidenceDatasetManifest[] manifests)
     {
         var catalog = new Mock<IEvidenceCatalog>(MockBehavior.Strict);
+        catalog.Setup(value => value.GetResearchRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((EvidenceResearchRunManifest?)null);
         catalog
             .Setup(value => value.GetDatasetAsync(
                 It.IsAny<string>(),

@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Logging;
+using TradingFlow.Domain.Persistence;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Storage;
 
@@ -76,6 +77,7 @@ public sealed partial class AlpacaBrokerClient :
             ReadLossDecimal(root, "intraday_adjustments"));
     }
 
+    // Expose the exact committed quote receipt alongside the values already used by admission.
     public async Task<BrokerMarketObservation> GetMarketObservationAsync(
         string symbol,
         EquityTradingSession session,
@@ -134,7 +136,11 @@ public sealed partial class AlpacaBrokerClient :
             ParseOptionalTimestamp(quote, "t"),
             ParseOptionalDecimal(trade, "p"),
             ParseOptionalTimestamp(trade, "t"),
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow)
+        {
+            QuoteReceipt = new(quoteResponse.Archive.Manifest.ArchiveId, quoteResponse.Archive.Manifest.Sha256,
+                quoteResponse.Archive.Manifest.ReceivedAtUtc)
+        };
     }
 
     public async Task<BrokerOrderReceipt> SubmitOrderAsync(BrokerEntryOrder entryOrder, CancellationToken cancellationToken)

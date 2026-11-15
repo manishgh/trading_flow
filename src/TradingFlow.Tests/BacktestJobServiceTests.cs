@@ -87,14 +87,14 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         var reader = new SimpleYamlReader();
         var executor = new ImmediateBacktestExecutor();
         var enabled = new BacktestJobService(executor, repository, reader, BacktestJobServiceOptions.Default,
-            new StrategyArtifactCatalog(testRoot, manifestPath, reader));
+            new StrategyArtifactCatalog(testRoot, manifestPath, reader), SyntheticResearchQueue.For(repository));
         var queued = await enabled.StartAsync("queued-before-disable", configPath);
         var captured = await repository.GetJobAsync(queued.JobId, default);
 
         rotation["enabled"] = false;
         await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
         var parked = new BacktestJobService(executor, repository, reader, BacktestJobServiceOptions.Default,
-            new StrategyArtifactCatalog(testRoot, manifestPath, reader));
+            new StrategyArtifactCatalog(testRoot, manifestPath, reader), SyntheticResearchQueue.For(repository));
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             parked.StartAsync("disabled-at-submission", configPath));
         Assert.Contains("parked for later standalone research", error.Message, StringComparison.Ordinal);
@@ -288,7 +288,7 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         }
     }
 
-    /// <summary>A rejected legacy admission removes its unique parameter file while retaining the first accepted job's inputs.</summary>
+    /// <summary>A full queue retains the exact pending inputs for a deterministic research retry.</summary>
     [Fact]
     public async Task QueueCapacity_BoundsDurableWaitingAndRunningJobs()
     {
@@ -299,17 +299,18 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.StartAsync("second-capacity", configPath));
 
-        Assert.Contains("maximum of 1", error.Message, StringComparison.Ordinal);
+        Assert.Contains("queue is full", error.Message, StringComparison.Ordinal);
         Assert.Single(await repository.GetJobsAsync("backtest", CancellationToken.None));
         var retained = Assert.Single(await repository.GetJobsAsync("backtest", CancellationToken.None));
         var reference = DurableFileJobRequest.Deserialize(retained.RequestJson).PreparedMarketData!;
-        Assert.Equal(reference.Path, Assert.Single(Directory.GetFiles(Path.Combine(testRoot, "results", "_prepared-requests"),
-            "request.json", SearchOption.AllDirectories)));
+        var requests = Directory.GetFiles(Path.Combine(testRoot, "results", "_prepared-requests"), "request.json", SearchOption.AllDirectories);
+        Assert.Equal(2, requests.Length);
+        Assert.Contains(reference.Path, requests);
     }
 
-    /// <summary>Cancellation after request publication releases rejected staging even though the caller's cancellation token is already set.</summary>
+    /// <summary>Cancellation after registry publication retains its exact request for recovery.</summary>
     [Fact]
-    public async Task CanceledAdmission_DiscardsOnlyUnacceptedPreparedRequest()
+    public async Task CanceledAdmission_RetainsRegistryOwnedPreparedRequest()
     {
         using var cancellation = new CancellationTokenSource();
         var durable = new Mock<IDurableJobRepository>();
@@ -322,9 +323,9 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
             });
         var service = CreateService(new ImmediateBacktestExecutor(), durableRepository: durable.Object);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.StartAsync("canceled-admission", configPath, cancellation.Token));
-        Assert.Empty(Directory.GetFiles(Path.Combine(testRoot, "results", "_prepared-requests"), "request.json", SearchOption.AllDirectories));
+        Assert.Single(Directory.GetFiles(Path.Combine(testRoot, "results", "_prepared-requests"), "request.json", SearchOption.AllDirectories));
         Assert.True(File.Exists(configPath));
-        durable.Verify(candidate => candidate.GetAllJobsAsync(CancellationToken.None), Times.Once);
+        durable.Verify(candidate => candidate.GetAllJobsAsync(CancellationToken.None), Times.Never);
     }
 
     /// <summary>An uncertain enqueue error cannot delete a request that the durable repository already accepted.</summary>
@@ -576,7 +577,7 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         BacktestJobServiceOptions? options = null,
         IDurableJobRepository? durableRepository = null) =>
         new(executor, durableRepository ?? repository, new SimpleYamlReader(), options ?? BacktestJobServiceOptions.Default,
-            RetiredStrategyFixtures.Catalog(new SimpleYamlReader()));
+            RetiredStrategyFixtures.Catalog(new SimpleYamlReader()), SyntheticResearchQueue.For(durableRepository ?? repository));
 
     private Task<bool> ProcessOneAsync(BacktestJobService service) =>
         new DurableJobProcessor(repository).ProcessNextAsync(

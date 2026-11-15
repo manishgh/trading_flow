@@ -6,12 +6,13 @@ using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Research;
 
 namespace TradingFlow.Application.Jobs;
 
 /// <summary>Saves immutable plans in the existing application event store; ordinary durable workers execute their jobs.</summary>
 public sealed class BacktestPlanService(IApplicationEventRepository events, IUniversePreviewRepository previews,
-    IDurableJobRepository jobs, RunWorkflowService workflow, IWorkflowRunConfiguration configuration, RunQueueLimits limits, TimeProvider clock)
+    RunWorkflowService workflow, IWorkflowRunConfiguration configuration, RunQueueLimits limits, TimeProvider clock)
 {
     private const string Stream = "backtest-plans";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -121,22 +122,26 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
     {
         if (request.ContractVersion != ContractVersions.VersionOne || String.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 100)
             throw new InvalidOperationException("A supported contract and a retry key of at most 100 characters are required.");
+        request = request with { IdempotencyKey = request.IdempotencyKey.Trim() };
         var plan = await GetAsync(id, token) ?? throw new InvalidOperationException("Saved backtest plan not found.");
         if (plan.ExecutionCount > limits.Backtest)
             throw new InvalidOperationException("The complete plan exceeds the current backtest queue budget.");
-        await RequireUnchangedResearchScreenAsync(plan, token);
-        using var scope = await configuration.OpenEvidenceVerificationScopeAsync(plan.Run, token);
-        var evidence = await configuration.GetDecisionContextEvidenceAsync(plan.Run, token, scope);
-        if (plan.EvidenceSummary?.DependencyGraphSha256 != evidence?.DependencyGraphSha256)
-            throw new InvalidDataException("Decision-context dependencies differ from the saved plan. Review and save a new plan before starting.");
+        var start = FreezeResearchStart(plan, request.IdempotencyKey);
         var attempts = new List<PersistedJob>(plan.ExecutionCount);
         try
         {
-            await PrepareExecutionsAsync(plan, request.IdempotencyKey, attempts, token, scope);
-            var comparisonId = "comparison-" + Convert.ToHexStringLower(SHA256.HashData(
-                Encoding.UTF8.GetBytes($"{plan.PlanId}:{request.IdempotencyKey}")));
-            await workflow.AttachPreparedComparisonAsync(comparisonId, attempts, plan.Run.TestWindowEndUtc, token);
-            var accepted = await AdmitExecutionsAsync(attempts, request.IdempotencyKey, token);
+            var accepted = await workflow.Research.AdmitAsync(start, limits.Backtest, async (_, ct) =>
+            {
+                await RequireUnchangedResearchScreenAsync(plan, ct);
+                using var scope = await configuration.OpenEvidenceVerificationScopeAsync(plan.Run, ct);
+                var evidence = await configuration.GetDecisionContextEvidenceAsync(plan.Run, ct, scope);
+                if (plan.EvidenceSummary?.DependencyGraphSha256 != evidence?.DependencyGraphSha256)
+                    throw new InvalidDataException("Decision-context dependencies differ from the saved plan. Review and save a new plan before starting.");
+                await PrepareExecutionsAsync(plan, request.IdempotencyKey, attempts, ct, scope);
+                var comparisonId = "comparison-" + ResearchStartIdentity.HashText($"{plan.PlanId}:{request.IdempotencyKey}");
+                await workflow.AttachPreparedComparisonAsync(comparisonId, attempts, plan.Run.TestWindowEndUtc, ct);
+                return attempts;
+            }, token);
             return new(id, request.IdempotencyKey, accepted.Select(RunWorkflowService.Project).ToArray());
         }
         finally
@@ -144,6 +149,18 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
             // Acceptance is transactional. Cleanup checks the durable winner before removing any attempt's inputs.
             foreach (var attempt in attempts) await workflow.DiscardUnacceptedInputsAsync(attempt);
         }
+    }
+
+    /// <summary>One exact strategy is one variant, even when its intended execution matrix contains many stock groups.</summary>
+    private FrozenResearchStart FreezeResearchStart(BacktestPlanResponse plan, string startKey)
+    {
+        var variants = plan.Run.Strategies.Select(strategy => ResearchQueue.WorkflowVariant(strategy, plan.Run, plan.ResearchScreen, plan.ResolvedSettings)).ToArray();
+        var executions = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        foreach (var cohort in plan.Cohorts)
+        foreach (var (strategy, index) in plan.Run.Strategies.Select((strategy, index) => (strategy, index)))
+            executions.Add(ResearchQueue.WorkflowJobId(ExecutionKey(plan.PlanId, startKey, cohort.Name, strategy)).ToString("N"), [variants[index].VariantKey]);
+        return new(ResearchStartIdentity.StartId("saved-plan", $"{plan.PlanId}:{startKey}"), ResearchStartKind.Portfolio,
+            EvidenceCanonicalJson.ComputeSha256(plan), workflow.Research.CodeSha256, variants, executions);
     }
 
     /// <summary>Prepares each exact strategy/group independently and records completed attempts for cleanup if a later group fails.</summary>
@@ -159,24 +176,6 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
             attempts.Add(await workflow.PrepareCohortAsync(run,
                 new(plan.PlanId, cohort.Name, cohort.Symbols, cohort.StartingCapital, strategy), plan.Source, token, evidenceScope));
         }
-    }
-
-    /// <summary>Accepts the complete matrix once, or returns its exact durable retry outcome; never accepts a partial comparison.</summary>
-    private async Task<IReadOnlyList<PersistedJob>> AdmitExecutionsAsync(IReadOnlyList<PersistedJob> prepared, string startKey, CancellationToken token)
-    {
-        var prior = await Task.WhenAll(prepared.Select(job => jobs.GetJobAsync(job.Id, token)));
-        if (prior.Any(job => job is not null) || !await jobs.TryEnqueueBatchAsync(prepared, limits.Backtest, token))
-        {
-            var existing = await Task.WhenAll(prepared.Select(job => jobs.GetJobAsync(job.Id, token)));
-            if (existing.Any(job => job is null))
-                throw new InvalidOperationException("No new jobs were accepted: the complete comparison does not fit the available queue capacity, or its earlier execution set is incomplete.");
-            for (var index = 0; index < prepared.Count; index++)
-                if (DurableFileJobRequest.Deserialize(existing[index]!.RequestJson).Workflow?.RequestSha256 !=
-                    DurableFileJobRequest.Deserialize(prepared[index].RequestJson).Workflow?.RequestSha256)
-                    throw new IdempotencyKeyConflictException(startKey);
-            return existing.Select(job => job!).ToArray();
-        }
-        return prepared;
     }
 
     /// <summary>

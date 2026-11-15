@@ -21,7 +21,11 @@ public sealed record BacktestPendingOrder(string CandidateId, string StrategyId,
     string OrderId, string Side, string OrderType, int RemainingQuantity, string Status,
     decimal ReservedNotional, DateTimeOffset KnownAtUtc);
 public sealed record BacktestPendingExit(string CandidateId, string StrategyId, string Ticker,
-    DateTimeOffset KnownAtUtc, string Reason);
+    DateTimeOffset KnownAtUtc, string Reason)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestExitEvidence? ExitEvidence { get; init; }
+}
 public sealed record BacktestSessionObservation(DateOnly SessionDate, decimal Cash, decimal RealizedNetProfit,
     decimal Fees, decimal? PositionValue, decimal? UnrealizedProfit, decimal? Equity,
     decimal? GrossExposurePct, int OpenPositionCount, string? UnavailableReason);

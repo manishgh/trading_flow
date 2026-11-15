@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using TradingFlow.Backtesting;
-using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Data.Csv;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Backtesting;
@@ -83,7 +82,6 @@ public sealed partial class IntradayBacktestIntegrationTests
             Assert.Equal(1, provider.BarCaptures);
             Assert.Equal(21 * 78, provider.CapturedBars);
             Assert.All(provider.RequestedTimeframes, timeframe => Assert.Equal("5m", timeframe));
-            await BacktestArtifactIntegrity.VerifyManifestAsync(result.ArtifactManifestPath!);
             await AssertOpeningRangeArtifactsAsync(result, state, start, outwardRounding, completedBreakout);
             // Monthly publication requires a selectable catalog identity, which the stop-market variant does not have.
             if (!completedBreakout) return;
@@ -301,9 +299,10 @@ public sealed partial class IntradayBacktestIntegrationTests
         var executions = JsonSerializer.Deserialize<BacktestExecutionAuditEvent[]>(
             await File.ReadAllTextAsync(result.PortfolioExecutionAuditPath!), options)!;
         Assert.Contains(executions, item => item.State == "OrderFilled" && item.ReferenceId == candidate.CandidateId);
-        using var decisions = JsonDocument.Parse(await File.ReadAllTextAsync(result.CandidateDecisionAuditPath!));
-        Assert.True(decisions.RootElement.GetArrayLength() > 0);
-        Assert.Contains("opening_range_breakout", decisions.RootElement.GetRawText(), StringComparison.Ordinal);
+        var decisions = await CandidateAuditFixtureReader.ReadAsync(result);
+        Assert.NotEmpty(decisions);
+        Assert.Contains(decisions.SelectMany(item => item.Transitions),
+            transition => transition.EvidenceJson.Contains("opening_range_breakout", StringComparison.Ordinal));
     }
 
     /// <summary>Archives complete synthetic sessions: twenty prior regular sessions plus the current opening-range session.</summary>

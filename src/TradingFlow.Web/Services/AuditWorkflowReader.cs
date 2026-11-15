@@ -42,7 +42,7 @@ public sealed class AuditWorkflowReader(IDbContextFactory<TradingFlowDbContext> 
                 var published = await AuditEquityReader.ReadResultAsync(runName, root, job.ResultReference, token);
                 return published is null ? Missing("Published result manifest unavailable.") : FromPublished(published.Value.Result, published.Value.Manifest);
             }
-            catch (Exception error) when (error is IOException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException)
+            catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException)
             {
                 return Missing("Published workflow evidence could not be verified or exceeds its read limits.");
             }

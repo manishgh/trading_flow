@@ -1,0 +1,60 @@
+# TradingFlow chart information density
+
+15 November 2026 · Design proposal
+
+## What makes the chart hard to scan
+
+The candle readout currently shows open, high, low, close and volume, then runs the candle interval, feed source, original receipt, retrieval and availability clocks together in one paragraph. Price-level comparisons run together in a second paragraph. In the earlier real-data phone capture, those two paragraphs take about 18 lines below the values. The published indicator code adds up to six evidence lines per study with a value, including its availability, calculation start and source revision. The published MU screenshots confirm the chart and study controls but end before the full readout. The description of the published readout comes from its source code.
+
+The chart already has three collapsed sections. **Data evidence** shows series-wide clocks and coverage. **Layers & price levels** shows level records and layer controls. **News & earnings** shows the event list. The simplest change is to use those sections for the details they already explain.
+
+## Proposed layout
+
+| Chart area | Show by default | Open for detail |
+| --- | --- | --- |
+| Above the plot | Keep the chart status, last completed age, source and price basis, reconstruction warning and extended-hours key. Show **Partial candle coverage** when the current snapshot reports partial coverage. Keep the selected indicator warnings **Partial history**, **Unavailable** and **Retry available** visible with their existing reasons. | Existing **Data evidence** and indicator disclosures retain source and calculation context. |
+| Immediately below the plot | Keep **Load earlier**, **Go to latest**, any relevant retry or reload control and its status. Keep one compact readout with the selected candle time and session, previous/next buttons, open, high, low, close, volume and the selected indicators' values and units. Keep **Unavailable** on any selected study that has no value for that candle. | **Data evidence** opens the exact information for the same candle and its indicator values. |
+| Layers & price levels | Keep the collapsed summary. | Keep the existing toggles and level and zone evidence. Add the comparisons for the selected candle as labelled rows. Preserve **Latest comparison** for latest-only levels and **Reconstructed for this close** and availability time where applicable. Omit this subsection when there are no eligible comparisons. |
+| Data evidence | Keep the collapsed summary directly after the readout. Keep a short **Completed candles only** note in the chart header in place of the permanent forming-candle note below the readout. | Retain series evidence and add a labelled **Selected candle** section and **Selected indicator evidence** where values exist. The sections distinguish source coverage, the candle's original receipt and the availability of each indicator value. |
+| News & earnings | Keep the collapsed summary and count. | Keep the existing event list, source links and timestamps. |
+
+On a daily chart the readout can say `Nov 13, 2026 · Daily`. Format the provider candle's `sessionDate` as a literal exchange date, without a browser-time-zone day shift, so the label conveys the exchange session, rather than presenting the provider's start stamp as a market-open time. For intraday, retain New York and Berlin time and the session in the readout, using the existing clock formatter. The expanded candle evidence retains the original clock precision in UTC, New York and Berlin, including the full start and end.
+
+Keep `Reconstructed from retrieved history` and the existing qualifier about calculations shown at the candle close visible when applicable. In the compact readout, a single short `Study history includes reconstructed values` or `Separate earlier study segment` note can identify the source series/page flags. Reconstruction is aggregated across a series/page; do not claim that this proves reconstruction of the selected individual point. Expanded evidence names the affected series/page and retains each point's exact availability and calculation anchor. Display prices, volume and indicator units at their current precision.
+
+### What Data evidence shows
+
+- **Series** keeps feed, adjustment basis, reported coverage, coverage through, last completed candle, last source observation, snapshot time, receipt basis, basis breaks and source notes. This describes the latest accepted snapshot.
+- **Selected candle** shows the actual start and end, source kind, original receipt, retrieval time when supplied and availability. Keep the explicit **Original receipt unavailable** state. Each clock describes a separate event, even when two clocks have equal values.
+- **Selected indicator evidence** shows each matched point's availability, calculation start, observed snapshot time, full source revision and any reconstruction or separate earlier-page marker. Show the full revision as selectable text and allow it to wrap. Indicator definitions, formula versions, parameters and baseline counts remain in the existing indicator disclosures.
+
+### Support and resistance above the plot
+
+The current MU phone screenshot stacks cards that repeat their pivot source and a long input timestamp. A small follow-on could keep the labelled price ranges and **Latest close in band** cue, with the structure source and lookback shown once above the list. The detailed zone panel already shows the precise input time, source dates, pivot count and confirmation time. Keep enabled zones discoverable even if their bands are off screen. Preserve their current-band labels and visibility controls. The below-plot proposal works independently of this refinement.
+
+## Shared implementation
+
+- `src/TradingFlow.Web/Pages/Shared/_StockChart.cshtml` already renders both **Desk** and the full **Chart** page. Reuse the existing candle readout, navigation and native `details` disclosures. Add the two selected-candle evidence targets under **Data evidence** and move the comparison target into **Layers & price levels**. Reuse the existing status and announcement regions.
+- `src/TradingFlow.Web/wwwroot/js/stock-chart.js` already uses `inspect()` for keyboard navigation, pointer inspection and snapshots. Use that same selected bar and `studies.readouts(start)` for both the compact values and the details. Use `fields()` and `timestamp()` for the labelled evidence. Reuse `distancesFor()` and its selected-close, reconstructed and latest-only rules. The optional zone refinement is confined to `renderZoneKey()` with `zoneTitle()` and `renderZones()` retaining the shared labels and details.
+- `src/TradingFlow.Web/wwwroot/js/stock-chart-indicators.js` already supplies point values, availability, calculation start, revision, reconstruction, observation time and the earlier-page flag. Reuse those attributes and the existing study state; available values retain their own source interval and units. The chart responses, pagination, matching and calculation logic can be reused as they stand.
+- `src/TradingFlow.Web/wwwroot/css/stock-chart.css` can reuse the responsive value grid and disclosure styles. Give the compact readout a predictable height for the current selection. Wrap long evidence, timestamps or revision strings in open panels. Keep full prices and study labels readable at narrow widths. Update `docs/user-guide.md` at implementation to describe the two disclosures and where selected-candle comparisons moved.
+
+A focused shared front-end change and chart browser checks cover the work. Expanding a disclosure or selecting a candle uses data already in the chart and should issue zero additional chart-history requests. Use the latest accepted same-symbol data during a reconnect and keep **Showing last available candles** visible. Clear selected evidence on a symbol or series reset or when joined compatible pages leave no selected plotted candle, including when its panel was open. An empty current snapshot may leave compatible historical candles plotted: retain evidence for the actual visible selected candle and the current-data warning. Avoid rewriting unchanged evidence text so copying a full revision remains usable. If keeping the details open across a selection change, populate them solely from the new selection.
+
+## Keyboard and phone behavior
+
+- The plot remains focusable. Left and right select completed candles, Home and End select the first and last loaded candle, and Tab moves to controls and disclosure summaries. The labelled **Previous candle** and **Next candle** buttons retain their disabled boundaries. Keep the current keyboard announcement for the selected time and values and avoid announcing provenance on pointer movement.
+- Native disclosure summaries work with Enter and Space and stay closed until opened. Selection and snapshot updates keep keyboard focus and leave the disclosure state alone. The open panel updates to the same selected candle without jumping the page, reopening itself or taking focus.
+- At phone width, let the controls and compact values wrap within the chart. Keep at least 44 px targets for candle navigation and disclosure summaries. Keep the plot, history buttons and readout in normal document flow. Expanded evidence should wrap inside the chart without horizontal page scroll.
+
+## Verification after approval
+
+1. Extend the existing isolated fixture in `tests/ui/specs/stock-chart.spec.js`. Use its 1440 px desktop and 390 px phone widths and exercise both the full chart and embedded Desk chart. Confirm that the collapsed view shows candle and study values, with the selected candle date/time still visible but detailed receipt/retrieval/availability timestamps and revisions absent from the collapsed readout, and that opening each disclosure reveals its details. Verify native keyboard operation, focus retention, button boundaries, text wrapping and unchanged chart request counts when inspecting and expanding. Check that the focused plot still supports arrow keys and Home/End after the move.
+2. Reuse its paging, same-time amendment, reconnect and empty cases. Confirm that selected evidence follows the selected candle after paging and revisions and clears on symbol/interval reset or an empty joined view; retain actual selected historical evidence when compatible older candles remain plotted after an empty current update. Assert distinct visible states for closed or history-only charts, delayed/repairing data, last available candles, partial candle coverage, partial indicator history and unavailable point values. Confirm older reconstructed values retain their observed and available times and keep historical gaps. If the zone refinement is included, keep the existing right-edge band and toggle assertions and check the remaining price labels at phone width.
+3. Using an authorized build and read-only browser session, inspect one real intraday and one real daily chart at desktop and phone widths. Capture the full compact readout and one expanded **Data evidence** state from each interval. Compare the selected timestamps, price values and study states with the same chart response. Reconnect and empty states can be proven with the isolated fixture. A closed-market screenshot establishes layout and labels for the data shown.
+
+This review used the saved published MU, intraday, daily and phone screenshots, earlier real-data readout captures, and the shared chart source and user guide at `ef1169f`, whose chart implementation is from `57ee499`. It is a design proposal. The proposed layout and browser checks are pending implementation.
+
+## Independent reviews
+
+Separate plan/execution reviewer A and code/design reviewer B accepted this proposal for presentation on 15 November 2026. Their clarifications above preserve literal daily session dates, series-level reconstruction semantics, visible selected-candle clocks and evidence tied to the actual joined plotted selection. The optional above-plot zone refinement remains a separate follow-on. No implementation has been approved or performed for this density change.

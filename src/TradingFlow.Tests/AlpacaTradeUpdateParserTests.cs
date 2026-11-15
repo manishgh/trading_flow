@@ -51,16 +51,21 @@ public sealed class AlpacaTradeUpdateParserTests
         });
     }
 
-    [Fact]
-    public void Parse_Fill_ProducesUtcSourceAwareUpdate()
+    // A fill keeps its provider execution instant independently of the later order update.
+    [Theory]
+    [InlineData("2026-07-21T10:59:59.750-04:00", true)]
+    [InlineData("2026-07-21T10:59:59.750", false)]
+    [InlineData("unknown", false)]
+    public void Parse_Fill_ProducesUtcSourceAwareUpdate(string timestamp, bool hasExecutionClock)
     {
         using var document = JsonDocument.Parse(
-            """
+            $$"""
             {
               "stream": "trade_updates",
               "data": {
                 "event": "fill",
                 "execution_id": "execution-1",
+                "timestamp": "{{timestamp}}",
                 "qty": "10",
                 "price": "100.50",
                 "position_qty": "10",
@@ -89,6 +94,8 @@ public sealed class AlpacaTradeUpdateParserTests
         Assert.Equal(10m, update.PositionQuantity);
         Assert.Equal("execution-1", update.ExecutionId);
         Assert.Equal(new DateTimeOffset(2026, 7, 21, 15, 0, 0, TimeSpan.Zero), update.Timestamp);
+        Assert.Equal(hasExecutionClock ? update.Timestamp.AddMilliseconds(-250) : (DateTimeOffset?)null,
+            update.ExecutionTimestampUtc);
     }
 
     [Fact]

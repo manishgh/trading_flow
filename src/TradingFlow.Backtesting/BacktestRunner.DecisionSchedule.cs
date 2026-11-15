@@ -61,10 +61,10 @@ public sealed partial class BacktestRunner
     }
 
     // Whether the entry-factor exit is checked at this completed bar's close under the strategy's exit schedule.
-    private bool IsEntryFactorExitSession(StrategyDefinition strategy, OhlcvBar bar) =>
+    private bool IsEntryFactorExitSession(StrategyDefinition strategy, OhlcvBar bar, bool requireCalendar) =>
         strategy.ExitRules.EntryFactorExitSchedule is not { } schedule ||
-        DecisionSchedules.IsDecisionSession(schedule, ExchangeSessionCalendar.SessionDate(bar.Timestamp),
-            NextExchangeSession(bar.Timestamp));
+        NextExitSession(bar.Timestamp, requireCalendar) is { } next &&
+            DecisionSchedules.IsDecisionSession(schedule, ExchangeSessionCalendar.SessionDate(bar.Timestamp), next);
 
     /// <summary>
     /// The session whose list membership governs a decision: the New York date of the decision time, moved to the calendar's
@@ -96,6 +96,19 @@ public sealed partial class BacktestRunner
         return ExchangeSessionCalendar.NextTradingSession(calendar, session);
     }
 
+    // Only the execution choice requires the calendar; an additional observation can be unavailable.
+    private DateOnly? NextExitSession(DateTimeOffset barStart, bool requireCalendar)
+    {
+        try
+        {
+            return NextExchangeSession(barStart);
+        }
+        catch (InvalidDataException) when (!requireCalendar)
+        {
+            return null;
+        }
+    }
+
     public const string OffListExitReason = "technical_exit_off_list";
 
     /// <summary>
@@ -105,12 +118,12 @@ public sealed partial class BacktestRunner
     /// list names no stock at all that session (past the list's or the run's end), where the position is simply kept.
     /// </summary>
     private string? OffListExitReasonAt(StrategyDefinition strategy, IReadOnlyList<OhlcvBar> bars, int index,
-        UniverseMembership? membership)
+        UniverseMembership? membership, bool requireCalendar = true)
     {
         if (!strategy.ExitRules.ExitWhenOffList) return null;
         var bar = bars[index];
-        var next = NextExchangeSession(bar.Timestamp);
-        if (!DecisionSchedules.IsDecisionSession(strategy.EntryRules.DecisionSchedule, ExchangeSessionCalendar.SessionDate(bar.Timestamp), next))
+        if (NextExitSession(bar.Timestamp, requireCalendar) is not { } next ||
+            !DecisionSchedules.IsDecisionSession(strategy.EntryRules.DecisionSchedule, ExchangeSessionCalendar.SessionDate(bar.Timestamp), next))
             return null;
         var list = membership
             ?? throw new InvalidOperationException($"{strategy.StrategyId} sells funds that leave its list, so it needs a research-list universe.");
@@ -119,9 +132,22 @@ public sealed partial class BacktestRunner
 
     // The entry-factor exit reason for completed bar index, or null when it does not fire or is off schedule.
     private string? EntryFactorExitReason(StrategyDefinition strategy, IReadOnlyList<OhlcvBar> bars,
-        IReadOnlyList<IndicatorSnapshot> snapshots, int index) =>
+        IReadOnlyList<IndicatorSnapshot> snapshots, int index, bool requireCalendar = true) =>
         strategy.ExitRules.ExitOnEntryFactorAtOrBelow is null
             ? null
             : TechnicalExecutionEngine.GetEntryFactorExitReason(strategy, bars, snapshots, index,
-                IsEntryFactorExitSession(strategy, bars[index]));
+                IsEntryFactorExitSession(strategy, bars[index], requireCalendar));
+
+    // Read the same scheduled predicates for evidence, reusing outcomes already determined by the execution precedence.
+    private void ObserveLongScheduledExits(StrategyDefinition strategy, IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots, int index, UniverseMembership? membership, string primaryReason,
+        ICollection<BacktestExitCondition> observations)
+    {
+        if (primaryReason == TechnicalExecutionEngine.EntryFactorExitReason ||
+            primaryReason != OffListExitReason && EntryFactorExitReason(strategy, bars, snapshots, index, requireCalendar: false) is not null)
+            observations.Add(BacktestExitCondition.EntryFactorAtOrBelowThreshold);
+        if (primaryReason == OffListExitReason ||
+            membership is not null && OffListExitReasonAt(strategy, bars, index, membership, requireCalendar: false) is not null)
+            observations.Add(BacktestExitCondition.OffList);
+    }
 }

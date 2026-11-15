@@ -57,9 +57,8 @@ public sealed class BacktestMatrixExecutionTests
         Assert.Equal(JsonSerializer.Serialize(ordinary.DecisionContextEvidence), JsonSerializer.Serialize(scoped.DecisionContextEvidence));
         Assert.NotNull(scoped.DecisionContextEvidence);
         Assert.Equal(provider.DependencyGraphSha256, scoped.DecisionContextEvidence.DependencyGraphSha256);
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-        var ordinaryDecisions = JsonSerializer.Deserialize<BacktestCandidateDecisionAudit[]>(await File.ReadAllTextAsync(ordinary.CandidateDecisionAuditPath!), options)!;
-        var scopedDecisions = JsonSerializer.Deserialize<BacktestCandidateDecisionAudit[]>(await File.ReadAllTextAsync(scoped.CandidateDecisionAuditPath!), options)!;
+        var ordinaryDecisions = await CandidateAuditFixtureReader.ReadAsync(ordinary);
+        var scopedDecisions = await CandidateAuditFixtureReader.ReadAsync(scoped);
         Assert.NotEmpty(ordinaryDecisions);
         Assert.Equal(JsonSerializer.Serialize(ordinaryDecisions.OrderBy(item => item.Candidate.CandidateId)),
             JsonSerializer.Serialize(scopedDecisions.OrderBy(item => item.Candidate.CandidateId)));

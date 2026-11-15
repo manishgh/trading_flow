@@ -12,6 +12,7 @@ internal static class ProductionPersistenceModelConfiguration
         ConfigureRuns(modelBuilder.Entity<ProductionRun>());
         ConfigureOrderIntents(modelBuilder.Entity<OrderIntentRecord>());
         ConfigureOrderEvents(modelBuilder.Entity<OrderEventRecord>());
+        ConfigureOrderExecutionTelemetry(modelBuilder);
         ConfigureProtectiveStopReplacements(modelBuilder.Entity<ProtectiveStopReplacementRecord>());
         ConfigurePortfolioRiskReservations(modelBuilder.Entity<PortfolioRiskReservationRecord>());
         ConfigureGateEvaluations(modelBuilder.Entity<GateEvaluationRecord>());
@@ -31,6 +32,22 @@ internal static class ProductionPersistenceModelConfiguration
                 property.SetColumnName(ToSnakeCase(property.Name));
             }
         }
+    }
+
+    // Admission survives retries unchanged, and every local entry attempt has its own durable pre-POST stamp.
+    private static void ConfigureOrderExecutionTelemetry(ModelBuilder modelBuilder)
+    {
+        var admissions = modelBuilder.Entity<OrderAdmissionTelemetryRecord>();
+        admissions.ToTable("order_admission_telemetry");
+        admissions.HasKey(record => record.IntentId);
+        admissions.HasOne<OrderIntentRecord>().WithOne().HasForeignKey<OrderAdmissionTelemetryRecord>(record => record.IntentId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        var attempts = modelBuilder.Entity<OrderDispatchAttemptTelemetryRecord>();
+        attempts.ToTable("order_dispatch_attempt_telemetry");
+        attempts.HasKey(record => new { record.IntentId, record.AttemptNumber });
+        attempts.HasOne<OrderIntentRecord>().WithMany().HasForeignKey(record => record.IntentId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureRuns(EntityTypeBuilder<ProductionRun> entity)

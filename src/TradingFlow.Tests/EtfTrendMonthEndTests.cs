@@ -144,6 +144,7 @@ public sealed class EtfTrendMonthEndTests
         Assert.True(result.EconomicResultsComplete);
         var dip = Assert.Single(result.CompletedTrades);
         Assert.Equal(("DIP", TechnicalExecutionEngine.EntryFactorExitReason), (dip.Ticker, dip.ExitReason));
+        Assert.Equal([BacktestExitCondition.EntryFactorAtOrBelowThreshold], dip.ExitEvidence!.Conditions);
         var exitFill = Assert.Single(result.PortfolioState!.Fills, fill => !fill.IsEntry);
         Assert.Equal(("DIP", new DateOnly(2026, 10, 1)), (exitFill.Ticker, exitFill.SourceSessionDate));
         Assert.Equal(["LATE", "UPP"], result.PortfolioState!.OpenPositions.Select(position => position.Ticker).Order());

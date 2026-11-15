@@ -1,4 +1,5 @@
 using System;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 
@@ -101,40 +102,68 @@ public sealed class TechnicalExecutionEngine
 
     // The short side's technical exits (after the minimum hold), then the bar-count and hour limits, read from one observation:
     // shared by the daily and decision-hour backtest builders and research signal studies. Returns
-    // the exit reason or null; sourceTimestamp is the observation's time and entryTimestamp the entry's, for the hour limit.
+    // the first exit reason or null; optional observations retain all true conditions in the same precedence.
     public static string? GetShortTechnicalOrTimeExitReason(StrategyDefinition strategy, IndicatorSnapshot snapshot, int barsHeld,
-        DateTimeOffset sourceTimestamp, DateTimeOffset entryTimestamp, IndicatorSnapshot? previousSnapshot)
+        DateTimeOffset sourceTimestamp, DateTimeOffset entryTimestamp, IndicatorSnapshot? previousSnapshot,
+        ICollection<BacktestExitCondition>? observations = null)
     {
+        var match = new ExitConditionSelection(observations);
         if (barsHeld >= strategy.ExitRules.MinHoldBarsBeforeTechnicalExit)
         {
-            if (strategy.ExitRules.ExitOnCloseBelowVwap && snapshot.Vwap is { } vwap && snapshot.CurrentPrice > vwap)
-                return "technical_exit_above_vwap";
-            if (strategy.ExitRules.ExitOnMacdHistogramNegative && snapshot.MacdHistogram is { } histogram && histogram > 0)
-                return "technical_exit_macd_histogram_positive";
+            if (strategy.ExitRules.ExitOnCloseBelowVwap && snapshot.Vwap is { } vwap && snapshot.CurrentPrice > vwap &&
+                match.Add("technical_exit_above_vwap", BacktestExitCondition.CloseAboveVwap))
+                return match.Reason;
+            if (strategy.ExitRules.ExitOnMacdHistogramNegative && snapshot.MacdHistogram is { } histogram && histogram > 0 &&
+                match.Add("technical_exit_macd_histogram_positive", BacktestExitCondition.PositiveMacdHistogram))
+                return match.Reason;
             // Connors short mirror: cover when the close falls below its 5-day average.
-            if (strategy.ExitRules.ExitOnCloseBelowSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice < sma5)
-                return "technical_exit_below_sma5";
-            if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 && IsSma10CrossedAboveSma20(snapshot, previousSnapshot))
-                return "technical_exit_sma10_cross_above_sma20";
+            if (strategy.ExitRules.ExitOnCloseBelowSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice < sma5 &&
+                match.Add("technical_exit_below_sma5", BacktestExitCondition.CloseBelowSma5))
+                return match.Reason;
+            if (strategy.ExitRules.ExitShortOnSma10CrossAboveSma20 && IsSma10CrossedAboveSma20(snapshot, previousSnapshot) &&
+                match.Add("technical_exit_sma10_cross_above_sma20", BacktestExitCondition.Sma10CrossAboveSma20))
+                return match.Reason;
         }
 
-        if (strategy.ExitRules.MaxHoldBars is { } maxHoldBars && maxHoldBars > 0 && barsHeld >= maxHoldBars)
-            return "max_hold_bars";
-        return sourceTimestamp >= entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours) ? "max_hold" : null;
+        return CheckTimeExits(strategy, barsHeld, sourceTimestamp, entryTimestamp, match);
     }
 
+    // Use the same technical and time predicates for the primary reason and reporting.
     public string? GetTechnicalOrTimeExitReason(StrategyDefinition strategy,
         IndicatorSnapshot snapshot, int barsHeld, DateTimeOffset sourceTimestamp,
         DateTimeOffset entrySourceTimestamp, decimal? priceLogSlope = null,
-        decimal? volumeLogSlope = null, IndicatorSnapshot? previousSnapshot = null)
+        decimal? volumeLogSlope = null, IndicatorSnapshot? previousSnapshot = null,
+        ICollection<BacktestExitCondition>? observations = null)
     {
         var technical = GetTechnicalExitReason(strategy, snapshot, barsHeld,
-            priceLogSlope, volumeLogSlope, previousSnapshot);
-        if (technical is not null) return technical;
-        if (strategy.ExitRules.MaxHoldBars is { } maximum && maximum > 0 && barsHeld >= maximum)
-            return "max_hold_bars";
-        return sourceTimestamp >= entrySourceTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours)
-            ? "max_hold" : null;
+            priceLogSlope, volumeLogSlope, previousSnapshot, observations);
+        if (technical is not null && observations is null) return technical;
+        return CheckTimeExits(strategy, barsHeld, sourceTimestamp, entrySourceTimestamp, new(observations, technical));
+    }
+
+    // Both directions prefer the bar limit over the elapsed-time limit when both are reached.
+    private static string? CheckTimeExits(StrategyDefinition strategy, int barsHeld, DateTimeOffset sourceTimestamp,
+        DateTimeOffset entryTimestamp, ExitConditionSelection match)
+    {
+        if (strategy.ExitRules.MaxHoldBars is { } maximum && maximum > 0 && barsHeld >= maximum &&
+            match.Add("max_hold_bars", BacktestExitCondition.MaxHoldBars))
+            return match.Reason;
+        if (sourceTimestamp >= entryTimestamp.AddHours((double)strategy.ExitRules.MaxHoldHours))
+            match.Add("max_hold", BacktestExitCondition.MaxHoldTime);
+        return match.Reason;
+    }
+
+    // Record the first matching legacy reason and tell ordinary callers when to short-circuit.
+    private struct ExitConditionSelection(ICollection<BacktestExitCondition>? observations, string? reason = null)
+    {
+        public string? Reason { get; private set; } = reason;
+
+        public bool Add(string candidateReason, BacktestExitCondition condition)
+        {
+            Reason ??= candidateReason;
+            observations?.Add(condition);
+            return observations is null;
+        }
     }
 
     /// <summary>Calculates the existing ATR stop; continuation protection needs its own stateful lifecycle.</summary>
@@ -165,68 +194,65 @@ public sealed class TechnicalExecutionEngine
         return Math.Max(initialStopLossPrice, Math.Max(currentStopLossPrice, trailingStop));
     }
 
+    // Observe true long technical predicates only after the configured minimum holding period.
     public string? GetTechnicalExitReason(
         StrategyDefinition strategy,
         IndicatorSnapshot snapshot,
         int barsHeld,
         decimal? priceLogSlope = null,
         decimal? volumeLogSlope = null,
-        IndicatorSnapshot? previousSnapshot = null)
+        IndicatorSnapshot? previousSnapshot = null,
+        ICollection<BacktestExitCondition>? observations = null)
     {
         if (barsHeld < strategy.ExitRules.MinHoldBarsBeforeTechnicalExit)
         {
             return null;
         }
 
+        var match = new ExitConditionSelection(observations);
+        // A confirmed EMA20 exit requires the previous completed close below its own EMA20 too.
         if (strategy.ExitRules.ExitOnCloseBelowEma20 &&
             snapshot.Ema20 is not null &&
             snapshot.CurrentPrice < snapshot.Ema20.Value &&
             (!strategy.ExitRules.RequireConfirmedEma20Exit ||
-                (previousSnapshot is { Ema20: { } previousEma20 } && previousSnapshot.CurrentPrice < previousEma20)))
-        {
-            // With RequireConfirmedEma20Exit, a single close below EMA20 is only a warning; the prior
-            // bar must also have closed below its EMA20 (two-close confirmation) before we exit.
-            return "technical_exit_below_ema20";
-        }
+                (previousSnapshot is { Ema20: { } previousEma20 } && previousSnapshot.CurrentPrice < previousEma20)) &&
+            match.Add("technical_exit_below_ema20", BacktestExitCondition.CloseBelowEma20))
+            return match.Reason;
 
         // If confirmed VWAP failure is enabled, a single close below VWAP is only a warning.
         // The caller should use ShouldExitLongOnConfirmedVwapFailure before evaluating standard exits.
         if (strategy.ExitRules.ExitOnCloseBelowVwap &&
             !strategy.ExitRules.EnableConfirmedVwapExit &&
             snapshot.Vwap is not null &&
-            snapshot.CurrentPrice < snapshot.Vwap.Value)
-        {
-            return "technical_exit_below_vwap";
-        }
+            snapshot.CurrentPrice < snapshot.Vwap.Value &&
+            match.Add("technical_exit_below_vwap", BacktestExitCondition.CloseBelowVwap))
+            return match.Reason;
 
         if (strategy.ExitRules.ExitOnEma10CrossBelowEma20 &&
-            IsEma10CrossedBelowEma20(snapshot, previousSnapshot))
-        {
-            return "technical_exit_ema10_cross_below_ema20";
-        }
+            IsEma10CrossedBelowEma20(snapshot, previousSnapshot) &&
+            match.Add("technical_exit_ema10_cross_below_ema20", BacktestExitCondition.Ema10CrossBelowEma20))
+            return match.Reason;
 
         if (strategy.ExitRules.ExitOnMacdHistogramNegative &&
             snapshot.MacdHistogram is not null &&
-            snapshot.MacdHistogram.Value < 0)
-        {
-            return "technical_exit_macd_histogram_negative";
-        }
+            snapshot.MacdHistogram.Value < 0 &&
+            match.Add("technical_exit_macd_histogram_negative", BacktestExitCondition.NegativeMacdHistogram))
+            return match.Reason;
 
-        if (strategy.ExitRules.ExitOnCloseAboveSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice > sma5)
-            return "technical_exit_above_sma5";
+        if (strategy.ExitRules.ExitOnCloseAboveSma5 && snapshot.Sma5 is { } sma5 && snapshot.CurrentPrice > sma5 &&
+            match.Add("technical_exit_above_sma5", BacktestExitCondition.CloseAboveSma5))
+            return match.Reason;
 
         if (strategy.ExitRules.ExitOnRsi2Above is { } maxRsi2 &&
             snapshot.Rsi2 is { } rsi2 &&
-            rsi2 > maxRsi2)
-        {
-            return "technical_exit_rsi2_recovered";
-        }
+            rsi2 > maxRsi2 &&
+            match.Add("technical_exit_rsi2_recovered", BacktestExitCondition.Rsi2Recovery))
+            return match.Reason;
 
         if (strategy.ExitRules.ExitOnSma10NearSma20 &&
-            IsSma10NearSma20(snapshot, strategy.ExitRules.Sma10NearSma20Pct))
-        {
-            return "technical_exit_sma10_near_sma20";
-        }
+            IsSma10NearSma20(snapshot, strategy.ExitRules.Sma10NearSma20Pct) &&
+            match.Add("technical_exit_sma10_near_sma20", BacktestExitCondition.Sma10NearSma20))
+            return match.Reason;
 
         if (strategy.ExitRules.ExitOnSma10CrossBelowSma20 &&
             previousSnapshot is not null &&
@@ -235,10 +261,9 @@ public sealed class TechnicalExecutionEngine
             snapshot.Sma10 is { } currentSma10 &&
             snapshot.Sma20 is { } currentSma20 &&
             previousSma10 >= previousSma20 &&
-            currentSma10 < currentSma20)
-        {
-            return "technical_exit_sma10_cross_below_sma20";
-        }
+            currentSma10 < currentSma20 &&
+            match.Add("technical_exit_sma10_cross_below_sma20", BacktestExitCondition.Sma10CrossBelowSma20))
+            return match.Reason;
 
         if (strategy.ExitRules.ExitOnLogPriceFade &&
             priceLogSlope is { } slope &&
@@ -246,12 +271,11 @@ public sealed class TechnicalExecutionEngine
             (!strategy.ExitRules.RequireRisingVolumeForLogFadeExit ||
                 (volumeLogSlope is { } volumeSlope && volumeSlope >= strategy.ExitRules.MinExitLogVolumeSlope)) &&
             (!strategy.ExitRules.RequireBelowVwapForLogFadeExit ||
-                (snapshot.Vwap is { } vwap && snapshot.CurrentPrice < vwap)))
-        {
-            return "technical_exit_log_price_fade";
-        }
+                (snapshot.Vwap is { } vwap && snapshot.CurrentPrice < vwap)) &&
+            match.Add("technical_exit_log_price_fade", BacktestExitCondition.LogPriceFade))
+            return match.Reason;
 
-        return null;
+        return match.Reason;
     }
 
     public static bool IsSma10NearSma20(IndicatorSnapshot snapshot, decimal nearPct)

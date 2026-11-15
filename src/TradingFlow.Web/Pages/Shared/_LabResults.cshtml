@@ -248,7 +248,23 @@
                                 @trade.ExitPrice.ToString("C2")
                                 <span class="cell-sub">@MonthlyBacktestPresentation.FillTimeLabel(trade.ExitFillTiming, trade.ExitTimestamp)</span>
                             </td>
-                            <td>@trade.ExitReason</td>
+                            <td>
+                                @trade.ExitReason
+                                @if (trade.ExitEvidence is { } evidence)
+                                {
+                                    <details class="cell-sub">
+                                        <summary>Completed-close conditions</summary>
+                                        <span>Decision close @(evidence.DecisionCloseUtc is { } close ? TradingFlow.Web.Services.UiDisplayFormatter.FormatAuditInstant(close) : "unavailable")</span>
+                                        <span class="cell-sub">Available UTC @evidence.AvailableAtUtc.ToString("u")</span>
+                                        <ul>
+                                            @foreach (var condition in evidence.Conditions)
+                                            {
+                                                <li>@condition</li>
+                                            }
+                                        </ul>
+                                    </details>
+                                }
+                            </td>
                             <td class="num">@Hold(trade.ExitFillTiming?.EconomicTimestampUtc - trade.EntryFillTiming?.EconomicTimestampUtc)</td>
                             @* No stop distance means no R. Zero would read as a
                                break-even, which is a different claim. *@

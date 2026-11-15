@@ -5,9 +5,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Application.Jobs;
 using TradingFlow.Backtesting;
+using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Jobs;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Models;
 
@@ -87,6 +89,7 @@ public sealed class BacktestJobService : IDurableJobHandler
     private readonly ILogger<BacktestJobService> logger;
     private readonly StrategyRunArtifactValidator strategyValidator;
     private readonly MonthlyRunResultWriter monthlyResults;
+    private readonly ResearchQueue research;
 
     /// <summary>Use the existing durable worker and immutable strategy validator for execution and monthly publication.</summary>
     public BacktestJobService(
@@ -95,11 +98,13 @@ public sealed class BacktestJobService : IDurableJobHandler
         SimpleYamlReader yamlReader,
         BacktestJobServiceOptions options,
         StrategyArtifactCatalog strategyArtifacts,
+        ResearchQueue research,
         ILogger<BacktestJobService>? logger = null)
     {
         this.runner = runner;
         this.repository = repository;
         this.yamlReader = yamlReader;
+        this.research = research;
         this.options = ValidateOptions(options);
         this.logger = logger ?? NullLogger<BacktestJobService>.Instance;
         strategyValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
@@ -114,6 +119,7 @@ public sealed class BacktestJobService : IDurableJobHandler
         foreach (var persisted in await repository.GetJobsAsync(JobType, cancellationToken))
         {
             await PublishResultMarkerAsync(persisted, cancellationToken);
+            await RecordResearchResultAsync(persisted, cancellationToken);
             jobs[persisted.Id] = MutableBacktestJob.FromPersisted(persisted, JsonOptions);
         }
 
@@ -133,64 +139,74 @@ public sealed class BacktestJobService : IDurableJobHandler
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         var fullConfigPath = Path.GetFullPath(configPath);
         var runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
-        RequireEnabledStrategies(runConfig);
-        var admittedAt = DateTimeOffset.UtcNow;
-        using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, runConfig.Engine);
-        var job = new MutableBacktestJob(Guid.NewGuid(), runName, fullConfigPath, admittedAt);
-        var inputFiles = ResolveInputs(fullConfigPath, runConfig, evidenceScope).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        PreparedMarketDataRequestReference? preparedReference = null;
-        var preparedPath = Path.Combine(Path.GetFullPath(runConfig.ResultsRoot), "_prepared-requests", job.JobId.ToString("N"), "request.json");
-        var accepted = false;
+        var metadata = DurableFileJobRequest.Capture(BacktestRunInputFiles.ResolveForResearchRegistration(fullConfigPath, runConfig));
+        using var frozenMetadata = metadata.AcquireVerifiedReadLease();
+        runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
+        metadata.EnsureContains(BacktestRunInputFiles.ResolveForResearchRegistration(fullConfigPath, runConfig));
+        var strategies = runConfig.Strategies.Select(path => strategyValidator.ReadAndAuthorizeRuntimeArtifact(path,
+            TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest)).ToArray();
+        var inputHash = EvidenceCanonicalJson.ComputeSha256(metadata.Files);
+        const string route = "web-file-backtest";
+        var key = runName.Trim() + ":" + inputHash;
+        var jobId = ResearchQueue.FileJobId(route, key);
+        var researchStart = ResearchFileStart.Portfolio(route, key, jobId.ToString("N"), inputHash, research.CodeSha256, runConfig, strategies);
+        var preparedPath = Path.Combine(Path.GetFullPath(runConfig.ResultsRoot), "_prepared-requests", jobId.ToString("N"),
+            Guid.NewGuid().ToString("N"), "request.json");
+        PersistedJob? staged = null;
         try
         {
-            using (DurableFileJobRequest.Capture(inputFiles).AcquireVerifiedReadLease())
+            var accepted = await research.AdmitAsync(researchStart, options.MaximumPendingJobs, async (start, token) =>
             {
-                if (runConfig.Provider.Equals("finviz", StringComparison.OrdinalIgnoreCase))
-                    throw new NotSupportedException("Finviz does not provide a raw API for Historical OHLCV Bars. Please use Alpaca instead.");
-                if (!runConfig.Provider.Equals("csv", StringComparison.OrdinalIgnoreCase))
-                {
-                    var dataRequest = new PreparedMarketDataRequest(1, "run-" + job.JobId.ToString("N"), job.CreatedAt,
-                        [new(job.JobId.ToString("N"), runConfig with { Strategies = [] }, runConfig.Strategies.Select(yamlReader.ReadStrategy).ToArray())]);
-                    new PreparedMarketDataService(ConfiguredDataProviders.FromEnvironment()).ValidateRequest(dataRequest);
-                    preparedReference = await PreparedMarketDataService.WriteRequestAsync(dataRequest, preparedPath, cancellationToken);
-                }
-            }
-            var request = DurableFileJobRequest.Capture(preparedReference is null ? inputFiles : inputFiles.Append(preparedReference.Path)) with
-                { CapturedAtUtc = job.CreatedAt, PreparedMarketData = preparedReference };
-            using (request.AcquireVerifiedReadLease())
-            {
-                runConfig = yamlReader.ReadBacktestRun(fullConfigPath);
-                request.EnsureContains(ResolveInputs(fullConfigPath, runConfig, evidenceScope));
-                RequireEnabledStrategies(runConfig);
-            }
-            var persisted = new PersistedJob
-            {
-                Id = job.JobId,
-                JobType = JobType,
-                RunName = job.RunName,
-                ConfigPath = job.ConfigPath,
-                RequestJson = request.Serialize(),
-                SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
-                Status = "queued",
-                CreatedAt = job.CreatedAt
-            };
-
-            if (!await repository.TryEnqueueAsync(persisted, options.MaximumPendingJobs, cancellationToken))
-            {
-                throw new InvalidOperationException(
-                    $"The backtest queue already contains its maximum of {options.MaximumPendingJobs} non-terminal jobs.");
-            }
-            accepted = true;
-
-            var projectedJob = jobs.GetOrAdd(job.JobId, job);
-
+                staged = await PrepareFileJobAsync(jobId, runName, fullConfigPath, runConfig, start.RegisteredAtUtc, preparedPath, token);
+                return new[] { staged };
+            }, cancellationToken);
+            var persisted = accepted.Single();
+            var projectedJob = jobs.GetOrAdd(jobId, _ => MutableBacktestJob.FromPersisted(persisted, JsonOptions));
             PruneTerminalJobs();
             return projectedJob.ToSnapshot();
         }
         finally
         {
-            if (!accepted && preparedReference is not null)
-                await PreparedRequestStagingCleanup.DiscardAsync(preparedReference, preparedPath, repository, job.JobId);
+            if (staged is not null && !await research.OwnsInputsAsync(staged, CancellationToken.None) &&
+                DurableFileJobRequest.Deserialize(staged.RequestJson).PreparedMarketData is { } reference)
+                await PreparedRequestStagingCleanup.DiscardAsync(reference, preparedPath, repository, jobId);
+        }
+    }
+
+    /// <summary>Prepares exact captured observations only after the registry has admitted the frozen file intent.</summary>
+    private async Task<PersistedJob> PrepareFileJobAsync(Guid id, string runName, string path, BacktestRunConfig run, DateTimeOffset cutoff,
+        string preparedPath, CancellationToken token)
+    {
+        using var evidenceScope = WorkflowEvidenceVerificationScope.Open(this, run.Engine);
+        var job = new MutableBacktestJob(id, runName, path, cutoff);
+        var inputs = ResolveInputs(path, run, evidenceScope);
+        using var lease = DurableFileJobRequest.Capture(inputs).AcquireVerifiedReadLease();
+        PreparedMarketDataRequestReference? reference = null;
+        try
+        {
+            if (run.Provider.Equals("finviz", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("Finviz does not provide a raw API for historical OHLCV bars. Use Alpaca or frozen catalog evidence.");
+            if (!run.Provider.Equals("csv", StringComparison.OrdinalIgnoreCase))
+            {
+                var dataRequest = new PreparedMarketDataRequest(1, "run-" + id.ToString("N"), cutoff,
+                    [new(id.ToString("N"), run with { Strategies = [] }, run.Strategies.Select(yamlReader.ReadStrategy).ToArray())]);
+                new PreparedMarketDataService(ConfiguredDataProviders.FromEnvironment()).ValidateRequest(dataRequest);
+                reference = await PreparedMarketDataService.WriteRequestAsync(dataRequest, preparedPath, token);
+            }
+            var request = DurableFileJobRequest.Capture(reference is null ? inputs : inputs.Append(reference.Path)) with
+                { CapturedAtUtc = cutoff, PreparedMarketData = reference };
+            using var verified = request.AcquireVerifiedReadLease();
+            request.EnsureContains(ResolveInputs(path, yamlReader.ReadBacktestRun(path), evidenceScope));
+            return new PersistedJob
+            {
+                Id = id, JobType = JobType, RunName = runName, ConfigPath = path, RequestJson = request.Serialize(),
+                SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), Status = "queued", CreatedAt = cutoff
+            };
+        }
+        catch
+        {
+            if (reference is not null) await PreparedRequestStagingCleanup.DiscardAsync(reference, preparedPath, repository, id);
+            throw;
         }
     }
 
@@ -253,6 +269,8 @@ public sealed class BacktestJobService : IDurableJobHandler
         DurableJobExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var cutoff = await research.VerifyWorkerAsync(context.Job, cancellationToken);
+        using var protectedObservations = ResearchObservationBoundary.Enter(cutoff);
         var request = DurableFileJobRequest.Deserialize(context.Job.RequestJson);
         using var inputLease = request.AcquireVerifiedReadLease();
         var capturedRun = yamlReader.ReadBacktestRun(context.Job.ConfigPath);
@@ -331,6 +349,7 @@ public sealed class BacktestJobService : IDurableJobHandler
         CancellationToken cancellationToken)
     {
         await PublishResultMarkerAsync(persisted, cancellationToken);
+        await RecordResearchResultAsync(persisted, cancellationToken);
         var job = jobs.GetOrAdd(
             persisted.Id,
             _ => MutableBacktestJob.FromPersisted(persisted, JsonOptions));
@@ -352,6 +371,20 @@ public sealed class BacktestJobService : IDurableJobHandler
 
         CompactManagedHeap();
         PruneTerminalJobs();
+    }
+
+    /// <summary>Retries cross-store outcome projection on refresh while retaining the durable queue result.</summary>
+    private async Task RecordResearchResultAsync(PersistedJob persisted, CancellationToken token)
+    {
+        try
+        {
+            await research.RecordResultAsync(persisted, token, async ct =>
+                persisted.ResultReference is { } reference ? await BacktestResearchPublication.VerifyAsync(reference, ct) : null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Backtest {JobId} outcome could not be recorded in the research ledger.", persisted.Id);
+        }
     }
 
     private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)

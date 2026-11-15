@@ -31,7 +31,10 @@ public sealed record EntryOrderSubmission(
     StrategyArtifactIdentity? StrategyIdentity = null,
     StrategySelectionMode? StrategySelectionMode = null,
     OperatorOverrideAuthorization? OperatorOverride = null,
-    StrategyArtifactIdentity? ExitPolicyIdentity = null);
+    StrategyArtifactIdentity? ExitPolicyIdentity = null)
+{
+    public OrderDecisionReference? DecisionReference { get; init; }
+}
 
 public sealed record OrderSubmissionResult(
     string BrokerOrderId,
@@ -316,7 +319,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         return await DispatchReservedEntryAsync(reservationResult, brokerClient, cancellationToken);
     }
 
-    /// <summary>Builds the same immutable request evidence and reservation terms without persistence or broker side effects.</summary>
+    /// <summary>Builds reservation terms and keeps the observed quote and decision outside immutable request JSON.</summary>
     private static OrderIntentReservation CreateEntryReservation(EntryOrderSubmission submission, EntryGateApproval approval)
     {
         var sessionDate = approval.TradeDate;
@@ -381,7 +384,16 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
                 CandidateSemanticDecisionSha256: submission.OperatorOverride is null
                     ? submission.Candidate.SemanticDecisionSha256
                     : null,
-                PositionGenerationEventId: null);
+                PositionGenerationEventId: null)
+        {
+            AdmissionEvidence = new(
+                approval.MarketObservation is { } quote && approval.QuoteFreshnessLimitMilliseconds is { } maxAge
+                    ? new(quote.BidPrice, quote.AskPrice, quote.Feed, quote.QuoteTimestampUtc, quote.ObservedAtUtc,
+                        maxAge, quote.QuoteReceipt)
+                    : null,
+                submission.OperatorOverride is null ? submission.DecisionReference : null,
+                submission.StrategyIdentity)
+        };
     }
 
     /// <summary>Requires the persisted intent's run to remain active before logging its reservation and dispatching the existing client ID.</summary>

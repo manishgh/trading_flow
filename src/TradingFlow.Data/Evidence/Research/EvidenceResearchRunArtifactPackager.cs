@@ -15,6 +15,20 @@ public sealed class EvidenceResearchRunArtifactPackager(
 {
     private const string JsonMediaType = "application/json";
 
+    /// <summary>Reads and verifies an already published result component without reopening the observation datasets.</summary>
+    public async Task<T> ReadOutputAsync<T>(EvidenceResearchRunManifest manifest, string outputName, CancellationToken token)
+    {
+        var output = manifest.Outputs.SingleOrDefault(reference => reference.ObjectNamespace.Value == "research/reports/" + outputName)
+            ?? throw new InvalidDataException($"The published research manifest has no '{outputName}' output.");
+        var verification = await artifactStore.VerifyAsync(output, token);
+        if (!verification.IsValid) throw new InvalidDataException($"The published research output '{outputName}' failed verification.");
+        await using var stream = await artifactStore.OpenReadAsync(output, token);
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.SnakeCaseLower));
+        return await System.Text.Json.JsonSerializer.DeserializeAsync<T>(stream, options, token)
+            ?? throw new InvalidDataException($"The published research output '{outputName}' is empty.");
+    }
+
     /// <summary>
     /// Publishes the immutable identity inputs and returns the exact holdout identity
     /// that must be reserved before any holdout calculation is allowed to run.

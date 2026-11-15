@@ -200,6 +200,10 @@
                     <button class="button" type="submit">Save screen</button>
                 </form>
                 @Message("screens")
+                @if (Model.ScreenCapture is { } captureStatus)
+                {
+                    <partial name="_FinvizCaptureStatus" model="captureStatus" />
+                }
 
                 @if (Model.Presets.Count == 0)
                 {

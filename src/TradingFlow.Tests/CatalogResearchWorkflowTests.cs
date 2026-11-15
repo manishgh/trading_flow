@@ -127,7 +127,8 @@ public sealed class CatalogResearchWorkflowTests : IDisposable
         var workflow = new CatalogResearchWorkflow(
             catalog.Object,
             partitionReader.Object,
-            new EvidenceResearchRunArtifactPackager(artifactStore));
+            new EvidenceResearchRunArtifactPackager(artifactStore),
+            new(new ResearchTrialRegistryOptions(Path.Combine(root, "development-trials.db"), ResearchTrialRegistryOpenMode.OpenOrCreate)));
 
         var first = await workflow.RunMomentumAsync(request);
         var replay = await workflow.RunMomentumAsync(request);
@@ -178,7 +179,8 @@ public sealed class CatalogResearchWorkflowTests : IDisposable
         var workflow = new CatalogResearchWorkflow(
             catalog.Object,
             reader.Object,
-            new EvidenceResearchRunArtifactPackager(artifactStore));
+            new EvidenceResearchRunArtifactPackager(artifactStore),
+            new(new ResearchTrialRegistryOptions(Path.Combine(root, "development-trials.db"), ResearchTrialRegistryOpenMode.OpenOrCreate)));
         var adjusted = Manifest(
             EvidenceDatasetKind.MarketBarsResearchAdjusted,
             "sip",

@@ -322,9 +322,13 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- The catalog holds 3 research artifacts and no archived artifacts, with no paper
-  execution or live authorization: opening-range breakout 1.2.0 and its published-recipe
-  versions 2.0.0 and 2.1.0. Connors RSI-2 (long and short), snapback (long and short) and
+- As verified on 15 November 2026, the catalog holds 6 research artifacts and no
+  archived artifacts. Five are operationally enabled: opening-range breakout
+  1.2.0, 2.0.0 and 2.1.0; `etf.trend-10m@1.0.0`; and
+  `etf.buy-and-hold-control@1.0.0`. `etf.rotation-12-1@1.0.0` remains explicitly
+  disabled for later standalone research. Catalog research availability grants
+  neither paper execution nor live authorization; the buy-and-hold control is a
+  measurement benchmark, not a strategy to trade. Connors RSI-2 (long and short), snapback (long and short) and
   `technical.recovery-sma5-news-avoidance` were retired on 13 November 2026 after the ten-year
   signal study (`docs/research/retired-strategy-artifacts-2026-11-13.md`); earlier removals are in
   `docs/research/retired-strategy-artifacts-2026-11-07.md`. Test-owned copies of the retired files
@@ -444,6 +448,11 @@ dotnet test C:\project\trading_flow\src\TradingFlow.Tests\TradingFlow.Tests.cspr
 ```
 
 Run web:
+
+The operator's separately published local site uses `http://127.0.0.1:10088`.
+The following development command explicitly overrides the port to 5088; it is
+not the deployed site's address. Do not start a second host against the operator
+database for development or mutation tests.
 
 ```powershell
 dotnet run --project C:\project\trading_flow\src\TradingFlow.Web --urls http://127.0.0.1:5088

@@ -64,6 +64,10 @@ var uiTestMode = String.Equals(
     StringComparison.OrdinalIgnoreCase);
 var runtimePaused = String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_DISABLE_RUNTIME"), "true", StringComparison.OrdinalIgnoreCase);
 var runtimeEnabled = !uiTestMode && !runtimePaused;
+var marketFeedsEnabled = !uiTestMode &&
+    String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase);
+var finvizCaptureRequested = String.Equals(
+    Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_FINVIZ_SCREEN_CAPTURE"), "true", StringComparison.OrdinalIgnoreCase);
 var finvizApiKey = Environment.GetEnvironmentVariable("FINVIZ_API_KEY") ??
     (OperatingSystem.IsWindows()
         ? Environment.GetEnvironmentVariable("FINVIZ_API_KEY", EnvironmentVariableTarget.User)
@@ -130,6 +134,15 @@ var backupRoot = uiTestMode
     : ResolveRootFromEnvironment("TRADINGFLOW_BACKUP_ROOT", Path.Combine(dataRoot, "backups"));
 var projectPaths = new ProjectPaths(repositoryRoot, dataRoot, cacheRoot);
 builder.Services.AddSingleton(projectPaths);
+builder.Services.AddSingleton<TradingFlow.Domain.Research.IResearchStartRegistry>(_ => uiTestMode
+    ? new SqliteResearchTrialRegistry(new ResearchTrialRegistryOptions(Path.Combine(dataRoot, "research", "research-trials.db"),
+        ResearchTrialRegistryOpenMode.OpenOrCreate))
+    : SqliteResearchTrialRegistry.OpenLocal(dataRoot, builder.Configuration["Research:RegistryPath"], builder.Configuration["Research:ReviewsPath"]));
+builder.Services.AddSingleton(services => new TradingFlow.Application.Jobs.ResearchQueue(
+    services.GetRequiredService<TradingFlow.Domain.Research.IResearchStartRegistry>(),
+    services.GetRequiredService<TradingFlow.Domain.Jobs.IDurableJobRepository>(),
+    TradingFlow.Backtesting.ResearchFileStart.EngineCodeSha256(typeof(WorkflowRunConfiguration).Assembly,
+        typeof(TradingFlow.Application.Jobs.RunWorkflowService).Assembly)));
 builder.Services.AddSingleton<SimpleYamlReader>();
 builder.Services.AddSingleton(serviceProvider => new StrategyArtifactCatalog(
     repositoryRoot,
@@ -268,6 +281,7 @@ builder.Services.AddSingleton(new PaperJobServiceOptions(
 builder.Services.AddSingleton<IPaperJobRecoveryService, PaperJobRecoveryService>();
 builder.Services.AddSingleton<PaperJobService>();
 builder.Services.AddScoped<PaperRunViewService>();
+builder.Services.AddScoped<PaperExecutionComparisonService>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
     serviceProvider.GetRequiredService<PaperJobService>());
 builder.Services.AddSingleton<MobileAutomationService>();
@@ -673,9 +687,11 @@ builder.Services.AddSingleton<IOrderCommandService>(serviceProvider =>
 builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOptions(
     Enabled: runtimeEnabled,
     EnableEarningsMonitor: !String.IsNullOrWhiteSpace(finvizApiKey),
-    EnableMarketFeeds: !uiTestMode && String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase),
+    EnableMarketFeeds: marketFeedsEnabled,
     EnableStrategyAssessments: !uiTestMode,
     MutationPause: runtimePaused));
+builder.Services.AddFinvizScreenCapture(new TradingFlow.Web.Services.ScreenCaptures.FinvizScreenCaptureOptions(
+    finvizCaptureRequested, marketFeedsEnabled, !String.IsNullOrWhiteSpace(finvizApiKey), uiTestMode));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
 builder.Services.AddSingleton<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>();
@@ -887,6 +903,9 @@ app.Use(async (context, next) => {
     await next(context);
 });
 app.MapRazorPages();
+app.MapGet("/api/finviz-screen-capture/status", (
+    TradingFlow.Web.Services.ScreenCaptures.FinvizScreenCaptureStatusReader reader,
+    CancellationToken token) => reader.ReadAsync(token)).RequireAuthorization();
 app.MapTradingFlowAuthApi();
 app.MapTradingFlowApiV1();
 app.MapDeskEndpoints();

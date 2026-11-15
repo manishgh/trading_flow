@@ -130,6 +130,7 @@ public sealed partial class CachedMarketDataProvider
             (!request.IsCalendar && (manifest.Bars!.Ticker != request.Ticker || manifest.Bars.Timeframe != request.Timeframe ||
                 manifest.OmittedSubDailyIntervalsMeanNoQualifyingTrades != OmittedSubDailyIntervalsMeanNoQualifyingTrades))) return false;
         var (start, end) = PreparedBounds(manifest);
+        if (manifest.Bars is { } bars && !IsWithinResearchCutoff(bars)) return false;
         if (start > request.Start || end < request.End || manifest.RequestSha256 != PreparedRequestHash(
                 manifest.Source, provider, request.Ticker, request.Timeframe, start, end, request.IsCalendar)) return false;
         var now = freshnessPolicy.TimeProvider.GetUtcNow();

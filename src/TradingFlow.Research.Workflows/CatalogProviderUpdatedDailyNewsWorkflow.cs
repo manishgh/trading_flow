@@ -19,7 +19,20 @@ public sealed partial class CatalogResearchWorkflow
         ArgumentNullException.ThrowIfNull(request);
         EnsureUtc(request.CreatedAtUtc, nameof(request.CreatedAtUtc));
         var symbols = ValidateProviderUpdatedDailyNewsRequest(request);
+        var frozen = FreezeCatalogStudy(request.ResearchRunId, "catalog.daily-news",
+            "Measure the forward net excess following historical provider-update events at the first knowable exchange open.", request,
+            [request.NewsDatasetId, request.AsTradedBarsDatasetId, request.ExchangeSessionsDatasetId],
+            request.StudyPartitions, request.Assumptions, "observation_count");
+        return await RunRegisteredCatalogAsync(frozen, request.ResearchRunId,
+            (start, token) => ComputeNewsAsync(request, symbols, start, token),
+            (manifest, token) => ReadNewsAsync(request, symbols, manifest, token), result => result.Manifest,
+            (result, window) => result.Report.EventObservations.Count(entry => entry.StudySegment == window.Name), cancellationToken);
+    }
 
+    /// <summary>Uses only partitions wholly before the protected observation boundary.</summary>
+    private async Task<CatalogProviderUpdatedDailyNewsDiagnosticResult> ComputeNewsAsync(CatalogProviderUpdatedDailyNewsDiagnosticRequest request,
+        string[] symbols, ResearchStart start, CancellationToken cancellationToken)
+    {
         var newsManifest = await RequireDatasetAsync(
             request.NewsDatasetId,
             EvidenceDatasetKind.NewsRevisions,
@@ -35,13 +48,14 @@ public sealed partial class CatalogResearchWorkflow
         RequireProviderUpdatedNewsDataset(newsManifest);
         RequireStaticMomentumDataset(barsManifest, "raw");
 
-        var news = await partitionReader.ReadNewsRevisionsAsync(
+        var approvedReader = ReaderForPhase(CatalogResearchPhase.DevelopmentValidation, request.StudyPartitions);
+        var news = await approvedReader.ReadNewsRevisionsAsync(
             newsManifest,
             cancellationToken);
-        var bars = await partitionReader.ReadMarketBarsAsync(
+        var bars = await approvedReader.ReadMarketBarsAsync(
             barsManifest,
             cancellationToken);
-        var sessions = await partitionReader.ReadExchangeSessionsAsync(
+        var sessions = await approvedReader.ReadExchangeSessionsAsync(
             sessionsManifest,
             cancellationToken);
         var selected = symbols.Append(request.Options.BenchmarkSymbol)
@@ -76,21 +90,6 @@ public sealed partial class CatalogResearchWorkflow
         var universeLedgerId =
             $"static-news-universe-{EvidenceCanonicalJson.ComputeSha256(universe)}";
         var partitionDefinition = Json(request.StudyPartitions);
-        var holdout = await packager.PrepareHoldoutAsync(
-            request.StudyName,
-            inputs,
-            universeLedgerId,
-            request.StudyPartitions,
-            universeLedger,
-            partitionDefinition,
-            cancellationToken);
-        await catalog.ReserveHoldoutAsync(
-            new EvidenceHoldoutConsumption(
-                holdout.HoldoutId,
-                request.ResearchRunId,
-                request.CreatedAtUtc),
-            cancellationToken);
-
         var report = new ProviderUpdatedDailyNewsStudy().Analyze(
             selectedNews,
             selectedBars,
@@ -99,6 +98,7 @@ public sealed partial class CatalogResearchWorkflow
             request.StudyPartitions);
         var blockers = report.PromotionBlockers
             .Append(StaticUniversePromotionBlocker)
+            .Append("holdout_not_executed")
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
@@ -136,6 +136,7 @@ public sealed partial class CatalogResearchWorkflow
                 partitionDefinition,
                 Assumptions(request.Assumptions),
                 [
+                    RegistrationArtifact(start),
                     new EvidenceResearchNamedOutput(
                         "event-observations",
                         Json(report.EventObservations)),
@@ -195,6 +196,23 @@ public sealed partial class CatalogResearchWorkflow
             registered,
             commit.AlreadyCommitted);
     }
+
+    /// <summary>Rehydrates each verified published report table without opening its source news or price datasets.</summary>
+    private async Task<CatalogProviderUpdatedDailyNewsDiagnosticResult> ReadNewsAsync(CatalogProviderUpdatedDailyNewsDiagnosticRequest request,
+        string[] symbols, EvidenceResearchRunManifest manifest, CancellationToken token)
+    {
+        var exclusions = await packager.ReadOutputAsync<PublishedNewsExclusions>(manifest, "exclusions-and-coverage", token);
+        var report = new ProviderUpdatedDailyNewsStudyReport(request.Options,
+            await packager.ReadOutputAsync<DailyNewsStoryCluster[]>(manifest, "story-clusters", token),
+            await packager.ReadOutputAsync<DailyNewsEventObservation[]>(manifest, "event-observations", token),
+            await packager.ReadOutputAsync<DailyNewsEventHorizonReturn[]>(manifest, "horizon-returns", token),
+            await packager.ReadOutputAsync<DailyNewsEventStudySummary[]>(manifest, "summary-by-timing-and-horizon", token),
+            await packager.ReadOutputAsync<DailyNewsCategoryStudySummary[]>(manifest, "summary-by-category-timing-and-horizon", token),
+            exclusions.Exclusions, false, manifest.ReadinessFailures);
+        return new(request.NewsDatasetId, request.AsTradedBarsDatasetId, request.ExchangeSessionsDatasetId, symbols, report, manifest, true);
+    }
+
+    private sealed record PublishedNewsExclusions(IReadOnlyDictionary<string, int> Exclusions);
 
     private static string[] ValidateProviderUpdatedDailyNewsRequest(
         CatalogProviderUpdatedDailyNewsDiagnosticRequest request)

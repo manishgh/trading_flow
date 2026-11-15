@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Domain.Wishlists;
+using TradingFlow.Web.Services.ScreenCaptures;
 using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Web.Pages;
@@ -10,15 +11,19 @@ public sealed class WishlistsModel : PageModel
     private readonly IWishlistRepository repository;
     private readonly ScreenerSyncService screener;
     private readonly ScreenerPresetService presets;
+    private readonly FinvizScreenCaptureStatusReader captures;
 
+    // Load scheduled capture evidence only for the saved screens view.
     public WishlistsModel(
         IWishlistRepository repository,
         ScreenerSyncService screener,
-        ScreenerPresetService presets)
+        ScreenerPresetService presets,
+        FinvizScreenCaptureStatusReader captures)
     {
         this.repository = repository;
         this.screener = screener;
         this.presets = presets;
+        this.captures = captures;
     }
 
     [BindProperty(SupportsGet = true)]
@@ -52,6 +57,7 @@ public sealed class WishlistsModel : PageModel
     /// the ones saved in its own UI.
     /// </summary>
     public IReadOnlyList<ScreenerPreset> Presets { get; private set; } = [];
+    public FinvizScreenCaptureStatus? ScreenCapture { get; private set; }
 
     public async Task OnGetAsync(CancellationToken cancellationToken) => await LoadAsync(cancellationToken);
 
@@ -280,9 +286,12 @@ public sealed class WishlistsModel : PageModel
         return RedirectToPage("/Wishlists", new { id, view = "screens" });
     }
 
+    // Assemble the selected wishlist and the read-only capture status for the screens tab.
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
         Presets = await presets.ListAsync(null, cancellationToken);
+        if (ShowScreens)
+            ScreenCapture = await captures.ReadAsync(Presets, cancellationToken);
         Wishlists = await repository.ListAsync(cancellationToken);
         SelectedWishlist = Id.HasValue
             ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == Id.Value)

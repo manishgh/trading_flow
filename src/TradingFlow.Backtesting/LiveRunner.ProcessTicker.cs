@@ -526,7 +526,10 @@ public sealed partial class LiveRunner
                                     order,
                                     AllowExtendedHoursTrading: run.Execution.AllowExtendedHoursTrading,
                                     StrategyIdentity: runtimeStrategy.Identity,
-                                    StrategySelectionMode: runtimeStrategy.SelectionMode),
+                                    StrategySelectionMode: runtimeStrategy.SelectionMode)
+                                {
+                                    DecisionReference = new(canonicalOrderPlan.TriggerReferencePrice, canonicalOrderPlan.TriggeredAtUtc)
+                                },
                                 _brokerClient,
                                 cancellationToken);
                             var orderId = submission.BrokerOrderId;

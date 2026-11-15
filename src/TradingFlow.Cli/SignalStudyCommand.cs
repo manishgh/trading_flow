@@ -3,8 +3,10 @@ using System.Text;
 using System.Text.Json;
 using TradingFlow.Backtesting;
 using TradingFlow.Data.Evidence;
+using TradingFlow.Data.Evidence.Governance;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Research;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
@@ -48,11 +50,11 @@ public static class SignalStudyCommand
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
         var request = ParseRequest(args);
-        var screen = PublishedResearchScreen.Read(Path.GetFullPath(request.ScreenFolder));
-        var config = ProviderConfig(request, screen);
+        var (manifest, _, membershipSha) = PublishedResearchScreen.ReadDefinition(request.ScreenFolder);
+        var config = ProviderConfig(request, manifest, membershipSha);
         var provider = EvidenceCatalogMarketDataProvider.Open(config,
             new FileSystemRawArchiveWriter(new RawArchiveOptions(Path.Combine(Path.GetFullPath(request.OutFolder), "catalog-reads"))));
-        await RunAsync(request, screen, provider, output, cancellationToken);
+        await RunAsync(request, provider, ResearchCliRegistry.Open(), output, cancellationToken);
         return 0;
     }
 
@@ -61,36 +63,187 @@ public static class SignalStudyCommand
     /// (from the warm-up start to the window end, nothing later), computes its indicators with the shared engine, follows every
     /// variant's signals and writes the reports, the outcome and monthly tables and the manifest. Returns the manifest path.
     /// </summary>
-    public static async Task<string> RunAsync(Request request, PublishedResearchScreen screen, EvidenceCatalogMarketDataProvider provider,
-        TextWriter output, CancellationToken cancellationToken)
+    public static async Task<string> RunAsync(Request request, EvidenceCatalogMarketDataProvider provider,
+        SqliteResearchTrialRegistry registry, TextWriter output, CancellationToken cancellationToken)
     {
         RequireStudyWindow(request.From, request.To);
+        var (screen, screenSha, membershipSha) = PublishedResearchScreen.ReadDefinition(request.ScreenFolder);
         RequireScreenInputs(request, screen);
+        if (request.WarmupBars <= 0 || request.CostBps is < 0m or >= 10_000m)
+            throw new ArgumentException("Signal studies require positive warm-up bars and costs from zero up to 10,000 bps per side.");
         var variants = request.StrategyFiles.Select(ReadVariant).ToArray();
+        if (variants.Length == 0 || variants.Select(variant => FileStem(variant.Label)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != variants.Length)
+            throw new InvalidDataException("Select at least one exact signal-study variant, with distinct output names.");
+        var folder = Path.GetFullPath(request.OutFolder);
+        var protectedEnd = ResearchObservationBoundary.DocumentedHoldoutEndExclusive;
+        var hasDeclaredHoldout = await provider.CanDeclareSignalStudyHoldoutAsync(ProviderConfig(request, screen, membershipSha),
+            NewYorkMidnight(protectedEnd.AddDays(-1)), cancellationToken);
+        var frozen = FreezeStudy(request, screenSha, membershipSha, screen.Inputs.ExchangeSessionsDatasetId!, variants, folder,
+            hasDeclaredHoldout ? protectedEnd : null);
+        var path = Path.Combine(folder, ManifestFileName);
+        using var outputOwner = AcquireOutputOwner(folder);
+        return await registry.RunDirectAsync(frozen, "study", (start, token) =>
+                ComputeStudyAsync(request, screenSha, provider, variants, start, folder, output, token),
+            (prior, _) => Task.FromResult(RequirePublishedStudy(path, prior)), cancellationToken);
+    }
+
+    /// <summary>Uses the output folder as an immutable study destination, even when two different requests are submitted concurrently.</summary>
+    private static FileStream AcquireOutputOwner(string folder)
+    {
+        Directory.CreateDirectory(folder);
+        return new(Path.Combine(folder, ".signal-study.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    /// <summary>Protects existing report bytes and verifies the completed registration before returning a retry result.</summary>
+    private static string RequirePublishedStudy(string path, ResearchExecutionResult prior)
+    {
+        if (prior.ArtifactReference != path || prior.ArtifactSha256 != ResearchStartIdentity.HashFile(path))
+            throw new InvalidDataException("The published signal-study manifest differs from its registered result.");
+        using var manifest = JsonDocument.Parse(File.ReadAllText(path));
+        VerifyPublishedFiles(path, manifest.RootElement);
+        return path;
+    }
+
+    /// <summary>Verifies an existing manifest's exact named report and table bytes without reading market inputs.</summary>
+    private static void VerifyPublishedFiles(string path, JsonElement manifest)
+    {
+        foreach (var variant in manifest.GetProperty("variants").EnumerateArray())
+        foreach (var file in variant.GetProperty("artifacts").EnumerateObject())
+            if (Path.GetFileName(file.Name) != file.Name || ResearchStartIdentity.HashFile(Path.Combine(Path.GetDirectoryName(path)!, file.Name)) != file.Value.GetString())
+                throw new InvalidDataException("A published signal-study output differs from its frozen manifest.");
+    }
+
+    /// <summary>Computes only after the exact trial identities and output-folder owner have been persisted.</summary>
+    private static async Task<DirectResearchCompletion<string>> ComputeStudyAsync(Request request, string screenSha,
+        EvidenceCatalogMarketDataProvider provider, IReadOnlyList<Variant> variants, ResearchStart start, string folder,
+        TextWriter output, CancellationToken cancellationToken)
+    {
+        var registrationPath = Path.Combine(folder, "signal-study-registration.json");
+        var manifestPath = Path.Combine(folder, ManifestFileName);
+        if (File.Exists(manifestPath))
+            return RecoverPublishedStudy(request, start, registrationPath, manifestPath);
+        await WriteExactAsync(registrationPath, Json(start.Binding), cancellationToken);
+        var screen = PublishedResearchScreen.Read(request.ScreenFolder, screenSha);
+        provider = provider.BeforeProtectedObservations(NewYorkMidnight(DevelopmentTo.AddDays(1)));
         var membership = screen.ToMembership(request.From, request.To);
         var pool = screen.PoolSymbols(request.From, request.To);
-        var dataStart = request.From.AddDays(-(int)Math.Ceiling(request.WarmupBars * 1.5) - 10);
+        var proposedDataStart = request.From.AddDays(-(int)Math.Ceiling(request.WarmupBars * 1.5) - 10);
+        var evidenceFloor = new DateOnly(2016, 1, 1);
+        var dataStart = proposedDataStart < evidenceFloor ? evidenceFloor : proposedDataStart;
         var schedules = await provider.LoadMarketSessionSchedulesAsync(dataStart.AddDays(-1), request.To, cancellationToken);
         var splits = await provider.LoadShareSplitsAsync(cancellationToken);
         var stocks = await LoadStocksAsync(provider, pool, schedules, splits, dataStart, request.To, cancellationToken);
         bool Eligible(string ticker, DateOnly day) => membership.IsMember(ticker, day);
         var universe = SignalStudyOutcomes.Universe(stocks, Eligible, request.From, request.To);
-        var folder = Path.GetFullPath(request.OutFolder);
-        Directory.CreateDirectory(folder);
         var settings = new SignalStudySettings(request.Entry, (double)(request.CostBps / 10_000m), request.From, request.To, request.WarmupBars);
-        var results = new List<object>();
+        var results = new List<VariantOutcome>();
         foreach (var variant in variants)
         {
             results.Add(await StudyVariantAsync(variant, stocks, Eligible, universe, settings, folder, cancellationToken));
             output.WriteLine($"{variant.Label}: written to {folder}");
         }
-        var manifestPath = Path.Combine(folder, ManifestFileName);
-        await File.WriteAllTextAsync(manifestPath, Json(Manifest(request, screen, stocks, results)), cancellationToken);
-        return manifestPath;
+        await WriteExactAsync(manifestPath, Json(Manifest(request, screen, stocks, results, start)), cancellationToken);
+        return CompletePublishedStudy(request, start, manifestPath, results);
+    }
+
+    /// <summary>Finishes an interrupted registry publication or refuses an old artifact before any screen or candle reads.</summary>
+    private static DirectResearchCompletion<string> RecoverPublishedStudy(Request request, ResearchStart start, string registrationPath, string manifestPath)
+    {
+        if (!File.Exists(registrationPath) || ResearchStartIdentity.HashFile(registrationPath) != ResearchStartIdentity.HashText(Json(start.Binding)))
+            throw new InvalidDataException("The destination already holds a signal study without this exact durable registration. Use a new output folder.");
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        var manifest = document.RootElement;
+        if (!manifest.TryGetProperty("registration", out var registration) ||
+            registration.GetProperty("StartId").GetString() != start.Binding.Request.StartId ||
+            registration.GetProperty("RequestSha256").GetString() != start.Binding.Request.RequestSha256 ||
+            manifest.GetProperty("codeSha256").GetString() != start.Binding.Request.CodeSha256)
+            throw new InvalidDataException("The existing signal-study manifest belongs to a different frozen start.");
+        VerifyPublishedFiles(manifestPath, manifest);
+        var results = manifest.GetProperty("variants").Deserialize<VariantOutcome[]>()
+            ?? throw new InvalidDataException("The published signal-study variants are missing.");
+        return CompletePublishedStudy(request, start, manifestPath, results);
+    }
+
+    /// <summary>Creates a canonical result per exact declared variant, linking all its output hashes and the shared manifest.</summary>
+    private static DirectResearchCompletion<string> CompletePublishedStudy(Request request, ResearchStart start, string manifestPath,
+        IReadOnlyList<VariantOutcome> results)
+    {
+        if (!results.Select(result => result.identity.ContentSha256).SequenceEqual(start.Binding.Trials.Select(trial => trial.VariantKey)))
+            throw new InvalidDataException("Published signal-study variants differ from the frozen registration.");
+        var manifestHash = ResearchStartIdentity.HashFile(manifestPath);
+        var canonical = results.Select(result =>
+        {
+            var trial = start.Binding.Trials.Single(item => item.VariantKey == result.identity.ContentSha256);
+            return new CanonicalResearchResultManifest(trial.ExperimentId + "-development", trial.ExperimentId,
+                trial.DefinitionSha256, start.Binding.Request.StartId, start.Binding.Request.CodeSha256, "development", "passed",
+                new Dictionary<string, decimal>
+                {
+                    ["passed"] = request.Entry == SignalStudyEntry.NextOpen && result.decision == SignalStudyAnalyzer.AdvanceToHoldout ? 1m : 0m,
+                    ["trades"] = result.trades
+                },
+                result.artifacts.Values.Append(manifestHash).ToArray(), start.RegisteredAtUtc);
+        }).ToArray();
+        return new(manifestPath, manifestPath, manifestHash, canonical);
     }
 
     /// <summary>One declared variant: its definition, its catalog identity (or the definition hash) and its source file.</summary>
-    private sealed record Variant(StrategyDefinition Strategy, string Label, object Identity, string FilePath, string FileSha256);
+    private sealed record Variant(StrategyDefinition Strategy, string Label, StrategyArtifactIdentity Identity, string FilePath, string FileSha256);
+
+    private sealed record VariantOutcome(string variant, StrategyArtifactIdentity identity, string strategyFile,
+        string strategyFileSha256, string decision, int trades, IReadOnlyDictionary<string, int> counts,
+        IReadOnlyDictionary<string, string> artifacts);
+
+    /// <summary>Freezes actual dataset identities and analyzer parameters without reading any price outcomes.</summary>
+    private static FrozenResearchStart FreezeStudy(Request request, string screenSha, string membershipSha, string calendarId,
+        IReadOnlyList<Variant> variants, string folder, DateOnly? protectedEnd)
+    {
+        var code = ResearchFileStart.EngineCodeSha256(typeof(SignalStudyAnalyzer).Assembly, typeof(SignalStudyCommand).Assembly);
+        var passRules = new SignalStudyPassRules();
+        var thresholds = JsonSerializer.SerializeToElement(passRules).EnumerateObject()
+            .ToDictionary(item => item.Name, item => item.Value.GetDecimal(), StringComparer.Ordinal);
+        var partitions = new List<ResearchPartitionDefinition>
+        {
+            new("development", NewYorkMidnight(request.From), NewYorkMidnight(request.To.AddDays(1)), TimeSpan.Zero)
+        };
+        var holdoutStart = DevelopmentTo.AddDays(1);
+        if (protectedEnd is { } holdoutEnd)
+            partitions.Add(new("holdout", NewYorkMidnight(holdoutStart), NewYorkMidnight(holdoutEnd), TimeSpan.Zero));
+        var frozenVariants = variants.Select(variant => new FrozenResearchVariant(variant.Identity.ContentSha256, variant.Identity.StrategyId,
+            $"Signals from {variant.Label} exceed the equal-weight eligible-stock return after frozen costs and require the declared sample and robustness criteria.",
+            variant.Identity.ContentSha256,
+            [request.BarsDatasetId, request.ActionsDatasetId, calendarId,
+                "screen-manifest:" + screenSha, "screen-membership:" + membershipSha],
+            new Dictionary<string, string> { ["market_clock"] = "America/New_York", ["stored_clock"] = "UTC" },
+            new Dictionary<string, string>
+            {
+                ["strategy_document_sha256"] = variant.FileSha256,
+                ["price_basis"] = "as-traded daily bars with explicit split handling",
+                ["signal_horizon"] = "daily",
+                ["entry"] = request.Entry.ToString(),
+                ["warmup_bars"] = request.WarmupBars.ToString(CultureInfo.InvariantCulture),
+                ["benchmark"] = "equal-weight eligible stocks over the same holding dates"
+            }, thresholds,
+            new Dictionary<string, string> { ["bps_per_side"] = request.CostBps.ToString(CultureInfo.InvariantCulture) },
+            partitions, "passed",
+            ["Fail any frozen SignalStudyPassRules gate", "Only next-open execution can substantiate a portfolio study review."])).ToArray();
+        var hash = EvidenceCanonicalJson.ComputeSha256(new { Variants = frozenVariants, Screen = screenSha });
+        return new(ResearchStartIdentity.StartId("signal-study", folder), ResearchStartKind.SignalStudy, hash, code, frozenVariants,
+            new Dictionary<string, string[]> { ["study"] = frozenVariants.Select(variant => variant.VariantKey).ToArray() });
+    }
+
+    /// <summary>Publishes exact immutable bytes, or reconciles an identical file left by an interrupted attempt.</summary>
+    private static async Task WriteExactAsync(string path, string content, CancellationToken token)
+    {
+        var expected = ResearchStartIdentity.HashText(content);
+        if (!File.Exists(path))
+        {
+            await AtomicFileArtifactWriter.Instance.WriteTextExclusiveAsync(path, content, token);
+        }
+        else if (ResearchStartIdentity.HashFile(path) != expected)
+        {
+            throw new InvalidDataException($"The research output '{Path.GetFileName(path)}' already belongs to different evidence. Use a new output folder.");
+        }
+    }
 
     // Refuses a window outside the development years, so the holdout and the latest data stay unopened.
     private static void RequireStudyWindow(DateOnly from, DateOnly to)
@@ -101,12 +254,16 @@ public static class SignalStudyCommand
     }
 
     // The named datasets must be the ones the published screen was built from, with an exchange-session dataset.
-    private static void RequireScreenInputs(Request request, PublishedResearchScreen screen)
+    private static void RequireScreenInputs(Request request, ResearchScreenManifest screen)
     {
-        var inputs = screen.Manifest.Inputs;
-        if (screen.IsRanked || inputs.DailyBarsDatasetId != request.BarsDatasetId || inputs.CorporateActionsDatasetId != request.ActionsDatasetId ||
+        if (screen.To > DevelopmentTo)
+            throw new InvalidOperationException("The published eligible list contains protected dates. Publish an eligible list confined to the development years before running the study.");
+        if (request.From < screen.From || request.To > screen.To)
+            throw new InvalidOperationException("The published eligible list does not cover the requested development window.");
+        var inputs = screen.Inputs;
+        if (screen.RankingRules is not null || inputs.DailyBarsDatasetId != request.BarsDatasetId || inputs.CorporateActionsDatasetId != request.ActionsDatasetId ||
             inputs.ExchangeSessionsDatasetId is null)
-            throw new InvalidOperationException($"Research screen '{screen.Name}' must be an eligible list built from daily bars {request.BarsDatasetId} " +
+            throw new InvalidOperationException($"Research screen must be an eligible list built from daily bars {request.BarsDatasetId} " +
                 $"and corporate actions {request.ActionsDatasetId}, with an exchange-session dataset.");
     }
 
@@ -115,6 +272,7 @@ public static class SignalStudyCommand
     private static Variant ReadVariant(string file)
     {
         var path = Path.GetFullPath(file);
+        using var held = File.OpenRead(path);
         var reader = new SimpleYamlReader();
         var repository = RepositoryRoot(path);
         var catalog = new StrategyArtifactCatalog(repository, Path.Combine(repository, "configs", "strategy-catalog.json"), reader);
@@ -139,9 +297,9 @@ public static class SignalStudyCommand
     }
 
     // The catalog provider settings: the screen's daily bars, exchange sessions and corporate actions; no intraday datasets.
-    private static EvidenceCatalogProviderConfig ProviderConfig(Request request, PublishedResearchScreen screen) => new(
-        Path.GetFullPath(request.CatalogPath), Path.GetFullPath(request.ArtifactRoot), screen.RankedListSha256, request.BarsDatasetId,
-        screen.Manifest.Inputs.ExchangeSessionsDatasetId!, [], [], request.ActionsDatasetId);
+    private static EvidenceCatalogProviderConfig ProviderConfig(Request request, ResearchScreenManifest screen, string membershipSha) => new(
+        Path.GetFullPath(request.CatalogPath), Path.GetFullPath(request.ArtifactRoot), membershipSha, request.BarsDatasetId,
+        screen.Inputs.ExchangeSessionsDatasetId!, [], [], request.ActionsDatasetId);
 
     /// <summary>
     /// Loads each pool stock's daily bars from the data start through the window end (the request ends at the midnight after
@@ -169,7 +327,7 @@ public static class SignalStudyCommand
     }
 
     // Follows one variant over every stock and writes its report, outcome table and monthly table; returns its manifest entry.
-    private static async Task<object> StudyVariantAsync(Variant variant, IReadOnlyList<SignalStudyStock> stocks, Func<string, DateOnly, bool> eligible,
+    private static async Task<VariantOutcome> StudyVariantAsync(Variant variant, IReadOnlyList<SignalStudyStock> stocks, Func<string, DateOnly, bool> eligible,
         IReadOnlyList<EligibleUniverseDay> universe, SignalStudySettings settings, string folder, CancellationToken cancellationToken)
     {
         var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
@@ -178,11 +336,16 @@ public static class SignalStudyCommand
             .OrderBy(signal => signal.Outcome.SignalDate).ThenBy(signal => signal.Outcome.Ticker, StringComparer.Ordinal).ToArray();
         var report = SignalStudyAnalyzer.Analyze(variant.Label, signals.Select(signal => signal.Outcome).ToArray(), universe, new SignalStudyPassRules());
         var stem = FileStem(variant.Label);
-        await File.WriteAllTextAsync(Path.Combine(folder, $"{stem}-report.json"), Json(report), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(folder, $"{stem}-outcomes.csv"), OutcomesCsv(signals, universe), cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(folder, $"{stem}-months.csv"), MonthsCsv(report), cancellationToken);
-        return new { variant = variant.Label, identity = variant.Identity, strategyFile = variant.FilePath, strategyFileSha256 = variant.FileSha256,
-            decision = report.Decision, trades = report.Trades, counts };
+        var artifacts = new Dictionary<string, string>
+        {
+            [$"{stem}-report.json"] = Json(report),
+            [$"{stem}-outcomes.csv"] = OutcomesCsv(signals, universe),
+            [$"{stem}-months.csv"] = MonthsCsv(report)
+        };
+        foreach (var (name, content) in artifacts)
+            await WriteExactAsync(Path.Combine(folder, name), content, cancellationToken);
+        return new(variant.Label, variant.Identity, variant.FilePath, variant.FileSha256, report.Decision, report.Trades, counts,
+            artifacts.ToDictionary(item => item.Key, item => ResearchStartIdentity.HashText(item.Value), StringComparer.Ordinal));
     }
 
     // One row per signal outcome: dates, exit reason, holding days, compounded gross, net (cost on both sides) and universe
@@ -210,12 +373,15 @@ public static class SignalStudyCommand
             $"{month.Year},{month.Month},{month.Trades},{month.UnviewedTrades},{month.MeanNetExcessPerTrade:F8}\n")));
 
     // The manifest: input fingerprints, variants with identities and counts, cost, entry, window and the dates actually read.
-    private static object Manifest(Request request, PublishedResearchScreen screen, IReadOnlyList<SignalStudyStock> stocks, IReadOnlyList<object> variants)
+    private static object Manifest(Request request, PublishedResearchScreen screen, IReadOnlyList<SignalStudyStock> stocks, IReadOnlyList<VariantOutcome> variants,
+        ResearchStart start)
     {
         var read = stocks.SelectMany(stock => stock.Bars).Select(bar => SignalStudyOutcomes.SessionDate(bar.Timestamp)).ToArray();
         return new
         {
             codeVersion = CodeVersion,
+            codeSha256 = start.Binding.Request.CodeSha256,
+            registration = new { start.Binding.Request.StartId, start.Binding.Request.RequestSha256, start.Binding.Trials },
             inputs = new
             {
                 catalog = Path.GetFullPath(request.CatalogPath), barsDatasetId = request.BarsDatasetId, actionsDatasetId = request.ActionsDatasetId,

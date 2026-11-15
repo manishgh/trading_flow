@@ -27,6 +27,8 @@ public sealed record BacktestCandidateTrade(
 
     // A completed exit decision can await an executable slice beyond the frozen study.
     public BacktestPendingExitDecision? PendingExitDecision { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestExitEvidence? ExitEvidence { get; init; }
     public string DecisionStrategyId { get; init; } = "";
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public IntradayExecutionEvidence? IntradayExecution { get; init; }
@@ -37,7 +39,11 @@ public sealed record BacktestCandidateTrade(
     public string? FillTimeframe { get; init; }
 }
 
-public sealed record BacktestPendingExitDecision(DateTimeOffset KnownAtUtc, string Reason);
+public sealed record BacktestPendingExitDecision(DateTimeOffset KnownAtUtc, string Reason)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestExitEvidence? ExitEvidence { get; init; }
+}
 
 /// <summary>A completed position. Use fill timing for economic time when present. The original timestamps support replay reconciliation.</summary>
 public sealed record BacktestTrade(
@@ -66,6 +72,9 @@ public sealed record BacktestTrade(
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public BacktestFillTiming? ExitFillTiming { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BacktestExitEvidence? ExitEvidence { get; init; }
 
     // EntryTimestamp and ExitTimestamp retain the original journal stamps for reconciliation.
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

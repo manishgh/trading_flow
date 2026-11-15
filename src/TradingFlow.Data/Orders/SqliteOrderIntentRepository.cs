@@ -9,6 +9,7 @@ using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Domain.Execution;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Data.Orders;
@@ -252,7 +253,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
         return new OrderDispatchLease(intent, state, token, leaseExpiresAtUtc);
     }
 
-    /// <summary>Fence the first broker attempt against paper ownership, discovery and current account limits under one write lock.</summary>
+    /// <summary>Fence the broker attempt and atomically stamp each entry's local pre-POST time.</summary>
     public async Task<OrderIntentRecord> RecordDispatchAttemptAsync(
         Guid intentId,
         Guid leaseToken,
@@ -353,6 +354,16 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
 
         intent.DispatchAttemptCount = checked(intent.DispatchAttemptCount + 1);
         intent.LastDispatchAttemptAtUtc = nowUtc;
+        if (intent.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
+            OperationalTradingLimitProfile.Mode(owningRun.Profile) == "paper")
+        {
+            context.Set<OrderDispatchAttemptTelemetryRecord>().Add(new()
+            {
+                IntentId = intent.IntentId,
+                AttemptNumber = intent.DispatchAttemptCount,
+                PrePostAtUtc = nowUtc
+            });
+        }
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return intent;
@@ -703,6 +714,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             int? triggeredVersion = null;
             int? consumedVersion = null;
             string? candidateSemanticDecisionSha256 = null;
+            OrderDecisionReference? persistedDecisionReference = null;
             string? triggeredEvidenceSha256 = null;
             string? consumptionEvidenceSha256 = null;
             string? consumptionEvidenceJson = null;
@@ -751,6 +763,7 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
                     ?? throw new InvalidOperationException(
                         $"Candidate {candidateId:N} has no matching persisted Triggered transition.");
                 ValidateCandidateSnapshot(run, reservation, candidate, trigger, serverNowUtc);
+                persistedDecisionReference = ReadDecisionReference(trigger);
                 if (candidate.ExpiresAtUtc <= serverNowUtc)
                 {
                     await ExpireCandidateAsync(
@@ -879,6 +892,12 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             };
 
             context.OrderIntents.Add(intent);
+            if (reservation.Kind is OrderIntentKind.StrategyEntry or OrderIntentKind.OperatorEntry &&
+                reservation.AdmissionEvidence is { } evidence && OperationalTradingLimitProfile.Mode(run.Profile) == "paper")
+            {
+                context.Set<OrderAdmissionTelemetryRecord>().Add(CreateAdmissionTelemetry(intent.IntentId,
+                    evidence with { Decision = persistedDecisionReference ?? evidence.Decision }));
+            }
             context.OrderEvents.Add(new OrderEventRecord
             {
                 ClientOrderId = clientOrderId,
@@ -920,6 +939,49 @@ public sealed partial class SqliteOrderIntentRepository : IOrderIntentRepository
             reservationLock.Release();
         }
     }
+
+    // Bind the first admission's market receipt, strategy identity and trigger reference to the winning intent.
+    /// <summary>Reads only the exact trigger already validated by the reservation transaction; absent or unverifiable plans stay unknown.</summary>
+    internal static OrderDecisionReference? ReadDecisionReference(CandidateTransitionRecord trigger)
+    {
+        if (trigger.Source != "strategy_decision_kernel") return null;
+        try
+        {
+            using var document = JsonDocument.Parse(trigger.EvidenceJson);
+            if (!document.RootElement.TryGetProperty("semantic", out var semantic) ||
+                ComputeSha256(semantic.GetRawText()) != trigger.SemanticDecisionSha256 ||
+                !semantic.TryGetProperty("orderPlan", out var plan) || plan.ValueKind != JsonValueKind.Object ||
+                !plan.TryGetProperty("triggerReferencePrice", out var price) || !price.TryGetDecimal(out var value) || value <= 0 ||
+                !plan.TryGetProperty("triggeredAtUtc", out var time) || !time.TryGetDateTimeOffset(out var timestamp) || timestamp > trigger.OccurredAtUtc)
+                return null;
+            return new(value, timestamp.ToUniversalTime());
+        }
+        catch (Exception error) when (error is JsonException or InvalidOperationException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Projects first-admission evidence into its immutable relational row without changing order request identity.</summary>
+    private static OrderAdmissionTelemetryRecord CreateAdmissionTelemetry(Guid intentId, OrderAdmissionEvidence evidence) => new()
+    {
+        IntentId = intentId,
+        Bid = evidence.Quote?.Bid,
+        Ask = evidence.Quote?.Ask,
+        QuoteFeed = evidence.Quote?.Feed,
+        QuoteProviderTimestampUtc = evidence.Quote?.ProviderTimestampUtc,
+        QuoteObservedAtUtc = evidence.Quote?.ObservedAtUtc,
+        QuoteFreshnessLimitMilliseconds = evidence.Quote?.FreshnessLimitMilliseconds,
+        QuoteReceiptId = evidence.Quote?.Receipt?.ArchiveId,
+        QuoteReceiptSha256 = evidence.Quote?.Receipt?.Sha256,
+        QuoteReceiptAtUtc = evidence.Quote?.Receipt?.ReceivedAtUtc,
+        DecisionPrice = evidence.Decision?.TriggerReferencePrice,
+        DecisionAtUtc = evidence.Decision?.TriggeredAtUtc,
+        ModeledExecutablePrice = evidence.Decision?.ModeledExecutablePrice,
+        StrategyArtifactId = evidence.StrategyIdentity?.StrategyId,
+        StrategyVersion = evidence.StrategyIdentity?.SemanticVersion,
+        StrategyContentSha256 = evidence.StrategyIdentity?.ContentSha256
+    };
 
     private static void ValidateReservation(ProductionRun run, OrderIntentReservation reservation)
     {

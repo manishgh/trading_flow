@@ -4,9 +4,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Application.Jobs;
 using TradingFlow.Backtesting;
+using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Backtesting.Optimization;
 using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Optimization;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Web.Models;
 
@@ -45,18 +47,24 @@ public sealed class OptimizationJobService : IDurableJobHandler
     private readonly IDurableJobRepository repository;
     private readonly OptimizationJobServiceOptions options;
     private readonly ILogger<OptimizationJobService> logger;
+    private readonly ResearchQueue research;
+    private readonly StrategyArtifactCatalog strategyArtifacts;
 
     public OptimizationJobService(
         SimpleYamlReader yamlReader,
         BacktestRunner backtestRunner,
         IDurableJobRepository repository,
         OptimizationJobServiceOptions options,
+        ResearchQueue research,
+        StrategyArtifactCatalog strategyArtifacts,
         ILogger<OptimizationJobService>? logger = null)
     {
         this.yamlReader = yamlReader;
         this.backtestRunner = backtestRunner;
         this.repository = repository;
         this.options = options.Validate();
+        this.research = research;
+        this.strategyArtifacts = strategyArtifacts;
         this.logger = logger ?? NullLogger<OptimizationJobService>.Instance;
     }
 
@@ -68,6 +76,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
         foreach (var persisted in await repository.GetJobsAsync(JobType, cancellationToken))
         {
             await PublishResultMarkerAsync(persisted, cancellationToken);
+            await RecordResearchResultAsync(persisted, cancellationToken);
             jobs[persisted.Id] = MutableOptimizationJob.FromPersisted(persisted, JsonOptions);
         }
 
@@ -88,51 +97,36 @@ public sealed class OptimizationJobService : IDurableJobHandler
         var backtest = yamlReader.ReadBacktestRun(optimization.BacktestConfigPath);
         StrategyOptimizer.ValidateConfiguration(optimization, backtest);
         _ = backtestRunner.ReadResearchStrategy(optimization.BaseStrategyPath);
-        var request = DurableFileJobRequest.Capture(ResolveInputs(fullConfigPath, optimization, backtest));
-        using (request.AcquireVerifiedReadLease())
+        var metadata = DurableFileJobRequest.Capture(ResearchFileStart.OptimizationInputs(fullConfigPath, backtest, optimization, includeObservations: false));
+        using (metadata.AcquireVerifiedReadLease())
         {
             optimization = yamlReader.ReadOptimizationConfig(fullConfigPath);
             backtest = yamlReader.ReadBacktestRun(optimization.BacktestConfigPath);
             StrategyOptimizer.ValidateConfiguration(optimization, backtest);
-            request.EnsureContains(ResolveInputs(fullConfigPath, optimization, backtest));
+            metadata.EnsureContains(ResearchFileStart.OptimizationInputs(fullConfigPath, backtest, optimization, includeObservations: false));
             _ = backtestRunner.ReadResearchStrategy(optimization.BaseStrategyPath);
         }
-        var job = new MutableOptimizationJob(Guid.NewGuid(), runName, fullConfigPath, DateTimeOffset.UtcNow);
-        var persisted = new PersistedJob
+        using var frozenInputs = metadata.AcquireVerifiedReadLease();
+        var baseStrategy = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(
+            backtestRunner.ReadResearchStrategy(optimization.BaseStrategyPath), strategyArtifacts);
+        var inputHash = EvidenceCanonicalJson.ComputeSha256(metadata.Files);
+        const string route = "web-optimization";
+        var key = runName.Trim() + ":" + inputHash;
+        var jobId = ResearchQueue.FileJobId(route, key);
+        var start = ResearchFileStart.Optimization(route, key, jobId.ToString("N"),
+            inputHash, research.CodeSha256, backtest, optimization, baseStrategy);
+        var queued = await research.AdmitAsync(start, options.MaximumPendingJobs, (binding, _) =>
         {
-            Id = job.JobId,
-            JobType = JobType,
-            RunName = job.RunName,
-            ConfigPath = job.ConfigPath,
-            RequestJson = request.Serialize(),
-            SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions),
-            Status = "queued",
-            CreatedAt = job.CreatedAt
-        };
-        if (!await repository.TryEnqueueAsync(persisted, options.MaximumPendingJobs, cancellationToken))
-        {
-            throw new InvalidOperationException(
-                $"The optimization queue already contains its maximum of {options.MaximumPendingJobs} non-terminal jobs.");
-        }
-
-        jobs[job.JobId] = job;
-        return job.ToSnapshot();
-    }
-
-    // Captures a generated base strategy's immutable sidecar with the other optimization inputs.
-    private static IEnumerable<string> ResolveInputs(string configPath, OptimizationConfig optimization,
-        TradingFlow.Domain.Backtesting.BacktestRunConfig backtest)
-    {
-        yield return configPath;
-        yield return optimization.BacktestConfigPath;
-        yield return optimization.BaseStrategyPath;
-        var manifestPath = optimization.BaseStrategyPath + ".artifact.json";
-        if (File.Exists(manifestPath))
-            yield return manifestPath;
-        if (StrategyExperimentArtifactStore.FindManifestForStrategyDocument(optimization.BaseStrategyPath) is { } experimentManifest)
-            yield return experimentManifest;
-        foreach (var path in backtest.Strategies)
-            yield return path;
+            var job = new MutableOptimizationJob(jobId, runName, fullConfigPath, binding.RegisteredAtUtc);
+            var request = DurableFileJobRequest.Capture(ResearchFileStart.OptimizationInputs(fullConfigPath, backtest, optimization))
+                with { CapturedAtUtc = binding.RegisteredAtUtc };
+            return Task.FromResult<IReadOnlyList<PersistedJob>>([new()
+            {
+                Id = jobId, JobType = JobType, RunName = job.RunName, ConfigPath = job.ConfigPath, RequestJson = request.Serialize(),
+                SnapshotJson = JsonSerializer.Serialize(job.ToSnapshot(), JsonOptions), Status = "queued", CreatedAt = job.CreatedAt
+            }]);
+        }, cancellationToken);
+        return jobs.GetOrAdd(jobId, _ => MutableOptimizationJob.FromPersisted(queued.Single(), JsonOptions)).ToSnapshot();
     }
 
     public IReadOnlyList<OptimizationJobSnapshot> List() => jobs.Values
@@ -171,6 +165,8 @@ public sealed class OptimizationJobService : IDurableJobHandler
         DurableJobExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var cutoff = await research.VerifyWorkerAsync(context.Job, cancellationToken);
+        using var protectedObservations = ResearchObservationBoundary.Enter(cutoff);
         var request = DurableFileJobRequest.Deserialize(context.Job.RequestJson);
         using var inputLease = request.AcquireVerifiedReadLease();
         var job = jobs.GetOrAdd(
@@ -185,7 +181,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
         var optimizationProgress = new InlineProgress<OptimizationProgress>(job.ReportOptimization);
         var config = yamlReader.ReadOptimizationConfig(job.ConfigPath);
         var backtestConfig = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
-        request.EnsureContains(ResolveInputs(job.ConfigPath, config, backtestConfig));
+        request.EnsureContains(ResearchFileStart.OptimizationInputs(job.ConfigPath, backtestConfig, config));
         var attemptRoot = Path.Combine(
             backtestConfig.ResultsRoot,
             ".durable-attempts",
@@ -198,7 +194,8 @@ public sealed class OptimizationJobService : IDurableJobHandler
             progress,
             optimizationProgress,
             attemptRoot,
-            request.CapturedAtUtc);
+            request.CapturedAtUtc,
+            captureResearchEvidence: true);
         while (!runTask.IsCompleted)
         {
             var delay = Task.Delay(options.SnapshotInterval, cancellationToken);
@@ -220,6 +217,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
     public async Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
         await PublishResultMarkerAsync(persisted, cancellationToken);
+        await RecordResearchResultAsync(persisted, cancellationToken);
         var job = jobs.GetOrAdd(
             persisted.Id,
             _ => MutableOptimizationJob.FromPersisted(persisted, JsonOptions));
@@ -234,6 +232,20 @@ public sealed class OptimizationJobService : IDurableJobHandler
 
         job.ApplyPersistedState(persisted);
         PruneTerminalJobs();
+    }
+
+    /// <summary>Reconciles terminal optimization outcomes after queue publication, with retry on projection refresh.</summary>
+    private async Task RecordResearchResultAsync(PersistedJob persisted, CancellationToken token)
+    {
+        try
+        {
+            await research.RecordResultAsync(persisted, token, async ct =>
+                persisted.ResultReference is { } reference ? await OptimizationPublication.ReadRecordedAsync(reference, ct) : null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Optimization {JobId} outcome could not be recorded in the research ledger.", persisted.Id);
+        }
     }
 
     private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)

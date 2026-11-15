@@ -164,7 +164,9 @@ public sealed class ResearchPipelineEndToEndTests : IAsyncLifetime
             new ParquetEvidencePartitionDataReader(
                 new EvidenceParquetCodec(),
                 artifactStore),
-            new EvidenceResearchRunArtifactPackager(artifactStore));
+            new EvidenceResearchRunArtifactPackager(artifactStore),
+            new TradingFlow.Data.Evidence.Governance.SqliteResearchTrialRegistry(new(
+                Path.Combine(root, "research-trials.db"), TradingFlow.Data.Evidence.Governance.ResearchTrialRegistryOpenMode.OpenOrCreate)));
 
     private async Task<FrozenEvidence> PublishAndCommitFrozenEvidenceAsync()
     {

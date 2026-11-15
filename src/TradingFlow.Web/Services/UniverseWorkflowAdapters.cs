@@ -81,7 +81,7 @@ public sealed class UniverseSourceResolver(
     private UniverseSourceCapture ResolveResearchScreen(UniverseSourceSelectionRequest source)
     {
         var screens = researchScreens ?? throw new InvalidOperationException("Research screens are not available in this host.");
-        var screen = screens.Read(source.SourceKey);
+        var screen = screens.ReadForPreview(source.SourceKey);
         var observed = timeProvider.GetUtcNow().ToUniversalTime();
         var symbols = screen.PoolSymbols(screen.Manifest.From, screen.Manifest.To)
             .Select(symbol => new DiscoverySymbolObservation(symbol, JsonSerializer.Serialize(new { researchScreen = screen.Name }))).ToArray();

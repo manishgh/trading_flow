@@ -17,6 +17,136 @@ namespace TradingFlow.Data.Context.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
 
+            modelBuilder.Entity("TradingFlow.Domain.ScreenCaptures.FinvizCaptureSchedule", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("CalendarCheckedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CalendarError")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("NextSlotAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("NextUnclosedSessionDate")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("finviz_capture_schedule", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.ScreenCaptures.FinvizCaptureSlot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("ClaimedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("EvidenceAttemptId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExportFormat")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("PlannedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("PlannedRevisionKnown")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("PresetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PresetName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("PresetUpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PublishedAttemptId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("PublishedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Query")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("QuerySha256")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("RetryNotBeforeUtcTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateOnly>("SessionDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("State")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PresetId", "SessionDate", "Kind")
+                        .IsUnique();
+
+                    b.HasIndex("SessionDate", "Kind");
+
+                    b.ToTable("finviz_capture_slots", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.ScreenCaptures.FinvizCaptureAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("FinishedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ObservationJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("RequestedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SlotId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SlotId", "Number")
+                        .IsUnique();
+
+                    b.ToTable("finviz_capture_attempts", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.ScreenCaptures.FinvizCaptureAttempt", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.ScreenCaptures.FinvizCaptureSlot", null)
+                        .WithMany()
+                        .HasForeignKey("SlotId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1547,6 +1677,37 @@ namespace TradingFlow.Data.Context.Migrations
                     b.HasIndex("ClientOrderId", "LocalTimestampUtc");
 
                     b.ToTable("order_events", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderAdmissionTelemetryRecord", b =>
+                {
+                    b.Property<Guid>("IntentId").HasColumnType("TEXT");
+                    b.Property<decimal?>("Bid").HasColumnType("TEXT");
+                    b.Property<decimal?>("Ask").HasColumnType("TEXT");
+                    b.Property<string>("QuoteFeed").HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("QuoteProviderTimestampUtc").HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("QuoteObservedAtUtc").HasColumnType("TEXT");
+                    b.Property<int?>("QuoteFreshnessLimitMilliseconds").HasColumnType("INTEGER");
+                    b.Property<string>("QuoteReceiptId").HasColumnType("TEXT");
+                    b.Property<string>("QuoteReceiptSha256").HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("QuoteReceiptAtUtc").HasColumnType("TEXT");
+                    b.Property<decimal?>("DecisionPrice").HasColumnType("TEXT");
+                    b.Property<DateTimeOffset?>("DecisionAtUtc").HasColumnType("TEXT");
+                    b.Property<decimal?>("ModeledExecutablePrice").HasColumnType("TEXT");
+                    b.Property<string>("StrategyArtifactId").HasColumnType("TEXT");
+                    b.Property<string>("StrategyVersion").HasColumnType("TEXT");
+                    b.Property<string>("StrategyContentSha256").HasColumnType("TEXT");
+                    b.HasKey("IntentId");
+                    b.ToTable("order_admission_telemetry", (string)null);
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderDispatchAttemptTelemetryRecord", b =>
+                {
+                    b.Property<Guid>("IntentId").HasColumnType("TEXT");
+                    b.Property<int>("AttemptNumber").HasColumnType("INTEGER");
+                    b.Property<DateTimeOffset>("PrePostAtUtc").HasColumnType("TEXT");
+                    b.HasKey("IntentId", "AttemptNumber");
+                    b.ToTable("order_dispatch_attempt_telemetry", (string)null);
                 });
 
             modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderIntentRecord", b =>
@@ -3125,6 +3286,24 @@ namespace TradingFlow.Data.Context.Migrations
                     b.HasOne("TradingFlow.Domain.Persistence.ProductionRun", null)
                         .WithMany()
                         .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderAdmissionTelemetryRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Persistence.OrderIntentRecord", null)
+                        .WithOne()
+                        .HasForeignKey("TradingFlow.Domain.Persistence.OrderAdmissionTelemetryRecord", "IntentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TradingFlow.Domain.Persistence.OrderDispatchAttemptTelemetryRecord", b =>
+                {
+                    b.HasOne("TradingFlow.Domain.Persistence.OrderIntentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("IntentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

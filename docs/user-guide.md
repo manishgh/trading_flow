@@ -19,6 +19,10 @@ The local app currently runs with trading paused and market feeds active. You ca
 
 Groups and screens discover which stocks to examine. Today’s list contains today’s members. A historical test using those same members is diagnostic because it cannot establish which stocks would have met the screen on each past date. [Operating boundaries](operating-boundaries.md#universe-boundary)
 
+Open **Scheduled Finviz capture** under **Saved Finviz screens** or **Settings → Health**. When enabled, the collector observes each saved screen 30 minutes before the regular exchange open and 15 minutes after its actual close. A typical session has slots at 09:00 and 16:15 New York time. Early closes move the second slot, and holidays have no slots. Read **Next slot** and receipt times in New York, Berlin, and UTC, since the time differences can shift around daylight-saving changes.
+
+Compare **Latest slot** with **Last capture received**. A missed or failed slot can leave an earlier receipt as the latest available capture. Read any partial-coverage or unknown-revision reason alongside the receipt. CSV rows are records returned by Finviz. When matching-row membership is unverified, even a CSV with headers and zero rows leaves the matching list unknown. Scheduled observations can run while trading is paused and do not add stocks to a group or grant trading permission. [Scheduled capture design](design-review/2026-11-15/fable-remaining-work.md#next-1-start-retaining-scheduled-finviz-observations)
+
 ## Prepare a list for the next session
 
 While the local app is paused, you can inspect saved workflows, save drafts, and review previously collected evidence. Wait until the preparation worker is enabled before scheduling or requesting a new collection, including a curated revision.
@@ -73,6 +77,12 @@ For a concrete comparison, the existing saved plan 192 compares the monthly ETF 
 
 Read **Research assessment from retained evidence** and the selected run’s evidence gates. That assessment is derived from the currently retained summary; it is not a newly persisted promotion decision. For example, the retained plan 192 assessment can say `FAILED_GATE`. Review which requirements failed or still lack evidence. **Completed** describes job execution; a separate **Result unavailable** notice means the original artifact or its durable publication evidence cannot be verified. Retained monthly records can still be inspected, but do not substitute them for the missing complete artifact. Paper access requires separate authorization. Keep original results, plans, and evidence, including unsuccessful runs. Cleanup of economic-run intermediates requires the recorded review for that exact run. [Research and promotion rules](operating-boundaries.md#promotion-boundary), [Backtest retention](backtesting-research-retention.md)
 
+## Check research attempts and admission
+
+Open **Strategies → Research ledger**. **Registered trials** shows the strategy family, hypothesis, try number, exact definition and dataset identities, published results, and protected partition state. Older trial counts stay unknown where registrations are missing. **Unopened in this registry** applies to a declared, verified protected partition. **Starts and outcomes** shows admission, diagnostic replays, and recorded outcomes, including failures and cancellations.
+
+If a research start is refused, read its recorded reason. A new portfolio family needs a reviewed successful signal study tied to the exact frozen definition and evidence before the first portfolio experiment. A diagnostic replay needs a verified link to the original plan or artifact, or an explicitly reviewed replay. The ledger reads registry metadata, links to the retirement records, and displays the investment success policy as **Draft, awaiting approval**. [Research admission design](design-review/2026-11-15/fable-remaining-work.md#next-4-record-and-show-research-attempts-before-running-them)
+
 ## Start an authorized paper run
 
 **Paper experiment** runs an explicitly registered research experiment under its own identity. Its results cannot promote a strategy. **Paper shadow** requires review and authorization for the exact strategy version and content hash. Both modes can route to the paper broker when enabled. Same-day strategies remain backtest-only under the current operating boundary.
@@ -85,6 +95,12 @@ Read **Research assessment from retained evidence** and the selected run’s evi
 For an approved experiment, open **Experiments → Register an experiment** when an eligible **Research strategy** is available. Review its **Version**. If the approval includes different parameters, use **Change settings (needs a new version)** and enter the approved version and values. Click **Register experiment** and check the resulting identity under **Paper experiment** before starting a run.
 
 For a separately authorized manual paper ticket, **Trading → New order → Open ticket** opens the review workflow. Check the account, symbol, side, quantity, quote, limit, stop, target, session, and expiration shown for the proposed order. **Review order** requests server validation. Only **Confirm paper order**, when offered after a valid review, submits it. For a blocked or stale review, correct the reason and request a new review. [UI operator runbook](ui-operator-runbook.md)
+
+## Read the paper fill comparison
+
+Open a run from **Strategies → Strategy runs → Running and recent** and find **Paper fill comparison**. Read the decision price, modeled executable price, order limit, and admission bid and ask separately. A missing reference shows **Unavailable**. Compare the decision time, quote observation and provider times, local pre-POST attempt, and broker execution time in New York, Berlin, and UTC. The local stamp records an attempt just before the broker call. The admission quote was seen earlier, so check its age, the delay to the attempt, and any freshness warning before using it as a reference.
+
+Expand **Order status and evidence coverage** to see unfilled orders and missing quote, timing, or fill records. **New York fill months** shows the run’s fills by exact strategy version and hash, with a row for each reference price. Each row reports the covered orders, fills and units, the fill-price average weighted by quantity, and the adverse distance in basis points. A higher fill price is adverse for a buy and a lower fill price is adverse for a sell. A partial order can contribute fills to multiple months according to each fill’s execution time. Check coverage before comparing rows. [Paper fill comparison design](design-review/2026-11-15/fable-remaining-work.md#next-3-explain-the-distance-between-a-decision-and-its-paper-fills)
 
 ## Monitor fills and review entry blocks
 

@@ -49,7 +49,6 @@ public sealed class CatalogProviderUpdatedDailyNewsWorkflowTests : IDisposable
             ["XNYS"]);
         var manifests = new[] { newsManifest, barsManifest, sessionsManifest };
         EvidenceResearchRunManifest? registered = null;
-        EvidenceHoldoutConsumption? reserved = null;
 
         var catalog = new Mock<IEvidenceCatalog>(MockBehavior.Strict);
         catalog
@@ -59,27 +58,6 @@ public sealed class CatalogProviderUpdatedDailyNewsWorkflowTests : IDisposable
             .ReturnsAsync((string id, CancellationToken _) =>
                 manifests.SingleOrDefault(manifest =>
                     manifest.DatasetId.Equals(id, StringComparison.Ordinal)));
-        catalog
-            .Setup(value => value.ReserveHoldoutAsync(
-                It.IsAny<EvidenceHoldoutConsumption>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((
-                EvidenceHoldoutConsumption consumption,
-                CancellationToken _) =>
-            {
-                if (reserved is null)
-                {
-                    reserved = consumption;
-                    return new EvidenceCatalogCommitResult(
-                        consumption.HoldoutId,
-                        false);
-                }
-
-                Assert.Equal(reserved, consumption);
-                return new EvidenceCatalogCommitResult(
-                    consumption.HoldoutId,
-                    true);
-            });
         catalog
             .Setup(value => value.RegisterResearchRunAsync(
                 It.IsAny<EvidenceResearchRunManifest>(),
@@ -112,12 +90,14 @@ public sealed class CatalogProviderUpdatedDailyNewsWorkflowTests : IDisposable
         var reader = new Mock<IEvidencePartitionDataReader>(MockBehavior.Strict);
         reader
             .Setup(value => value.ReadNewsRevisionsAsync(
-                newsManifest,
+                It.Is<EvidenceDatasetManifest>(value => value.DatasetId == newsManifest.DatasetId &&
+                    value.Partitions.All(partition => partition.MaximumSourceTimestampUtc < Utc(2026, 7, 4))),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([News()]);
         reader
             .Setup(value => value.ReadMarketBarsAsync(
-                barsManifest,
+                It.Is<EvidenceDatasetManifest>(value => value.DatasetId == barsManifest.DatasetId &&
+                    value.Partitions.All(partition => partition.MaximumSourceTimestampUtc < Utc(2026, 7, 4))),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Bars());
         reader
@@ -135,7 +115,7 @@ public sealed class CatalogProviderUpdatedDailyNewsWorkflowTests : IDisposable
 
         Assert.False(first.AlreadyRegistered);
         Assert.True(replay.AlreadyRegistered);
-        Assert.NotNull(reserved);
+        catalog.Verify(value => value.ReserveHoldoutAsync(It.IsAny<EvidenceHoldoutConsumption>(), It.IsAny<CancellationToken>()), Times.Never);
         Assert.Equal(
             EvidenceCanonicalJson.SerializeToUtf8Bytes(first.Manifest),
             EvidenceCanonicalJson.SerializeToUtf8Bytes(replay.Manifest));
@@ -150,7 +130,7 @@ public sealed class CatalogProviderUpdatedDailyNewsWorkflowTests : IDisposable
         Assert.Single(first.Report.StoryClusters);
         Assert.Single(first.Report.EventObservations);
         Assert.Single(first.Report.HorizonReturns);
-        Assert.Equal(7, first.Manifest.Outputs.Count);
+        Assert.Equal(8, first.Manifest.Outputs.Count);
         catalog.VerifyAll();
         reader.VerifyAll();
     }
@@ -217,7 +197,8 @@ public sealed class CatalogProviderUpdatedDailyNewsWorkflowTests : IDisposable
             new EvidenceResearchRunArtifactPackager(
                 new FileSystemImmutableArtifactStore(
                     new ImmutableArtifactStoreOptions(
-                        Path.Combine(root, "objects")))));
+                        Path.Combine(root, "objects")))),
+            TradingFlow.Data.Evidence.Governance.SqliteResearchTrialRegistry.OpenLocal(root));
 
     private static CatalogProviderUpdatedDailyNewsDiagnosticRequest Request(
         EvidenceDatasetManifest news,

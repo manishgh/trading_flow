@@ -41,6 +41,8 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
     private readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<(EvidenceDatasetManifest Dataset, EvidenceDatasetPartitionManifest Partition)>>>> partitions = new(StringComparer.Ordinal);
     private readonly Lazy<Task<SessionCalendar>> calendar;
     private readonly PartitionCache cache = new(CachedRowLimit);
+    private DateTimeOffset? firstProtectedObservation;
+    private DateTimeOffset? ProtectedCutoff => firstProtectedObservation ?? ResearchObservationBoundary.Current;
 
     /// <summary>
     /// Creates the adapter over a dataset lookup and partition reader; the lookup must return the committed manifest for an ID.
@@ -81,6 +83,21 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
     public string HistoricalEndpointIdentity => "tradingflow-evidence-catalog-v1";
     public string HistoricalParserVersion => "evidence-catalog-market-bars-v1";
     public string HistoricalCalendarIdentity => "evidence-catalog-exchange-sessions:" + config.ExchangeSessionsDatasetId;
+
+    /// <summary>Creates a development reader with a separate cache and a physical holdout boundary.</summary>
+    public EvidenceCatalogMarketDataProvider BeforeProtectedObservations(DateTimeOffset firstProtectedObservationUtc) =>
+        new(config, getDataset, reader, archive) { firstProtectedObservation = firstProtectedObservationUtc };
+
+    /// <summary>Verifies the bound study inputs and reads only manifest metadata about the documented protected price window.</summary>
+    public async Task<bool> CanDeclareSignalStudyHoldoutAsync(EvidenceCatalogProviderConfig expected, DateTimeOffset protectedLastDayUtc,
+        CancellationToken token)
+    {
+        if (config.DailyDatasetId != expected.DailyDatasetId || config.ExchangeSessionsDatasetId != expected.ExchangeSessionsDatasetId ||
+            config.CorporateActionsDatasetId != expected.CorporateActionsDatasetId || config.RankedListSha256 != expected.RankedListSha256)
+            throw new InvalidDataException("The study provider does not match the frozen eligible-list inputs.");
+        var bars = await RequireDatasetAsync(config.DailyDatasetId, EvidenceDatasetKind.MarketBarsAsTraded, token);
+        return bars.Partitions.Any(partition => partition.MaximumSourceTimestampUtc >= protectedLastDayUtc);
+    }
 
     /// <summary>Returns the stored bars of each stock and timeframe in [start, end), in time order, from the frozen datasets only.</summary>
     public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers, IReadOnlyCollection<string> timeframes,
@@ -149,14 +166,20 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
     {
         var symbol = ticker.Trim().ToUpperInvariant();
         var frame = NormalizeTimeframe(timeframe);
+        var cutoff = ProtectedCutoff;
+        var readEnd = cutoff is not null && cutoff < end ? cutoff.Value : end;
+        if (readEnd <= start) return ([], []);
         var sources = (await PartitionsAsync(frame, cancellationToken))
-            .Where(item => item.Partition.Provenance.Symbols.Contains(symbol, StringComparer.Ordinal)).ToArray();
+            .Where(item => item.Partition.Provenance.Symbols.Contains(symbol, StringComparer.Ordinal) &&
+                item.Partition.MinimumSourceTimestampUtc < readEnd && item.Partition.MaximumSourceTimestampUtc >= start)
+            .ToArray();
         var bars = new List<OhlcvBar>();
         foreach (var source in sources)
         {
+            RequireBeforeProtected(source.Partition);
             var rows = await cache.GetOrReadAsync(source.Dataset.DatasetId, source.Partition.PartitionId,
                 () => ReadPartitionAsync(source.Dataset, source.Partition, frame, cancellationToken));
-            if (rows.TryGetValue(symbol, out var stored)) bars.AddRange(stored.Where(bar => bar.Timestamp >= start && bar.Timestamp < end));
+            if (rows.TryGetValue(symbol, out var stored)) bars.AddRange(stored.Where(bar => bar.Timestamp >= start && bar.Timestamp < readEnd));
         }
         var ordered = bars.OrderBy(bar => bar.Timestamp).ToArray();
         for (var index = 1; index < ordered.Length; index++)
@@ -204,7 +227,31 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
         var id = config.CorporateActionsDatasetId ?? throw new InvalidOperationException(
             "providers.evidence_catalog.corporate_actions_dataset is not set; the run cannot see split ex-dates.");
         var dataset = await RequireDatasetAsync(id, EvidenceDatasetKind.CorporateActions, cancellationToken);
-        return ShareSplits.FromCorporateActions(await reader.ReadCorporateActionsAsync(dataset, cancellationToken));
+        var cutoff = ProtectedCutoff;
+        if (cutoff is null)
+            return ShareSplits.FromCorporateActions(await reader.ReadCorporateActionsAsync(dataset, cancellationToken));
+        // Corporate-action source timestamps are receipt times, often years after an ex-date. The verified
+        // provider query and Parquet row checks bound these partitions by corporate-action process date.
+        var protectedDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(cutoff.Value, NewYork).DateTime);
+        var processDateBoundary = new DateTimeOffset(protectedDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var parts = dataset.Partitions.Where(partition => partition.Provenance.RequestedStartUtc < processDateBoundary).ToArray();
+        if (parts.Any(partition => partition.Provenance.RequestedEndUtc > processDateBoundary))
+            throw new InvalidDataException("A corporate-action partition spans protected process dates. Use a separately published development partition.");
+        if (parts.Length == 0)
+            throw new InvalidDataException("The frozen corporate-action dataset has no verified process-date partition before the protected window.");
+        var development = new EvidenceDatasetManifest(dataset.Kind, dataset.SchemaVersion, dataset.CreatedAtUtc, dataset.CollectionJobId,
+            dataset.CollectionPlanHash, dataset.ConfigHash, dataset.CodeVersion, dataset.NormalizerVersion, dataset.DataFeed, parts,
+            dataset.Quality, dataset.Attributes);
+        var actions = await reader.ReadCorporateActionsAsync(development, cancellationToken);
+        return ShareSplits.FromCorporateActions(actions.Where(action => (action.ExDate ?? action.EffectiveDate ?? action.ProcessDate) < protectedDate));
+    }
+
+    /// <summary>Refuses to open any physical partition that would reveal observations after the locked boundary.</summary>
+    private void RequireBeforeProtected(EvidenceDatasetPartitionManifest partition)
+    {
+        if (ProtectedCutoff is { } cutoff && partition.MaximumSourceTimestampUtc >= cutoff)
+            throw new InvalidDataException($"Evidence partition '{partition.PartitionId}' crosses the protected research boundary {cutoff:O}. " +
+                "Use a separately published development partition with no holdout observations.");
     }
 
     /// <summary>

@@ -1,8 +1,10 @@
 using System.Text.Json;
 using TradingFlow.Backtesting;
+using TradingFlow.Backtesting.Artifacts;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Optimization;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Storage;
 
@@ -12,6 +14,13 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
 {
     private readonly IArtifactWriter _artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
 
+    /// <summary>Freezes exactly the complete permutation order used by the optimizer before market preparation.</summary>
+    public static IReadOnlyList<IReadOnlyDictionary<string, object>> FreezePermutations(OptimizationConfig config, BacktestRunConfig run)
+    {
+        ValidateConfiguration(config, run);
+        return EnumeratePermutations(config.Parameters).ToArray();
+    }
+
     /// <summary>Rejects unsupported objectives and excessive work before allocating a workspace or requesting market data.</summary>
     public async Task<OptimizationResult> OptimizeAsync(
         string optimizationConfigPath,
@@ -19,7 +28,8 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         IProgress<BacktestProgress>? progress = null,
         IProgress<OptimizationProgress>? optimizationProgress = null,
         string? durableAttemptRoot = null,
-        DateTimeOffset? evaluationCutoffUtc = null)
+        DateTimeOffset? evaluationCutoffUtc = null,
+        bool captureResearchEvidence = false)
     {
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
         var run = yamlReader.ReadBacktestRun(config.BacktestConfigPath);
@@ -31,13 +41,14 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
         var workspace = runner.CreateWorkspace(run, Path.Combine(resultOwner, "optimization.json"));
         var scoped = new StrategyOptimizer(yamlReader, workspace.Runner, _artifactWriter);
         return await workspace.ExecuteAsync(() => scoped.OptimizeCoreAsync(optimizationConfigPath, cancellationToken,
-            progress, optimizationProgress, durableAttemptRoot, evaluationCutoffUtc, workspace.Run, baseStrategy));
+            progress, optimizationProgress, durableAttemptRoot, evaluationCutoffUtc, workspace.Run, baseStrategy, captureResearchEvidence));
     }
 
     /// <summary>Reuses prepared market state and evaluates one bounded parameter combination at a time.</summary>
     private async Task<OptimizationResult> OptimizeCoreAsync(string optimizationConfigPath, CancellationToken cancellationToken,
         IProgress<BacktestProgress>? progress, IProgress<OptimizationProgress>? optimizationProgress,
-        string? durableAttemptRoot, DateTimeOffset? evaluationCutoffUtc, BacktestRunConfig scopedRun, StrategyDefinition baseStrategy)
+        string? durableAttemptRoot, DateTimeOffset? evaluationCutoffUtc, BacktestRunConfig scopedRun, StrategyDefinition baseStrategy,
+        bool captureResearchEvidence)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var config = yamlReader.ReadOptimizationConfig(optimizationConfigPath);
@@ -45,6 +56,7 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
 
         var permutationCount = ValidateConfiguration(config, backtestConfig);
         var runs = new List<OptimizationRun>();
+        var evidence = captureResearchEvidence ? new List<OptimizationPermutationEvidence>(permutationCount) : null;
         progress?.Report(BacktestProgress.StageOnly(
             "optimization_prepare_market",
             $"Preparing candles and indicators once for {permutationCount} optimization permutation(s)."));
@@ -118,6 +130,12 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
                 result.StrategyResults.FirstOrDefault()?.WinningTradeCount ?? 0,
                 result.StrategyResults.FirstOrDefault()?.LosingTradeCount ?? 0,
                 result);
+            if (evidence is not null)
+            {
+                var publication = await BacktestResearchPublication.VerifyAsync(result.ResultPath, cancellationToken, result.ArtifactManifestPath);
+                evidence.Add(new(ResearchFileStart.OptimizationVariantKey(i, p), optimizationRun.MetricValue, result.ResultPath,
+                    ResearchStartIdentity.HashFile(result.ResultPath), publication));
+            }
             runs.Add(optimizationRun);
             // Only selected results are published; do not retain every full backtest result while searching.
             runs = RankRuns(runs, config.TopNResults).ToList();
@@ -142,7 +160,8 @@ public sealed class StrategyOptimizer(SimpleYamlReader yamlReader, BacktestRunne
             startedAt,
             DateTimeOffset.UtcNow,
             permutationCount,
-            topRuns);
+            topRuns,
+            evidence);
 
         var resultPath = durableAttemptRoot is null
             ? Path.Combine(backtestConfig.ResultsRoot, "optimization", $"{config.RunName}_summary.json")

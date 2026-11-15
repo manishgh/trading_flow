@@ -45,6 +45,7 @@ public sealed class AlpacaTradeUpdateStreamer : ITradeUpdateStreamer, IDisposabl
 
 public static class AlpacaTradeUpdateParser
 {
+    // Preserve both the required lifecycle stamp and the optional broker execution clock.
     public static OrderUpdate? Parse(System.Text.Json.JsonElement element)
     {
         if (!element.TryGetProperty("stream", out var streamProperty) ||
@@ -96,7 +97,19 @@ public static class AlpacaTradeUpdateParser
             executionId,
             timestamp.ToUniversalTime(),
             BrokerUpdateSource.TradeStream,
-            lastFillPrice);
+            lastFillPrice,
+            isFill ? ReadFillClock(data) : null);
+    }
+
+    // An absent, malformed or timezone-free execution clock never changes fill handling.
+    private static DateTimeOffset? ReadFillClock(System.Text.Json.JsonElement data)
+    {
+        if (data.TryGetProperty("timestamp", out var property) && property.ValueKind == System.Text.Json.JsonValueKind.String &&
+            property.GetString() is { Length: >= 20 } value &&
+            (value.EndsWith('Z') || value[^6] is '+' or '-') &&
+            property.TryGetDateTimeOffset(out var timestamp))
+            return timestamp.ToUniversalTime();
+        return null;
     }
 
     private static string RequireString(System.Text.Json.JsonElement element, string propertyName)

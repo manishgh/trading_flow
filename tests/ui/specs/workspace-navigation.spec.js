@@ -19,7 +19,7 @@ for(const width of [320,412,1280,1440]) test('workspace navigation stays availab
  }
  await navigation().getByRole('link',{name:'Strategies',exact:true}).click();
  const strategyViews=page.getByRole('navigation',{name:'Strategy views'});
- await expect(strategyViews.getByRole('link')).toHaveText(['Strategy runs','Backtests']);
+ await expect(strategyViews.getByRole('link')).toHaveText(['Strategy runs','Backtests','Research ledger']);
  await expect(strategyViews.getByRole('link',{name:'Strategy runs',exact:true})).toHaveAttribute('aria-current','page');
  await strategyViews.getByRole('link',{name:'Backtests',exact:true}).click();
  await expect(page).toHaveURL(/\/Backtests$/);
@@ -30,6 +30,25 @@ for(const width of [320,412,1280,1440]) test('workspace navigation stays availab
   await page.goto(path);await expect(navigation().getByRole('link',{name,exact:true})).toHaveAttribute('aria-current','page');
  }
  await page.goto('/Desk');await page.screenshot({path:testInfo.outputPath('workspace-'+width+'.png'),fullPage:true});
+});
+
+test('research ledger shows unknown coverage and policy evidence without mutating jobs',async({page})=>{
+ await signIn(page);await page.goto('/Backtests');
+ const writes=[];
+ page.on('request',request=>{if(!['GET','HEAD'].includes(request.method()))writes.push(request.url());});
+ const ledger=page.getByRole('navigation',{name:'Strategy views'}).getByRole('link',{name:'Research ledger',exact:true});
+ await ledger.click();
+ await expect(page).toHaveURL(/\/ResearchLedger$/);
+ await expect(ledger).toHaveAttribute('aria-current','page');
+ await expect(page.getByRole('heading',{name:'Research ledger',exact:true})).toBeVisible();
+ await expect(page.getByText('Historical trial counts are unknown where exact registrations are missing.')).toBeVisible();
+ await expect(page.getByText('No verified trial registrations are available.')).toBeVisible();
+ await expect(page.getByText('No durable starts are recorded.')).toBeVisible();
+ await expect(page.getByText('Draft, awaiting approval')).toBeVisible();
+ const draft=await page.request.get(await page.getByRole('link',{name:'Read the success-policy draft'}).getAttribute('href'));
+ expect(draft.ok()).toBeTruthy();
+ expect(await draft.text()).toContain('Status: draft');
+ expect(writes).toEqual([]);
 });
 
 test('audit return keeps its candidate run',async({page})=>{

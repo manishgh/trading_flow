@@ -57,6 +57,11 @@
     <p><a asp-page="/AccountLossReview">Review paper account loss limits</a></p>
 }
 
+@if (Model.ScreenCapture is { } captureStatus)
+{
+    <partial name="_FinvizCaptureStatus" model="captureStatus" />
+}
+
 @if (report is null)
 {
     <p class="empty-state">Operational state has not loaded.</p>

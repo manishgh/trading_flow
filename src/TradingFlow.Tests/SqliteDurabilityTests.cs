@@ -14,6 +14,8 @@ using TradingFlow.Domain.Orders;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Web.Models;
+using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
 
@@ -89,6 +91,123 @@ public sealed class SqliteDurabilityTests
         Assert.Equal(1, replay.Intent.SequenceNumber);
         await using var verification = new TradingFlowDbContext(options);
         Assert.Equal(1, await verification.OrderIntents.CountAsync());
+    }
+
+    // Run the actual journal and paper read path with delayed admission, retries, duplicate fills and two New York months.
+    [Theory]
+    [InlineData("paper")]
+    [InlineData("paper_shadow")]
+    [InlineData("paper_experiment")]
+    public async Task PaperExecutionTelemetry_PreservesFirstQuoteAndSeparatesUnitFillsAndBaselines(string profile)
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        var clock = new MutableTimeProvider(CandidateReservationTime);
+        var run = CreateRun(Guid.NewGuid());
+        run.Profile = profile;
+        var candidateId = Guid.NewGuid();
+        var semantic = new { orderPlan = new { triggerReferencePrice = 99m, triggeredAtUtc = clock.GetUtcNow().AddMinutes(-1) } };
+        var semanticHash = EvidenceCanonicalJson.ComputeSha256(semantic);
+        var identity = new StrategyArtifactIdentity("SWGA", "1.0.0", new string('d', 64));
+        var receipt = new AdmissionQuoteReceipt("receipt-1", new string('a', 64), clock.GetUtcNow().AddMilliseconds(-20));
+        var quote = new AdmissionOrderQuote(99.99m, 100m, "sip", clock.GetUtcNow().AddMilliseconds(-100),
+            clock.GetUtcNow(), 500, receipt);
+        // Reviewed strategy entry has no caller-supplied decision price; the exact persisted trigger supplies it.
+        var admission = new OrderAdmissionEvidence(quote, null, identity);
+        var reservation = CreateCandidateReservation(Guid.NewGuid(), candidateId, "MSFT", semanticHash)
+            with { AdmissionEvidence = admission };
+        await SeedTriggeredCandidateAsync(options, run, candidateId, "MSFT", semanticHash,
+            evidenceJson: System.Text.Json.JsonSerializer.Serialize(new { semantic }));
+        await using (var seeded = new TradingFlowDbContext(options))
+        {
+            var trigger = await seeded.CandidateTransitions.SingleAsync(row => row.CandidateId == candidateId && row.Sequence == 4);
+            trigger.Source = "strategy_decision_kernel";
+            trigger.OccurredAtUtc = semantic.orderPlan.triggeredAtUtc;
+            (await seeded.Candidates.SingleAsync(row => row.CandidateId == candidateId)).RevalidatedAtUtc = trigger.OccurredAtUtc;
+            await seeded.SaveChangesAsync();
+        }
+        var intents = new SqliteOrderIntentRepository(factory, clock);
+        var records = new SqliteOrderEventRepository(factory);
+        var lifecycle = new OrderLifecycleService(records, clock);
+        var intent = (await intents.ReserveAsync(run, reservation)).Intent;
+        var replay = await intents.ReserveAsync(run, reservation with
+        {
+            AdmissionEvidence = admission with { Quote = quote with { Ask = 120m, ObservedAtUtc = quote.ObservedAtUtc.AddSeconds(1) } }
+        });
+        Assert.False(replay.Created);
+        Assert.Equal(reservation.RequestJson, replay.Intent.RequestJson);
+        await intents.ReserveAsync(run, CreateReservation(Guid.NewGuid(), "NVDA"));
+        await records.TransitionAsync(new(intent.ClientOrderId, OrderState.Intent, OrderState.Submitted, "engine",
+            clock.GetUtcNow(), PayloadJson: intent.RequestJson));
+        var lease = await intents.TryAcquireDispatchLeaseAsync(intent.IntentId, intent.AccountId, "fixture", TimeSpan.FromSeconds(30));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await intents.RecordDispatchAttemptAsync(intent.IntentId, lease!.LeaseToken);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await intents.RecordDispatchAttemptAsync(intent.IntentId, lease.LeaseToken);
+
+        var july = new DateTimeOffset(2026, 8, 1, 3, 59, 0, TimeSpan.Zero);
+        var august = july.AddMinutes(2);
+        await ObservePaperFillAsync(lifecycle, intent, "partial-one", OrderStatus.PartiallyFilled, july, july.AddMinutes(2), 4, 4, 100, 100);
+        await ObservePaperFillAsync(lifecycle, intent, "partial-one", OrderStatus.PartiallyFilled, july, july.AddMinutes(2), 4, 4, 100, 100);
+        await ObservePaperFillAsync(lifecycle, intent, "partial-two", OrderStatus.PartiallyFilled, august, august.AddSeconds(1), 3, 7, 102, 706m / 7m);
+        await ObservePaperFillAsync(lifecycle, intent, "legacy-fill", OrderStatus.Filled, null, august.AddSeconds(2), 3, 10, 110, 103.6m);
+
+        var view = new PaperExecutionComparisonService(factory, NullLogger<PaperExecutionComparisonService>.Instance);
+        var result = await view.ReadAsync(run.RunId, default);
+        Assert.Null(result.UnavailableReason);
+        var detail = Assert.Single(result.Orders, order => order.Intent.IntentId == intent.IntentId);
+        Assert.Equal(identity, detail.Identity);
+        Assert.Equal("receipt-1", detail.Admission!.QuoteReceiptId);
+        Assert.Equal(100m, detail.Admission.Ask);
+        Assert.Equal(quote.ObservedAtUtc, detail.Admission.QuoteObservedAtUtc);
+        Assert.Equal([1, 2], detail.Attempts.Select(attempt => attempt.AttemptNumber));
+        Assert.Equal(TimeSpan.FromSeconds(61), detail.DecisionToFirstAttempt);
+        Assert.Equal(new PaperDispatchQuoteTiming(TimeSpan.FromMilliseconds(1100), TimeSpan.FromSeconds(1), true),
+            detail.QuoteTiming(detail.FirstPrePostAtUtc));
+        Assert.Equal([3m, 4m, 3m], detail.Fills.Select(fill => fill.Quantity));
+        Assert.Equal(103.6m, detail.WeightedFillPrice);
+        var manual = Assert.Single(result.Orders, order => order.Intent.Symbol == "NVDA");
+        Assert.Null(manual.Admission);
+        Assert.Null(manual.Reference(PaperPriceReference.Decision));
+        Assert.Equal(1, Assert.Single(result.Coverage, row => row.State == "FILLED").FillsWithoutClock);
+
+        var ask = result.Months.Where(row => row.ReferenceKind == PaperPriceReference.AdmissionAsk).ToArray();
+        Assert.Equal([("2026-07", 4m, 0m), ("2026-08", 3m, 200m)],
+            ask.Select(row => (row.Month, row.FillQuantity, row.AdverseBps!.Value)));
+        Assert.All(result.Months.Where(row => row.ReferenceKind == PaperPriceReference.ModeledExecutable),
+            row => Assert.Null(row.AdverseBps));
+        Assert.Equal(2, result.Months.Count(row => row.ReferenceKind == PaperPriceReference.Decision && row.AdverseBps > 0));
+    }
+
+    // A replayed broker update carries its execution ID and delta through the unchanged order lifecycle.
+    private static Task<OrderStateSnapshot> ObservePaperFillAsync(OrderLifecycleService lifecycle, OrderIntentRecord intent,
+        string executionId, OrderStatus status, DateTimeOffset? sourceTimeUtc, DateTimeOffset lifecycleTimeUtc,
+        decimal units, decimal cumulativeUnits, decimal price, decimal averagePrice) =>
+        lifecycle.ApplyBrokerUpdateWithFillAsync(new("broker-fixture", intent.ClientOrderId, intent.Symbol, intent.Side,
+            status, cumulativeUnits, averagePrice, units, cumulativeUnits, executionId, lifecycleTimeUtc,
+            BrokerUpdateSource.TradeStream, price, sourceTimeUtc),
+            new(intent.Symbol, intent.Side, cumulativeUnits, averagePrice, executionId, cumulativeUnits, units, price));
+
+    // A failed telemetry write path is irrelevant to an independently fenced protective dispatch.
+    [Fact]
+    public async Task PaperExecutionTelemetry_FailingAttemptTableDoesNotDisableProtection()
+    {
+        await using var database = new TemporarySqliteDatabase();
+        var options = database.CreateOptions(withDurabilityInterceptor: true);
+        var factory = new TestDbContextFactory(options);
+        await InitializeAsync(options);
+        var intents = new SqliteOrderIntentRepository(factory, new FixedTimeProvider(CandidateReservationTime));
+        var reserved = (await intents.ReserveAsync(CreateRun(Guid.NewGuid()), CreateProtectiveReservation(Guid.NewGuid(), "MSFT"))).Intent;
+        await using var context = new TradingFlowDbContext(options);
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER fail_attempt_telemetry BEFORE INSERT ON order_dispatch_attempt_telemetry
+            BEGIN SELECT RAISE(ABORT, 'fixture rejected telemetry'); END;
+            """);
+        var lease = await intents.TryAcquireDispatchLeaseAsync(reserved.IntentId, reserved.AccountId, "fixture", TimeSpan.FromSeconds(30));
+        var attempted = await intents.RecordDispatchAttemptAsync(reserved.IntentId, lease!.LeaseToken);
+        Assert.Equal(1, attempted.DispatchAttemptCount);
+        Assert.Empty(await context.Set<OrderDispatchAttemptTelemetryRecord>().AsNoTracking().ToArrayAsync());
     }
 
     [Fact]
@@ -258,6 +377,10 @@ public sealed class SqliteDurabilityTests
         }
         broker.Verify(client => client.SubmitOrderAsync(
             It.IsAny<BrokerEntryOrder>(), It.IsAny<CancellationToken>()), Times.Never);
+        await using var verification = new TradingFlowDbContext(options);
+        var attempt = Assert.Single(await verification.Set<OrderDispatchAttemptTelemetryRecord>().AsNoTracking().ToArrayAsync());
+        Assert.Equal(intent.IntentId, attempt.IntentId);
+        Assert.Equal(1, attempt.AttemptNumber);
     }
 
     [Fact]

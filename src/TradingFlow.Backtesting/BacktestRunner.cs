@@ -1672,15 +1672,28 @@ public sealed partial class BacktestRunner(
             result with { ResultPath = exclusivePath },
             artifacts);
         var candidateAuditPath = Path.ChangeExtension(exclusivePath, ".candidate-decisions.json");
+        var candidateEvidencePath = Path.ChangeExtension(exclusivePath, ".candidate-evidence.sqlite");
+        var candidateEvidenceStage = Path.Combine(TransientArtifactRoot, $"candidate-evidence-{artifactSetId}.sqlite");
         long candidateAuditCount = 0;
-        await _artifactWriter.WriteStreamExclusiveAsync(
-            candidateAuditPath,
-            async (stream, token) =>
-            {
-                candidateAuditCount = await CandidateAuditExporter.WriteAsync(
-                    stream, candidateAuditJournals, token);
-            },
-            cancellationToken);
+        long candidateEvidenceCount;
+        using (var evidence = new TradingFlow.Data.Backtesting.CandidateEvidenceIndex(candidateEvidenceStage, artifactSetId, create: true))
+        {
+            await _artifactWriter.WriteStreamExclusiveAsync(
+                candidateAuditPath,
+                async (stream, token) =>
+                {
+                    candidateAuditCount = await CandidateAuditExporter.WriteAsync(
+                        stream, candidateAuditJournals, evidence, token);
+                },
+                cancellationToken);
+            candidateEvidenceCount = evidence.Count();
+            evidence.Complete();
+        }
+        await _artifactWriter.WriteStreamExclusiveAsync(candidateEvidencePath, async (stream, token) =>
+        {
+            await using var input = File.OpenRead(candidateEvidenceStage);
+            await input.CopyToAsync(stream, token);
+        }, cancellationToken);
         var candidateHypothesisAuditPath = Path.ChangeExtension(exclusivePath, ".candidate-hypotheses.json");
         await _artifactWriter.WriteStreamExclusiveAsync(
             candidateHypothesisAuditPath,
@@ -1707,6 +1720,7 @@ public sealed partial class BacktestRunner(
         var evidenceReferences = new List<BacktestArtifactReference>
         {
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "candidate_decisions", candidateAuditPath, candidateAuditCount, cancellationToken),
+            await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "candidate_evidence", candidateEvidencePath, candidateEvidenceCount, cancellationToken),
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "candidate_hypotheses", candidateHypothesisAuditPath, candidateHypothesisJournal.Count, cancellationToken),
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_portfolio_execution", portfolioExecutionAuditPath, portfolioExecutionJournal.Count, cancellationToken),
             await BacktestArtifactIntegrity.CreateReferenceAsync(artifactRoot, "unified_completed_trades", unifiedCompletedTradesPath, unifiedCompletedTrades.Count, cancellationToken)
@@ -1819,7 +1833,8 @@ public sealed partial class BacktestRunner(
                     DateTimeOffset.UtcNow,
                     true,
                     coverage,
-                    manifestArtifacts),
+                    manifestArtifacts,
+                    TradingFlow.Data.Backtesting.CandidateEvidenceCodec.EncodingId),
                 cancellationToken: token),
             cancellationToken);
         return new BacktestArtifactWriteResult(
@@ -1874,6 +1889,7 @@ public sealed partial class BacktestRunner(
     private static bool IsResultPathAvailable(string path) =>
         !File.Exists(path) &&
         !File.Exists(Path.ChangeExtension(path, ".candidate-decisions.json")) &&
+        !File.Exists(Path.ChangeExtension(path, ".candidate-evidence.sqlite")) &&
         !File.Exists(Path.ChangeExtension(path, ".candidate-hypotheses.json")) &&
         !File.Exists(Path.ChangeExtension(path, ".portfolio-execution.json")) &&
         !File.Exists(Path.ChangeExtension(path, ".unified-completed-trades.json")) &&

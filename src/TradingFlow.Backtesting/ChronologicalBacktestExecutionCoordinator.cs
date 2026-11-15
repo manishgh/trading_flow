@@ -276,8 +276,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         }).ToArray();
         var pending = _scheduled.Where(t => !t.IsTerminal && t.EntryFilledQuantity > t.ExitFilledQuantity &&
                 t.Plan.Candidate.PendingExitDecision is { } exit && exit.KnownAtUtc <= cutoffUtc)
-            .Select(t => new BacktestPendingExit(t.Identity, t.Plan.Candidate.StrategyId, t.Plan.Candidate.Ticker,
-                t.Plan.Candidate.PendingExitDecision!.KnownAtUtc, t.Plan.Candidate.PendingExitDecision.Reason)).ToArray();
+            .Select(t => DescribePendingExit(t, t.Plan.Candidate.PendingExitDecision!, cutoffUtc)).ToArray();
         var snapshot = new BacktestPortfolioState(NativeDailySessionLedger.ValuationBasis, cutoffUtc.ToUniversalTime(), _scheduled.Count,
             _scheduled.Count(t => t.EntryFilledQuantity > 0), _completed.Count, _fills.ToArray(), positions, orders, pending, [])
         {
@@ -289,6 +288,15 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         AppendCutoffEvidence(snapshot);
         return snapshot;
     }
+
+    // Copy the observed conditions only when the admitted position actually reached the decision close.
+    private static BacktestPendingExit DescribePendingExit(ExecutionTracker tracker, BacktestPendingExitDecision exit,
+        DateTimeOffset cutoffUtc) =>
+        new(tracker.Identity, tracker.Plan.Candidate.StrategyId, tracker.Plan.Candidate.Ticker, exit.KnownAtUtc, exit.Reason)
+        {
+            ExitEvidence = BacktestDecisionTiming.EvidenceWhileHeld(exit.ExitEvidence,
+                tracker.EntryTiming?.EconomicTimestampUtc ?? tracker.EntrySourceTimestampUtc, cutoffUtc)
+        };
 
     // Retain actual command state independently of later result projection for artifact reconciliation.
     private void AppendCutoffEvidence(BacktestPortfolioState snapshot)
@@ -934,7 +942,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         exitReason.Equals("trailing_stop", StringComparison.OrdinalIgnoreCase) ||
         exitReason.StartsWith("stop_loss", StringComparison.OrdinalIgnoreCase);
 
-    // Journal the events in simulator order, using one timing observation for each report and fill event.
+    // Journal in simulator order, retaining the source intervals for fills whose intrabar time is unavailable.
     private void ApplyEvents(IReadOnlyCollection<SimulatedExecutionEvent> events, OhlcvBar bar,
         DateTimeOffset availableAtUtc, bool priceAtClose = false)
     {
@@ -960,6 +968,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             if (executionEvent.ClientOrderId.Equals(tracker.EntryClientOrderId, StringComparison.Ordinal))
             {
                 tracker.EntryTiming ??= timing;
+                tracker.EntrySourceTimestampUtc ??= bar.Timestamp;
                 tracker.EntryFilledQuantity += executionEvent.LastFillQuantity;
                 tracker.EntryFilledNotional += executionEvent.LastFillQuantity * executionEvent.FillPrice!.Value;
                 tracker.EntryLiquidityVolume += bar.Volume;
@@ -973,6 +982,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 tracker.ExitFilledNotional += executionEvent.LastFillQuantity * executionEvent.FillPrice!.Value;
                 tracker.LastExitFillUtc = executionEvent.OccurredAtUtc;
                 tracker.ExitTiming = timing;
+                tracker.ExitSourceTimestampUtc = bar.Timestamp;
             }
 
             tracker.ExecutionFees += executionEvent.Fees;
@@ -1017,7 +1027,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             processing, availableAtUtc);
     }
 
-    // Publishes first entry and last exit timing beside the original stamps used by validation and audit.
+    // Publish actual fill clocks and any completed-close decision observed during the holding.
     private void FinalizeTerminalTrackers()
     {
         foreach (var tracker in _active
@@ -1064,7 +1074,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 candidate.CandidateId)
             {
                 EntryFillTiming = tracker.EntryTiming,
-                ExitFillTiming = tracker.ExitTiming
+                ExitFillTiming = tracker.ExitTiming,
+                ExitEvidence = BacktestDecisionTiming.EvidenceWhileHeld(
+                    candidate.ExitEvidence ?? candidate.PendingExitDecision?.ExitEvidence,
+                    tracker.EntryTiming?.EconomicTimestampUtc ?? tracker.EntrySourceTimestampUtc,
+                    tracker.ExitTiming?.EconomicTimestampUtc ?? tracker.ExitSourceTimestampUtc)
             });
         }
     }
@@ -1300,6 +1314,8 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public DateTimeOffset? FirstEntryFillUtc { get; set; }
         public BacktestFillTiming? EntryTiming { get; set; }
         public BacktestFillTiming? ExitTiming { get; set; }
+        public DateTimeOffset? EntrySourceTimestampUtc { get; set; }
+        public DateTimeOffset? ExitSourceTimestampUtc { get; set; }
         public DateTimeOffset? LastExitFillUtc { get; set; }
         public string? FilledExitReason { get; private set; }
 

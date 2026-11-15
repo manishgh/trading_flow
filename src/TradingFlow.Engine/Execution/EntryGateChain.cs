@@ -61,7 +61,11 @@ public sealed record EntryGateApproval(
     EquityTradingSession Session,
     bool SubmitOutsideRegularHours,
     DateTimeOffset DispatchExpiresAtUtc,
-    PortfolioRiskReservationRequest PortfolioRisk);
+    PortfolioRiskReservationRequest PortfolioRisk)
+{
+    public BrokerMarketObservation? MarketObservation { get; init; }
+    public int? QuoteFreshnessLimitMilliseconds { get; init; }
+}
 
 /// <summary>
 /// Collects authoritative evidence lazily in binding order, persists every evaluated
@@ -579,7 +583,11 @@ public sealed class EntryGateChain(
                                 reservationAccount.RequestedAtUtc.ToUniversalTime(),
                                 reservationAccount.ObservedAtUtc.ToUniversalTime(),
                                 fillHistory,
-                                options.AccountSnapshotMaxAgeSeconds)),
+                                options.AccountSnapshotMaxAgeSeconds))
+                        {
+                            MarketObservation = market,
+                            QuoteFreshnessLimitMilliseconds = options.QuoteMaxAgeMilliseconds
+                        },
                         token);
                 },
                 cancellationToken);

@@ -1,11 +1,13 @@
 using System.Globalization;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Abstractions;
 
 namespace TradingFlow.Data.Csv;
 
 public sealed class CsvMarketDataProvider(string normalizedRoot) : IMarketDataProvider
 {
+    /// <summary>Reads declared CSV inputs only when no protected partition requires physically bounded source files.</summary>
     public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
         IReadOnlyCollection<string> tickers,
         IReadOnlyCollection<string> timeframes,
@@ -13,6 +15,8 @@ public sealed class CsvMarketDataProvider(string normalizedRoot) : IMarketDataPr
         DateTimeOffset end,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (ResearchObservationBoundary.Current is not null)
+            throw new InvalidDataException("The CSV source has no verified physical date bounds. Use frozen development-only catalog evidence for this research replay.");
         foreach (var ticker in tickers)
         {
             foreach (var timeframe in timeframes)

@@ -1,4 +1,5 @@
 using TradingFlow.Domain.Backtesting;
+using TradingFlow.Domain.Research;
 
 namespace TradingFlow.Domain.Optimization;
 
@@ -9,7 +10,12 @@ public sealed record OptimizationResult(
     DateTimeOffset StartedAt,
     DateTimeOffset FinishedAt,
     int TotalPermutations,
-    IReadOnlyList<OptimizationRun> TopRuns);
+    IReadOnlyList<OptimizationRun> TopRuns,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<OptimizationPermutationEvidence>? FrozenPermutationEvidence = null);
+
+public sealed record OptimizationPermutationEvidence(string VariantKey, decimal MetricValue, string ResultPath, string ResultSha256,
+    ResearchPublicationEvidence Publication);
 
 public sealed record OptimizationRun(
     int Rank,

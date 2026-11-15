@@ -92,8 +92,8 @@ internal sealed class BacktestMatrixFixture : IAsyncDisposable
                 10000m, 1m, 25m, 5, "use_cache", "full", "matrix", "matrix.yaml");
             fixture.Jobs = new(fixture.Database);
             var limits = new RunQueueLimits(32, 16);
-            var workflow = new RunWorkflowService(fixture.Jobs, fixture.Database.Workflows, new StrategyIdentityResolver(catalog), configuration, clock, limits);
-            fixture.Plans = new(fixture.Database.Workflows, fixture.Database.Workflows, fixture.Jobs, workflow, configuration, limits, clock);
+            var workflow = new RunWorkflowService(fixture.Jobs, fixture.Database.Workflows, new StrategyIdentityResolver(catalog), configuration, clock, limits, SyntheticResearchQueue.For(fixture.Jobs));
+            fixture.Plans = new(fixture.Database.Workflows, fixture.Database.Workflows, workflow, configuration, limits, clock);
             return fixture;
         }
         catch
@@ -165,7 +165,7 @@ internal sealed class BacktestMatrixFixture : IAsyncDisposable
             preparedDataBindingStore: new PreparedMarketDataEventBindingStore(Database.Workflows));
         IBacktestRunExecutor executor = observe is null ? new BacktestRunExecutor(runner) : new ObservedExecutor(runner, observe);
         return new(executor, Jobs, reader,
-            BacktestJobServiceOptions.Default with { MaximumPendingJobs = 32, RetainedTerminalJobs = 32 }, artifacts);
+            BacktestJobServiceOptions.Default with { MaximumPendingJobs = 32, RetainedTerminalJobs = 32 }, artifacts, SyntheticResearchQueue.For(Jobs));
     }
 
     /// <summary>Replays one accepted book through the existing injected-source path for prepared-versus-direct decision and monthly parity.</summary>

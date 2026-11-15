@@ -9,6 +9,7 @@ using TradingFlow.Domain.Earnings;
 using TradingFlow.Domain.Portfolio;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.ScreenCaptures;
 
 namespace TradingFlow.Data.Context;
 
@@ -27,6 +28,9 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     public DbSet<WishlistBulkCommand> WishlistBulkCommands => Set<WishlistBulkCommand>();
     public DbSet<WishlistSignal> WishlistSignals => Set<WishlistSignal>();
     public DbSet<ScreenerPreset> ScreenerPresets => Set<ScreenerPreset>();
+    public DbSet<FinvizCaptureSlot> FinvizCaptureSlots => Set<FinvizCaptureSlot>();
+    public DbSet<FinvizCaptureAttempt> FinvizCaptureAttempts => Set<FinvizCaptureAttempt>();
+    public DbSet<FinvizCaptureSchedule> FinvizCaptureSchedules => Set<FinvizCaptureSchedule>();
     public DbSet<AdvisoryPortfolio> AdvisoryPortfolios => Set<AdvisoryPortfolio>();
     public DbSet<AdvisoryPosition> AdvisoryPositions => Set<AdvisoryPosition>();
     public DbSet<ProductionRun> ProductionRuns => Set<ProductionRun>();
@@ -61,6 +65,23 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<FinvizCaptureSlot>(entity =>
+        {
+            entity.ToTable("finviz_capture_slots");
+            entity.HasIndex(slot => new { slot.PresetId, slot.SessionDate, slot.Kind }).IsUnique();
+            entity.HasIndex(slot => new { slot.SessionDate, slot.Kind });
+        });
+        modelBuilder.Entity<FinvizCaptureAttempt>(entity =>
+        {
+            entity.ToTable("finviz_capture_attempts");
+            entity.HasIndex(attempt => new { attempt.SlotId, attempt.Number }).IsUnique();
+            entity.HasOne<FinvizCaptureSlot>().WithMany().HasForeignKey(attempt => attempt.SlotId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<FinvizCaptureSchedule>(entity =>
+        {
+            entity.ToTable("finviz_capture_schedule");
+            entity.Property(schedule => schedule.Id).ValueGeneratedNever();
+        });
         modelBuilder.Entity<TradingFlow.Domain.Preparation.PreparationScheduleCursor>(e=>{e.ToTable("preparation_schedule_cursors");e.HasKey(x=>x.WorkflowId);});
         modelBuilder.Entity<TradingFlow.Domain.Preparation.PreparationDefinitionRecord>(e => {
             e.ToTable("preparation_definitions"); e.HasKey(x => x.Id);

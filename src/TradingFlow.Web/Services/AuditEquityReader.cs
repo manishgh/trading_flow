@@ -25,7 +25,7 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
             ConfineConfig(paths, job.ConfigPath);
             var root = yaml.ReadBacktestRun(job.ConfigPath).ResultsRoot;
             return await ReadPublishedAsync(runName, root, job.ResultReference, token);
-        } catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException) {
+        } catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException) {
             return new([],"The published result could not be verified or exceeds the comparison limits. Open the original job for details.");
         }
     }
@@ -50,6 +50,8 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         var manifest = await ReadBoundedAsync<BacktestArtifactManifest>(manifestPath,1_000_000,token);
         if(manifest.SchemaVersion != 1 || !manifest.PublicationComplete || manifest.RunName != runName)
             throw new InvalidDataException("Published run identity differs.");
+        // The new reference encoding cannot claim complete evidence when its sidecar is absent or changed.
+        using var candidateEvidence = await TradingFlow.Backtesting.Artifacts.CandidateAuditReader.OpenEvidenceAsync(directory, manifest, token);
         var reference = manifest.Artifacts.SingleOrDefault(x=>x.Kind == "backtest_result")
             ?? throw new InvalidDataException("Result reference missing.");
         if(reference.ByteLength is <= 0 or > 10_000_000 || !reference.Complete || reference.RecordCount != 1 ||

@@ -601,6 +601,8 @@ if (args.Length > 0 &&
                       new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                   ?? throw new InvalidDataException(
                       "The frozen momentum research request is empty.");
+    if (request.Phase != CatalogResearchPhase.DevelopmentValidation)
+        throw new InvalidOperationException("This CLI command evaluates registered development and validation windows. Protected holdout evaluation needs its separately authorized workflow.");
     var artifactStore = new FileSystemImmutableArtifactStore(
         new ImmutableArtifactStoreOptions(artifactRoot));
     var catalog = new SqliteEvidenceCatalog(
@@ -612,7 +614,8 @@ if (args.Length > 0 &&
     var workflow = new CatalogResearchWorkflow(
         catalog,
         partitionReader,
-        new EvidenceResearchRunArtifactPackager(artifactStore));
+        new EvidenceResearchRunArtifactPackager(artifactStore),
+        TradingFlow.Cli.ResearchCliRegistry.Open());
     var result = await workflow.RunMomentumAsync(request);
 
     Console.WriteLine(JsonSerializer.Serialize(new
@@ -663,7 +666,8 @@ if (args.Length > 0 &&
     var workflow = new CatalogResearchWorkflow(
         catalog,
         partitionReader,
-        new EvidenceResearchRunArtifactPackager(artifactStore));
+        new EvidenceResearchRunArtifactPackager(artifactStore),
+        TradingFlow.Cli.ResearchCliRegistry.Open());
     var result = await workflow.RunStaticUniverseMomentumDiagnosticAsync(request);
 
     Console.WriteLine(JsonSerializer.Serialize(new
@@ -859,7 +863,8 @@ if (args.Length > 0 &&
     var workflow = new CatalogResearchWorkflow(
         catalog,
         partitionReader,
-        new EvidenceResearchRunArtifactPackager(artifactStore));
+        new EvidenceResearchRunArtifactPackager(artifactStore),
+        TradingFlow.Cli.ResearchCliRegistry.Open());
     var result =
         await workflow.RunProviderUpdatedDailyNewsDiagnosticAsync(request);
 
@@ -893,10 +898,6 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
         : throw new ArgumentException("Optimization config path required.");
 
     var reader = new SimpleYamlReader();
-    var runner = new BacktestRunner(
-        reader,
-        CreateStrategyArtifactCatalog(reader));
-    var optimizer = new StrategyOptimizer(reader, runner);
 
     var progress = new Progress<BacktestProgress>(update =>
     {
@@ -913,7 +914,8 @@ if (args.Length > 0 && args[0].Equals("optimize", StringComparison.OrdinalIgnore
         }
     });
 
-    var optResult = await optimizer.OptimizeAsync(optConfigPath, CancellationToken.None, progress, optimizationProgress);
+    var optResult = await TradingFlow.Cli.ResearchBacktestCommand.OptimizeAsync(optConfigPath, ParseStringOption(args, "--retry-key"),
+        reader, CreateStrategyArtifactCatalog(reader), TradingFlow.Cli.ResearchCliRegistry.Open(), progress, optimizationProgress, CancellationToken.None);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         optResult.RunName,
@@ -1131,10 +1133,8 @@ if (runConfig.Mode.Equals("paper", StringComparison.OrdinalIgnoreCase) ||
 }
 else
 {
-    var runner = new BacktestRunner(
-        readerInstance,
-        CreateStrategyArtifactCatalog(readerInstance));
-    var result = await runner.RunAsync(configPath, CancellationToken.None);
+    var result = await TradingFlow.Cli.ResearchBacktestCommand.BacktestAsync(configPath, ParseStringOption(args, "--retry-key"),
+        readerInstance, CreateStrategyArtifactCatalog(readerInstance), TradingFlow.Cli.ResearchCliRegistry.Open(), CancellationToken.None);
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         result.RunName,

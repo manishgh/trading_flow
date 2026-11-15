@@ -174,6 +174,9 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.Equal(412.14m, observation.AskPrice);
         Assert.Equal(412.12m, observation.MidPrice);
         Assert.Equal(412.12m, observation.LastTradePrice);
+        Assert.False(String.IsNullOrWhiteSpace(observation.QuoteReceipt!.ArchiveId));
+        Assert.Equal(64, observation.QuoteReceipt.Sha256.Length);
+        Assert.True(observation.QuoteReceipt.ReceivedAtUtc <= observation.ObservedAtUtc);
         Assert.Equal(
             new DateTimeOffset(2026, 7, 22, 14, 30, 0, 100, TimeSpan.Zero),
             observation.QuoteTimestampUtc);

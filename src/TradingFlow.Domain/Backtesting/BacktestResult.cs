@@ -74,7 +74,9 @@ public sealed record BacktestArtifactManifest(
     DateTimeOffset PublishedAtUtc,
     bool PublicationComplete,
     BacktestArtifactCoverage Coverage,
-    IReadOnlyList<BacktestArtifactReference> Artifacts);
+    IReadOnlyList<BacktestArtifactReference> Artifacts,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? CandidateAuditEncoding = null);
 
 public sealed record BacktestArtifactCoverage(
     int ExpectedWorkItemCount,

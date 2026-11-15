@@ -22,7 +22,12 @@ public static class RunPortfolioStateProjection
                 order.OrderId, order.Side, order.OrderType, order.RemainingQuantity, order.Status,
                 order.ReservedNotional, order.KnownAtUtc)).ToArray(),
             state.PendingExits.Select(exit => new RunPendingExit(exit.CandidateId, exit.StrategyId,
-                exit.Ticker, exit.KnownAtUtc, exit.Reason)).ToArray(),
+                exit.Ticker, exit.KnownAtUtc, exit.Reason)
+            {
+                ExitEvidence = exit.ExitEvidence is { } evidence
+                    ? new(evidence.DecisionCloseUtc, evidence.AvailableAtUtc,
+                        evidence.Conditions.Select(condition => condition.ToString()).ToArray()) : null
+            }).ToArray(),
             state.IntradayDecisions.Select(ProjectIntradayDecision).ToArray(), state.IntradayDecisionCount);
     }
 

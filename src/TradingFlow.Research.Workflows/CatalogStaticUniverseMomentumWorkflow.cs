@@ -28,7 +28,25 @@ public sealed partial class CatalogResearchWorkflow
         ArgumentNullException.ThrowIfNull(request);
         EnsureUtc(request.CreatedAtUtc, nameof(request.CreatedAtUtc));
         var frozenSymbols = ValidateStaticUniverseRequest(request);
+        var frozen = FreezeCatalogStudy(request.ResearchRunId, "catalog.momentum",
+            "Measure forward momentum outcomes for the explicitly frozen static comparison universe.", request,
+            [request.ResearchAdjustedBarsDatasetId, request.AsTradedBarsDatasetId],
+            request.StudyPartitions, request.Assumptions, "observation_count");
+        return await RunRegisteredCatalogAsync(frozen, request.ResearchRunId,
+            (start, token) => ComputeStaticMomentumAsync(request, frozenSymbols, start, token), async (manifest, token) =>
+            {
+                var (report, audit) = await ReadMomentumResultsAsync(manifest, token);
+                return new CatalogStaticUniverseMomentumResult(request.ResearchAdjustedBarsDatasetId, request.AsTradedBarsDatasetId,
+                    frozenSymbols, request.SurvivorshipSelectionBiasWarning.Trim(), report, audit, manifest, true);
+            }, result => result.Manifest,
+            (result, window) => result.Report.FormationLedger.Count(entry => entry.Segment == window.Name && entry.IsPrimarySelection),
+            cancellationToken);
+    }
 
+    /// <summary>Analyzes only registered development and validation observations for the exact static cohort.</summary>
+    private async Task<CatalogStaticUniverseMomentumResult> ComputeStaticMomentumAsync(CatalogStaticUniverseMomentumRequest request,
+        string[] frozenSymbols, ResearchStart start, CancellationToken cancellationToken)
+    {
         var adjustedManifest = await RequireDatasetAsync(
             request.ResearchAdjustedBarsDatasetId,
             EvidenceDatasetKind.MarketBarsResearchAdjusted,
@@ -153,7 +171,7 @@ public sealed partial class CatalogResearchWorkflow
                         artifact.Name,
                         new EvidenceResearchJsonPayload(
                             artifact.GetUtf8Json())))
-                    .ToArray(),
+                    .Append(RegistrationArtifact(start)).ToArray(),
                 false,
                 readinessFailures),
             cancellationToken);

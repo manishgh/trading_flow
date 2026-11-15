@@ -10,6 +10,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\TradingFlow.Application\TradingFlow.Application.csproj" />
     <ProjectReference Include="..\TradingFlow.Domain\TradingFlow.Domain.csproj" />
     <ProjectReference Include="..\TradingFlow.Engine\TradingFlow.Engine.csproj" />
     <ProjectReference Include="..\TradingFlow.Alpaca\TradingFlow.Alpaca.csproj" />

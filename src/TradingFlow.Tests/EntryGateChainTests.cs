@@ -34,6 +34,8 @@ public sealed class EntryGateChainTests
         Assert.True(submitted);
         Assert.NotNull(approval);
         Assert.Equal(new DateOnly(2026, 7, 22), approval!.TradeDate);
+        Assert.Same(fixture.Broker.MarketObservation, approval.MarketObservation);
+        Assert.Equal(2_000, approval.QuoteFreshnessLimitMilliseconds);
         Assert.False(approval.SubmitOutsideRegularHours);
         Assert.Equal("submitted", result);
         Assert.Equal(Enumerable.Range(1, 12), fixture.Evaluations.Requests.Select(item => item.GateOrder));

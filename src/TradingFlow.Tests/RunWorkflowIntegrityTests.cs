@@ -20,6 +20,12 @@ public sealed class RunWorkflowIntegrityTests
         var preview = await UniverseWorkflowIntegrityTests.Preview(database, clock);
         var identity = UniverseWorkflowIntegrityTests.Request(preview).Strategies[0];
         var configuration = new Mock<IWorkflowRunConfiguration>(MockBehavior.Strict);
+        configuration.Setup(item => item.NormalizeBacktestRequestAsync(It.IsAny<StartBacktestRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((StartBacktestRequest request, CancellationToken _) => request);
+        configuration.Setup(item => item.GetBacktestConfigurationHashAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new string('b', 64));
+        configuration.Setup(item => item.GetBacktestResolvedSettingsAsync(It.IsAny<StartBacktestRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((BacktestResolvedSettingsResponse?)null);
         configuration.Setup(item => item.OpenEvidenceVerificationScopeAsync(It.IsAny<StartBacktestRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IWorkflowEvidenceVerificationScope?)null);
         configuration.Setup(item => item.GetDecisionContextEvidenceAsync(It.IsAny<StartBacktestRequest>(), It.IsAny<CancellationToken>(), It.IsAny<IWorkflowEvidenceVerificationScope?>()))
@@ -33,7 +39,8 @@ public sealed class RunWorkflowIntegrityTests
         try
         {
             var request = new StartBacktestRequest(ContractVersions.VersionOne, "fixture", preview.UniverseSnapshotId, [identity],
-                clock.Now.AddMonths(-6), clock.Now.AddDays(-1), 10000, 1, 25, 4, "use_cache", "full", "job-key");
+                clock.Now.AddMonths(-6), clock.Now.AddDays(-1), 10000, 1, 25, 4, "use_cache", "full", "job-key",
+                ConfigurationSha256: new string('b', 64));
             await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(request));
             configuration.Setup(item => item.WritePreparedComparisonRequestAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<TradingFlow.Domain.Jobs.PersistedJob>>(),
                 It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
@@ -42,7 +49,10 @@ public sealed class RunWorkflowIntegrityTests
             configuration.Setup(item => item.WriteAsync(request, It.Is<UniversePreviewResponse>(value => value.ContentSha256 == preview.ContentSha256),
                 It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<IWorkflowEvidenceVerificationScope?>())).ReturnsAsync([path]);
             var repository = new SqliteJobRepository(database);
-            var service = new RunWorkflowService(repository, database.Workflows, strategies.Object, configuration.Object, clock, new(32, 16));
+            configuration.Setup(item => item.DiscardUnacceptedAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+            var service = new RunWorkflowService(repository, database.Workflows, strategies.Object, configuration.Object, clock, new(32, 16),
+                SyntheticResearchQueue.For(repository));
             var first = await service.StartAsync(request);
             Assert.Equal("queued", first.Status);
             Assert.Equal(preview.UniverseSnapshotId, first.Provenance!.UniverseSnapshotId);
@@ -78,8 +88,9 @@ public sealed class RunWorkflowIntegrityTests
         var clock = new CandidateWorkflowTestClock(CandidateAuditIntegrityTests.Now);
         var preview = await UniverseWorkflowIntegrityTests.Preview(database, clock);
         var configuration = new Mock<IWorkflowRunConfiguration>(MockBehavior.Strict);
-        var service = new RunWorkflowService(new SqliteJobRepository(database), database.Workflows,
-            Mock.Of<IStrategyIdentityResolver>(), configuration.Object, clock, new(32, 16));
+        var repository = new SqliteJobRepository(database);
+        var service = new RunWorkflowService(repository, database.Workflows,
+            Mock.Of<IStrategyIdentityResolver>(), configuration.Object, clock, new(32, 16), SyntheticResearchQueue.For(repository));
         var request = new StartPaperRunRequest(ContractVersions.VersionOne, "paper", preview.UniverseSnapshotId,
             UniverseWorkflowIntegrityTests.Request(preview).Strategies[0], false, false, "limit", "day", "strategy_validated", "paper-key", "live");
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(request));

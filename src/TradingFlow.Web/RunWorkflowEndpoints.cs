@@ -33,6 +33,7 @@ public static class RunWorkflowEndpoints
     {
         try { return Results.Ok(await action()); }
         catch (IdempotencyKeyConflictException exception) { return Results.Conflict(new ApiErrorResponse(ContractVersions.VersionOne, "idempotency_key_conflict", exception.Message)); }
+        catch (Exception exception) when (exception is InvalidDataException or FileNotFoundException or DirectoryNotFoundException) { return Error(exception); }
         catch (InvalidOperationException exception) { return Error(exception); }
     }
     private static IResult Error(Exception exception) => Results.BadRequest(new ApiErrorResponse(ContractVersions.VersionOne, "run_rejected", exception.Message));

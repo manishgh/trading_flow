@@ -133,7 +133,8 @@ public sealed class NativeDailyResultIntegrationTests
         var jobs = new Mock<IDurableJobRepository>();
         jobs.Setup(repository => repository.GetJobAsync(job.Id, It.IsAny<CancellationToken>())).ReturnsAsync(job);
         var service = new RunWorkflowService(jobs.Object, Mock.Of<IUniversePreviewRepository>(),
-            Mock.Of<IStrategyIdentityResolver>(), Mock.Of<IWorkflowRunConfiguration>(), TimeProvider.System, new(32, 16));
+            Mock.Of<IStrategyIdentityResolver>(), Mock.Of<IWorkflowRunConfiguration>(), TimeProvider.System, new(32, 16),
+            SyntheticResearchQueue.For(jobs.Object));
         var details = await service.DetailsAsync(job.Id);
         var roundTrip = JsonSerializer.Deserialize<RunJobDetailsResponse>(JsonSerializer.Serialize(details, Json), Json)!;
 

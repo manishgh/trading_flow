@@ -60,7 +60,8 @@ public sealed class BacktestCandidateJournalTests
             using (var store = new SqliteBacktestCandidateStateStore(BacktestCandidateJournal.StatePath(path)))
                 foreach (var candidate in candidates) store.Save(candidate, []);
             using var output = new MemoryStream();
-            await CandidateAuditExporter.WriteAsync(output, [path], CancellationToken.None);
+            using var evidence = new CandidateEvidenceIndex(Path.Combine(root, "evidence.sqlite"), Guid.NewGuid().ToString("D"), create: true);
+            await CandidateAuditExporter.WriteAsync(output, [path], evidence, CancellationToken.None);
             output.Position = 0;
             var actual = await JsonSerializer.DeserializeAsync<BacktestCandidateDecisionAudit[]>(output);
             Assert.NotNull(actual);
@@ -69,7 +70,7 @@ public sealed class BacktestCandidateJournalTests
                 .Select(item => item.CandidateId), actual.Select(item => item.Candidate.CandidateId));
             using var cancelled = new CancellationTokenSource();
             cancelled.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CandidateAuditExporter.WriteAsync(output, [path], cancelled.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CandidateAuditExporter.WriteAsync(output, [path], evidence, cancelled.Token));
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -112,7 +113,8 @@ public sealed class BacktestCandidateJournalTests
                 Assert.Throws<InvalidOperationException>(() => first.Snapshot());
             }
             using var output = new MemoryStream();
-            await CandidateAuditExporter.WriteAsync(output, paths, CancellationToken.None);
+            using var evidence = new CandidateEvidenceIndex(Path.Combine(root, "evidence.sqlite"), Guid.NewGuid().ToString("D"), create: true);
+            await CandidateAuditExporter.WriteAsync(output, paths, evidence, CancellationToken.None);
             output.Position = 0;
             var audits = await JsonSerializer.DeserializeAsync<BacktestCandidateDecisionAudit[]>(output);
             Assert.NotNull(audits);

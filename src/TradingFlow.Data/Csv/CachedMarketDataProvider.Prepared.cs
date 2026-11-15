@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Research;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Pipeline;
@@ -47,6 +48,8 @@ public sealed partial class CachedMarketDataProvider
         endUtc = endUtc.ToUniversalTime();
         if (endUtc < startUtc || maximumBars <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumBars), "Exact bounds and a positive retained-bar budget are required.");
+        if (ResearchObservationBoundary.Current is { } cutoff && endUtc > cutoff)
+            throw new InvalidDataException("The prepared history request reaches beyond the frozen research observation boundary.");
         var evidenceProvider = RequireEvidenceProvider();
         var source = sourceDescriptor ?? throw new InvalidOperationException("Prepared history requires explicit provider/feed/price-basis provenance.");
         var hash = PreparedRequestHash(source, evidenceProvider, symbol, frame, startUtc, endUtc, isCalendar: false);
@@ -221,6 +224,8 @@ public sealed partial class CachedMarketDataProvider
              bars.AdjustmentPolicy != manifest.Source.AdjustmentPolicy || bars.RestatementRevision != manifest.Source.RestatementRevision ||
              !MarketDataCacheManifest.IsSafeDataFileName(bars.DataFileName, bars.Timeframe)))
             throw new InvalidDataException("Pinned candle manifest has an inconsistent source, schema or row count.");
+        if (manifest.Bars is { } pinnedBars && !IsWithinResearchCutoff(pinnedBars))
+            throw new InvalidDataException("Pinned prepared history contains or requests protected observations. Reuse a version bounded to development.");
         if (manifest.Calendar is { } calendar &&
             (calendar.SchemaVersion != MarketSessionCalendarCacheManifest.CurrentSchemaVersion ||
              calendar.ProviderIdentity != manifest.Source.ProviderIdentity || calendar.CoverageEnd < calendar.CoverageStart ||
@@ -254,6 +259,11 @@ public sealed partial class CachedMarketDataProvider
         if (expectedVersion != version) throw new InvalidDataException("Pinned prepared reference does not match its immutable manifest.");
         return manifest;
     }
+
+    /// <summary>Checks physical parent coverage from metadata before opening either normalized or raw observation files.</summary>
+    private static bool IsWithinResearchCutoff(MarketDataCacheManifest manifest) =>
+        ResearchObservationBoundary.Current is not { } cutoff ||
+        manifest.RequestedEndUtc <= cutoff && (manifest.BarCoverage?.LastBarUtc is not { } last || last < cutoff);
 
     /// <summary>Builds the transport reference exclusively from committed manifest fields and its actual bytes.</summary>
     private static async Task<PreparedMarketDataVersion> DescribePreparedVersionAsync(string path,

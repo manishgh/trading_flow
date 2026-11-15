@@ -16,13 +16,17 @@ public sealed class PaperJobModel : PageModel
     private readonly PaperJobService jobs;
     private readonly PaperRunViewService views;
     private readonly ConfigCatalogService catalog;
+    private readonly PaperExecutionComparisonService executionComparison;
 
 
-    public PaperJobModel(PaperJobService jobs, PaperRunViewService views, ConfigCatalogService catalog)
+    // Add the read-only comparison to the existing paper detail using the same immutable job ID.
+    public PaperJobModel(PaperJobService jobs, PaperRunViewService views, ConfigCatalogService catalog,
+        PaperExecutionComparisonService executionComparison)
     {
         this.jobs = jobs;
         this.views = views;
         this.catalog = catalog;
+        this.executionComparison = executionComparison;
 
     }
 
@@ -35,7 +39,9 @@ public sealed class PaperJobModel : PageModel
     public List<DecisionAuditRecord> RecentAudits { get; private set; } = new();
     public string LocalTimeZoneLabel => UiDisplayFormatter.LocalTradingTimeZoneLabel;
     public string MarketDataFeedLabel { get; private set; } = "Market data feed: unknown";
+    public PaperExecutionComparisonResult? ExecutionComparison { get; private set; }
 
+    // Load the durable comparison once on the full detail page alongside the existing run views.
     public async Task OnGetAsync(Guid id)
     {
         Job = jobs.Get(id);
@@ -45,6 +51,7 @@ public sealed class PaperJobModel : PageModel
 
         if (Job != null)
         {
+            ExecutionComparison = await executionComparison.ReadAsync(Job.JobId, HttpContext.RequestAborted);
             try
             {
                 var config = catalog.GetConfig(Job.ConfigPath);

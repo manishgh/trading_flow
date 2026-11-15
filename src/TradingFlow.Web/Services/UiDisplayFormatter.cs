@@ -8,6 +8,17 @@ public static class UiDisplayFormatter
 
     public static string LocalTradingTimeZoneLabel => LocalTradingTimeZone.Id;
 
+    /// <summary>Labels the same audit instant in exchange, operator and persistence clocks without inferring a market session.</summary>
+    public static string FormatAuditInstant(DateTimeOffset timestamp, bool includeMilliseconds = false)
+    {
+        var format = includeMilliseconds ? "yyyy-MM-dd HH:mm:ss.fff" : "yyyy-MM-dd HH:mm:ss";
+        return TimeZoneInfo.ConvertTime(timestamp, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"))
+            .ToString(format, CultureInfo.InvariantCulture) + " NY · " +
+            TimeZoneInfo.ConvertTime(timestamp, TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin"))
+            .ToString(format, CultureInfo.InvariantCulture) + " Berlin · " +
+            timestamp.ToUniversalTime().ToString(format, CultureInfo.InvariantCulture) + " UTC";
+    }
+
     public static string FormatLocal(DateTimeOffset timestamp, bool includeMilliseconds = false)
     {
         var local = TimeZoneInfo.ConvertTime(timestamp, LocalTradingTimeZone);

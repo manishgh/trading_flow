@@ -1,8 +1,11 @@
 using TradingFlow.Backtesting;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Indicators;
+using TradingFlow.Web.Models;
 
 namespace TradingFlow.Tests;
 
@@ -25,7 +28,10 @@ public sealed class ResearchScreenHoldingRulesTests
     public void BarsThatNeverResume_CloseAtTheLastCloseBeforeTheNextSessionsAdmissions()
     {
         var bars = Bars(day => day <= new DateOnly(2026, 9, 17));
-        var coordinator = Schedule(bars, Rules([]), exit: null);
+        var lateClose = Midnight(new(2026, 9, 18));
+        var evidence = new BacktestExitEvidence(lateClose.AddDays(-1), lateClose.AddHours(-11), lateClose,
+            [BacktestExitCondition.CloseAboveSma5]);
+        var coordinator = Schedule(bars, Rules([]), exit: null, evidence);
 
         coordinator.AdvanceThrough(Midnight(new(2026, 9, 18)));
         Assert.Empty(coordinator.ActiveExecutions);
@@ -33,12 +39,14 @@ public sealed class ResearchScreenHoldingRulesTests
 
         var trade = Assert.Single(coordinator.CompletedTrades);
         Assert.Equal(ChronologicalBacktestExecutionCoordinator.DataEndedExitReason, trade.ExitReason);
+        Assert.Null(trade.ExitEvidence);
         Assert.Equal((500, Price(new(2026, 9, 17)) * 0.999m, Midnight(new(2026, 9, 18))), (trade.ShareQuantity, trade.ExitPrice, trade.ExitTimestamp));
         Assert.Equal("regular_session_close", trade.ExitFillTiming!.Basis);
         Assert.Equal(Midnight(new(2026, 9, 17)).AddHours(13), trade.ExitFillTiming.EconomicTimestampUtc);
         Assert.Equal(trade.ExitTimestamp, trade.ExitFillTiming.AvailableAtUtc);
         var state = coordinator.Snapshot(Cutoff);
         Assert.Empty(state.PendingOrders);
+        Assert.Empty(state.PendingExits);
         Assert.Empty(state.OpenPositions);
         Assert.All(Ledger(state, bars, true).Sessions, session => Assert.NotNull(session.Equity));
 
@@ -87,6 +95,57 @@ public sealed class ResearchScreenHoldingRulesTests
         Assert.Contains(ledger.SessionMarks, mark => mark.SessionDate == gap[0] && mark.Price is null);
     }
 
+    // Run the same synthetic candidate with and without reporting evidence through the book and monthly ledger.
+    [Fact]
+    public void ExitEvidence_DoesNotAlterOrdersFillsFeesCashDailyEquityOrMonthlyResults()
+    {
+        var bars = Bars(_ => true, thin: false);
+        var exit = Midnight(new(2026, 9, 22));
+        var proof = new BacktestExitEvidence(exit.AddDays(-1), exit.AddHours(-8), exit,
+            [BacktestExitCondition.CloseAboveSma5, BacktestExitCondition.MaxHoldBars]);
+        var baselineEvents = new CollectingExecutionSink();
+        var observedEvents = new CollectingExecutionSink();
+        var baseline = Schedule(bars, Rules([]), exit, sink: baselineEvents);
+        var observed = Schedule(bars, Rules([]), exit, proof, observedEvents);
+        baseline.Complete(Cutoff);
+        observed.Complete(Cutoff);
+
+        Assert.Empty(baseline.Failures);
+        Assert.Empty(observed.Failures);
+        Assert.Equal(baselineEvents.Events, observedEvents.Events);
+        var baseTrade = Assert.Single(baseline.CompletedTrades);
+        var observedTrade = Assert.Single(observed.CompletedTrades);
+        Assert.Equal(proof, observedTrade.ExitEvidence);
+        Assert.Equal(baseTrade, observedTrade with { ExitEvidence = null });
+
+        var baseLedger = Ledger(baseline.Snapshot(Cutoff), bars, true);
+        var observedLedger = Ledger(observed.Snapshot(Cutoff), bars, true);
+        Assert.Equal(baseLedger.Fills, observedLedger.Fills);
+        Assert.Equal(baseLedger.Sessions, observedLedger.Sessions);
+        Assert.Equal(baseLedger.CashSummary, observedLedger.CashSummary);
+
+        var runTime = new AuthorizedRuntimeStrategy(new(Strategy.StrategyId, "1.0.0", new string('a', 64)),
+            StrategySelectionMode.Backtest, Strategy, StrategyAdmissionProfiles.DeterministicV1);
+        Assert.Equal(MonthlyRows(baseTrade, baseLedger, runTime), MonthlyRows(observedTrade, observedLedger, runTime));
+    }
+
+    // Project the native daily ledger through the same monthly consumer used by the run details.
+    private static IReadOnlyList<TradingFlow.Contracts.V1.MonthlyRunResult> MonthlyRows(BacktestTrade trade,
+        BacktestPortfolioState ledger, AuthorizedRuntimeStrategy runtime)
+    {
+        var endingEquity = ledger.Sessions[^1].Equity!.Value;
+        var result = new StrategyBacktestResult(Strategy.StrategyId, Strategy.StrategyName, "synthetic",
+            Portfolio.StartingCapital, endingEquity, trade.NetProfit, 0, 0, ledger.Sessions.Count,
+            0, 1, 1, 0, 0, 0, [trade]) { PortfolioState = ledger };
+        return MonthlyBacktestPresentation.FromPortfolioState(result, runtime, "synthetic", "synthetic", Midnight(First), Cutoff);
+    }
+
+    private sealed class CollectingExecutionSink : IExecutionEventSink
+    {
+        public List<ExecutionEvent> Events { get; } = [];
+        public void Append(ExecutionEvent item) => Events.Add(item);
+    }
+
     // The rules for the given split ex-dates over the fixture's weekday sessions.
     private static HoldingDataRules Rules(IEnumerable<(string, DateOnly)> splits) =>
         new(Weekdays().ToArray(), splits.ToHashSet())
@@ -97,11 +156,17 @@ public sealed class ResearchScreenHoldingRulesTests
 
     // Schedules one 500-share long held from the 15 September open, with the stop and target 7.1.0 places, and an optional
     // planned exit (a completed close-above-SMA5 signal) at a later open.
-    private static ChronologicalBacktestExecutionCoordinator Schedule(IReadOnlyCollection<OhlcvBar> bars, HoldingDataRules? rules, DateTimeOffset? exit)
+    private static ChronologicalBacktestExecutionCoordinator Schedule(IReadOnlyCollection<OhlcvBar> bars, HoldingDataRules? rules,
+        DateTimeOffset? exit, BacktestExitEvidence? evidence = null, IExecutionEventSink? sink = null)
     {
-        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio, bars, holdingRules: rules);
+        var coordinator = new ChronologicalBacktestExecutionCoordinator(Portfolio, bars, executionEvidence: sink, holdingRules: rules);
         var candidate = new BacktestCandidateTrade("TEST", "Connors 7.1.0", "long", Midnight(new(2026, 9, 15)), 100m, 90m, 120m,
-            exit, null, exit is null ? "open_at_study_end" : "close_above_sma5", 10m, StrategyId: Strategy.StrategyId, CandidateId: "held");
+            exit, null, exit is null ? "open_at_study_end" : "close_above_sma5", 10m, StrategyId: Strategy.StrategyId, CandidateId: "held")
+            {
+                ExitEvidence = exit is not null ? evidence : null,
+                PendingExitDecision = exit is null && evidence is not null
+                    ? new(evidence.AvailableAtUtc, "close_above_sma5") { ExitEvidence = evidence } : null
+            };
         Assert.True(coordinator.TrySchedule(new(candidate, Strategy, 500), out var rejection), rejection);
         return coordinator;
     }

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.ScreenCaptures;
 
 namespace TradingFlow.Web.Pages;
 
@@ -22,14 +23,17 @@ public sealed class OperationsModel : PageModel
     private readonly AlpacaQuoteService quotes;
     private readonly PaperJobService paperJobs;
     private readonly MobileAutomationService automation;
+    private readonly FinvizScreenCaptureStatusReader captures;
 
+    // Add observational capture status alongside the existing operational report.
     public OperationsModel(
         OperationsHealthService health,
         ConfigCatalogService catalog,
         TradingEnvironmentService environments,
         AlpacaQuoteService quotes,
         PaperJobService paperJobs,
-        MobileAutomationService automation)
+        MobileAutomationService automation,
+        FinvizScreenCaptureStatusReader captures)
     {
         this.health = health;
         this.catalog = catalog;
@@ -37,6 +41,7 @@ public sealed class OperationsModel : PageModel
         this.quotes = quotes;
         this.paperJobs = paperJobs;
         this.automation = automation;
+        this.captures = captures;
     }
 
     /// <summary>Environment this screen is reporting on, from the query segment.</summary>
@@ -45,7 +50,9 @@ public sealed class OperationsModel : PageModel
     public TradingEnvironmentState EnvironmentState => environments.GetState(environments.Parse(Env));
 
     public OperationsReport? Report { get; private set; }
+    public FinvizScreenCaptureStatus? ScreenCapture { get; private set; }
 
+    // Read subsystem health and independent observational capture evidence for this request.
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
         // Quote freshness is measured against the symbols the operator actually
@@ -61,6 +68,7 @@ public sealed class OperationsModel : PageModel
         }
 
         Report = await health.BuildAsync(ResolveQuoteFeed(), observations, cancellationToken);
+        ScreenCapture = await captures.ReadAsync(cancellationToken);
     }
 
     private string ResolveQuoteFeed()

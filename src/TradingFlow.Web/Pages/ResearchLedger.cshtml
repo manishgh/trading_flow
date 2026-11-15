@@ -1,0 +1,152 @@
+@page
+@model TradingFlow.Web.Pages.ResearchLedgerModel
+@using TradingFlow.Domain.Research
+@using TradingFlow.Web.Services
+@{
+    ViewData["Title"] = "Research ledger";
+}
+
+<div class="container">
+    <h1>Research ledger</h1>
+    <p>Historical trial counts are unknown where exact registrations are missing.</p>
+    <p>
+        Investment success policy <strong>Draft, awaiting approval</strong>.
+        <a asp-page-handler="Document" asp-route-name="success-policy">Read the success-policy draft</a>
+    </p>
+    <p>
+        Strategy retirements
+        <a asp-page-handler="Document" asp-route-name="retired-2026-11-07">7 November 2026</a> and
+        <a asp-page-handler="Document" asp-route-name="retired-2026-11-13">13 November 2026</a>
+    </p>
+
+    @if (Model.Error is { } error)
+    {
+        <p role="alert">@error</p>
+    }
+    else
+    {
+        <h2>Registered trials</h2>
+        @if (Model.Ledger.Trials.Count == 0)
+        {
+            <p>No verified trial registrations are available.</p>
+        }
+        @foreach (var family in Model.Ledger.Trials.GroupBy(entry => entry.Trial.FamilyId))
+        {
+            <section aria-label="@family.Key">
+                <h3>@family.Key</h3>
+                <p>@family.Count() registered attempts. Lifetime attempts unknown.</p>
+                <div class="table-scroll"><table class="grid-table">
+                    <thead><tr><th scope="col">Try</th><th scope="col">Hypothesis</th><th scope="col">Evidence and outcome</th><th scope="col">Protected partition</th></tr></thead>
+                    <tbody>
+                    @foreach (var row in family)
+                    {
+                        <tr>
+                            <td>@row.Trial.FamilyTrialCount</td>
+                            <td>@row.Trial.Hypothesis</td>
+                            <td>
+                                <details>
+                                    <summary>@(row.Results.Count == 0 ? "No canonical result published" : $"{row.Results.Count} canonical results")</summary>
+                                    <p>Trial <code>@row.Trial.ExperimentId</code></p>
+                                    <p>Definition SHA-256 <code>@row.TrialSha256</code></p>
+                                    <p>Datasets <code>@String.Join(", ", row.Trial.DatasetIds)</code></p>
+                                    @foreach (var partition in row.Trial.Partitions)
+                                    {
+                                        <p>@partition.Name, @UiDisplayFormatter.FormatAuditInstant(partition.StartUtc) to @UiDisplayFormatter.FormatAuditInstant(partition.EndUtc) exclusive</p>
+                                    }
+                                    @foreach (var result in row.Results)
+                                    {
+                                        <p>@result.Partition result <code>@result.ResultId</code></p>
+                                        @if (result.Metrics.TryGetValue("passed", out var passed))
+                                        {
+                                            <p>@(passed == 1m ? "Passed frozen signal-study gates" : "Did not pass the frozen signal-study gates")</p>
+                                        }
+                                        @foreach (var sha in result.OutputArtifactSha256)
+                                        {
+                                            <p>Artifact SHA-256 <code>@sha</code></p>
+                                        }
+                                    }
+                                </details>
+                            </td>
+                            <td>@ResearchLedgerModel.HoldoutLabel(row.HoldoutState)</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table></div>
+            </section>
+        }
+
+        <h2>Starts and outcomes</h2>
+        @if (Model.Ledger.Starts.Count == 0)
+        {
+            <p>No durable starts are recorded.</p>
+        }
+        @foreach (var entry in Model.Ledger.Starts)
+        {
+            var binding = entry.Start.Binding;
+            <details>
+                <summary>
+                    @String.Join(", ", binding.Request.Variants.Select(variant => variant.FamilyId).Distinct())
+                    · @entry.Start.State
+                    @if (binding.DiagnosticReplay)
+                    {
+                        <span> · Diagnostic replay</span>
+                    }
+                    · @UiDisplayFormatter.FormatAuditInstant(entry.Start.RegisteredAtUtc)
+                </summary>
+                <p>@binding.Request.Kind · @binding.Request.Executions.Count intended executions</p>
+                @if (entry.Start.Reason is { } reason)
+                {
+                    <p>@reason</p>
+                }
+                @if (binding.ReviewEvidence is { } review)
+                {
+                    <p>Reviewed evidence @review</p>
+                }
+                <p>Request SHA-256 <code>@binding.Request.RequestSha256</code></p>
+                <p>Code SHA-256 <code>@binding.Request.CodeSha256</code></p>
+                @if (binding.ProtectedObservationStartUtc is { } cutoff)
+                {
+                    <p>Observation cutoff @UiDisplayFormatter.FormatAuditInstant(cutoff) exclusive</p>
+                }
+                @foreach (var item in binding.Trials)
+                {
+                    <p>Trial <code>@item.ExperimentId</code> · try @item.FamilyOrdinal</p>
+                }
+                @if (entry.Executions.Count == 0)
+                {
+                    <p>No terminal execution outcome is recorded.</p>
+                }
+                @foreach (var item in entry.Executions)
+                {
+                    <p>
+                        @if (Guid.TryParseExact(item.ExecutionId, "N", out var jobId))
+                        {
+                            <a asp-page="@(binding.Request.Kind == ResearchStartKind.Optimization ? "/OptimizationJob" : "/Job")" asp-route-id="@jobId">@jobId</a>
+                        }
+                        else
+                        {
+                            <code>@item.ExecutionId</code>
+                        }
+                        · @item.State · @UiDisplayFormatter.FormatAuditInstant(item.AtUtc)
+                        @if (item.ArtifactSha256 is { } sha)
+                        {
+                            <span> · artifact SHA-256 <code>@sha</code></span>
+                        }
+                        @if (item.ArtifactReference is { } reference)
+                        {
+                            <span> · <code>@reference</code></span>
+                        }
+                        @if (item.Publication is { } publication)
+                        {
+                            <span> · publication manifest SHA-256 <code>@publication.ManifestSha256</code></span>
+                        }
+                        @if (item.Detail is { } detail)
+                        {
+                            <span> · @detail</span>
+                        }
+                    </p>
+                }
+            </details>
+        }
+    }
+</div>
