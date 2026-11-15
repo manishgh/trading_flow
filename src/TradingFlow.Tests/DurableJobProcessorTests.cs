@@ -12,15 +12,17 @@ public sealed class DurableJobProcessorTests : IAsyncLifetime
     private readonly string databasePath = Path.Combine(
         Path.GetTempPath(),
         $"trading-flow-job-processor-{Guid.NewGuid():N}.db");
+    private DbContextOptions<TradingFlowDbContext> databaseOptions = null!;
     private SqliteJobRepository repository = null!;
 
+    // Use this test's isolated SQLite database for real lease fencing and controlled recovery setup.
     public async Task InitializeAsync()
     {
-        var options = new DbContextOptionsBuilder<TradingFlowDbContext>()
+        databaseOptions = new DbContextOptionsBuilder<TradingFlowDbContext>()
             .UseSqlite($"Data Source={databasePath}")
             .Options;
-        var factory = new TestContextFactory(options);
-        await using var context = new TradingFlowDbContext(options);
+        var factory = new TestContextFactory(databaseOptions);
+        await using var context = new TradingFlowDbContext(databaseOptions);
         await context.Database.EnsureCreatedAsync();
         repository = new SqliteJobRepository(factory);
     }
@@ -77,55 +79,63 @@ public sealed class DurableJobProcessorTests : IAsyncLifetime
         Assert.NotNull(stored.FinishedAt);
     }
 
+    // Reconcile an expired worker's paper exposure before resuming the job.
     [Fact]
     public async Task RecoveredBrokerJob_ReconcilesBeforeExecution()
     {
         var job = CreateJob("paper");
         await repository.TryEnqueueAsync(job, 4, CancellationToken.None);
-        var expiredAt = DateTimeOffset.UtcNow;
-        _ = await repository.TryAcquireAsync(
-            job.Id,
-            "dead-worker",
-            expiredAt,
-            TimeSpan.FromMilliseconds(100),
-            CancellationToken.None);
-        await Task.Delay(180);
+        await SeedExpiredWorkerLeaseAsync(job);
         var handler = new ImmediateHandler(DurableJobRecoveryMode.ReconcileBrokerExposure, "paper");
 
         await new DurableJobProcessor(repository).ProcessNextAsync(
             "recovery-worker",
             handler,
-            FastOptions(),
+            DurableJobWorkerOptions.Default,
             CancellationToken.None);
 
+        var stored = await repository.GetJobAsync(job.Id, CancellationToken.None);
+        Assert.NotNull(stored);
+        Assert.Equal("completed", stored.Status);
+        Assert.Equal(2, stored.AttemptCount);
         Assert.Equal(new[] { "recover", "execute", "published" }, handler.Events);
-        Assert.Equal(2, (await repository.GetJobAsync(job.Id, CancellationToken.None))!.AttemptCount);
     }
 
+    // Reconcile an expired worker's paper exposure before publishing its requested cancellation.
     [Fact]
     public async Task RecoveredCancellingBrokerJob_ReconcilesThenCancelsWithoutNormalExecution()
     {
         var job = CreateJob("paper");
         await repository.TryEnqueueAsync(job, 4, CancellationToken.None);
-        var expiredAt = DateTimeOffset.UtcNow;
-        _ = await repository.TryAcquireAsync(
-            job.Id,
-            "dead-worker",
-            expiredAt,
-            TimeSpan.FromMilliseconds(100),
-            CancellationToken.None);
-        await Task.Delay(180);
-        Assert.True(await repository.RequestCancellationAsync(job.Id, expiredAt, CancellationToken.None));
+        await SeedExpiredWorkerLeaseAsync(job);
+        Assert.True(await repository.RequestCancellationAsync(job.Id, DateTimeOffset.UtcNow, CancellationToken.None));
         var handler = new ImmediateHandler(DurableJobRecoveryMode.ReconcileBrokerExposure, "paper");
 
         await new DurableJobProcessor(repository).ProcessNextAsync(
             "recovery-worker",
             handler,
-            FastOptions(),
+            DurableJobWorkerOptions.Default,
             CancellationToken.None);
 
+        var stored = await repository.GetJobAsync(job.Id, CancellationToken.None);
+        Assert.NotNull(stored);
+        Assert.Equal("cancelled", stored.Status);
+        Assert.Equal(2, stored.AttemptCount);
         Assert.Equal(new[] { "recover", "published" }, handler.Events);
-        Assert.Equal("cancelled", (await repository.GetJobAsync(job.Id, CancellationToken.None))!.Status);
+    }
+
+    // Seed the expired predecessor deterministically using the real lease token and both persisted expiry fields.
+    private async Task SeedExpiredWorkerLeaseAsync(PersistedJob job)
+    {
+        var lease = Assert.IsType<DurableJobLease>(await repository.TryAcquireAsync(job.Id, "dead-worker",
+            job.CreatedAt, DurableJobWorkerOptions.Default.LeaseDuration, CancellationToken.None));
+        await using var context = new TradingFlowDbContext(databaseOptions);
+        var expiry = job.CreatedAt.AddSeconds(-1);
+        var updated = await context.Jobs.Where(row => row.Id == job.Id && row.LeaseToken == lease.LeaseToken)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(row => row.LeaseExpiresAtUtc, expiry)
+                .SetProperty(row => row.LeaseExpiresAtUtcTicks, expiry.UtcTicks));
+        Assert.Equal(1, updated);
     }
 
     [Fact]

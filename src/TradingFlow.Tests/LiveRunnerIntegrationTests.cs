@@ -1285,13 +1285,16 @@ public class LiveRunnerIntegrationTests
                 discoverySession: expectedSkipReason is null ? null : new ScriptedLiveDiscoverySession([["AAPL"]], clock),
                 timeProvider: clock,
                 candidateRepository: candidates);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            // Finish after actual runner work. Keep a separate test deadline to diagnose a stalled iteration.
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var iterationCompleted = false;
             var progressMessages = new System.Collections.Concurrent.ConcurrentQueue<string>();
-            var progress = new Progress<string>(message =>
+            var progress = new InlineProgress(message =>
             {
                 progressMessages.Enqueue(message);
                 if (message.StartsWith("Iteration finished.", StringComparison.Ordinal))
                 {
+                    iterationCompleted = true;
                     cts.Cancel();
                 }
             });
@@ -1303,6 +1306,8 @@ public class LiveRunnerIntegrationTests
                 cts,
                 progress);
 
+            Assert.True(iterationCompleted, "The test deadline elapsed before the first live runner iteration completed. " +
+                String.Join(Environment.NewLine, progressMessages));
             if (expectedSkipReason is null)
             {
                 Assert.True(submittedOrder is not null, String.Join(Environment.NewLine, progressMessages));
