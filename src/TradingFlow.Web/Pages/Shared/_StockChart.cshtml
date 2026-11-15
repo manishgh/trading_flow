@@ -5,6 +5,7 @@
         <div>
             <h3>Price &amp; volume</h3>
             <p class="stock-chart-status" data-chart-status role="status">Loading completed candles…</p>
+            <p class="stock-chart-note" data-chart-completed-note>Completed candles only</p>
         </div>
         @if (String.IsNullOrEmpty(Model))
         {
@@ -109,11 +110,24 @@
         <p class="visually-hidden" data-chart-inspection role="status"></p>
         <dl class="stock-chart-values" data-chart-values></dl>
         <dl class="stock-chart-values stock-chart-study-values" data-chart-study-values hidden></dl>
-        <p data-chart-candle-evidence></p>
-        <p data-chart-distances hidden></p>
+        <p class="stock-chart-study-history" data-chart-study-history hidden></p>
     </div>
-    <p class="stock-chart-note" data-chart-forming>Forming candles · preview unavailable</p>
     <div class="stock-chart-details">
+        <details>
+            <summary>Data evidence</summary>
+            <div class="stock-chart-evidence-section">
+                <h4>Series</h4>
+                <dl class="stock-chart-evidence" data-chart-evidence></dl>
+            </div>
+            <div class="stock-chart-evidence-section" data-chart-selected-candle hidden>
+                <h4>Selected candle</h4>
+                <dl class="stock-chart-evidence" data-chart-candle-evidence></dl>
+            </div>
+            <div class="stock-chart-evidence-section" data-chart-selected-indicators hidden>
+                <h4>Selected indicator evidence</h4>
+                <ul class="stock-chart-detail-list" data-chart-indicator-evidence></ul>
+            </div>
+        </details>
         <details>
             <summary>Layers &amp; price levels</summary>
             <div class="stock-chart-toggles">
@@ -126,14 +140,14 @@
             </div>
             <ul class="stock-chart-detail-list" data-chart-zones></ul>
             <ul class="stock-chart-detail-list" data-chart-levels></ul>
+            <div class="stock-chart-evidence-section" data-chart-selected-comparisons hidden>
+                <h4>Selected candle comparisons</h4>
+                <dl class="stock-chart-evidence" data-chart-distances></dl>
+            </div>
         </details>
         <details>
             <summary>News &amp; earnings <span data-chart-event-count></span></summary>
             <ul class="stock-chart-detail-list" data-chart-events></ul>
-        </details>
-        <details>
-            <summary>Data evidence</summary>
-            <dl class="stock-chart-evidence" data-chart-evidence></dl>
         </details>
     </div>
     <footer class="stock-chart-footer"><a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">Charts by TradingView</a></footer>

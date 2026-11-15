@@ -6,6 +6,9 @@ import { signIn } from './sign-in.js';
 const separator = '\x1e';
 const tradingDay = Date.parse('2026-11-12T14:30:00Z');
 const minute = 60_000;
+const currentRevision = 'fixture-current-' + 'a'.repeat(96);
+const earlierRevision = 'fixture-earlier-' + 'b'.repeat(96);
+const earlierObserved = '2026-11-12T13:58:00Z';
 
 // Use sub-minute availability and distinct UTC exchange sessions in fixture evidence.
 const iso = value => new Date(value).toISOString();
@@ -15,7 +18,8 @@ function fixtureBars(key, page = 0) {
     const daily = key.interval === '1d';
     const minutes = daily ? 390 : Number.parseInt(key.interval, 10);
     const count = daily ? 28 : 38;
-    const start = tradingDay - (page ? 86400_000 : key.sessionView === 'extended' ? 40 * minute : 0);
+    const dailyStart = Date.parse('2026-11-12T00:00:00Z');
+    const start = (daily ? dailyStart : tradingDay) - (page ? 86400_000 : key.sessionView === 'extended' ? 40 * minute : 0);
     return Array.from({ length: count }, (_, index) => {
         const time = daily ? start - (count - index - 1) * 86400_000 : start + index * minutes * minute;
         const closeAt = time + minutes * minute;
@@ -34,7 +38,7 @@ function fixtureBars(key, page = 0) {
 }
 
 // Represent warm-up, explicit sample gaps and causal daily availability using the real compact wire shape.
-function fixtureIndicators(key, bars) {
+function fixtureIndicators(key, bars, page) {
     if (!key.indicators) return [];
     return key.indicators.split(',').map(id => {
         const name = id.split(':')[0];
@@ -51,10 +55,11 @@ function fixtureIndicators(key, bars) {
         const available = sameDay ? Date.parse(bars[4].startUtc) - 1000 : null;
         return { id, sourceInterval, sessionView: key.sessionView, adjustmentPolicy: 'all', formulaVersion: 'fixture-v1',
             parameters: 'Fixture fixed period', cutoffUtc: bars.at(-1)?.endUtc, anchorUtc: '2026-11-10T21:00:00Z',
-            sourceRevision: 'fixture-current', reconstructed: sameDay, availableAtUtc: available && iso(available),
+            sourceRevision: page ? earlierRevision : currentRevision, reconstructed: sameDay, availableAtUtc: available && iso(available),
             status: unavailable ? 'unavailable' : 'partial', reason: name === 'rvol' ? 'Insufficient baseline' :
                 unavailable ? 'Completed candles unavailable' : 'Warm-up or gaps exclude some observations.',
             columns, samples, segmentStarts: unavailable ? [] : [4, 10],
+            segmentAnchorsUtc: unavailable ? [] : ['2026-11-10T21:00:00Z', '2026-11-11T21:00:00Z'],
             availabilityRuns: sameDay ? [[4, bars.length - 4, available]] : [], seedObservations: 14, warmupObservations: 114 };
     });
 }
@@ -68,7 +73,7 @@ function fixtureSnapshot(key, { page = 0, empty = false } = {}) {
     const source = key.context !== 'intraday' ? '1d' : '15m';
     const reconstructed = key.context === 'year';
     return {
-        contractVersion: 2, seriesKey: key, asOfUtc: reconstructed ? '2026-11-13T14:00:00Z' : '2026-11-12T17:41:00Z',
+        contractVersion: 2, seriesKey: key, asOfUtc: page ? earlierObserved : reconstructed ? '2026-11-13T14:00:00Z' : '2026-11-12T17:41:00Z',
         status: empty ? 'unavailable' : key.interval === '1d' || page ? 'history_only' : 'streaming',
         reason: empty ? 'No verified fixture candles' : null,
         evidence: {
@@ -113,7 +118,7 @@ function fixtureSnapshot(key, { page = 0, empty = false } = {}) {
                 title: 'After close', source: 'Fixture Calendar', isEstimate: true }
         ],
         historyCursor: empty || page ? null : 'previous-fixture-page',
-        indicators: fixtureIndicators(key, bars)
+        indicators: fixtureIndicators(key, bars, page)
     };
 }
 
@@ -257,6 +262,8 @@ test('plots completed candles and volume with keyboard, event evidence and a res
     const chart = page.getByRole('region', { name: 'Stock price chart' });
     const plot = chart.locator('[data-chart-plot]');
     const reading = chart.locator('[data-chart-readout]');
+    const data = chart.getByText('Data evidence', { exact: true });
+    const candle = chart.locator('[data-chart-candle-evidence]');
     await expect(reading).toBeHidden();
     send(watch, chunked.slice(1));
     await expect(chart.locator('[data-chart-status]')).toContainText('Streaming completed candles');
@@ -270,13 +277,40 @@ test('plots completed candles and volume with keyboard, event evidence and a res
     await expect.poll(() => coloredPanes(plot)).toBeGreaterThanOrEqual(2);
     await capture(chart, 'desktop');
 
+    const requestCount = [wire.watches.length, wire.history.length];
+    const caption = reading.locator('[data-chart-candle-time]');
+    const values = reading.locator('[data-chart-values]');
+    const latest = await caption.textContent();
+    await plot.hover({ position: { x: 145, y: 110 } });
+    await expect(caption).not.toHaveText(latest);
+    const firstHovered = await caption.textContent();
+    const firstValues = await values.textContent();
+    await plot.hover({ position: { x: 320, y: 110 } });
+    await expect(caption).not.toHaveText(firstHovered);
+    await expect(values).not.toHaveText(firstValues);
+    expect([wire.watches.length, wire.history.length]).toEqual(requestCount);
+
     await plot.focus();
     await page.keyboard.press('Home');
-    await expect(reading).toContainText('14:30:00.000Z');
+    await expect(reading).toContainText('09:30:00 NY');
+    await expect(reading).not.toContainText('14:30:00.000Z');
     await expect(reading).toContainText('$190.00');
+    await expect(reading.getByRole('button', { name: 'Previous candle' })).toBeDisabled();
+    await expect(candle).toBeHidden();
+    await data.focus();
+    await data.press('Space');
+    await expect(data).toBeFocused();
+    await expect(candle).toBeVisible();
+    await expect(candle).toContainText('2026-11-12T14:30:00.000Z');
+    await expect(candle).toContainText('2026-11-12T14:35:00.000Z');
+    await expect(candle).toContainText('Original receipt');
+    await expect(candle).toContainText('09:35:00.950 NY');
+    await plot.focus();
     await page.keyboard.press('ArrowRight');
     await expect(reading.locator('[data-chart-candle-time]')).toContainText('09:35:00 NY');
     await expect(reading.locator('[data-chart-candle-time]')).toContainText('15:35:00 Berlin');
+    await expect(candle).not.toContainText('2026-11-12T14:30:00.000Z');
+    await expect(plot).toBeFocused();
     await page.keyboard.press('End');
     await expect(reading.getByRole('button', { name: 'Next candle' })).toBeDisabled();
 
@@ -303,8 +337,12 @@ test('plots completed candles and volume with keyboard, event evidence and a res
     await chart.getByText(/^News & earnings/).click();
     await expect(chart.locator('[data-chart-events]')).toContainText('Earnings estimate');
     await expect(chart.locator('[data-chart-events]')).toContainText('Outside loaded candle intervals');
+    expect([wire.watches.length, wire.history.length]).toEqual(requestCount);
 
     await page.setViewportSize({ width: 390, height: 830 });
+    await data.focus();
+    await data.press('Enter');
+    await expect(candle).toBeHidden();
     await chart.getByText('Layers & price levels', { exact: true }).click();
     await chart.getByText(/^News & earnings/).click();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
@@ -312,7 +350,9 @@ test('plots completed candles and volume with keyboard, event evidence and a res
         values.every(value => getComputedStyle(value).whiteSpace === 'nowrap' && value.scrollWidth <= value.clientWidth))).toBe(true);
     await expect.poll(() => plot.locator('canvas').first().evaluate(canvas => canvas.width)).toBeLessThan(390);
     await expect(chart.getByRole('combobox', { name: 'Candle interval' })).toBeVisible();
-    await expect(chart.locator('[data-chart-forming]')).toContainText('preview unavailable');
+    await expect(chart.locator('[data-chart-completed-note]')).toHaveText('Completed candles only');
+    expect((await data.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    expect((await reading.getByRole('button', { name: 'Previous candle' }).boundingBox()).width).toBeGreaterThanOrEqual(44);
     await capture(chart, 'mobile');
 });
 
@@ -334,10 +374,25 @@ test('prepends a bounded earlier page without moving the viewport and updates a 
     await plot.hover({ position: { x: 145, y: 110 } });
     await expect(readout.locator('[data-chart-candle-time]')).toHaveText(inspected);
     await page.getByRole('button', { name: 'Go to latest' }).click();
-    const amended = { ...snapshot, bars: snapshot.bars.map((bar, index) =>
-        index === snapshot.bars.length - 1 ? { ...bar, close: 198.77, high: 199.15 } : bar) };
+    const data = page.getByText('Data evidence', { exact: true });
+    const selected = page.locator('[data-chart-candle-evidence]');
+    await data.press('Enter');
+    await expect(selected).toContainText(snapshot.bars.at(-1).knownAtUtc);
+    const retrieved = '2026-11-12T17:41:09.1234567Z';
+    const available = '2026-11-12T17:41:10.5678901Z';
+    const amended = { ...snapshot, asOfUtc: '2026-11-12T17:41:11Z', bars: snapshot.bars.map((bar, index) =>
+        index === snapshot.bars.length - 1 ? { ...bar, close: 198.77, high: 199.15,
+            knownAtUtc: null, retrievedAtUtc: retrieved, availableAtUtc: available } : bar) };
     send(watch, frames(watch, amended));
     await expect(readout.locator('[data-chart-values]')).toContainText('$198.77');
+    await expect(data).toBeFocused();
+    await expect(selected).toBeVisible();
+    await expect(selected).toContainText('Original receipt unavailable');
+    await expect(selected).toContainText(retrieved);
+    await expect(selected).toContainText(available);
+    await expect(selected).toContainText('12:41:09.1234567 NY');
+    await expect(selected).toContainText('18:41:09.1234567 Berlin');
+    await expect(readout).not.toContainText(retrieved);
     await expect(page.getByRole('button', { name: 'Load earlier' })).toBeDisabled();
 });
 
@@ -361,6 +416,7 @@ test('keeps daily structure and daily overlay availability on intraday candles a
     await expect(zoneKey).toContainText('Current zone · 1d pivots');
     const study = chart.locator('[data-chart-study-row="sma50:1d"]');
     await expect(study).toContainText('SMA 50 · 1d');
+    await expect(study).toContainText('Partial history · Warm-up or gaps exclude some observations.');
     await expect(chart.locator('[data-chart-study-row="rvol"]')).toContainText('Unavailable · Insufficient baseline');
     await study.getByText('SMA 50 · 1d', { exact: true }).click();
     await expect(study).toContainText('Reconstructed from retrieved history');
@@ -368,6 +424,10 @@ test('keeps daily structure and daily overlay availability on intraday candles a
 
     const plot = chart.locator('[data-chart-plot]');
     const readings = chart.locator('[data-chart-study-values]');
+    const data = chart.getByText('Data evidence', { exact: true });
+    const selected = chart.locator('[data-chart-candle-evidence]');
+    const point = chart.locator('[data-chart-indicator-evidence]');
+    const availability = iso(baseline.indicators[1].availabilityRuns[0][2]);
     // Focus scrolling can move the canvas under a pointer left over the study details.
     await page.mouse.move(1, 1);
     await plot.scrollIntoViewIfNeeded();
@@ -378,12 +438,73 @@ test('keeps daily structure and daily overlay availability on intraday candles a
     await expect(readings).toContainText('SMA 50 · 1dUnavailable for this candle');
     for (let index = 0; index < 4; index++) await plot.press('ArrowRight');
     await expect(chart.locator('[data-chart-candle-time]')).toContainText('09:50:00 NY');
-    await expect(readings).toContainText('Available ' + iso(baseline.indicators[1].availabilityRuns[0][2]));
+    await expect(readings).toContainText('USD');
+    await expect(readings).toContainText('Same-time RVOL · 1mUnavailable for this candle');
+    await expect(readings).not.toContainText(availability);
+    await expect(readings).not.toContainText(currentRevision);
+    await expect(chart.locator('[data-chart-study-history]')).toHaveText('Study history includes reconstructed values');
+    await expect(point).toBeHidden();
+    const requestsBeforeEvidence = [wire.watches.length, wire.history.length];
+    await data.press('Enter');
+    await expect(point).toBeVisible();
+    await expect(point).toContainText(availability);
+    await expect(point).toContainText('2026-11-10T21:00:00.000Z');
+    await expect(point).toContainText('2026-11-13T14:00:00.000Z');
+    await expect(point).toContainText(currentRevision);
+    await expect(point).not.toContainText('RVOL');
+    expect([wire.watches.length, wire.history.length]).toEqual(requestsBeforeEvidence);
+    const selectedTime = await chart.locator('[data-chart-candle-time]').textContent();
+    const revision = point.getByText(currentRevision, { exact: true });
+    await revision.evaluate(node => node.dataset.retained = 'true');
+    const repairing = { ...baseline, asOfUtc: '2026-11-13T14:01:00Z', status: 'repairing', reason: 'Waiting for the missing interval.',
+        evidence: { ...baseline.evidence, coverage: 'partial' },
+        indicators: baseline.indicators.map(item => item.id === 'rvol'
+            ? { ...item, status: 'retry', reason: 'Source retry was requested.' } : item) };
+    send(watch, frames(watch, repairing));
+    await expect(chart.locator('[data-chart-status]')).toContainText('Repairing data · Waiting for the missing interval.');
+    await expect(chart.locator('[data-chart-source]')).toContainText('Partial candle coverage');
+    await expect(chart.locator('[data-chart-study-row="rvol"]')).toContainText('Retry available · Source retry was requested.');
+    await expect(point).toContainText('2026-11-13T14:01:00.000Z');
+    await expect(chart.locator('[data-chart-candle-time]')).toHaveText(selectedTime);
+    await expect(revision).toHaveAttribute('data-retained', 'true');
+    await expect(data).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 830 });
+    await expect.poll(() => revision.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     await chart.getByRole('button', { name: 'Load earlier', exact: true }).click();
     await expect(chart.locator('[data-chart-history-status]')).toHaveText('38 earlier candles loaded');
     expect(wire.history).toEqual([{ key: watch.key, older: true }]);
     await expect(zoneKey).toContainText('Current zone · 1d pivots');
-    await expect(readings).toContainText('Available ' + iso(baseline.indicators[1].availabilityRuns[0][2]));
+    await expect(chart.locator('[data-chart-candle-time]')).toHaveText(selectedTime);
+    await expect(point).toContainText(availability);
+    await expect(revision).toHaveAttribute('data-retained', 'true');
+    await page.mouse.move(1, 1);
+    await plot.press('Home');
+    for (let index = 0; index < 4; index++) await plot.press('ArrowRight');
+    const earlier = fixtureSnapshot(watch.key, { page: 1 });
+    const earlierAvailability = iso(earlier.indicators[1].availabilityRuns[0][2]);
+    await expect(chart.locator('[data-chart-study-history]')).toContainText('Separate earlier study segment');
+    await expect(point).toContainText(earlierAvailability);
+    await expect(point).toContainText('2026-11-12T13:58:00.000Z');
+    await expect(point).toContainText(earlierRevision);
+    await expect(point).not.toContainText(currentRevision);
+    const earlierStart = earlier.bars[4].startUtc;
+    await expect(selected).toContainText(earlierStart);
+    send(watch, frames(watch, fixtureSnapshot(watch.key, { empty: true })));
+    await expect(chart.locator('[data-chart-status]')).toContainText('Candles unavailable');
+    await expect(selected).toContainText(earlierStart);
+    await expect(point).toContainText(earlierRevision);
+    for (let index = 0; index < 5; index++) await plot.press('ArrowRight');
+    await expect(readings).toContainText('SMA 50 · 1dUnavailable for this candle');
+    await expect(point).toBeEmpty();
+    const incompatible = fixtureSnapshot(watch.key, { empty: true });
+    incompatible.evidence.adjustmentPolicy = 'raw';
+    send(watch, frames(watch, incompatible));
+    await expect(chart.locator('[data-chart-readout]')).toBeHidden();
+    await expect(selected).toBeEmpty();
+    await expect(point).toBeEmpty();
+    await expect(chart.locator('[data-chart-evidence]')).toContainText('raw');
+    expect(wire.history).toHaveLength(1);
 });
 
 test('limits four price studies and two lower panes and switches them with a mobile keyboard', async ({ page }) => {
@@ -512,8 +633,17 @@ test('keeps Desk on demand and rejects queued or wrong-context frames on selecti
 
     await page.getByRole('button', { name: 'AAPL', exact: true }).click();
     await expect.poll(() => wire.watches.length).toBe(1);
-    send(wire.watches[0]);
+    const chart = page.getByRole('region', { name: 'Stock price chart' });
+    const data = chart.getByText('Data evidence', { exact: true });
+    const selected = chart.locator('[data-chart-candle-evidence]');
+    const aapl = fixtureSnapshot(wire.watches[0].key);
+    const aaplReceipt = '2026-11-12T17:40:02.1234567Z';
+    aapl.bars.at(-1).knownAtUtc = aaplReceipt;
+    aapl.bars.at(-1).availableAtUtc = aaplReceipt;
+    send(wire.watches[0], frames(wire.watches[0], aapl));
     await expect(page.locator('[data-chart-readout]')).toBeVisible();
+    await data.press('Enter');
+    await expect(selected).toContainText(aaplReceipt);
     await expect(page.getByRole('link', { name: 'Open full chart for AAPL' })).toHaveAttribute('href', /\/Chart\?.*symbol=AAPL/);
 
     await page.getByRole('button', { name: 'MSFT', exact: true }).click();
@@ -521,10 +651,12 @@ test('keeps Desk on demand and rejects queued or wrong-context frames on selecti
     await expect.poll(() => wire.watches[0].closed).toBe(true);
     send(wire.watches[1], frames(wire.watches[1], fixtureSnapshot(wire.watches[0].key)));
     await expect(page.locator('[data-chart-readout]')).toBeHidden();
+    await expect(selected).toBeEmpty();
     send(wire.watches[1]);
     await expect(page.locator('[data-chart-readout]')).toContainText(/\$31[0-9]/);
+    await expect(selected).toBeVisible();
+    await expect(selected).not.toContainText(aaplReceipt);
 
-    const chart = page.getByRole('region', { name: 'Stock price chart' });
     await chart.getByRole('combobox', { name: 'Session' }).selectOption('extended');
     await expect.poll(() => wire.watches.length).toBe(3);
     send(wire.watches[2]);
@@ -532,19 +664,41 @@ test('keeps Desk on demand and rejects queued or wrong-context frames on selecti
     await chart.getByRole('combobox', { name: 'Candle interval' }).selectOption('1d');
     await expect.poll(() => wire.watches.length).toBe(4);
     expect(wire.watches[3].key).toMatchObject({ interval: '1d', sessionView: 'regular', context: 'swing' });
+    await expect(selected).toBeEmpty();
     await expect(chart.getByRole('combobox', { name: 'Session' })).toBeDisabled();
     await chart.getByRole('combobox', { name: 'Daily lookback' }).selectOption('year');
     await expect.poll(() => wire.watches.length).toBe(5);
-    send(wire.watches[4]);
+    const daily = fixtureSnapshot(wire.watches[4].key);
+    daily.levels.push({
+        key: 'previous-close', label: 'Previous close', value: 313, effectiveAtUtc: '2026-11-12T00:00:00Z',
+        distancePct: 1.25, sourceTimeframe: '1d', points: []
+    });
+    send(wire.watches[4], frames(wire.watches[4], daily));
     await expect(chart.locator('[data-chart-context-label]')).toContainText('1d structure · year lookback');
     await expect(chart.locator('[data-chart-source]')).toContainText('Reconstructed from retrieved history');
+    await expect(chart.locator('[data-chart-source]')).toContainText('Calculations shown at source candle close. Original availability may be later.');
+    await expect(chart.locator('[data-chart-status]')).toContainText('History only');
+    const caption = chart.locator('[data-chart-candle-time]');
+    await expect(caption).toHaveText('Nov 12, 2026 · Daily');
+    await expect(selected).toContainText('Nov 11, 2026, 19:00:00.000 NY');
+    await expect(selected).toContainText('2026-11-12T00:00:00.000Z');
+    await expect(chart.locator('[data-chart-readout]')).not.toContainText('2026-11-13T14:00:00.000Z');
+    const layers = chart.getByText('Layers & price levels', { exact: true });
+    const comparisons = chart.locator('[data-chart-distances]');
+    await expect(comparisons).toBeHidden();
+    const requestCount = [wire.watches.length, wire.history.length];
+    await layers.press('Enter');
     await chart.locator('[data-chart-plot]').focus();
     await page.keyboard.press('End');
-    await expect(chart.locator('[data-chart-distances]')).toContainText('Reconstructed for this close · Daily SMA50');
-    await expect(chart.locator('[data-chart-distances]')).toContainText('2026-11-13T14:00:00.000Z');
+    await expect(comparisons).toBeVisible();
+    await expect(comparisons.getByText('Daily SMA50', { exact: true })).toBeVisible();
+    await expect(comparisons).toContainText('Reconstructed for this close');
+    await expect(comparisons).toContainText('2026-11-13T14:00:00.000Z');
+    await expect(comparisons).toContainText('Latest comparison +1.25%');
     await page.keyboard.press('ArrowLeft');
-    await expect(chart.locator('[data-chart-distances]')).toBeHidden();
-    await chart.getByText('Layers & price levels', { exact: true }).click();
+    await expect(comparisons).toBeEmpty();
+    await expect(comparisons).toBeHidden();
+    expect([wire.watches.length, wire.history.length]).toEqual(requestCount);
     await expect(chart.locator('[data-chart-zones]')).toContainText('shown at the right edge');
     const fullChart = page.getByRole('link', { name: 'Open full chart for MSFT' });
     await fullChart.focus();
@@ -561,18 +715,28 @@ test('retains the last candles during reconnect and renders explicit empty or un
     await page.goto('/Chart?symbol=AAPL');
     await expect.poll(() => wire.watches.length).toBe(1);
     const watch = wire.watches[0];
-    send(watch, frames(watch, { ...fixtureSnapshot(watch.key), status: 'delayed', reason: 'Latest minute is overdue.' }));
+    const baseline = fixtureSnapshot(watch.key);
+    send(watch, frames(watch, { ...baseline, status: 'closed' }));
     const status = page.locator('[data-chart-status]');
     const reading = page.locator('[data-chart-readout]');
+    const selected = page.locator('[data-chart-candle-evidence]');
+    await expect(status).toHaveText('Market closed');
+    send(watch, frames(watch, { ...baseline, status: 'delayed', reason: 'Latest minute is overdue.' }));
+    await page.getByText('Data evidence', { exact: true }).press('Enter');
+    await expect(selected).toContainText('Original receipt');
+    const acceptedEvidence = await selected.textContent();
     await expect(status).toContainText('Delayed candles');
     send(watch, [{ type: 3, invocationId: watch.invocationId }]);
     await expect(status).toContainText('Reconnecting chart stream');
+    await expect(status).toContainText('Showing last available candles');
     await expect(reading).toBeVisible();
+    await expect(selected).toHaveText(acceptedEvidence);
     await expect.poll(() => wire.watches.length).toBe(2);
     send(wire.watches[1], frames(wire.watches[1], fixtureSnapshot(wire.watches[1].key, { empty: true })));
     await expect(status).toContainText('Candles unavailable');
     await expect(page.locator('[data-chart-empty]')).toContainText('No completed candles');
     await expect(reading).toBeHidden();
+    await expect(selected).toBeEmpty();
 
     await page.getByRole('combobox', { name: 'Candle interval' }).selectOption('15m');
     await expect.poll(() => wire.watches.length).toBe(3);

@@ -298,10 +298,14 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
     background: var(--panel-subtle);
 }
 
-.stock-chart-readout p {
+.stock-chart-study-history {
     font-size: 12px;
     color: var(--muted);
-    margin-top: 4px;
+}
+
+.stock-chart-readout-head strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .stock-chart-values {
@@ -330,12 +334,6 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
     gap: 7px 12px;
     padding-top: 6px;
     border-top: 1px solid var(--line);
-}
-
-.stock-chart-study-values small {
-    display: block;
-    color: var(--muted);
-    overflow-wrap: anywhere;
 }
 
 .stock-chart-details > details {
@@ -389,6 +387,15 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
 .stock-chart-detail-list [data-zone-type="support"] strong { color: var(--stock-chart-up); }
 .stock-chart-detail-list [data-zone-type="resistance"] strong { color: var(--stock-chart-down); }
 
+.stock-chart-evidence-section h4 {
+    margin: 8px 0 6px;
+    font-size: 13px;
+}
+
+.stock-chart-evidence-section .stock-chart-detail-list .stock-chart-evidence {
+    margin: 0;
+}
+
 .stock-chart-evidence {
     display: grid;
     grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr);
@@ -416,7 +423,10 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
     .stock-chart-pane-control select,
     .stock-chart-navigation .btn,
     .stock-chart-candle-nav .btn,
-    .stock-chart-head .btn { min-height: 44px; }
+    .stock-chart-head .btn,
+    .stock-chart-details > details > summary { min-height: 44px; }
+    .stock-chart-candle-nav .btn { min-width: 44px; }
+    .stock-chart-details > details > summary { box-sizing: border-box; padding-block: 12px; }
     .stock-chart-toggles label { min-height: 36px; }
     .stock-chart-plot { height: calc(clamp(260px, 45vh, 400px) + var(--stock-chart-panes, 0) * 94px); }
     .stock-chart-studies li { min-height: 44px; padding: 12px 45px 8px 8px; }

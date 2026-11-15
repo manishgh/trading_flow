@@ -10,6 +10,7 @@
     };
     const clock = new Intl.DateTimeFormat(undefined, { ...clockFormat, timeZone: 'America/New_York' });
     const berlinClock = new Intl.DateTimeFormat(undefined, { ...clockFormat, timeZone: 'Europe/Berlin' });
+    const sessionDate = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
     const statusLabels = {
         streaming: 'Streaming completed candles', delayed: 'Delayed candles', repairing: 'Repairing data',
         history_only: 'History only', closed: 'Market closed', unavailable: 'Candles unavailable'
@@ -21,14 +22,24 @@
     const historyPageLimit = 3;
 
     // Express the same instant in New York and Berlin, with each zone's historical daylight saving rules.
-    function localClocks(time) {
-        return clock.format(time) + ' NY · ' + berlinClock.format(time) + ' Berlin';
+    function localClocks(time, fraction = '') {
+        return clock.format(time) + fraction + ' NY · ' + berlinClock.format(time) + fraction + ' Berlin';
     }
 
     // Show the displayed clocks and the exact original UTC instant for source evidence.
-    function timestamp(value) {
+    function timestamp(value, exact = false) {
         const time = Date.parse(value);
-        return Number.isFinite(time) ? localClocks(time) + ' · ' + new Date(time).toISOString() : 'Unavailable';
+        if (!Number.isFinite(time)) return 'Unavailable';
+        const fraction = exact ? String(value).match(/\.\d+(?=Z$|[+-]\d{2}:\d{2}$)/i)?.[0] : '';
+        const utc = new Date(time).toISOString();
+        return localClocks(time, fraction) + ' · ' + (fraction ? utc.replace(/\.\d+Z$/, fraction + 'Z') : utc);
+    }
+
+    // Format DateOnly in UTC so a provider's literal exchange date never moves across a local midnight.
+    function candleCaption(bar, interval) {
+        if (interval !== '1d') return localClocks(bar.startMs) + ' · ' + bar.segment;
+        const time = Date.parse(bar.sessionDate);
+        return (Number.isFinite(time) ? sessionDate.format(time) : 'Session date unavailable') + ' · Daily';
     }
 
     // Put only text and explicit classes in elements that carry server evidence.
@@ -39,16 +50,27 @@
         return node;
     }
 
-    // Make ordered label/value pairs reusable for readings and their evidence.
+    // Update only changed evidence fields so the full revision stays selectable across snapshot updates.
     function fields(list, entries, grouped = false) {
-        list.replaceChildren(...entries.flatMap(([label, value]) => {
-            const term = element('dt', label);
-            const detail = element('dd', value);
-            if (!grouped) return [term, detail];
-            const wrapper = element('div');
-            wrapper.append(term, detail);
-            return [wrapper];
-        }));
+        for (const [index, [label, value]] of entries.entries()) {
+            let row = grouped ? list.children[index] : list;
+            if (!row) {
+                row = element('div');
+                list.append(row);
+            }
+            const offset = grouped ? 0 : 2 * index;
+            let term = row.children[offset];
+            let detail = row.children[offset + 1];
+            if (!term) {
+                term = element('dt');
+                detail = element('dd');
+                row.append(term, detail);
+            }
+            if (term.textContent !== label) term.textContent = label;
+            const text = String(value ?? '');
+            if (detail.textContent !== text) detail.textContent = text;
+        }
+        for (const child of [...list.children].slice(grouped ? entries.length : 2 * entries.length)) child.remove();
     }
 
     // Limit external event links to ordinary articles reachable over HTTP or HTTPS.
@@ -91,15 +113,16 @@
             const points = level.points || [];
             if (!points.length) {
                 return latest && level.distancePct != null
-                    ? [level.label + ' · Latest comparison ' + percents.format(level.distancePct) + '%'] : [];
+                    ? [[level.label, 'Latest comparison ' + percents.format(level.distancePct) + '%']] : [];
             }
             const point = points.find(item => Date.parse(item.startUtc) === bar.startMs);
             const historical = point && window.TradingFlowStockChartPlot.reconstructedAtClose(point, bar, reconstructed);
             const available = point && Date.parse(point.availableAtUtc) <= bar.endMs;
             const value = (historical || available) && point.value;
             if (!(value > 0)) return [];
-            const text = level.label + ' ' + percents.format(100 * (bar.close / value - 1)) + '%';
-            return [historical ? 'Reconstructed for this close · ' + text + ' · Available ' + timestamp(point.availableAtUtc) : text];
+            const distance = percents.format(100 * (bar.close / value - 1)) + '%';
+            return [[level.label, [distance, historical ? 'Reconstructed for this close' : '',
+                'Available ' + timestamp(point.availableAtUtc, true)].filter(Boolean).join(' · ')]];
         });
     }
 
@@ -125,6 +148,7 @@
         let streamStatus = '';
         let reconstructed = false;
         let shownPane = null;
+        let pointerMoved = false;
 
         // Add handlers whose lifetime is no longer than this chart host.
         function on(node, event, handler) {
@@ -155,6 +179,7 @@
             if (!evidence) return;
             const evidenceText = [evidence.provider, evidence.feed?.toUpperCase(), evidence.adjustmentPolicy].filter(Boolean);
             evidenceText.push(evidence.lastCompletedUtc ? 'Last completed · ' + readAge(evidence.lastCompletedUtc) : 'No completed candle');
+            if (evidence.coverage === 'partial') evidenceText.push('Partial candle coverage');
             if (reconstructed) {
                 evidenceText.push('Reconstructed from retrieved history');
                 if (currentLevels.some(level => level.points?.length)) {
@@ -172,7 +197,7 @@
                 element('span', 'Postmarket', 'stock-chart-late'));
         }
 
-        // Present completed prices and provenance in a readout shared by the keyboard and crosshair.
+        // Present compact prices and study values for exactly the candle inspected by keyboard or crosshair.
         function inspect(start, announce = false) {
             const index = currentBars.findIndex(bar => bar.startMs === start);
             if (index === -1) return;
@@ -182,50 +207,93 @@
                 ['Open', prices.format(bar.open)], ['High', prices.format(bar.high)], ['Low', prices.format(bar.low)],
                 ['Close', prices.format(bar.close)], ['Volume', numbers.format(bar.volume)]
             ];
-            get('candle-time').textContent = localClocks(bar.startMs) + ' · ' + bar.segment;
-            get('candle-evidence').textContent = [
-                timestamp(bar.startUtc) + ' → ' + timestamp(bar.endUtc),
-                bar.sourceKind?.replaceAll('_', ' '), bar.knownAtUtc ? 'Original receipt ' + timestamp(bar.knownAtUtc) : 'Original receipt unavailable',
-                bar.retrievedAtUtc ? 'Retrieved ' + timestamp(bar.retrievedAtUtc) : '', 'Available ' + timestamp(bar.availableAtUtc)
-            ].filter(Boolean).join(' · ');
-            const distances = distancesFor(bar, currentLevels, hiddenLevels, reconstructed, index === currentBars.length - 1);
-            get('distances').hidden = distances.length === 0;
-            get('distances').textContent = distances.join(' · ');
+            const title = candleCaption(bar, key.interval);
+            const time = get('candle-time');
+            if (time.textContent !== title) time.textContent = title;
             fields(get('values'), values, true);
-            const indicators = studies.readouts(start);
+            const indicators = studies.readouts(start).map(([label, value, available, anchor, revision, reconstructedStudy, observed, historical]) =>
+                ({ label, value, available, anchor, revision, reconstructedStudy, observed, historical }));
             const studyReadout = get('study-values');
             studyReadout.hidden = !indicators.length;
-            fields(studyReadout, indicators, true);
-            for (const [offset, [, , available, anchor, revision, reconstructedStudy, observed, historical]] of indicators.entries()) {
-                if (!available) continue;
-                const label = element('small', 'Available ' + available);
-                label.title = timestamp(available);
-                studyReadout.children[offset].append(label);
-                if (anchor) {
-                    const source = element('small', 'Segment from ' + anchor);
-                    source.title = timestamp(anchor);
-                    studyReadout.children[offset].append(source);
-                }
-                if (historical) studyReadout.children[offset].append(element('small', 'Separate earlier-page segment'));
-                if (reconstructedStudy) studyReadout.children[offset].append(element('small', 'Reconstructed history'));
-                if (observed) studyReadout.children[offset].append(element('small', 'Observed ' + observed));
-                if (revision) {
-                    const provenance = element('small', 'Source revision ' + revision.slice(0, 12));
-                    provenance.title = revision;
-                    studyReadout.children[offset].append(provenance);
-                }
-            }
+            const measurements = indicators.map(({ label, value }) => [label, value]);
+            fields(studyReadout, measurements, true);
+            const history = get('study-history');
+            const notes = [
+                indicators.some(item => item.reconstructedStudy) ? 'Study history includes reconstructed values' : '',
+                indicators.some(item => item.historical) ? 'Separate earlier study segment' : ''
+            ].filter(Boolean).join(' · ');
+            if (history.textContent !== notes) history.textContent = notes;
+            history.hidden = !notes;
+            renderSelectedEvidence(bar, indicators, index === currentBars.length - 1);
             get('prev').disabled = index === 0;
             get('next').disabled = index === currentBars.length - 1;
             get('readout').hidden = false;
-            if (announce) get('inspection').textContent = get('candle-time').textContent + '. ' + [...values, ...indicators]
+            if (announce) get('inspection').textContent = title + '. ' + [...values, ...measurements]
                 .map(([label, value]) => label + ' ' + value).join(', ');
+        }
+
+        // Keep the same selected candle and matched studies in the disclosures, with their independent clocks.
+        function renderSelectedEvidence(bar, indicators, latest) {
+            get('selected-candle').hidden = !bar;
+            fields(get('candle-evidence'), bar ? [
+                ['Start', timestamp(bar.startUtc, true)], ['End', timestamp(bar.endUtc, true)],
+                ['Source', bar.sourceKind?.replaceAll('_', ' ') || 'Unavailable'],
+                ['Original receipt', bar.knownAtUtc ? timestamp(bar.knownAtUtc, true) : 'Original receipt unavailable'],
+                ...(bar.retrievedAtUtc ? [['Retrieved', timestamp(bar.retrievedAtUtc, true)]] : []),
+                ['Available', timestamp(bar.availableAtUtc, true)]
+            ] : []);
+            const studyEvidence = indicators.flatMap(({ label, available, anchor, revision, reconstructedStudy, observed, historical }) =>
+                available ? [[label, [
+                    ['Available', timestamp(available, true)],
+                    ['Calculation start', timestamp(anchor, true)],
+                    ['Observed snapshot', timestamp(observed, true)],
+                    ['Source revision', revision || 'Unavailable'],
+                    ...(reconstructedStudy ? [['Series / page', 'Study history includes reconstructed values']] : []),
+                    ...(historical ? [['Calculation segment', 'Separate earlier study segment']] : [])
+                ]]] : []);
+            renderIndicatorEvidence(studyEvidence);
+            const comparisons = bar ? distancesFor(bar, currentLevels, hiddenLevels, reconstructed, latest) : [];
+            get('selected-comparisons').hidden = !comparisons.length;
+            fields(get('distances'), comparisons);
+        }
+
+        // Keep each study's evidence nodes across snapshots of the same source interval and study.
+        function renderIndicatorEvidence(studies) {
+            get('selected-indicators').hidden = !studies.length;
+            const list = get('indicator-evidence');
+            const rows = new Map([...list.children].map(row => [row.firstElementChild.textContent, row]));
+            for (const [index, [label, evidence]] of studies.entries()) {
+                let row = rows.get(label);
+                if (!row) {
+                    row = element('li');
+                    row.append(element('strong', label), element('dl', null, 'stock-chart-evidence'));
+                }
+                const position = list.children[index];
+                if (position !== row) list.insertBefore(row, position ?? null);
+                fields(row.lastElementChild, evidence);
+            }
+            for (const row of [...list.children].slice(studies.length)) row.remove();
+        }
+
+        // Clear stale evidence when no candle is left in the accepted joined view.
+        function clearInspection() {
+            selected = null;
+            get('readout').hidden = true;
+            get('candle-time').textContent = '';
+            get('inspection').textContent = '';
+            fields(get('values'), [], true);
+            fields(get('study-values'), [], true);
+            get('study-values').hidden = true;
+            get('study-history').replaceChildren();
+            get('study-history').hidden = true;
+            renderSelectedEvidence(null, [], false);
         }
 
         // Move the keyboard inspection to a real completed bar and preserve zoom while bringing it into view.
         function inspectIndex(index) {
             const bar = currentBars[Math.max(0, Math.min(index, currentBars.length - 1))];
             if (!bar) return;
+            pointerMoved = false;
             plot.reveal(currentBars.indexOf(bar));
             inspect(bar.startMs, true);
         }
@@ -370,6 +438,7 @@
             const selectedStudies = indicatorLibrary.joinedStudies(snapshot, olderPages.slice().reverse(), studies.tokens());
             earlierStudiesChanged = selectedStudies.some(study => study.earlierUnavailable);
             studies.update(selectedStudies);
+            pointerMoved = false;
             plot.setData({ bars: currentBars, zones, levels: currentLevels, events, interval: key.interval,
                 basisBreaks: recent.flatMap(page => page.evidence.basisBreaks || []),
                 reconstructed, studies: selectedStudies, shownPane }, retainPosition);
@@ -380,7 +449,7 @@
             if (hasBars) {
                 const prior = currentBars.find(bar => bar.startMs === selected);
                 inspect((prior || currentBars.at(-1)).startMs);
-            }
+            } else clearInspection();
             renderZoneKey(zones);
             renderZones(zones);
             renderLevels(currentLevels);
@@ -411,11 +480,12 @@
             reconstructed = false;
             studies.update([]);
             get('retry').hidden = true;
-            get('readout').hidden = true;
+            clearInspection();
             get('empty').hidden = false;
             get('empty').textContent = 'Loading completed candles…';
             renderZoneKey([]);
-            for (const name of ['source', 'history-status', 'event-count', 'inspection', 'zones', 'levels', 'events', 'evidence']) get(name).replaceChildren();
+            for (const name of ['source', 'history-status', 'event-count', 'zones', 'levels', 'events']) get(name).replaceChildren();
+            fields(get('evidence'), []);
             refreshPager();
         }
 
@@ -471,6 +541,9 @@
                 return;
             }
             if (!plot) plot = plotting.createPlot(get('plot'), start => {
+                // Layout and programmatic crosshair updates must not replace a keyboard or prior selection.
+                if (!pointerMoved) return;
+                pointerMoved = false;
                 if (start !== selected) inspect(start);
             });
             if (reset) {
@@ -656,9 +729,17 @@
         on(get('retry'), 'click', () => startSelection(!snapshot));
         on(get('older'), 'click', loadEarlier);
         on(get('history-reload'), 'click', () => startSelection(false, true));
-        on(get('latest'), 'click', () => { plot.latest(); inspect(currentBars.at(-1).startMs, true); });
+        // Return to the chart's live edge and keep the newly inspected latest candle selected.
+        on(get('latest'), 'click', () => {
+            pointerMoved = false;
+            plot.latest();
+            inspect(currentBars.at(-1).startMs, true);
+        });
         on(get('prev'), 'click', () => inspectIndex(currentBars.findIndex(bar => bar.startMs === selected) - 1));
         on(get('next'), 'click', () => inspectIndex(currentBars.findIndex(bar => bar.startMs === selected) + 1));
+        // Only an actual pointer input in the plot can select a candle through its crosshair.
+        for (const event of ['pointerdown', 'pointermove']) on(get('plot'), event, () => { pointerMoved = true; });
+        on(get('plot'), 'pointerleave', () => { pointerMoved = false; });
         on(get('plot'), 'keydown', event => {
             // Keep native Tab and Escape navigation while giving arrow controls to the chart.
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || !currentBars.length) return;
