@@ -131,8 +131,9 @@ On 27 October 2026 the user also approved the fifteen-minute opening-range break
 
 Generic sentiment, present-day universes projected backward, and parameter searches
 remain diagnostic and cannot promote. A result can promote only when the number of
-variants tried is known from the trial registry. Saved-plan backtests are not registered
-there yet, so they stay diagnostic until that is built.
+variants tried is known from the trial registry. New saved-plan starts are now registered
+through the reviewed admission path. Missing historical registrations leave earlier try
+counts unknown. Registration alone does not establish eligibility or grant promotion.
 
 Every experiment freezes its exact observed data coverage and chronological
 development, validation, embargo, and untouched holdout boundaries in the trial

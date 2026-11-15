@@ -1,12 +1,12 @@
 # Remaining Fable work: implementation proposal
 
-15 November 2026. Status: NEXT-1 through NEXT-4 approved by the user after separate plan/execution and code/design reviews and a plain-language explanation. Implementation is beginning. NEXT-5 through NEXT-7 still require their separate decisions/designs. This extends the completed daily-workflow/chart checkpoint.
+15 November 2026, evening status: NEXT-1 through NEXT-4 are implemented, independently reviewed and locally deployed. Scheduled-capture receipts and actual paper fills remain external acceptance evidence. The exact NEXT-7 one-share AAPL test is already approved for Monday after 15:35 Berlin, subject to its recorded preflight; no repeat approval is needed. The chart density/crosshair follow-up is also complete. See [current audit closure inventory](fable-audit-closure.md) for remaining research decisions and the separate proposed paper/chart additions. Rotation stays disabled; trading stays paused.
 
 Checkpoint labels NEXT-1 through NEXT-7 are local planning IDs, separate from the audit finding IDs.
 
 ## What this proposal closes
 
-The current audit's A1/A2/A4/A5 and B1–B4/B7 repairs are implemented in their reviewed scopes. The five chart findings have been addressed. Plan 192's replay and the actual operator migration count have been verified. The new optional-indicator/workflow release passed 226 browser tests and 3,995 backend cases, with zero failures and four explicit profiling opt-ins unrun. Commit 57ee499 is installed locally with trading paused. Signed-in chart, News, Earnings and paused-ticket checks passed; protected operator records and migration 29 were verified after the update.
+At the earlier UI checkpoint, the audit's A1/A2/A4/A5 and B1–B4/B7 repairs are implemented in their reviewed scopes. The five chart findings have been addressed. Plan 192's replay and the actual operator migration count have been verified. The new optional-indicator/workflow release passed 226 browser tests and 3,995 backend cases, with zero failures and four explicit profiling opt-ins unrun. Commit 57ee499 was installed locally with trading paused. Signed-in chart, News, Earnings and paused-ticket checks passed; protected operator records and migration 29 were verified after the update.
 
 The whole audit remains open. The table below separates software completion from evidence that cannot be obtained by adding code. The user has asked to finish the remaining audit, while keeping sector rotation disabled, separate independent reviewers, local commits and no GitHub synchronization.
 
@@ -106,7 +106,7 @@ Tests: first registration before computation, retry/concurrency, failed and canc
 
 Other unresolved policy/UI follow-ups stay explicit: late-entry window policy, historical backtest loss-limit parity, broker-supported linked-stop handoff/RSK-02, strategy-specific chart levels and timestamps, and any remaining section 7 navigation/view merges or embedded News chart choices. Where prior approved scope did not cover them, they need concrete designs. They are not hidden by closing the software checkpoints below.
 
-User approval received for the NEXT-1–NEXT-4 software checkpoints as described, including the observational local Finviz schedule after its acceptance check. It excludes NEXT-5 investment-policy adoption, new NEXT-6 economic studies, NEXT-7 broker writes and later chart implementation. Prepare those concrete proposals while independent software work proceeds.
+Historical approval boundary for NEXT-1–NEXT-4 software checkpoints as described, including the observational local Finviz schedule after its acceptance check. It excludes NEXT-5 investment-policy adoption, new NEXT-6 economic studies, NEXT-7 broker writes and later chart implementation. The later exact Monday AAPL test approval is recorded separately in the current status and its acceptance plan; the exclusions here describe the earlier NEXT-1 through NEXT-4 approval only.
 
 Use isolated checkouts, narrow Sol 6.1 High implementation assignments, one heavyweight build/test job at a time, and separate A plan/execution and B code/design reviewers who do not implement. Each checkpoint records exact tests, measured evidence, local commit and remaining external acceptance in the existing tracking plan. Preserve the user-owned Fable audit, secrets, operator data, original results and all provider receipts. Do not sync GitHub.
 
