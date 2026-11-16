@@ -70,6 +70,16 @@ Root visually inspected the retained 1440px and 390px fixture screenshots; statu
 is beside the symbol on desktop and wraps without page overflow on the phone.
 These screenshots contain synthetic prices. Full release tests remain pending.
 
+The first full release attempt found the central runtime-registry guard: the
+initial implementation registered its hosted shutdown hook directly in Program.
+The run was stopped, its failure log retained, and no owned test/browser process
+remained. The hook and its optional dependencies now use the existing central
+registry. It is hosted only on enabled paper runtime and registered after the SIP
+owner so reverse shutdown drains it first. **26/26** focused composition and
+diagnostic checks passed, including the original guard and four new off/paused/
+feed-only/enabled cases. A and B independently accepted the correction; the complete
+release suite must rerun against the corrected commit. No test was disabled.
+
 ## Operational acceptance remains separate
 
 The installed site still serves the previous reviewed `d77e22b` release. It has

@@ -7,6 +7,25 @@ Source: [Fable audit](../research/tradingflow-audit-2026-11-14.md).
 
 ## Current status
 
+**Current implementation checkpoint, 16 November morning:** the approved bounded
+live-chart diagnostic and directly requested Desk header move passed independent
+A/B component review, an early Release compile, 33 focused backend cases, the
+overlapping final 12-case acceptance slice, 61 affected browser cases, and two
+final four-case browser slices. The real endpoint's admin/CSRF/loopback/default-off
+controls and hard deadline were tested. The first full release attempt exposed a
+hosted-service registration outside the central registry; it was stopped and
+corrected without weakening the check. The corrected composition/diagnostic slice
+passed 26/26 and both reviewers accepted the correction. Full release verification
+and installation are pending; the installed site below remains unchanged. See the
+[implementation evidence](../verification/chart-acceptance-implementation-2026-11-16.md).
+
+The separate [Desk live-quote repair](../design-review/2026-11-16/desk-live-quotes.md)
+is designed and awaiting explicit approval. Investigation confirmed that slow full
+snapshots can delay the current quote relay and its silence-based polling label is
+misleading. No new Desk quote transport has been implemented. Real scheduled
+Finviz receipts, the bounded paper execution and live chart/private evidence remain
+pending their authorized market windows. Nothing was synced to GitHub.
+
 **16 November morning acceptance check, 07:45 Berlin:** the app and collector are
 running. The durable schedule points to today's 15:00 Berlin slot with no calendar
 error; there are zero capture attempts or today-slot outcomes. Both saved screens

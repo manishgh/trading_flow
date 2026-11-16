@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Charts;
 
 namespace TradingFlow.Tests;
 
@@ -208,6 +209,37 @@ public sealed class ProductionCompositionTests
             EnableEarningsMonitor: true));
 
         Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(IHostedService));
+    }
+
+    // The optional endpoint keeps its runtime guard, and its shutdown hook drains before the shared SIP owner stops.
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public void ChartAcceptanceHookRequiresOptInAndTradingRuntime(bool enabled, bool runtime, bool marketFeeds)
+    {
+        var services = new ServiceCollection();
+        services.AddTradingFlowRuntimeHostedServices(new(
+            Enabled: runtime, EnableEarningsMonitor: false, EnableMarketFeeds: marketFeeds, EnableChartAcceptance: enabled));
+        var options = Assert.IsType<ChartAcceptanceOptions>(
+            Assert.Single(services, descriptor => descriptor.ServiceType == typeof(ChartAcceptanceOptions)).ImplementationInstance);
+        Assert.Equal(enabled, options.Enabled);
+        Assert.Equal(runtime, options.RuntimeEnabled);
+        Assert.Equal(enabled, services.Any(descriptor => descriptor.ServiceType == typeof(ChartAcceptanceCoordinator)));
+
+        var hosted = services.Where(descriptor => descriptor.ServiceType == typeof(IHostedService))
+            .Select(ResolveHostedServiceType).ToArray();
+        if (!(enabled && runtime))
+        {
+            Assert.DoesNotContain(typeof(ChartAcceptanceCoordinator), hosted);
+            return;
+        }
+
+        Assert.Single(hosted, type => type == typeof(ChartAcceptanceCoordinator));
+        var diagnostic = Array.IndexOf(hosted, typeof(ChartAcceptanceCoordinator));
+        Assert.True(Array.IndexOf(hosted, typeof(AlpacaMarketStateStreamService)) < diagnostic);
+        Assert.True(diagnostic < Array.IndexOf(hosted, typeof(DurableJobWorkerHostedService)));
     }
 
     [Fact]
