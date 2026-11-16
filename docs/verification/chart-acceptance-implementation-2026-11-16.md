@@ -140,6 +140,14 @@ both the pre-cutover backup and original baseline. B independently rehashed all
 launcher defaults and database preservation. Both accepted the installed release;
 neither represented future market observations as complete.
 
+After committing the reviewed changes, removed only the owned duplicate
+`.tmp/chart-acceptance/publish-319e79a`: all 243 files matched the retained
+publication manifest, there were no database files or reparse links, and the
+resolved target stayed inside this checkout. Freed **61,051,503 bytes** (58.22 MiB).
+Installed and prior binaries, consistent database backups, provider data, test
+receipts, screenshots and review logs remain retained for pending acceptance.
+The user-requested local site remains running. No GitHub sync occurred.
+
 ## Operational acceptance remains separate
 
 The installed site now serves the reviewed `319e79a` release. Scheduled Finviz first receipts, the exact
