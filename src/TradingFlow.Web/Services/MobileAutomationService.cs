@@ -100,6 +100,9 @@ public sealed partial class MobileAutomationService
         await PersistAsync(cancellationToken);
     }
 
+    // A read-only admission check can inspect active automation without pruning session history.
+    internal bool HasActiveSessions => sessions.Values.Any(session => session.Status is "queued" or "starting" or "running");
+
     public IReadOnlyList<MobileAutomationSessionSnapshot> List()
     {
         PruneExpiredSessions();

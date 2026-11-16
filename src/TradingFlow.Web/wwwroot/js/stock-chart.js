@@ -134,9 +134,18 @@
     }
 
     // Mount one read-only chart instance with scoped controls, data and disposal.
-    function mount(root, { privateContext } = {}) {
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost } = {}) {
+        const acceptance = Boolean(acceptanceCorrelation);
+        let acceptanceStarted = false;
+        const summaryNodes = new Map();
+        if (summaryHost) {
+            const head = root.querySelector('.stock-chart-head');
+            for (const name of ['status', 'completed-note', 'full']) summaryNodes.set(name, head.querySelector('[data-chart-' + name + ']'));
+            summaryHost.append(...head.childNodes);
+            head.hidden = true;
+        }
         // Find the component's elements inside this instance so other hosts remain independent.
-        const get = name => root.querySelector('[data-chart-' + name + ']');
+        const get = name => summaryNodes.get(name) || root.querySelector('[data-chart-' + name + ']');
         const transport = window.TradingFlowStockChartTransport;
         const plotting = window.TradingFlowStockChartPlot;
         const indicatorLibrary = window.TradingFlowStockChartIndicators;
@@ -173,6 +182,7 @@
         // Keep a status transition accessible while preserving the last price data on screen.
         function setStatus(state, text) {
             root.dataset.state = state;
+            if (summaryHost) summaryHost.dataset.state = state;
             if (get('status').textContent !== text) get('status').textContent = text;
         }
 
@@ -585,21 +595,21 @@
                 session.value = preservedSession;
                 preservedSession = undefined;
             }
-            session.disabled = daily || weekly;
+            session.disabled = acceptance || daily || weekly;
             session.options[0].textContent = daily || weekly ? 'Provider daily' : 'Regular';
             if (daily) session.value = 'regular';
             const structure = get('structure');
-            structure.disabled = weekly;
+            structure.disabled = acceptance || weekly;
             structure.querySelector('[value="intraday"]').disabled = daily;
             if (daily && structure.value === 'intraday') structure.value = 'auto';
-            get('preset').disabled = weekly;
-            get('library').inert = weekly;
+            get('preset').disabled = acceptance || weekly;
+            get('library').inert = acceptance || weekly;
             get('weekly-availability').hidden = !weekly;
             get('zones').hidden = weekly;
             get('levels').hidden = weekly;
             for (const input of layerFields) {
                 if (['sessions', 'support', 'resistance'].includes(input.dataset.chartLayer)) input.disabled = weekly;
-                if (input.dataset.chartLayer === 'forming') input.disabled = daily || weekly;
+                if (input.dataset.chartLayer === 'forming') input.disabled = acceptance || daily || weekly;
             }
             const showDaily = !weekly && (daily || structure.value === 'daily');
             get('lookback-control').hidden = !showDaily;
@@ -613,6 +623,12 @@
 
         // Use the active controls to start one observation, keeping the current view until a requested reload succeeds.
         function startSelection(reset = true, reloadEarlier = false) {
+            if (acceptance && acceptanceStarted) {
+                void stop();
+                onAcceptanceEnded?.('The acceptance chart selection changed. The observation has ended.');
+                return;
+            }
+            if (acceptance) acceptanceStarted = true;
             const closed = stop();
             const request = new AbortController();
             privateReady = false;
@@ -650,6 +666,7 @@
                 stop = () => closed;
                 get('empty').textContent = 'Chart assets could not load. Reload this page to retry.';
                 setStatus('unavailable', 'Chart unavailable');
+                if (acceptance) onAcceptanceEnded?.('Chart assets could not load.');
                 return;
             }
             if (!plot) plot = plotting.createPlot(get('plot'), start => {
@@ -664,6 +681,10 @@
                 setStatus('loading', 'Loading completed candles…');
             }
             const watchOptions = { formingPreview: Boolean(layers.forming && ['1m', '5m', '15m'].includes(interval)) };
+            if (acceptance) {
+                watchOptions.acceptanceCorrelation = acceptanceCorrelation;
+                acceptanceCorrelation = null;
+            }
             stop = transport.watch(paths, key, watchOptions, request, {
                 // Apply a fresh baseline only while its exact selection is mounted.
                 snapshot(received, live) {
@@ -717,6 +738,7 @@
                     }
                     if (!snapshot) get('empty').textContent = text;
                     refreshStatus();
+                    if (acceptance && !retrying) onAcceptanceEnded?.(text);
                 }
             }, closed);
         }
@@ -792,6 +814,7 @@
 
         // Store only the active browser display preferences without changing the workspace or stock.
         function savePreferences() {
+            if (acceptance) return;
             indicatorLibrary.remember({
                 ...Object.fromEntries(Object.keys(defaults).map(name => [name, get(name).value])),
                 session: preservedSession ?? get('session').value,
@@ -838,13 +861,19 @@
             plot?.setShownPane(pane);
         });
 
-        restorePreferences(indicatorLibrary.preferences(), new URLSearchParams(root.closest('.stock-chart-page') ? location.search : ''));
+        if (acceptance) {
+            root.dataset.symbol = 'AAPL';
+            restorePreferences({ interval: '1m', session: 'regular', indicators: [], preset: 'custom', layers: { forming: true } });
+            // A diagnostic observes one fixed watch. Normal chart preferences remain untouched.
+            for (const node of root.querySelectorAll('.stock-chart-controls select, .stock-chart-study-toolbar button, .stock-chart-study-toolbar select, [data-chart-layer="forming"], [data-chart-reset], [data-chart-retry]')) node.disabled = true;
+        } else restorePreferences(indicatorLibrary.preferences(), new URLSearchParams(root.closest('.stock-chart-page') ? location.search : ''));
         for (const picker of Object.keys(defaults)) on(get(picker), 'change', () => {
             if (picker === 'interval') studies.intervalChanged();
             startSelection();
             savePreferences();
         });
         on(get('reset'), 'click', () => {
+            if (acceptance) return;
             indicatorLibrary.remember(null);
             restorePreferences({});
             get('study-feedback').textContent = '';
@@ -928,6 +957,11 @@
                 const result = stop();
                 active = null;
                 plot?.dispose();
+                if (summaryHost) {
+                    const head = root.querySelector('.stock-chart-head');
+                    head.append(...summaryHost.childNodes);
+                    head.hidden = false;
+                }
                 return result;
             }
         };

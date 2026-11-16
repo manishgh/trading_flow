@@ -41,7 +41,7 @@ public sealed record AlpacaMarketStateStreamOptions(
 /// Sole owner of the Alpaca SIP websocket. It multiplexes market bars and
 /// trading-status evidence for every discovery/run scope behind one fenced lease.
 /// </summary>
-public sealed class AlpacaMarketStateStreamService : BackgroundService,
+public sealed partial class AlpacaMarketStateStreamService : BackgroundService,
     ISecurityTradingStatusProvider,
     IDiscoverySubscriptionSink,
     IDisplayQuoteSubscriptions
@@ -93,7 +93,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         Lazy<TradingFlow.Engine.Abstractions.IMarketDataProvider> marketDataProvider,
         AlpacaMarketStateStreamOptions options,
         TimeProvider timeProvider,
-        LiveQuoteBook? quotes = null)
+        LiveQuoteBook? quotes = null,
+        ChartAcceptanceOptions? chartAcceptanceOptions = null)
     {
         this.quotes = quotes ?? new LiveQuoteBook();
         this.credentials = credentials;
@@ -104,6 +105,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         this.marketDataProvider = marketDataProvider;
         this.options = options;
         this.timeProvider = timeProvider;
+        chartAcceptanceEnabled = chartAcceptanceOptions is { Enabled: true, RuntimeEnabled: true };
         options.Validate();
     }
 
@@ -245,6 +247,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
+    // Remove only the requested owner and register the distinct provider cleanup outcome.
     public async Task RemoveScopeAsync(Guid scopeId, CancellationToken cancellationToken)
     {
         await scopeGate.WaitAsync(cancellationToken);
@@ -254,6 +257,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             {
                 subscriptionChanges.Writer.TryWrite(true);
             }
+            RecordDiagnosticScopeRemoval(scopeId);
         }
         finally
         {
@@ -474,6 +478,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             await stream.ConnectAsync(connectionCts.Token);
             await RevalidateLeaseOwnershipAsync(leaseState, connectionCts.Token);
             marketState.ActivateOwnership(leaseState.Current.FencingToken);
+            var supportsChartReceipts = chartAcceptanceEnabled && stream.TryInstallReceiptObserver(
+                new DiagnosticReceiptObserver(this, lease.FencingToken));
             Volatile.Write(ref chartPreview, preview);
             receive = ReceiveMessagesAsync(
                 stream,
@@ -513,6 +519,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
 
             marketState.MarkSnapshotsReady(leaseState.Current.FencingToken);
             Volatile.Write(ref chartMembership, activeSubscriptions);
+            if (supportsChartReceipts) Volatile.Write(ref diagnosticReadyLease, leaseState);
             displayQuotes = ForwardDisplayQuotesAsync(stream, connectionCts.Token);
 
             subscriptions = ForwardSubscriptionChangesAsync(
@@ -528,6 +535,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
         finally
         {
+            RetireChartDiagnostic(lease.FencingToken);
             Volatile.Write(ref chartPreview, null);
             preview.Retire();
             Volatile.Write(ref chartMembership, null);
@@ -603,7 +611,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         while (await timer.WaitForNextTickAsync(cancellationToken))
         {
             var calendar = await RefreshMarketCalendarAsync(cancellationToken);
-            preview.UpdateCalendar(calendar, timeProvider.GetUtcNow());
+            if (preview.UpdateCalendar(calendar, timeProvider.GetUtcNow()))
+                Volatile.Read(ref chartDiagnostic)?.Session.Fail("The verified exchange schedule changed during the observation.");
         }
     }
 
@@ -695,7 +704,7 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
-    // Follow the existing market scopes and retire chart observations before unsubscribing.
+    // Keep normal work in the existing scope loop while dedicated warming runs under its own cancellation.
     private async Task ForwardSubscriptionChangesAsync(
         IAlpacaMarketStateStreamClient stream,
         IReadOnlyCollection<string> initial,
@@ -712,43 +721,97 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var additions = desired.Except(subscribed, StringComparer.OrdinalIgnoreCase).ToArray();
             var removals = subscribed.Except(desired, StringComparer.OrdinalIgnoreCase).ToArray();
-            if (additions.Length > 0)
+            var diagnostic = Volatile.Read(ref chartDiagnostic);
+            var diagnosticAddition = diagnostic is not null && !diagnostic.HasNormalOwner &&
+                additions.Contains(ChartAcceptanceSession.Symbol, StringComparer.Ordinal);
+            var normalAdditions = diagnosticAddition
+                ? additions.Where(symbol => symbol != ChartAcceptanceSession.Symbol).ToArray()
+                : additions;
+            var diagnosticRemoval = diagnostic is { SubscriptionStarted: true, HasNormalOwner: false } &&
+                removals.Contains(ChartAcceptanceSession.Symbol, StringComparer.Ordinal);
+            Func<Task>? removeDiagnostic = diagnosticRemoval
+                ? ReleaseDiagnosticAsync
+                : null;
+            if (normalAdditions.Length > 0)
             {
                 await SubscribeAndWarmAsync(
                     stream,
-                    additions,
+                    normalAdditions,
                     receive,
                     activeSubscriptions,
                     preview,
-                    cancellationToken);
+                    cancellationToken,
+                    removeDiagnostic);
             }
+            else if (removeDiagnostic is not null)
+                await removeDiagnostic();
 
-            if (removals.Length > 0)
+            if (diagnosticAddition && !await SubscribeDiagnosticAsync(diagnostic!, stream, receive, activeSubscriptions,
+                    preview, workTracker, cancellationToken))
+                desired.Remove(ChartAcceptanceSession.Symbol);
+
+            if (diagnostic is { HasNormalOwner: true, SubscriptionStarted: true } &&
+                desired.Contains(ChartAcceptanceSession.Symbol) && subscribed.Contains(ChartAcceptanceSession.Symbol) &&
+                diagnostic.TryFinishHandoff())
             {
-                foreach (var removal in removals)
-                {
-                    activeSubscriptions.TryRemove(removal, out _);
-                    preview.Untrack(AlpacaSymbolMapper.ToCanonicalSymbol(removal));
-                }
-
-                await stream.UnsubscribeMarketStateAsync(removals, cancellationToken);
-                await AwaitSubscriptionAcknowledgementAsync(
-                    stream,
-                    activeSubscriptions.Keys.ToArray(),
-                    receive,
-                    cancellationToken);
-                foreach (var removal in removals)
-                {
-                    await workTracker.DrainSymbolAsync(
-                        removal,
-                        options.LeaseDuration,
-                        cancellationToken);
-                    await marketState.EvictSymbolAsync(removal, cancellationToken);
-                    statuses.TryRemove(removal, out var removedStatus);
-                }
+                await diagnostic.WarmTask.WaitAsync(cancellationToken);
+                if (diagnostic.SubscriptionConfirmed)
+                    await WarmSubscribedSymbolsAsync([ChartAcceptanceSession.Symbol], activeSubscriptions, preview, cancellationToken);
+                else
+                    await SubscribeAndWarmAsync(stream, [ChartAcceptanceSession.Symbol], receive, activeSubscriptions,
+                        preview, cancellationToken);
+                stream.ExitDiagnosticAcknowledgementIsolation();
             }
+
+            var normalRemovals = diagnosticRemoval
+                ? removals.Where(symbol => symbol != ChartAcceptanceSession.Symbol).ToArray()
+                : removals;
+            if (normalRemovals.Length > 0)
+                await RemoveMarketSubscriptionsAsync(normalRemovals, stream, receive, activeSubscriptions, preview,
+                    workTracker, null, cancellationToken);
 
             subscribed = desired;
+
+            // Recheck scope ownership before committing the diagnostic unsubscribe command.
+            async Task ReleaseDiagnosticAsync()
+            {
+                if (await TryScheduleDiagnosticRemovalAsync(diagnostic!, cancellationToken))
+                    await RemoveMarketSubscriptionsAsync([ChartAcceptanceSession.Symbol], stream, receive, activeSubscriptions,
+                        preview, workTracker, diagnostic, cancellationToken);
+                else
+                    desired.Add(ChartAcceptanceSession.Symbol);
+            }
+        }
+    }
+
+    // Retire market coverage, validate the acknowledgement, then drain and evict only the removed symbols.
+    private async Task RemoveMarketSubscriptionsAsync(IReadOnlyCollection<string> symbols,
+        IAlpacaMarketStateStreamClient stream, Task receive, ConcurrentDictionary<string, long> activeSubscriptions,
+        SipFormingBook preview, ConnectionWorkTracker tracker, ChartDiagnosticReservation? diagnostic, CancellationToken cancellationToken)
+    {
+        foreach (var symbol in symbols)
+        {
+            activeSubscriptions.TryRemove(symbol, out _);
+            preview.Untrack(AlpacaSymbolMapper.ToCanonicalSymbol(symbol));
+        }
+        var afterOrdinal = stream.CurrentArrivalOrdinal;
+        await stream.UnsubscribeMarketStateAsync(symbols, cancellationToken);
+        if (diagnostic is null)
+        {
+            await AwaitSubscriptionAcknowledgementAsync(stream, ExpectedNormalAcknowledgement(activeSubscriptions), receive, cancellationToken);
+        }
+        else
+        {
+            var acknowledged = await TryAwaitDiagnosticAcknowledgementAsync(diagnostic, stream, receive,
+                activeSubscriptions.Keys.ToArray(), afterOrdinal, cancellationToken);
+            diagnostic.ConfirmRemoval(acknowledged);
+            if (acknowledged is { MutationChannelsConfirmed: true }) stream.ExitDiagnosticAcknowledgementIsolation();
+        }
+        foreach (var symbol in symbols)
+        {
+            await tracker.DrainSymbolAsync(symbol, options.LeaseDuration, cancellationToken);
+            await marketState.EvictSymbolAsync(symbol, cancellationToken);
+            statuses.TryRemove(symbol, out _);
         }
     }
 
@@ -759,33 +822,22 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         Task receive,
         ConcurrentDictionary<string, long> activeSubscriptions,
         SipFormingBook preview,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<Task>? beforeWarm = null)
     {
         foreach (var symbol in symbols)
-        {
-            var generation = Interlocked.Increment(ref subscriptionGeneration);
-            activeSubscriptions[Normalize(symbol)] = generation;
-            preview.Track(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), generation);
-        }
+            TrackMarketSubscription(symbol, activeSubscriptions, preview);
 
         try
         {
             await stream.SubscribeMarketStateAsync(symbols, cancellationToken);
             await AwaitSubscriptionAcknowledgementAsync(
                 stream,
-                activeSubscriptions.Keys.ToArray(),
+                ExpectedNormalAcknowledgement(activeSubscriptions),
                 receive,
                 cancellationToken);
-            if (await WarmAdditionsAsync(symbols, cancellationToken))
-            {
-                var warmed = timeProvider.GetUtcNow();
-                foreach (var symbol in symbols)
-                {
-                    if (activeSubscriptions.TryGetValue(Normalize(symbol), out var generation) &&
-                        !repairsInProgress.ContainsKey(Normalize(symbol)) && !marketState.RequiresRepair(symbol))
-                        preview.MarkWarm(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), generation, warmed);
-                }
-            }
+            if (beforeWarm is not null) await beforeWarm();
+            await WarmSubscribedSymbolsAsync(symbols, activeSubscriptions, preview, cancellationToken);
         }
         catch
         {
@@ -796,6 +848,29 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             }
 
             throw;
+        }
+    }
+
+    // Reuse identical membership, coverage and generation setup for normal and diagnostic scopes.
+    private long TrackMarketSubscription(string symbol, ConcurrentDictionary<string, long> activeSubscriptions, SipFormingBook preview)
+    {
+        var generation = Interlocked.Increment(ref subscriptionGeneration);
+        activeSubscriptions[Normalize(symbol)] = generation;
+        preview.Track(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), generation);
+        return generation;
+    }
+
+    // Preview coverage starts at the same normal warm boundary for either kind of owner.
+    private async Task WarmSubscribedSymbolsAsync(IReadOnlyCollection<string> symbols,
+        ConcurrentDictionary<string, long> activeSubscriptions, SipFormingBook preview, CancellationToken token)
+    {
+        if (!await WarmAdditionsAsync(symbols, token)) return;
+        var warmed = timeProvider.GetUtcNow();
+        foreach (var symbol in symbols)
+        {
+            if (activeSubscriptions.TryGetValue(Normalize(symbol), out var generation) &&
+                !repairsInProgress.ContainsKey(Normalize(symbol)) && !marketState.RequiresRepair(symbol))
+                preview.MarkWarm(AlpacaSymbolMapper.ToCanonicalSymbol(symbol), generation, warmed);
         }
     }
 
@@ -849,7 +924,9 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                 var symbol = marketEvent!.Bar.Ticker;
                 if (activeSubscriptions.TryGetValue(symbol, out var generation))
                 {
-                    workTracker.TryRun(
+                    var diagnostic = FindDiagnosticSession(fencingToken, symbol);
+                    var raw = diagnostic?.ClaimRawBar(fencingToken, generation, stream.CurrentArrivalOrdinal);
+                    if (!workTracker.TryRun(
                         symbol,
                         "market-bar",
                         () => ObserveMarketBarAsync(
@@ -857,7 +934,13 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                             generation,
                             activeSubscriptions,
                             workTracker,
-                            cancellationToken));
+                            cancellationToken,
+                            diagnostic,
+                            raw)) && diagnostic is not null && raw is { } receipt)
+                    {
+                        diagnostic.ObserveCanonical(receipt, marketEvent, "not-queued", observedAt);
+                        diagnostic.Fail("The normal canonical pipeline could not queue an AAPL provider bar.");
+                    }
                 }
 
                 continue;
@@ -865,6 +948,13 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
 
             if (parseFailure is not null)
             {
+                var diagnostic = FindDiagnosticSession(fencingToken, parseFailure.Symbol);
+                if (diagnostic is not null && activeSubscriptions.TryGetValue(ChartAcceptanceSession.Symbol, out var generation))
+                {
+                    if (diagnostic.ClaimRawBar(fencingToken, generation, stream.CurrentArrivalOrdinal) is { } raw)
+                        diagnostic.ObserveCanonical(raw, null, "malformed", observedAt);
+                    diagnostic.Fail("A provider bar could not be parsed for canonical reconciliation.");
+                }
                 LogMalformedBar(parseFailure);
                 continue;
             }
@@ -872,6 +962,9 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             ApplyTradingStatusMessage(message, observedAt);
             var receivedAt = stream.CurrentBatchReceivedAtUtc ?? observedAt;
             ObservePreviewMessage(preview, message, activeSubscriptions, receivedAt, observedAt);
+            if (FindDiagnosticSession(fencingToken, ChartAcceptanceSession.Symbol) is { } activeDiagnostic &&
+                preview.HasUnreconciledObservation(ChartAcceptanceSession.Symbol))
+                activeDiagnostic.Fail("The normal forming preview detected a late or unresolved AAPL event.");
         }
     }
 
@@ -897,12 +990,15 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
             failure.Symbol ?? "UNKNOWN",
             failure.Detail);
 
+    // Preserve the processor's disposition from the actual canonical path for the optional observer.
     private async Task ObserveMarketBarAsync(
         MarketBarEvent marketEvent,
         long subscriptionGeneration,
         ConcurrentDictionary<string, long> activeSubscriptions,
         ConnectionWorkTracker workTracker,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ChartAcceptanceSession? diagnostic = null,
+        ChartAcceptanceRawBarReceipt? raw = null)
     {
         try
         {
@@ -911,10 +1007,14 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
                     subscriptionGeneration,
                     activeSubscriptions))
             {
+                if (raw is { } ignored)
+                    diagnostic?.ObserveCanonical(ignored, marketEvent, "subscription-changed", timeProvider.GetUtcNow());
                 return;
             }
 
             var result = await marketState.ProcessAsync(marketEvent, cancellationToken);
+            if (raw is { } receipt)
+                diagnostic?.ObserveCanonical(receipt, marketEvent, result.Disposition.ToString(), timeProvider.GetUtcNow());
             if (result.Disposition is not (
                     MarketBarDisposition.Accepted or
                     MarketBarDisposition.Duplicate or
@@ -944,6 +1044,9 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
         catch (Exception exception)
         {
+            if (raw is { } receipt)
+                diagnostic?.ObserveCanonical(receipt, marketEvent, "processing-error", timeProvider.GetUtcNow());
+            diagnostic?.Fail("An AAPL provider bar could not be reconciled by the normal processor.");
             logger.LogError(exception, "Market-state bar processing failed for {Symbol}.", marketEvent.Bar.Ticker);
             if (IsActiveSubscription(
                     marketEvent.Bar.Ticker,
@@ -969,6 +1072,8 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         CancellationToken cancellationToken)
     {
         var normalized = Normalize(symbol);
+        if (StopDiagnosticRepair(normalized))
+            return;
         if (!repairsInProgress.TryAdd(normalized, 0))
         {
             return;
@@ -1044,13 +1149,30 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         ConcurrentDictionary<string, long> activeSubscriptions) =>
         activeSubscriptions.TryGetValue(Normalize(symbol), out var current) && current == generation;
 
+    // Let a normal discovery or trading-status owner take priority over an exclusive diagnostic.
     private IReadOnlyList<string> ApplyScope(
         Guid scopeId,
         HashSet<string> symbols)
     {
         var before = UnionSymbols();
+        var diagnostic = Volatile.Read(ref chartDiagnostic);
+        if (diagnostic is not null && diagnostic.Session.Id == scopeId && !diagnostic.Session.IsCapturing)
+            return [];
+        if (diagnostic is not null && diagnostic.Session.Id != scopeId && symbols.Contains(ChartAcceptanceSession.Symbol))
+        {
+            diagnostic.YieldToNormalOwner();
+            symbolsByScope.Remove(diagnostic.Session.Id);
+            subscriptionChanges.Writer.TryWrite(true);
+        }
+        else if (diagnostic is not null && diagnostic.Session.Id != scopeId && diagnostic.Session.IsCapturing &&
+            symbols.Except(symbolsByScope.GetValueOrDefault(scopeId) ?? [], StringComparer.OrdinalIgnoreCase).Any())
+        {
+            diagnostic.Session.Fail("Another market-data owner started work during the chart check.");
+            symbolsByScope.Remove(diagnostic.Session.Id);
+            subscriptionChanges.Writer.TryWrite(true);
+        }
         var after = symbolsByScope
-            .Where(pair => pair.Key != scopeId)
+            .Where(pair => pair.Key != scopeId && !IsRetiredChartScope(pair.Key))
             .SelectMany(pair => pair.Value)
             .Concat(symbols)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1114,8 +1236,10 @@ public sealed class AlpacaMarketStateStreamService : BackgroundService,
         }
     }
 
-    private HashSet<string> UnionSymbols() => symbolsByScope.Values
-        .SelectMany(symbols => symbols)
+    // Keep a retired diagnostic out of all future connection subscriptions.
+    private HashSet<string> UnionSymbols() => symbolsByScope
+        .Where(pair => !IsRetiredChartScope(pair.Key))
+        .SelectMany(pair => pair.Value)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private void ApplyTradingStatusMessage(

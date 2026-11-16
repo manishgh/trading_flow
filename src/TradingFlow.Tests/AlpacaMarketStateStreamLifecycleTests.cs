@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradingFlow.Alpaca;
 using TradingFlow.Contracts.V1;
@@ -11,6 +13,7 @@ using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Pipeline;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Charts;
 
 namespace TradingFlow.Tests;
 
@@ -20,6 +23,131 @@ public sealed class MarketStreamLifecycleCollection;
 [Collection("Market stream lifecycle")]
 public sealed class AlpacaMarketStateStreamLifecycleTests
 {
+    // The coordinator expires or stops its own REST acquisition, then removes only that market subscription.
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("takeover")]
+    [InlineData("expire")]
+    public async Task ChartAcceptanceStopsExclusiveWarmAndKeepsExistingScope(string ending)
+    {
+        var clock = new PreviewClock();
+        var socket = new DispatchStream(clock);
+        var provider = new BlockingDiagnosticProvider();
+        using var service = CreateDiagnosticService(clock, socket, provider);
+        using var lifetime = new DiagnosticHostLifetime();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var token = timeout.Token;
+        var coordinator = new ChartAcceptanceCoordinator(new(true, true), new AllowDiagnosticStart(clock), service,
+            service, new ChartAcceptanceSessionTests.MemoryArchive(), clock, lifetime, NullLogger<ChartAcceptanceCoordinator>.Instance);
+        var otherScope = Guid.NewGuid();
+        await service.ReplaceScopeAsync(otherScope, ["MSFT"], token);
+        await service.ReplaceDisplayQuotesAsync(otherScope, ["NVDA"], token);
+        await service.StartAsync(token);
+        try
+        {
+            await socket.ScopeReady.Task.WaitAsync(token);
+            var start = Assert.IsType<ChartAcceptanceStart>((await coordinator.StartAsync("admin", token)).Start);
+            Assert.Equal(clock.GetUtcNow().AddMinutes(5), start.DeadlineUtc);
+            Assert.Null((await coordinator.StartAsync("admin", token)).Start);
+            await provider.DiagnosticStarted.Task.WaitAsync(token);
+            Assert.Equal("idle", coordinator.Stop("other-admin").State);
+            Assert.Equal("observing", coordinator.GetStatus("admin").State);
+
+            if (ending == "takeover")
+            {
+                await service.ReplaceScopeAsync(otherScope, ["AAPL", "MSFT"], token);
+                await provider.NormalWarmStarted.Task.WaitAsync(token);
+                Assert.DoesNotContain("market:unsubscribe:AAPL", socket.Commands);
+                Assert.Equal(new[] { "AAPL", "MSFT" }, await service.GetDesiredSymbolsAsync(token));
+            }
+            else
+            {
+                if (ending == "expire")
+                    clock.Set(start.DeadlineUtc.ToString("O"));
+                else
+                    Assert.Contains(coordinator.Stop("admin").State, new[] { "finalizing", "incomplete" });
+                await socket.AaplRemovalSent.Task.WaitAsync(token);
+                Assert.Equal(new[] { "MSFT" }, await service.GetDesiredSymbolsAsync(token));
+            }
+            await provider.DiagnosticCancelled.Task.WaitAsync(token);
+            await coordinator.StopAsync(token);
+            var result = coordinator.GetStatus("admin");
+            Assert.Equal("incomplete", result.State);
+            Assert.True(result.ScopeRemovalRequested);
+            Assert.Equal(ending == "takeover" ? (bool?)null : true, result.RemovalAcknowledged);
+            Assert.NotNull(result.ResultPath);
+            Assert.Equal(1, socket.Connections);
+            Assert.Null((await coordinator.StartAsync("admin", token)).Start);
+        }
+        finally { await service.StopAsync(token); }
+    }
+
+    // Failing the optional AAPL acknowledgement never tears down the ordinary MSFT market-state connection.
+    [Fact]
+    public async Task ChartAcceptanceAcknowledgementFailureDoesNotRecycleSharedSocket()
+    {
+        var clock = new PreviewClock();
+        var socket = new DispatchStream(clock) { RejectDiagnosticSubscribe = true };
+        using var service = CreateDiagnosticService(clock, socket, new EmptyMarketDataProvider());
+        using var lifetime = new DiagnosticHostLifetime();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var token = timeout.Token;
+        var coordinator = new ChartAcceptanceCoordinator(new(true, true), new AllowDiagnosticStart(clock), service,
+            service, new ChartAcceptanceSessionTests.MemoryArchive(), clock, lifetime, NullLogger<ChartAcceptanceCoordinator>.Instance);
+        var normalScope = Guid.NewGuid();
+        await service.ReplaceScopeAsync(normalScope, ["MSFT"], token);
+        await service.ReplaceDisplayQuotesAsync(normalScope, ["NVDA"], token);
+        await service.StartAsync(token);
+        try
+        {
+            await socket.ScopeReady.Task.WaitAsync(token);
+            Assert.NotNull((await coordinator.StartAsync("admin", token)).Start);
+            await socket.AaplRemovalSent.Task.WaitAsync(token);
+            await coordinator.StopAsync(token);
+            Assert.Equal("incomplete", coordinator.GetStatus("admin").State);
+            Assert.Equal(true, coordinator.GetStatus("admin").RemovalAcknowledged);
+            Assert.Equal(new[] { "MSFT" }, await service.GetDesiredSymbolsAsync(token));
+            Assert.Equal(1, socket.Connections);
+            Assert.False(service.RuntimeCompletion.IsCompleted);
+            Assert.Contains("market:subscribe:MSFT", socket.Commands);
+            Assert.DoesNotContain("market:unsubscribe:MSFT", socket.Commands);
+        }
+        finally { await service.StopAsync(token); }
+    }
+
+    // Compose the genuine stream and in-memory processor with a synthetic transport and REST source.
+    private static AlpacaMarketStateStreamService CreateDiagnosticService(PreviewClock clock, DispatchStream socket,
+        IMarketDataProvider provider)
+    {
+        var credentials = new AlpacaCredentialProvider(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Alpaca:KeyId"] = "test", ["Alpaca:SecretKey"] = "test" }).Build());
+        var processor = new StreamingMarketStateProcessor(NullCandleStore.Instance,
+            new CandleStoreContext("test", "acceptance", "alpaca-sip"), StreamingMarketStateOptions.Default, clock,
+            NullLogger<StreamingMarketStateProcessor>.Instance);
+        return new(credentials, socket, NullLogger<AlpacaMarketStateStreamService>.Instance,
+            new LosingLeaseRepository(clock, keepLease: true), processor, new(() => provider),
+            new("test:chart:acceptance", 600, 300), clock, chartAcceptanceOptions: new(true, true));
+    }
+
+    private sealed class AllowDiagnosticStart(TimeProvider clock) : IChartAcceptanceAdmission
+    {
+        // Use an already-verified synthetic close for stream and lifecycle fixtures.
+        public Task<(DateTimeOffset? RegularCloseUtc, string? Denial)> VerifyAsync(CancellationToken token) =>
+            Task.FromResult<(DateTimeOffset?, string?)>((clock.GetUtcNow().AddHours(1), null));
+    }
+
+    private sealed class DiagnosticHostLifetime : IHostApplicationLifetime, IDisposable
+    {
+        private readonly CancellationTokenSource stopping = new();
+        public CancellationToken ApplicationStarted => default;
+        public CancellationToken ApplicationStopping => stopping.Token;
+        public CancellationToken ApplicationStopped => default;
+        // Drive the same stopping registration as an application host.
+        public void StopApplication() => stopping.Cancel();
+        // Dispose only the synthetic lifetime.
+        public void Dispose() => stopping.Dispose();
+    }
+
     // Exercise the real dispatch loop while the fake socket records commands and releases each received frame.
     [Fact]
     public async Task FormingReadsPreserveTradeStatusAndSubscriptionCommandsAndRejectAStaleCanonicalCopy()
@@ -327,19 +455,65 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
     private sealed class PreviewClock : TimeProvider
     {
         private long ticks = DateTimeOffset.Parse("2026-11-13T14:30:10Z").UtcTicks;
+        private ManualExpiryTimer? diagnosticExpiry;
 
         // Advance the synthetic exchange minute without changing the wall clock or triggering lease expiry.
-        public void Set(string iso) => Interlocked.Exchange(ref ticks, DateTimeOffset.Parse(iso).UtcTicks);
+        public void Set(string iso)
+        {
+            var now = DateTimeOffset.Parse(iso);
+            Interlocked.Exchange(ref ticks, now.UtcTicks);
+            Volatile.Read(ref diagnosticExpiry)?.Advance(now);
+        }
 
         // Share the same UTC instant across the stream, processor and test lease.
         public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+
+        // Run the acceptance one-shot timer on synthetic UTC while preserving the ordinary lease timer.
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime != ChartAcceptanceSession.Lifetime || period != Timeout.InfiniteTimeSpan)
+                return base.CreateTimer(callback, state, dueTime, period);
+            var expiry = new ManualExpiryTimer(callback, state, GetUtcNow() + dueTime);
+            Volatile.Write(ref diagnosticExpiry, expiry);
+            return expiry;
+        }
+
+        private sealed class ManualExpiryTimer(TimerCallback callback, object? state, DateTimeOffset due) : ITimer
+        {
+            private int completed;
+
+            // Fire the fixed deadline once even when a test advances past it twice.
+            public void Advance(DateTimeOffset now)
+            {
+                if (now >= due && Interlocked.Exchange(ref completed, 1) == 0) callback(state);
+            }
+
+            // The coordinator creates a fixed one-shot and never reschedules it.
+            public bool Change(TimeSpan dueTime, TimeSpan period) => throw new NotSupportedException();
+
+            // Retire the synthetic deadline on a normal stop.
+            public void Dispose() => Interlocked.Exchange(ref completed, 1);
+
+            // Support both timer disposal forms.
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
-    private sealed class DispatchStream : IAlpacaMarketStateStreamClient, IAlpacaMarketStateStreamClientFactory
+    private sealed class DispatchStream(TimeProvider? receiptClock = null) : IAlpacaMarketStateStreamClient, IAlpacaMarketStateStreamClientFactory
     {
         private readonly Channel<(JsonElement Frame, TaskCompletionSource Handled)> incoming =
             Channel.CreateUnbounded<(JsonElement Frame, TaskCompletionSource Handled)>();
         private Task acknowledgement = Task.CompletedTask;
+        private readonly HashSet<string> subscriptions = new(StringComparer.Ordinal);
+        private IAlpacaMarketDataReceiptObserver? observer;
+        public bool RejectDiagnosticSubscribe { get; init; }
+        public long CurrentArrivalOrdinal { get; private set; }
+        public DateTimeOffset? CurrentBatchReceivedAtUtc { get; private set; }
+        public TaskCompletionSource AaplRemovalSent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ScopeReady { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public System.Collections.Concurrent.ConcurrentQueue<string> Commands { get; } = new();
         public int Connections { get; private set; }
@@ -354,8 +528,8 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         public Task SubscribeMarketStateAsync(IReadOnlyCollection<string> tickers, CancellationToken token)
         {
             Commands.Enqueue("market:subscribe:" + String.Join(",", tickers));
-            acknowledgement = DispatchAsync(
-                """{"T":"subscription","trades":["AAPL"],"corrections":["AAPL"],"cancelErrors":["AAPL"]}""", token);
+            subscriptions.UnionWith(tickers);
+            acknowledgement = SendAcknowledgementAsync(token);
             return Task.CompletedTask;
         }
 
@@ -363,7 +537,24 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         public Task UnsubscribeMarketStateAsync(IReadOnlyCollection<string> tickers, CancellationToken token)
         {
             Commands.Enqueue("market:unsubscribe:" + String.Join(",", tickers));
+            subscriptions.ExceptWith(tickers);
+            acknowledgement = SendAcknowledgementAsync(token);
+            if (tickers.Contains("AAPL")) AaplRemovalSent.TrySetResult();
             return Task.CompletedTask;
+        }
+
+        // Use the same complete provider channel shape for subscription and removal acknowledgements.
+        private Task SendAcknowledgementAsync(CancellationToken token) => DispatchAsync(JsonSerializer.Serialize(new
+        {
+            T = "subscription", trades = subscriptions, corrections = subscriptions, cancelErrors = subscriptions,
+            bars = subscriptions, updatedBars = subscriptions, statuses = subscriptions
+        }), token);
+
+        // The synthetic transport can expose its exact test payloads before typed processing.
+        public bool TryInstallReceiptObserver(IAlpacaMarketDataReceiptObserver value)
+        {
+            observer = value;
+            return true;
         }
 
         // Startup only reaches quote forwarding once canonical membership is published.
@@ -385,11 +576,26 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         public Task WaitForSubscriptionAcknowledgementAsync(IReadOnlyCollection<string> expected, CancellationToken token) =>
             acknowledgement.WaitAsync(token);
 
+        // Reject just the optional subscription when requested, leaving the reader and normal symbols healthy.
+        public async Task<AlpacaDiagnosticSubscriptionAcknowledgement> WaitForDiagnosticSubscriptionAcknowledgementAsync(
+            IReadOnlyCollection<string> expected, string diagnostic, long afterArrivalOrdinal, CancellationToken token)
+        {
+            await acknowledgement.WaitAsync(token);
+            if (RejectDiagnosticSubscribe && expected.Contains(diagnostic))
+                throw new InvalidOperationException("Synthetic diagnostic acknowledgement rejection.");
+            Assert.True(CurrentArrivalOrdinal > afterArrivalOrdinal);
+            return new(CurrentArrivalOrdinal, CurrentBatchReceivedAtUtc!.Value, true);
+        }
+
         // Confirm each frame was dispatched before the test asserts on the resulting status or preview.
         public async IAsyncEnumerable<JsonElement> ReadMessagesAsync([EnumeratorCancellation] CancellationToken token)
         {
             await foreach (var (frame, handled) in incoming.Reader.ReadAllAsync(token))
             {
+                CurrentArrivalOrdinal++;
+                CurrentBatchReceivedAtUtc = receiptClock?.GetUtcNow();
+                if (observer is { IsCapturing: true } && CurrentBatchReceivedAtUtc is { } received)
+                    observer.Observe(frame, Encoding.UTF8.GetBytes(frame.GetRawText()), received, CurrentArrivalOrdinal);
                 yield return frame;
                 handled.SetResult();
             }
@@ -544,9 +750,9 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
             Task.FromResult<IReadOnlyList<OhlcvBar>>([]);
     }
 
-    private sealed class EmptyMarketDataProvider : IMarketDataProvider, IMarketSessionScheduleProvider
+    private class EmptyMarketDataProvider : IMarketDataProvider, IMarketSessionScheduleProvider
     {
-        public async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
+        public virtual async IAsyncEnumerable<OhlcvBar> GetBarsAsync(
             IReadOnlyCollection<string> tickers,
             IReadOnlyCollection<string> intervals,
             DateTimeOffset start,
@@ -572,6 +778,35 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
             }
 
             return Task.FromResult<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>>(schedules);
+        }
+    }
+
+    private sealed class BlockingDiagnosticProvider : EmptyMarketDataProvider
+    {
+        private int aaplCalls;
+        public TaskCompletionSource DiagnosticStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource DiagnosticCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource NormalWarmStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The exclusive acquisition blocks until cancellation; a normal takeover must receive a fresh request.
+        public override async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> intervals, DateTimeOffset start, DateTimeOffset end,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            if (!tickers.Contains("AAPL")) yield break;
+            Assert.Equal(45, (end - start).TotalDays);
+            Assert.Equal(new[] { "1m" }, intervals);
+            if (Interlocked.Increment(ref aaplCalls) == 1)
+            {
+                DiagnosticStarted.TrySetResult();
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+                finally { DiagnosticCancelled.TrySetResult(); }
+            }
+            else
+            {
+                Assert.True(DiagnosticCancelled.Task.IsCompleted);
+                NormalWarmStarted.TrySetResult();
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { signIn } from './sign-in.js';
+import { signIn, signInAsAdmin } from './sign-in.js';
 
 const separator = '\x1e';
 const tradingDay = Date.parse('2026-11-12T14:30:00Z');
@@ -324,6 +324,49 @@ async function deskSource(page) {
 }
 
 test.beforeEach(async ({ page }) => { await signIn(page); });
+
+test('normal host hides the acceptance controls and does not map its endpoint even for an administrator', async ({ page }) => {
+    await page.context().clearCookies();
+    await signInAsAdmin(page);
+    await page.goto('/Operations');
+    await expect(page.locator('[data-chart-acceptance]')).toHaveCount(0);
+    const response = await page.request.get('/api/operations/chart-acceptance');
+    expect(response.status()).toBe(404);
+});
+
+test('acceptance mount fixes one AAPL watch without reading or changing ordinary preferences', async ({ page }) => {
+    const wire = await chartWire(page);
+    await deskSource(page);
+    await page.goto('/Desk');
+    await expect(page.locator('[data-stock-chart]')).toHaveCount(1);
+    await page.evaluate(() => {
+        const preferences = JSON.stringify({ interval: '1d', session: 'extended', indicators: ['sma50'] });
+        localStorage.setItem('tradingflow.stock-chart.v2', preferences);
+        window.savedFixturePreferences = preferences;
+        const chart = document.querySelector('[data-stock-chart]').cloneNode(true);
+        chart.dataset.symbol = 'AAPL';
+        document.body.append(chart);
+        window.fixtureAcceptanceChart = window.TradingFlowStockChart.mount(chart, {
+            acceptanceCorrelation: 'fixture-single-watch', onAcceptanceEnded: reason => { window.fixtureEnded = reason; }
+        });
+        chart.id = 'acceptance-fixture';
+    });
+    await expect.poll(() => wire.watches.length).toBe(1);
+    expect(wire.watches[0].key).toEqual({ symbol: 'AAPL', interval: '1m', sessionView: 'regular', context: 'intraday', indicators: '' });
+    expect(wire.watches[0].options).toEqual({ formingPreview: true, acceptanceCorrelation: 'fixture-single-watch' });
+    send(wire.watches[0]);
+    const chart = page.locator('#acceptance-fixture');
+    await expect(chart.locator('[data-chart-interval]')).toBeDisabled();
+    await expect(chart.locator('[data-chart-session]')).toBeDisabled();
+    await expect(chart.locator('[data-chart-preset]')).toBeDisabled();
+    await expect(chart.locator('[data-chart-layer="forming"]')).toBeChecked();
+    await expect(chart.locator('[data-chart-layer="forming"]')).toBeDisabled();
+    expect(await page.evaluate(() => localStorage.getItem('tradingflow.stock-chart.v2') === window.savedFixturePreferences)).toBe(true);
+    await page.evaluate(() => window.fixtureAcceptanceChart.setSymbol('MSFT'));
+    await expect.poll(() => page.evaluate(() => window.fixtureEnded)).toContain('selection changed');
+    expect(wire.watches).toHaveLength(1);
+    await page.evaluate(() => window.fixtureAcceptanceChart.dispose());
+});
 
 test('keeps SIP preview outside completed evidence, history and selection', async ({ page }) => {
     const wire = await chartWire(page);
@@ -1023,7 +1066,9 @@ test('keeps Desk on demand and rejects queued or wrong-context frames on selecti
     await expect(chart.locator('[data-chart-context-label]')).toContainText('1d structure · year lookback');
     await expect(chart.locator('[data-chart-source]')).toContainText('Reconstructed from retrieved history');
     await expect(chart.locator('[data-chart-source]')).toContainText('Calculations shown at source candle close. Original availability may be later.');
-    await expect(chart.locator('[data-chart-status]')).toContainText('History only');
+    await expect(page.locator('#watch-chart-summary [data-chart-status]')).toContainText('History only');
+    await expect(page.locator('[data-chart-status]')).toHaveCount(1);
+    await expect(page.locator('#watch-chart-summary')).toContainText('Price & volume');
     const caption = chart.locator('[data-chart-candle-time]');
     await expect(caption).toHaveText('Nov 12, 2026 · Daily');
     await expect(selected).toContainText('Nov 11, 2026, 19:00:00.000 NY');

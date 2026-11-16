@@ -97,6 +97,11 @@ test('desktop Desk keeps row evidence, news and useful chart space together at 1
  const table=await page.locator('.watch-stocks').boundingBox();
  const news=await page.locator('.watch-news').boundingBox();
  const plot=await page.locator('[data-chart-plot]').boundingBox();
+ const symbol=await page.locator('#watch-symbol').boundingBox();
+ const summary=await page.locator('#watch-chart-summary').boundingBox();
+ expect(summary.x).toBeGreaterThanOrEqual(symbol.x+symbol.width);
+ await expect(page.locator('#watch-chart-summary [data-chart-status]')).toBeVisible();
+ await expect(page.locator('[data-chart-status]')).toHaveCount(1);
  expect(news.x).toBeGreaterThanOrEqual(table.x+table.width);
  expect(plot.y).toBeGreaterThan(table.y);
  await page.screenshot({path:process.env.TRADINGFLOW_DESK_REVIEW_SCREENSHOT||testInfo.outputPath('desk-1440.png'),
@@ -117,6 +122,10 @@ test('phone Desk confines its wide evidence table to a local scroll area at 390x
  await expect.poll(()=>table.evaluate(node=>node.scrollWidth>node.clientWidth)).toBe(true);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
  await table.scrollIntoViewIfNeeded();
+ await page.getByRole('button',{name:'AAPL',exact:true}).click();
+ await page.locator('#watch-chart-summary').scrollIntoViewIfNeeded();
+ await expect(page.locator('#watch-chart-summary [data-chart-status]')).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
  await page.screenshot({path:process.env.TRADINGFLOW_DESK_REVIEW_MOBILE||testInfo.outputPath('desk-390.png'),
   animations:'disabled'});
 });

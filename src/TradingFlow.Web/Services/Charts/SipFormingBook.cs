@@ -76,20 +76,29 @@ internal sealed class SipFormingBook(
     }
 
     // Invalidate observed coverage if the authoritative current session changed on refresh.
-    public void UpdateCalendar(SipFormingCalendar replacement, DateTimeOffset now)
+    public bool UpdateCalendar(SipFormingCalendar replacement, DateTimeOffset now)
     {
         lock (gate)
         {
             var same = calendar.SameSession(replacement, now);
             calendar = replacement;
-            if (same) return;
+            if (same) return false;
             calendar.TryReadWindow(now, "15m", out largestWindow);
             foreach (var (symbol, state) in tracking)
             {
                 Reset(symbol, state);
                 if (state.WarmAt is not null) state.WarmAt = now;
             }
+            return true;
         }
+    }
+
+    // Let dedicated acceptance end immediately when the normal forming path invalidates any covered child.
+    public bool HasUnreconciledObservation(string symbol)
+    {
+        lock (gate)
+            return tracking.TryGetValue(symbol, out var state) &&
+                (state.LateChildren.Count > 0 || state.UnresolvedMutation is not null);
     }
 
     // The existing subscription response must cover trades, corrections and cancel/errors for preview admission.

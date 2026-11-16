@@ -203,6 +203,7 @@
         let received = false;
         let triedHistory = false;
         let stopping = Promise.resolve();
+        const acceptance = Boolean(options.acceptanceCorrelation);
 
         // Serialize disposal with the next connection so rapid changes release the shared connection budget.
         function closeSocket() {
@@ -216,7 +217,7 @@
 
         // Preserve the last completed view during disconnect, and seed a read-only fallback once if needed.
         async function fallback() {
-            if (received || triedHistory || stopped) return;
+            if (acceptance || received || triedHistory || stopped) return;
             triedHistory = true;
             try {
                 const snapshot = await history(paths.history, key, null, abort.signal);
@@ -231,6 +232,11 @@
         // Bound retries with jitter and start every reconnect from a fresh baseline.
         function reconnect(active) {
             if (stopped || connection !== active) return;
+            if (acceptance) {
+                callbacks.status('Acceptance watch ended. This observation cannot reconnect.', false);
+                void stop();
+                return;
+            }
             closeSocket();
             if (attempt >= maxRetries) {
                 callbacks.status('Chart stream unavailable. Retry to reconnect.', false);
@@ -250,6 +256,7 @@
             if (stopped) return;
             if (!window.signalR) {
                 callbacks.status('Chart stream unavailable. Retry to reconnect.', false);
+                if (acceptance) { void stop(); return; }
                 void fallback();
                 return;
             }
@@ -266,6 +273,8 @@
                 await active.start();
                 if (stopped || connection !== active) return;
                 const output = options.formingPreview ? active.stream('WatchWithOptions', key, options) : active.stream('Watch', key);
+                // The one-use capability is sent only in this invocation, never retained for a reconnect.
+                if (acceptance) options.acceptanceCorrelation = null;
                 subscription = output.subscribe({
                     // Keep a partial or superseded frame out of the displayed series.
                     next(frame) {

@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Data.Identity;
 using TradingFlow.Web.Services.Charts;
 
 namespace TradingFlow.Web;
@@ -15,7 +16,8 @@ public sealed record ChartFrame(string Kind, ChartSeriesKey Key, string Epoch, l
 /// <summary>Read-only, backpressured chart snapshots over the existing server-owned market source.</summary>
 [Authorize]
 public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy access, ChartTransportLimits limits,
-    ChartHistoryCursor cursors, TimeProvider clock, ILogger<StockChartHub> logger) : Hub
+    ChartHistoryCursor cursors, TimeProvider clock, ILogger<StockChartHub> logger,
+    ChartAcceptanceCoordinator? acceptance = null) : Hub
 {
     public const int MaximumSnapshotBytes = 256 * 1024;
     internal const int MaximumPreviewBytes = 2 * 1024;
@@ -62,7 +64,7 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
     public IAsyncEnumerable<ChartFrame> WatchWithOptions(ChartSeriesKey requested, ChartWatchOptions? options,
         CancellationToken cancellationToken) => WatchCore(requested, options ?? new(), cancellationToken);
 
-    // Every changed view is a complete atomic baseline, so no missing delta can leave an incorrect candle or zone.
+    // Preserve atomic snapshots and optionally observe the exact frames emitted by this one authorized epoch.
     private async IAsyncEnumerable<ChartFrame> WatchCore(ChartSeriesKey requested, ChartWatchOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -78,10 +80,13 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
             if (Context.Items.TryGetValue(Active, out var prior) && prior is CancellationTokenSource previous) previous.Cancel();
             Context.Items[Active] = linked;
         }
+        var epoch = Guid.NewGuid().ToString("N");
+        ChartAcceptanceSession? diagnostic = null;
         try
         {
             await RequireAccessAsync(key, linked.Token);
-            var epoch = Guid.NewGuid().ToString("N");
+            diagnostic = AttachDiagnostic(user, key, options, epoch);
+            if (diagnostic is not null) options = options with { AcceptanceCorrelation = null };
             long sequence = 0;
             long previewSequence = 0;
             string? fingerprint = null;
@@ -107,7 +112,9 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
                     for (var part = 0; part < chunks.Count; part++)
                     {
                         linked.Token.ThrowIfCancellationRequested();
-                        yield return new ChartFrame("snapshot", key, epoch, sequence, part, chunks.Count, chunks[part]);
+                        var frame = new ChartFrame("snapshot", key, epoch, sequence, part, chunks.Count, chunks[part]);
+                        diagnostic?.ObserveChart(Context.ConnectionId, frame, snapshot);
+                        yield return frame;
                     }
                     fingerprint = current;
                 }
@@ -115,7 +122,8 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
                 if (options.FormingPreview)
                 {
                     linked.Token.ThrowIfCancellationRequested();
-                    var preview = JsonSerializer.Serialize(page.ReadForming?.Invoke() ?? new("coverage_unverified"), Json);
+                    var forming = page.ReadForming?.Invoke() ?? new("coverage_unverified");
+                    var preview = JsonSerializer.Serialize(forming, Json);
                     if (preview != previousPreview)
                     {
                         var frame = new ChartFrame("preview", key, epoch, sequence, 0, 1, preview, previewSequence + 1);
@@ -123,6 +131,7 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
                         {
                             previousPreview = preview;
                             previewSequence++;
+                            diagnostic?.ObserveChart(Context.ConnectionId, frame, forming: forming);
                             yield return frame;
                         }
                     }
@@ -132,9 +141,21 @@ public sealed class StockChartHub(IChartSeriesReader series, ChartAccessPolicy a
         }
         finally
         {
+            diagnostic?.DetachWatch(Context.ConnectionId, epoch);
             lock (Context.Items)
                 if (Context.Items.TryGetValue(Active, out var active) && ReferenceEquals(active, linked)) Context.Items.Remove(Active);
         }
+    }
+
+    // An explicit correlation is accepted on the local administrator's chart only.
+    private ChartAcceptanceSession? AttachDiagnostic(string user, ChartSeriesKey key, ChartWatchOptions options, string epoch)
+    {
+        if (options.AcceptanceCorrelation is not { } correlation) return null;
+        if (options.FormingPreview && Context.User?.IsInRole(TradingFlowRoles.Administrator) == true &&
+            Context.GetHttpContext() is { } http && ChartAcceptanceEndpoints.IsLocalRequest(http) &&
+            acceptance?.AttachWatch(user, key, correlation, Context.ConnectionId, epoch) is { } diagnostic)
+            return diagnostic;
+        throw new HubException("This chart watch did not match the one-use diagnostic correlation.");
     }
 
     // Recheck transient membership around each potentially slow read, rather than extending its lifetime by a new watch.

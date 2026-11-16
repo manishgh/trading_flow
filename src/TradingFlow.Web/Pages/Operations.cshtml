@@ -62,10 +62,26 @@
     <partial name="_FinvizCaptureStatus" model="captureStatus" />
 }
 
+@if (Model.ChartAcceptanceEnabled && User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator))
+{
+    <link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
+    <section class="panel" aria-labelledby="ChartAcceptanceHeading" data-chart-acceptance>
+        <h2 id="ChartAcceptanceHeading">Read-only chart check · AAPL</h2>
+        <p>One five-minute SIP observation, including warm-up. Start only after the approved paper test is flat and the normal strategy-gated runtime is restored. No order is created.</p>
+        <button type="button" class="btn btn-secondary" data-acceptance-start disabled>Start five-minute check</button>
+        <button type="button" class="btn btn-secondary" data-acceptance-stop disabled>Stop check</button>
+        <button type="button" class="btn btn-secondary" data-acceptance-refresh>Refresh check status</button>
+        <p role="status" data-acceptance-status>Reading check status…</p>
+        <p data-acceptance-evidence></p>
+        <div data-acceptance-chart hidden><partial name="_StockChart" model='"AAPL"' /></div>
+    </section>
+}
+
 @if (report is null)
 {
     <p class="empty-state">Operational state has not loaded.</p>
 }
+
 else
 {
     @* Four cells, and only the ones actually in a bad state are filled. The entry
@@ -250,4 +266,12 @@ else
             </section>
         </div>
     </div>
+}
+
+@section Scripts {
+    @if (Model.ChartAcceptanceEnabled && User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator))
+    {
+        <partial name="_StockChartScripts" />
+        <script src="~/js/chart-acceptance.js" asp-append-version="true"></script>
+    }
 }

@@ -4,7 +4,7 @@ namespace TradingFlow.Contracts.V1;
 
 public sealed record ChartSeriesKey(string Symbol, string Interval, string SessionView, string Context = "auto", string Indicators = "");
 
-public sealed record ChartWatchOptions(bool FormingPreview = false);
+public sealed record ChartWatchOptions(bool FormingPreview = false, string? AcceptanceCorrelation = null);
 
 /// <summary>A display-only update on the live watch, outside every completed chart payload.</summary>
 public sealed record ChartFormingCandle(

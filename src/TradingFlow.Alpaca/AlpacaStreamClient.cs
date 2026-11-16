@@ -16,12 +16,15 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
 {
     private readonly ClientWebSocket _webSocket = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
-    private readonly Channel<SubscriptionAcknowledgement> subscriptionAcknowledgements =
-        Channel.CreateUnbounded<SubscriptionAcknowledgement>(
+    private readonly Channel<(long Ordinal, DateTimeOffset Received, SubscriptionAcknowledgement Acknowledgement)> subscriptionAcknowledgements =
+        Channel.CreateUnbounded<(long Ordinal, DateTimeOffset Received, SubscriptionAcknowledgement Acknowledgement)>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly AlpacaOptions _options;
     private readonly Uri _streamUrl;
     private readonly ILogger<AlpacaStreamClient>? _logger;
+    private IAlpacaMarketDataReceiptObserver? receiptObserver;
+    private string? diagnosticSymbol;
+    private long currentArrivalOrdinal;
 
     public AlpacaStreamClient(AlpacaOptions options, ILogger<AlpacaStreamClient>? logger = null)
     {
@@ -149,6 +152,14 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
     }
 
     public DateTimeOffset? CurrentBatchReceivedAtUtc { get; private set; }
+    public long CurrentArrivalOrdinal => Interlocked.Read(ref currentArrivalOrdinal);
+
+    // Only the single connection owner installs an observer, before the market-data receive loop.
+    public bool TryInstallReceiptObserver(IAlpacaMarketDataReceiptObserver observer)
+    {
+        receiptObserver = observer;
+        return true;
+    }
 
     // Every item in one WebSocket message shares its original receipt time before JSON decoding.
     public async IAsyncEnumerable<JsonElement> ReadMessagesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
@@ -172,18 +183,20 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             }
 
             CurrentBatchReceivedAtUtc = TimeProvider.System.GetUtcNow();
-            var messageJson = Encoding.UTF8.GetString(ms.ToArray());
-
-            using var doc = JsonDocument.Parse(messageJson);
+            var batch = ms.GetBuffer().AsMemory(0, checked((int)ms.Length));
+            using var doc = JsonDocument.Parse(batch);
             if (doc.RootElement.ValueKind == JsonValueKind.Array)
             {
+                var offset = receiptObserver is not null ? batch.Span.IndexOf((byte)'[') + 1 : -1;
                 foreach (var element in doc.RootElement.EnumerateArray())
                 {
+                    var ordinal = Interlocked.Increment(ref currentArrivalOrdinal);
+                    if (receiptObserver is { IsCapturing: true } observer)
+                        offset = ObserveEvent(observer, element, batch.Span, offset, CurrentBatchReceivedAtUtc.Value, ordinal);
+                    else if (receiptObserver is not null)
+                        offset = -1;
                     var clone = element.Clone();
-                    if (TryParseSubscriptionAcknowledgement(clone, out var acknowledgement))
-                    {
-                        subscriptionAcknowledgements.Writer.TryWrite(acknowledgement!);
-                    }
+                    QueueSubscriptionAcknowledgement(clone, ordinal, CurrentBatchReceivedAtUtc.Value);
 
                     yield return clone;
                 }
@@ -191,20 +204,75 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         }
     }
 
-    public async Task WaitForSubscriptionAcknowledgementAsync(
+    // Route only subscription replies through the single command reader, with their original receive identity.
+    internal void QueueSubscriptionAcknowledgement(JsonElement element, long ordinal, DateTimeOffset received)
+    {
+        if (TryParseSubscriptionAcknowledgement(element, out var acknowledgement))
+            subscriptionAcknowledgements.Writer.TryWrite((ordinal, received, acknowledgement!));
+    }
+
+    // Read the existing receive buffer's exact value boundaries without copying or re-encoding the event.
+    internal static int ObserveEvent(IAlpacaMarketDataReceiptObserver observer, JsonElement element,
+        ReadOnlySpan<byte> batch, int offset, DateTimeOffset receivedAtUtc, long ordinal)
+    {
+        // A session that starts mid-batch begins at the next complete receipt; returning -1 keeps that batch excluded.
+        if (offset < 0) return -1;
+        while (offset < batch.Length && batch[offset] is (byte)',' or (byte)' ' or (byte)'\r' or (byte)'\n' or (byte)'\t')
+            offset++;
+        var reader = new Utf8JsonReader(batch[offset..]);
+        reader.Read();
+        reader.Skip();
+        var length = checked((int)reader.BytesConsumed);
+        observer.Observe(element, batch.Slice(offset, length), receivedAtUtc, ordinal);
+        return offset + length;
+    }
+
+    // Preserve normal exact membership checks, isolating late AAPL-only responses after a diagnostic command.
+    public Task WaitForSubscriptionAcknowledgementAsync(
         IReadOnlyCollection<string> expectedSymbols,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        WaitForAcknowledgementAsync(expectedSymbols, Volatile.Read(ref diagnosticSymbol), null, cancellationToken);
+
+    // Quote-only and pre-command acknowledgements cannot be claimed as the dedicated scope's provider reply.
+    public Task<AlpacaDiagnosticSubscriptionAcknowledgement> WaitForDiagnosticSubscriptionAcknowledgementAsync(IReadOnlyCollection<string> expectedSymbols,
+        string diagnosticSymbol, long afterArrivalOrdinal, CancellationToken cancellationToken)
+    {
+        Volatile.Write(ref this.diagnosticSymbol, diagnosticSymbol);
+        return WaitForAcknowledgementAsync(expectedSymbols, diagnosticSymbol, afterArrivalOrdinal, cancellationToken);
+    }
+
+    // Restore the ordinary strict subscription path once a normal owner has verified AAPL.
+    public void ExitDiagnosticAcknowledgementIsolation() => Volatile.Write(ref diagnosticSymbol, null);
+
+    // A single command reader shares the normal bounded acknowledgement deadline.
+    private async Task<AlpacaDiagnosticSubscriptionAcknowledgement> WaitForAcknowledgementAsync(
+        IReadOnlyCollection<string> expectedSymbols, string? diagnostic,
+        long? afterArrivalOrdinal, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var expected = expectedSymbols
+            .Select(symbol => symbol.Trim().ToUpperInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var acknowledgement = await subscriptionAcknowledgements.Reader.ReadAsync(timeout.Token);
-            var expected = expectedSymbols
-                .Select(symbol => symbol.Trim().ToUpperInvariant())
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (!SubscriptionAcknowledgementMatchesExpected(acknowledgement, expected))
+            while (true)
             {
+                var (ordinal, received, acknowledgement) = await subscriptionAcknowledgements.Reader.ReadAsync(timeout.Token);
+                if (afterArrivalOrdinal is { } boundary && ordinal <= boundary) continue;
+                if (SubscriptionAcknowledgementMatchesExpected(acknowledgement, expected))
+                {
+                    var mutationCoverage = diagnostic is not null && afterArrivalOrdinal is not null &&
+                        HasExpectedDiagnosticMutations(acknowledgement, diagnostic, expected.Contains(diagnostic));
+                    return new(ordinal, received, mutationCoverage);
+                }
+                if (afterArrivalOrdinal is not null) continue;
+                if (diagnostic is not null && DiffersOnlyByDiagnostic(acknowledgement, expected, diagnostic))
+                {
+                    // A normal owner requesting AAPL still needs the exact AAPL acknowledgement.
+                    if (expected.Contains(diagnostic)) continue;
+                    return default;
+                }
                 throw new InvalidOperationException(
                     $"Alpaca subscription acknowledgement does not match the complete expected symbol set [{String.Join(", ", expected)}]. " +
                     DescribeAcknowledgementDifference(acknowledgement, expected));
@@ -215,6 +283,28 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             throw new TimeoutException("Alpaca did not acknowledge the market-state subscription within 10 seconds.");
         }
     }
+
+    // Check mutation coverage on the same acknowledgement selected for bars, trades and statuses.
+    internal static bool HasExpectedDiagnosticMutations(SubscriptionAcknowledgement acknowledgement, string symbol, bool subscribed) =>
+        ChannelContainsExactlyRequestedSymbol(acknowledgement.Corrections, symbol, subscribed) &&
+        ChannelContainsExactlyRequestedSymbol(acknowledgement.CancelErrors, symbol, subscribed);
+
+    // Missing and wildcard entries cannot prove this symbol's coverage or removal.
+    private static bool ChannelContainsExactlyRequestedSymbol(IReadOnlySet<string>? channel, string symbol, bool subscribed) =>
+        channel is not null && !channel.Contains("*") && channel.Contains(symbol) == subscribed;
+
+    // A scoped diagnostic fault may leave only its optional symbol ambiguous; every normal symbol stays exact.
+    internal static bool DiffersOnlyByDiagnostic(SubscriptionAcknowledgement acknowledgement,
+        IReadOnlySet<string> expected, string diagnostic) =>
+        MatchesOutsideDiagnostic(acknowledgement.Bars, expected, diagnostic) &&
+        MatchesOutsideDiagnostic(acknowledgement.UpdatedBars, expected, diagnostic) &&
+        MatchesOutsideDiagnostic(acknowledgement.Trades, expected, diagnostic) &&
+        MatchesOutsideDiagnostic(acknowledgement.Statuses, expected, diagnostic);
+
+    // Compare all entries in either set without allocating filtered copies on the normal command path.
+    private static bool MatchesOutsideDiagnostic(IReadOnlySet<string> channel, IReadOnlySet<string> expected, string diagnostic) =>
+        channel.All(symbol => symbol == diagnostic || expected.Contains(symbol)) &&
+        expected.All(symbol => symbol == diagnostic || channel.Contains(symbol));
 
     private async Task SendMessageAsync(object payload, CancellationToken cancellationToken)
     {
@@ -310,7 +400,9 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             ReadSymbolSet(element, "updatedBars"),
             ReadSymbolSet(element, "trades"),
             ReadSymbolSet(element, "quotes"),
-            ReadSymbolSet(element, "statuses"));
+            ReadSymbolSet(element, "statuses"),
+            ReadDiagnosticSymbolSet(element, "corrections"),
+            ReadDiagnosticSymbolSet(element, "cancelErrors"));
         return true;
     }
 
@@ -356,12 +448,23 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
+    // Capture explicit mutation channels while leaving the ordinary acknowledgement contract untouched.
+    private static IReadOnlySet<string>? ReadDiagnosticSymbolSet(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var field) || field.ValueKind != JsonValueKind.Array ||
+            field.EnumerateArray().Any(value => value.ValueKind != JsonValueKind.String ||
+                String.IsNullOrWhiteSpace(value.GetString()))) return null;
+        return ReadSymbolSet(element, propertyName);
+    }
+
     internal sealed record SubscriptionAcknowledgement(
         IReadOnlySet<string> Bars,
         IReadOnlySet<string> UpdatedBars,
         IReadOnlySet<string> Trades,
         IReadOnlySet<string> Quotes,
-        IReadOnlySet<string> Statuses);
+        IReadOnlySet<string> Statuses,
+        IReadOnlySet<string>? Corrections = null,
+        IReadOnlySet<string>? CancelErrors = null);
 
     public void Dispose()
     {

@@ -4,17 +4,24 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Moq;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Data.Context;
+using TradingFlow.Data.Identity;
+using TradingFlow.Domain.Discovery;
 using TradingFlow.Web;
 using TradingFlow.Web.Services.Charts;
 using Xunit.Abstractions;
@@ -25,6 +32,48 @@ namespace TradingFlow.Tests;
 public sealed partial class ChartEndpointTests(ITestOutputHelper output)
 {
     private readonly ITestOutputHelper measurements = output;
+
+    // Exercise the actual protected routes and antiforgery middleware without starting the paper runtime.
+    [Fact]
+    public async Task ChartAcceptanceEndpointsRequireEnablementAdministratorLoopbackOriginAndCsrf()
+    {
+        const string endpoint = "/api/operations/chart-acceptance";
+        await using (var disabled = await Fixture.StartAsync())
+        using (var client = new HttpClient { BaseAddress = disabled.Address })
+        {
+            client.DefaultRequestHeaders.Add("X-Test-User", "admin");
+            Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(endpoint)).StatusCode);
+        }
+        await using var fixture = await Fixture.StartAsync(enableChartAcceptance: true);
+        using var signedIn = new HttpClient { BaseAddress = fixture.Address };
+        Assert.Equal(HttpStatusCode.Unauthorized, (await signedIn.GetAsync(endpoint)).StatusCode);
+        signedIn.DefaultRequestHeaders.Add("X-Test-User", "reader");
+        Assert.Equal(HttpStatusCode.Forbidden, (await signedIn.GetAsync(endpoint)).StatusCode);
+        signedIn.DefaultRequestHeaders.Remove("X-Test-User");
+        signedIn.DefaultRequestHeaders.Add("X-Test-User", "admin");
+        var status = await signedIn.GetAsync(endpoint);
+        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        Assert.True(status.Headers.CacheControl?.NoStore);
+        Assert.DoesNotContain("correlation", await status.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await signedIn.PostAsync(endpoint + "/start", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await signedIn.PostAsync(endpoint + "/stop", null)).StatusCode);
+        using var security = JsonDocument.Parse(await signedIn.GetStringAsync("/fixture-csrf"));
+        signedIn.DefaultRequestHeaders.Add(ApiMutationSecurity.HeaderName, security.RootElement.GetProperty("token").GetString());
+        signedIn.DefaultRequestHeaders.Add("Origin", fixture.Address.GetLeftPart(UriPartial.Authority) + "/wrong");
+        Assert.Equal(HttpStatusCode.NotFound, (await signedIn.PostAsync(endpoint + "/start", null)).StatusCode);
+        signedIn.DefaultRequestHeaders.Remove("Origin");
+        signedIn.DefaultRequestHeaders.Add("Origin", fixture.Address.GetLeftPart(UriPartial.Authority));
+        signedIn.DefaultRequestHeaders.Add("X-Forwarded-For", "127.0.0.1");
+        Assert.Equal(HttpStatusCode.NotFound, (await signedIn.GetAsync(endpoint)).StatusCode);
+        signedIn.DefaultRequestHeaders.Remove("X-Forwarded-For");
+        var start = await signedIn.PostAsync(endpoint + "/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, start.StatusCode);
+        Assert.True(start.Headers.CacheControl?.NoStore);
+        var stop = await signedIn.PostAsync(endpoint + "/stop", null);
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+        Assert.True(stop.Headers.CacheControl?.NoStore);
+    }
     // Exercise the actual HTTP routes and WebSocket hub against synthetic evidence, with no operator host or provider.
     [Fact]
     public async Task HostedChartRequiresAuthOriginAndMembershipAndStreamsKnownStock()
@@ -120,7 +169,7 @@ public sealed partial class ChartEndpointTests(ITestOutputHelper output)
         public Reader Reader => reader;
         // Own one ephemeral in-memory SQLite instance and one random loopback listener.
         public static async Task<Fixture> StartAsync(TimeProvider? clock = null, IReadOnlyList<string>? users = null,
-            ChartSeriesSnapshot? snapshot = null)
+            ChartSeriesSnapshot? snapshot = null, bool enableChartAcceptance = false)
         {
             var database = new SqliteConnection("Data Source=:memory:");
             await database.OpenAsync();
@@ -131,6 +180,7 @@ public sealed partial class ChartEndpointTests(ITestOutputHelper output)
             builder.Logging.ClearProviders();
             builder.Services.AddAuthentication("fixture").AddScheme<AuthenticationSchemeOptions, FixtureAuth>("fixture", _ => { });
             builder.Services.AddAuthorization();
+            builder.Services.AddApiMutationSecurity();
             builder.Services.AddSignalR(options => options.MaximumReceiveMessageSize = 4096);
             builder.Services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
             builder.Services.AddSingleton<TimeProvider>(clock ?? TimeProvider.System);
@@ -140,12 +190,26 @@ public sealed partial class ChartEndpointTests(ITestOutputHelper output)
             builder.Services.AddSingleton<ChartTransportLimits>();
             var reader = new Reader(snapshot);
             builder.Services.AddSingleton<IChartSeriesReader>(reader);
+            var chartAcceptance = new ChartAcceptanceOptions(enableChartAcceptance, RuntimeEnabled: false);
+            builder.Services.AddSingleton(chartAcceptance);
+            if (enableChartAcceptance)
+            {
+                // The disabled paper runtime guard must keep either live dependency unreachable in this HTTP fixture.
+                builder.Services.AddSingleton(sp => new ChartAcceptanceCoordinator(chartAcceptance,
+                    Mock.Of<IChartAcceptanceAdmission>(MockBehavior.Strict), Mock.Of<IDiscoverySubscriptionSink>(MockBehavior.Strict),
+                    null!, new ChartAcceptanceSessionTests.MemoryArchive(), sp.GetRequiredService<TimeProvider>(),
+                    sp.GetRequiredService<IHostApplicationLifetime>(), NullLogger<ChartAcceptanceCoordinator>.Instance));
+            }
             var app = builder.Build();
             app.UseRouting();
             app.UseAuthentication();
             app.UseAuthorization();
+            app.UseApiMutationSecurity();
             app.UseChartOriginGuard();
             app.MapChartEndpoints();
+            app.MapChartAcceptance();
+            app.MapGet("/fixture-csrf", (HttpContext context, IAntiforgery security) =>
+                Results.Json(new { token = security.GetAndStoreTokens(context).RequestToken }));
             var access = app.Services.GetRequiredService<ChartAccessPolicy>();
             foreach (var user in users ?? ["reader"])
                 access.RecordDisplayed(new ClaimsPrincipal(new ClaimsIdentity(
@@ -198,7 +262,9 @@ public sealed partial class ChartEndpointTests(ITestOutputHelper output)
         {
             if (!Request.Headers.TryGetValue("X-Test-User", out var user))
                 return Task.FromResult(AuthenticateResult.NoResult());
-            var principal = new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, user.ToString())], Scheme.Name));
+            var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, user.ToString()) };
+            if (user.ToString() == "admin") claims.Add(new(ClaimTypes.Role, TradingFlowRoles.Administrator));
+            var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name));
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name)));
         }
     }

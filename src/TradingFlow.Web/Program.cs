@@ -28,6 +28,7 @@ using TradingFlow.Earnings;
 using TradingFlow.Finviz;
 using TradingFlow.Web;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Charts;
 using TradingFlow.Web.Services.Wishlists;
 using TradingFlow.Web.Services.Discovery;
 using TradingFlow.Application.Candidates;
@@ -64,6 +65,18 @@ var uiTestMode = String.Equals(
     StringComparison.OrdinalIgnoreCase);
 var runtimePaused = String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_DISABLE_RUNTIME"), "true", StringComparison.OrdinalIgnoreCase);
 var runtimeEnabled = !uiTestMode && !runtimePaused;
+var chartAcceptance = new ChartAcceptanceOptions(
+    Boolean.TryParse(builder.Configuration["ChartAcceptance:Enabled"], out var enableChartAcceptance) && enableChartAcceptance,
+    runtimeEnabled);
+builder.Services.AddSingleton(chartAcceptance);
+if (chartAcceptance.Enabled)
+{
+    builder.Services.AddSingleton<IAccountScopedBrokerOrderReader>(services => services.GetRequiredService<IBrokerClient>());
+    builder.Services.AddSingleton<IBrokerPositionReader>(services => services.GetRequiredService<IBrokerClient>());
+    builder.Services.AddSingleton<IChartAcceptanceAdmission, ChartAcceptanceAdmission>();
+    builder.Services.AddSingleton<ChartAcceptanceCoordinator>();
+    builder.Services.AddHostedService(services => services.GetRequiredService<ChartAcceptanceCoordinator>());
+}
 var marketFeedsEnabled = !uiTestMode &&
     String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_MARKET_FEEDS"), "true", StringComparison.OrdinalIgnoreCase);
 var finvizCaptureRequested = String.Equals(
@@ -912,6 +925,7 @@ app.MapTradingFlowAuthApi();
 app.MapTradingFlowApiV1();
 app.MapDeskEndpoints();
 app.MapChartEndpoints();
+app.MapChartAcceptance();
 app.MapPrivatePaperChart();
 app.MapAccountLossReviewEndpoints();
 app.MapTradingFlowEarningsApi();

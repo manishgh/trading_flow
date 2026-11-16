@@ -75,6 +75,12 @@ public interface IAccountScopedBrokerOrderReader : IBrokerOrderReader, IBrokerAc
 {
 }
 
+/// <summary>Read-only view of broker positions for observers that do not own execution.</summary>
+public interface IBrokerPositionReader
+{
+    Task<System.Collections.Generic.IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken);
+}
+
 /// <summary>Optional broker capability; absence prevents claims of a complete account-wide daily-entry count.</summary>
 public interface IBrokerFillHistoryProvider
 {
@@ -84,6 +90,7 @@ public interface IBrokerFillHistoryProvider
 
 public interface IBrokerClient :
     IAccountScopedBrokerOrderReader,
+    IBrokerPositionReader,
     ITradingSessionProvider,
     IAssetTradingEligibilityProvider
 {
@@ -99,5 +106,4 @@ public interface IBrokerClient :
     Task<ActiveBrokerOrder> ReplaceProtectiveOrderAsync(
         BrokerProtectiveOrderReplacement replacement,
         CancellationToken cancellationToken);
-    Task<System.Collections.Generic.IReadOnlyList<BrokerPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken);
 }

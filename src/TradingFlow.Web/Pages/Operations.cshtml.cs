@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using TradingFlow.Data.Identity;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Charts;
 using TradingFlow.Web.Services.ScreenCaptures;
 
 namespace TradingFlow.Web.Pages;
@@ -9,10 +11,8 @@ namespace TradingFlow.Web.Pages;
 /// <summary>
 /// Operator health. Authoritative server state assembled into one view.
 ///
-/// This screen only reads. It cannot start, stop or reconfigure a subsystem, so
-/// opening it never changes what the system is doing. Anything unreadable is
-/// reported as unknown rather than guessed, and execution stays fail-closed
-/// while it is.
+/// Opening this screen only reads. An explicitly enabled local administrator
+/// can use the separate chart acceptance controls for a read-only observation.
 /// </summary>
 [Authorize]
 public sealed class OperationsModel : PageModel
@@ -24,6 +24,7 @@ public sealed class OperationsModel : PageModel
     private readonly PaperJobService paperJobs;
     private readonly MobileAutomationService automation;
     private readonly FinvizScreenCaptureStatusReader captures;
+    private readonly ChartAcceptanceOptions chartAcceptance;
 
     // Add observational capture status alongside the existing operational report.
     public OperationsModel(
@@ -33,7 +34,8 @@ public sealed class OperationsModel : PageModel
         AlpacaQuoteService quotes,
         PaperJobService paperJobs,
         MobileAutomationService automation,
-        FinvizScreenCaptureStatusReader captures)
+        FinvizScreenCaptureStatusReader captures,
+        ChartAcceptanceOptions chartAcceptance)
     {
         this.health = health;
         this.catalog = catalog;
@@ -42,6 +44,7 @@ public sealed class OperationsModel : PageModel
         this.paperJobs = paperJobs;
         this.automation = automation;
         this.captures = captures;
+        this.chartAcceptance = chartAcceptance;
     }
 
     /// <summary>Environment this screen is reporting on, from the query segment.</summary>
@@ -51,6 +54,8 @@ public sealed class OperationsModel : PageModel
 
     public OperationsReport? Report { get; private set; }
     public FinvizScreenCaptureStatus? ScreenCapture { get; private set; }
+    public bool ChartAcceptanceEnabled => chartAcceptance.Enabled && User.IsInRole(TradingFlowRoles.Administrator) &&
+        ChartAcceptanceEndpoints.IsLocalRequest(HttpContext);
 
     // Read subsystem health and independent observational capture evidence for this request.
     public async Task OnGetAsync(CancellationToken cancellationToken)

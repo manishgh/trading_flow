@@ -577,7 +577,7 @@
         chartSymbol = symbol;
         if (symbol && !deskChart) {
             const root = el('focus-content').querySelector('[data-stock-chart]');
-            if (root) deskChart = window.TradingFlowStockChart?.mount(root);
+            if (root) deskChart = window.TradingFlowStockChart?.mount(root, { summaryHost: el('chart-summary') });
         }
         deskChart?.setSymbol(symbol);
     }
