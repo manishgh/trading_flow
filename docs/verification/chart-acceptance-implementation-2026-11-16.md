@@ -1,7 +1,8 @@
 # Read-only chart acceptance implementation — 16 November
 
-Status: component implementation accepted by separate A and B reviewers; not installed and not
-executed against the provider. User approval is recorded in the
+Status: compiled Release `319e79a` installed and locally verified at 08:22 UTC;
+separate A and B reviewers accepted the installed release. The diagnostic has not
+been executed against the provider. User approval is recorded in the
 [bounded design](../design-review/2026-11-16/live-chart-acceptance-session.md).
 The separate [Desk quote repair](../design-review/2026-11-16/desk-live-quotes.md)
 is proposed only and awaits explicit approval.
@@ -44,8 +45,8 @@ remounting and preserves ordinary chart preferences.
   the 61-case result uses the explicit isolated-host config. Neither harness
   failure contacted the operator app or submitted an order.
 
-Logs are retained under this worktree's `.tmp/chart-acceptance/`. Full final
-backend/browser release checks and installed-host verification remain pending.
+Logs are retained under this worktree's `.tmp/chart-acceptance/`. The final release
+results and installed-host observations are recorded below.
 
 ## Independent component review accepted
 
@@ -68,7 +69,8 @@ Operations, fixed AAPL SignalR options/preferences, and desktop/phone layout.
 It supplements the four final Stop/transport cases and earlier 61-case run.
 Root visually inspected the retained 1440px and 390px fixture screenshots; status
 is beside the symbol on desktop and wraps without page overflow on the phone.
-These screenshots contain synthetic prices. Full release tests remain pending.
+These screenshots contain synthetic prices. This was the component checkpoint;
+final release tests subsequently passed as recorded below.
 
 The first full release attempt found the central runtime-registry guard: the
 initial implementation registered its hosted shutdown hook directly in Program.
@@ -77,13 +79,70 @@ remained. The hook and its optional dependencies now use the existing central
 registry. It is hosted only on enabled paper runtime and registered after the SIP
 owner so reverse shutdown drains it first. **26/26** focused composition and
 diagnostic checks passed, including the original guard and four new off/paused/
-feed-only/enabled cases. A and B independently accepted the correction; the complete
-release suite must rerun against the corrected commit. No test was disabled.
+feed-only/enabled cases. A and B independently accepted the correction. The complete
+release suite then passed against the corrected commit. No test was disabled.
+
+## Final release and local installation
+
+Frozen product commit: `319e79af72c8b5f52276ae3490ba437b707c2639`.
+The serialized final backend run passed **4,180**, failed **0**, with **5** explicit
+opt-in cases unrun (real Finviz export and four profiling/memory workloads).
+The final browser run from `tests/ui` passed **246/246** in 3.3 minutes with no
+skips or retries; its owned isolated host and synthetic data were cleaned up.
+An earlier full browser command from the repository root passed 242 but failed
+four fixtures resolving relative paths from the wrong working directory. Its
+log is retained; the successful rerun used the intended directory, without code
+changes or relaxed assertions. Both reviewers accepted these final receipts.
+
+Release publication succeeded. Every one of the 243 staged files matched the
+retained SHA-256 manifest. The installed Web DLL hash is
+`D6315C5C91E51784D81E1E3D2FCB5A43AC697C370C0558B901D109686CC1287D`.
+At 08:19:47 UTC the exact configured paper account was ACTIVE and flat with no
+open orders, queued jobs, active candidates, intents, risk reservations or enabled
+Preparation schedules. Only the verified old site processes were stopped. The
+listener took a moment to disappear; the next observation confirmed it absent.
+A consistent SQLite backup at `before-chart-release-319e79a-20261116T082053Z.db`
+passed integrity checking and retained all 15 jobs. The stopped-site preflight
+initially refused startup while the prior host lease remained active; it passed
+at 08:21:57 UTC after natural expiry. No lease was edited.
+
+Local main was fast-forwarded without GitHub synchronization. The user-owned
+Fable audit remains unstaged and unchanged, SHA-256
+`53443A75929C634CF52B7FDB658A295108A270E4EBDBEDC4A01B41E2EED6F2BF`.
+Previous binaries remain in `C:\project\tradingflow-site\bin-before-319e79a-20261116`.
+The unchanged standard launcher started app PID **38368**, command parent **14440**,
+hidden launcher **46972**, listening only at `127.0.0.1:10088`. No ngrok process
+was present. The runtime is enabled with `strategy_gated` manual policy; the
+diagnostic is default-off. No strategy was activated or broker order submitted.
+
+At 08:22:38 UTC, `release-running-319e79a.json` verified the installed hash and
+active paper host's exact code version, all **15 jobs across all 20 columns**
+against the retained baseline, **32 migrations**, and empty order intent/event/
+risk tables. Readiness was ready, order stream connected, completed recovery
+healthy, account reconciliation clean with no differences. The subsequent fresh
+paper preflight again verified zero positions/orders and no unrelated work.
+Receipts and the backup are retained in `work/operator-closure-20261115`.
+
+Signed-in browser checks on the installed app showed the MU chart status beside
+its symbol, retained search/chart selection, and real retrieved SIP candles.
+Operations did not expose the default-off diagnostic. It showed both Finviz
+screens awaiting their first 15:00 Berlin slot. The Desk showed overnight quotes
+with their own timestamps, while the regular-session chart correctly showed
+closed and Friday's completed candles. This is installed display verification,
+not proof of regular-session live forming candles or the proposed quote repair.
+Operations additionally reported no selected-list SIP quote and no external
+warm-up manifest; neither is relabelled as healthy by the release checks.
+
+A independently rechecked the installed and prior DLLs, live process chain and
+loopback listener, launcher posture, readiness and all 15 jobs/20 fields against
+both the pre-cutover backup and original baseline. B independently rehashed all
+243 installed files, verified the exact file set, source/audit identity, listener,
+launcher defaults and database preservation. Both accepted the installed release;
+neither represented future market observations as complete.
 
 ## Operational acceptance remains separate
 
-The installed site still serves the previous reviewed `d77e22b` release. It has
-not been replaced by this worktree. Scheduled Finviz first receipts, the exact
+The installed site now serves the reviewed `319e79a` release. Scheduled Finviz first receipts, the exact
 approved one-share paper execution, browser-visible live forming/completed
 reconciliation and exact private entry/exit evidence remain external checks.
 Morning actual receipts are in the paper acceptance plan. Do not execute early.

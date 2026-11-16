@@ -7,24 +7,26 @@ Source: [Fable audit](../research/tradingflow-audit-2026-11-14.md).
 
 ## Current status
 
-**Current implementation checkpoint, 16 November morning:** the approved bounded
-live-chart diagnostic and directly requested Desk header move passed independent
-A/B component review, an early Release compile, 33 focused backend cases, the
-overlapping final 12-case acceptance slice, 61 affected browser cases, and two
-final four-case browser slices. The real endpoint's admin/CSRF/loopback/default-off
-controls and hard deadline were tested. The first full release attempt exposed a
-hosted-service registration outside the central registry; it was stopped and
-corrected without weakening the check. The corrected composition/diagnostic slice
-passed 26/26 and both reviewers accepted the correction. Full release verification
-and installation are pending; the installed site below remains unchanged. See the
+**Current installed checkpoint, 16 November, 09:22 Berlin:** compiled Release
+`319e79a` is installed and running on port 10088. It contains the approved bounded
+live-chart diagnostic (default-off) and requested chart status beside the Desk
+symbol. Final checks passed **4,180 backend tests** (zero failures; five explicit
+opt-ins unrun) and **246 browser tests**. Separate A/B reviewers accepted the
+component, runtime-registry correction, full release receipts and independently
+verified installed release. The restarted paper runtime is enabled with
+normal strategy-gated submission, feeds and scheduled capture enabled; ngrok is
+off. All **15 jobs/20 fields** and **32 migrations** were verified after restart,
+with healthy order recovery/reconciliation, no positions, orders or queued work.
+Prior binaries and a consistent database backup are retained. See the
 [implementation evidence](../verification/chart-acceptance-implementation-2026-11-16.md).
 
 The separate [Desk live-quote repair](../design-review/2026-11-16/desk-live-quotes.md)
 is designed and awaiting explicit approval. Investigation confirmed that slow full
 snapshots can delay the current quote relay and its silence-based polling label is
 misleading. No new Desk quote transport has been implemented. Real scheduled
-Finviz receipts, the bounded paper execution and live chart/private evidence remain
-pending their authorized market windows. Nothing was synced to GitHub.
+Finviz receipts, the bounded paper execution and live chart evidence remain
+pending their authorized market windows; private fill evidence follows the flat
+paper test. Nothing was synced to GitHub.
 
 **16 November morning acceptance check, 07:45 Berlin:** the app and collector are
 running. The durable schedule points to today's 15:00 Berlin slot with no calendar
@@ -41,10 +43,12 @@ contemporaneous trade receipt. Current runtime ownership alone does not supply
 that: no discovery job is active, Desk quotes/chart watches do not create a
 market-state subscription, and the short manual-entry status observation is not
 a full covered minute. The live preview path keeps trades in bounded memory, not
-a durable raw-trade archive. Separate A/B source review confirmed that no existing
-read-only capture command closes this gap. Exact live trade reconciliation remains
-unverified until an authorized sustained session and retained receipt source are
-available. A later historical download must not be relabelled as a live receipt.
+a durable raw-trade archive. Before this release, separate A/B source review
+confirmed that no existing read-only capture command closed this gap. The newly
+installed diagnostic now provides that bounded command, but remains off and has
+not run. Exact live trade reconciliation remains unverified until its authorized
+session has supplied retained receipts. A later historical download must not be
+relabelled as a live receipt.
 Private order-chart reconciliation can follow the approved trade after it is flat,
 using its exact persisted intents and exact operator/account read grants; no grants
 or extra orders were added during this morning check.
@@ -55,11 +59,11 @@ for user approval. It adds one five-minute read-only AAPL session and bounded ex
 receipts through the existing SIP connection, plus temporary read grants for only
 the approved test's own persisted entry/exit intents after flat. This extra
 diagnostic and the scoped grants were explicitly approved by the user on 16
-November; implementation and execution are pending. The existing one-share paper
-approval is not being reopened. The app remains on the verified Release while the
-approved diagnostic is implemented and checked in an isolated checkout.
+November. The diagnostic implementation is now installed and default-off;
+operational execution and exact private grants remain pending after the approved
+paper test is flat. The existing one-share paper approval is not being reopened.
 
-**Authoritative checkpoint, 16 November 2026, 00:18 Berlin (15 November, 23:18 UTC).** Compiled Release `d77e22b` is installed in `C:\project\tradingflow-site\bin` and running at http://127.0.0.1:10088 with the explicitly authorized paper runtime enabled, normal strategy-gated submission, market feeds and scheduled Finviz capture enabled. Ngrok is stopped because its previous approval covered paused trading. The actual database has 32 migrations. The final release passed 4,164 backend tests (zero failures; five explicit opt-ins skipped) and 240 browser tests; separate A/B reviewers independently accepted both receipts. Signed-in Desk, remembered view, optional forming control, Chart details, real candles, News and Earnings were checked on the installed build. No broker order, new strategy run, economic experiment or GitHub sync occurred. [Final release evidence](../verification/release-2026-11-15-final.md).
+**Previous checkpoint, 16 November 2026, 00:18 Berlin (15 November, 23:18 UTC).** Compiled Release `d77e22b` was installed in `C:\project\tradingflow-site\bin` and running at http://127.0.0.1:10088 with the explicitly authorized paper runtime enabled, normal strategy-gated submission, market feeds and scheduled Finviz capture enabled. Ngrok is stopped because its previous approval covered paused trading. The actual database has 32 migrations. The final release passed 4,164 backend tests (zero failures; five explicit opt-ins skipped) and 240 browser tests; separate A/B reviewers independently accepted both receipts. Signed-in Desk, remembered view, optional forming control, Chart details, real candles, News and Earnings were checked on the installed build. No broker order, new strategy run, economic experiment or GitHub sync occurred. [Final release evidence](../verification/release-2026-11-15-final.md).
 
 **Startup preservation repair installed and verified:** the additive migration preserved all existing rows. Enabling the earlier host exposed an old startup retention prune that removed 14 terminal job rows. Exact insert-only recovery restored them. The obsolete pruning path is now removed from the running Release; the actual restart preserved all 15 original jobs across all 20 columns. The paper account remains flat, with no orders or intents; synchronization and completed recovery-cycle checks passed. Prior binaries and recovery snapshots remain retained. The old defective binary must not be restarted with paper runtime enabled.
 
