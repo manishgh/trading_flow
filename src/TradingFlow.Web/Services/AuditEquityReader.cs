@@ -14,6 +14,20 @@ public interface IAuditEquityReader { Task<AuditEquityResult> ReadAsync(string r
 public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobRepository repository,
     SimpleYamlReader yaml, ProjectPaths paths) : IAuditEquityReader
 {
+    /// <summary>
+    /// Largest published result file the Audit page reads. Results store the portfolio record several times, and the
+    /// largest published one (18 Nov 2026) is 17.4 MB; the file is read whole and verified against its hash.
+    /// </summary>
+    internal const long MaxPublishedResultBytes = 64_000_000;
+
+    // One published result in memory at a time across all Audit requests: each read can hold up to 64 MB of bytes plus
+    // the deserialized result, and one page load reads up to five results (workflow evidence plus four compared runs).
+    private static readonly SemaphoreSlim PublishedResultReads = new(1, 1);
+
+    /// <summary>
+    /// Selects the one completed backtest job with this database run name and returns its published realised-equity
+    /// curves, or the plain reason none can be shown.
+    /// </summary>
     public async Task<AuditEquityResult> ReadAsync(string runName, CancellationToken token)
     {
         var matching = jobs.List().Where(x => x.RunName == runName && x.Status == "completed").ToArray();
@@ -22,7 +36,7 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         if (job is null || job.Status != "completed" || String.IsNullOrWhiteSpace(job.ResultReference))
             return new([],"The completed result artifact is unavailable.");
         try {
-            return Series(runName, await ReadStoredResultAsync(paths, yaml, runName, job.ConfigPath, job.ResultReference, token));
+            return Series(runName, await ReadStoredResultAsync(paths, yaml, job.ConfigPath, job.ResultReference, token));
         } catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException) {
             return new([],"The published result could not be verified or exceeds the comparison limits. Open the original job for details.");
         }
@@ -30,31 +44,40 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
 
     /// <summary>
     /// Reads a completed backtest's published result from the settings and result paths stored on its job row.
-    /// Paths recorded before the data folder moved are read from the configured data folder (see
-    /// <see cref="ProjectPaths.LocateStored"/>); nothing stored is rewritten and all confinement and hash checks apply.
+    /// The publication must carry the <c>run_name</c> written in that job's own settings file: the job's database
+    /// name (for example <c>etf-trend-dev-2017-2023_9903…</c>) only selects the job, while the run and its manifest
+    /// are named after the generated settings file. Paths recorded before the data folder moved are read from the
+    /// configured data folder (see <see cref="ProjectPaths.LocateStored"/>); nothing stored is rewritten and all
+    /// confinement and hash checks apply.
     /// </summary>
     internal static Task<(BacktestResult Result, BacktestArtifactManifest Manifest)?> ReadStoredResultAsync(ProjectPaths paths,
-        SimpleYamlReader yaml, string runName, string storedConfigPath, string storedResultReference, CancellationToken token)
+        SimpleYamlReader yaml, string storedConfigPath, string storedResultReference, CancellationToken token)
     {
         var configPath = ConfineConfig(paths, paths.LocateStored(storedConfigPath));
-        var root = paths.LocateStored(yaml.ReadBacktestRun(configPath).ResultsRoot);
-        return ReadResultAsync(runName, root, paths.LocateStored(storedResultReference), token);
+        // ReadBacktestRun refuses a settings file without run_name (InvalidOperationException, caught by both callers).
+        var settings = yaml.ReadBacktestRun(configPath);
+        var root = paths.LocateStored(settings.ResultsRoot);
+        return ReadResultAsync(settings.RunName, root, paths.LocateStored(storedResultReference), token);
     }
 
     /// <summary>Reads display curves from a result path already located under its results root.</summary>
     public static async Task<AuditEquityResult> ReadPublishedAsync(string runName, string root, string resultPath, CancellationToken token) =>
         Series(runName, await ReadResultAsync(runName, root, resultPath, token));
 
-    // Turns a verified publication into display curves, stating why none is shown when evidence is absent or incomplete.
+    // Turns a publication whose identity ReadResultAsync verified into display curves labelled with the requested run
+    // name, stating why none is shown when evidence is absent or incomplete.
     private static AuditEquityResult Series(string runName, (BacktestResult Result, BacktestArtifactManifest Manifest)? published)
     {
         if (published is null) return new([],"The result has no published manifest; no curve is inferred from a truncated UI snapshot.");
         var result = published.Value.Result;
-        if(result.RunName != runName || !result.EconomicResultsComplete)
-            return new([],"Run identity or complete economic results are unavailable.");
+        if(!result.EconomicResultsComplete)
+            return new([],"Complete economic results are unavailable.");
         return BuildSeries(runName, result);
     }
 
+    // Reads and verifies one published result: the manifest and the result must both name `runName` (the run's own
+    // name), stay inside `root`, be no larger than MaxPublishedResultBytes and match the manifest's hash. Returns null
+    // when no manifest was published; throws InvalidDataException for any other failed check.
     internal static async Task<(BacktestResult Result, BacktestArtifactManifest Manifest)?> ReadResultAsync(string runName, string root, string resultPath, CancellationToken token)
     {
         var resultFile = Confine(root,resultPath);
@@ -69,10 +92,13 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         using var candidateEvidence = await TradingFlow.Backtesting.Artifacts.CandidateAuditReader.OpenEvidenceAsync(directory, manifest, token);
         var reference = manifest.Artifacts.SingleOrDefault(x=>x.Kind == "backtest_result")
             ?? throw new InvalidDataException("Result reference missing.");
-        if(reference.ByteLength is <= 0 or > 10_000_000 || !reference.Complete || reference.RecordCount != 1 ||
+        if(reference.ByteLength is <= 0 || reference.ByteLength > MaxPublishedResultBytes || !reference.Complete || reference.RecordCount != 1 ||
             Path.IsPathRooted(reference.Path) || Confine(directory,Path.Combine(directory,reference.Path)) != resultFile)
             throw new InvalidDataException("Result reference exceeds bounds or differs from job.");
-        var result = await ReadBoundedAsync<BacktestResult>(resultFile,10_000_000,token,reference.Sha256);
+        BacktestResult result;
+        await PublishedResultReads.WaitAsync(token);
+        try { result = await ReadBoundedAsync<BacktestResult>(resultFile,MaxPublishedResultBytes,token,reference.Sha256); }
+        finally { PublishedResultReads.Release(); }
         if(result.RunName != runName) throw new InvalidDataException("Published result identity differs.");
         return (result, manifest);
     }

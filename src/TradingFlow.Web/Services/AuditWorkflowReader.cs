@@ -37,7 +37,7 @@ public sealed class AuditWorkflowReader(IDbContextFactory<TradingFlowDbContext> 
                 return Missing("This backtest has no retained completed publication; no fills or candidate counts inferred.");
             try
             {
-                var published = await AuditEquityReader.ReadStoredResultAsync(paths, yaml, runName, job.ConfigPath, job.ResultReference, token);
+                var published = await AuditEquityReader.ReadStoredResultAsync(paths, yaml, job.ConfigPath, job.ResultReference, token);
                 return published is null ? Missing("Published result manifest unavailable.") : FromPublished(published.Value.Result, published.Value.Manifest);
             }
             catch (Exception error) when (error is IOException or InvalidDataException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException)
