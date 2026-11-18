@@ -25,11 +25,17 @@
     <label class="watch-source-label">Strategy<select id="watch-strategy"><option value="">Select a strategy</option></select></label>
     <label class="watch-search-label">Find a stock<input id="watch-search" type="search" maxlength="80" placeholder="Symbol or company" autocomplete="off" /></label>
     <label class="watch-sort-label">Sort<select id="watch-sort"><option value="symbol">Symbol A–Z</option><option value="held">Held first on this page</option><option value="news">Latest news on this page</option></select></label>
+    <button type="button" id="watch-add-open" class="btn btn-secondary">+ Add stock</button>
     <button type="button" id="watch-import-open" class="btn btn-secondary">+ Saved Elite screen</button>
     <a asp-page="/Wishlists" class="watch-manage">Manage groups ↗</a>
   </div>
   <p id="watch-strategy-status" class="watch-fine" role="status">Select a strategy to collect data and see its checks for each stock.</p>
   <div class="watch-actions"><button type="button" id="watch-strategy-refresh" class="btn btn-secondary" hidden>Refresh strategy checks</button><button type="button" id="watch-strategy-cancel" class="btn btn-secondary" hidden>Cancel strategy checks</button></div>
+  @* Any symbol can join an own stock group; the server first checks with Alpaca that it is an active, tradable US stock. *@
+  <form id="watch-add" class="watch-import" hidden>
+    <div><strong>Add a stock to your group</strong><p>Type any symbol. Alpaca first confirms it is an active, tradable US stock. Adding a stock does not start a strategy or place an order.</p></div>
+    <label>Symbol<input name="symbol" required maxlength="11" placeholder="AAPL" autocomplete="off" autocapitalize="characters" spellcheck="false" /></label><label>Stock group<select id="watch-add-list" name="wishlistId" required></select></label><button class="btn btn-primary" type="submit">Add stock</button><button class="btn btn-secondary" type="button" id="watch-add-close">Close</button><p role="status" id="watch-add-status"></p>
+  </form>
   <form id="watch-import" class="watch-import" hidden>
     <div><strong>Add a saved Elite screen</strong><p>Copy its Finviz URL here. Only the filters are saved locally; private Elite presets are not automatically synced.</p></div>
     <label>Screen name<input name="name" required maxlength="120" placeholder="My momentum screen" /></label><label>Finviz URL or filters<input name="url" required maxlength="4000" placeholder="https://elite.finviz.com/screener.ashx?f=…" /></label><button class="btn btn-primary" type="submit">Save screen</button><button class="btn btn-secondary" type="button" id="watch-import-close">Close</button><p role="status" id="watch-import-status"></p>

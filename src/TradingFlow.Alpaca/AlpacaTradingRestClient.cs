@@ -54,6 +54,8 @@ public sealed class AlpacaTradingRestClient : IDisposable
             cancellationToken);
     }
 
+    // The "failed with HTTP nnn" wording is read by DeskSources.DescribeLookupFailure (Desk "Add stock") to tell
+    // rejected keys from other errors; keep it, or change both together.
     public static string DescribeFailure(string operation, ArchivedAlpacaResponse response)
     {
         var providerMessage = NormalizeProviderMessage(TryReadProviderMessage(response.Payload));

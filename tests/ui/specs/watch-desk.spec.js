@@ -425,6 +425,47 @@ test('real follow API preserves notes, rejects nonmembers and refreshes membersh
  await page.reload();await page.locator('#watch-search').fill('AAPL');await expect(page.locator('#watch-rows')).toContainText('AAPL');
 });
 
+// "Add stock" sends any typed symbol with the chosen own group and shows the server's added or refused message.
+test('Add stock sends the typed symbol to the chosen group and shows the reason for a refusal',async({page})=>{
+ await fixture(page);const requests=[];
+ await page.route('**/api/desk/stocks',route=>{const body=route.request().postDataJSON();requests.push(body);
+  return body.symbol==='NOPE'?route.fulfill({status:400,json:{status:'Refused',symbol:'NOPE',message:'Alpaca has no asset with the symbol NOPE. Check the spelling. Nothing was added.'}})
+   :route.fulfill({json:{status:'Added',symbol:'PLTR',message:'Added PLTR to Core. It appears with the next Desk update, within about 5 seconds.'}});});
+ await signIn(page);await page.goto('/Desk');await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+ await expect(page.locator('#watch-add')).toBeHidden();await page.locator('#watch-add-open').click();
+ await expect(page.locator('#watch-add-list option')).toHaveText(['Core']);
+ await page.locator('#watch-add input[name=symbol]').fill('NOPE');await page.locator('#watch-add [type=submit]').click();
+ await expect(page.locator('#watch-add-status')).toContainText('no asset with the symbol NOPE');await expect(page.locator('#watch-add input[name=symbol]')).toHaveValue('NOPE');
+ await page.locator('#watch-add input[name=symbol]').fill('pltr');await page.locator('#watch-add [type=submit]').click();
+ await expect(page.locator('#watch-add-status')).toContainText('Added PLTR to Core');await expect(page.locator('#watch-add input[name=symbol]')).toHaveValue('');
+ expect(requests).toEqual([{symbol:'NOPE',wishlistId:id},{symbol:'pltr',wishlistId:id}]);
+ await page.locator('#watch-add-close').click();await expect(page.locator('#watch-add')).toBeHidden();await expect(page.locator('#watch-add-open')).toBeFocused();
+});
+
+// The real endpoint refuses a malformed symbol and an unknown group, and leaves a stock already in the group (with its
+// note) unchanged, and answers 503 for a new symbol when the site has no Alpaca keys; none of these cases asks Alpaca.
+test('real add-stock API refuses bad input, keeps an existing stock unchanged and reports missing keys without asking Alpaca',async({page})=>{
+ await signIn(page);await page.goto('/Desk');
+ const result=await page.evaluate(async()=>{
+  const post=async(path,body)=>{const r=await window.tradingFlowFetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.json()};};
+  const list=(await post('/api/v1/wishlists',{name:'Desk add '+crypto.randomUUID(),isObserved:false})).data;
+  await post('/api/v1/wishlists/'+list.id+'/items',{ticker:'AAPL',displayName:'Apple',notes:'Preserve operator note'});
+  const malformed=await post('/api/desk/stocks',{symbol:'$AAPL',wishlistId:list.id});
+  const unknownGroup=await post('/api/desk/stocks',{symbol:'AAPL',wishlistId:crypto.randomUUID()});
+  const existing=await post('/api/desk/stocks',{symbol:'aapl',wishlistId:list.id});
+  // playwright.config.js starts the test host with ALPACA_KEY_ID/ALPACA_SECRET_KEY set to blank, so a new symbol is
+  // answered 503 before any request to Alpaca.
+  const noKeys=await post('/api/desk/stocks',{symbol:'MSFT',wishlistId:list.id});
+  const lists=await fetch('/api/v1/wishlists').then(r=>r.json());const current=lists.find(x=>x.id===list.id);
+  return {malformed,unknownGroup,existing,noKeys,current};
+ });
+ expect(result.noKeys.status).toBe(503);expect(result.noKeys.data.message).toContain('keys are not set');
+ expect(result.malformed.status).toBe(400);expect(result.malformed.data.message).toContain('Enter a stock symbol');
+ expect(result.unknownGroup.status).toBe(400);expect(result.unknownGroup.data.message).toContain('no longer exists');
+ expect(result.existing.status).toBe(200);expect(result.existing.data.status).toBe('AlreadyInGroup');
+ expect(result.current.items).toHaveLength(1);expect(result.current.items[0].notes).toBe('Preserve operator note');
+});
+
 // Stand-in SignalR client: records each connection and lets the test push quote frames without a provider socket.
 const fakeSignalR=`window.signalR={HttpTransportType:{WebSockets:1},LogLevel:{None:6},HubConnectionBuilder:class{
  withUrl(url,options){this.url=url;this.options=options;return this;} configureLogging(){return this;}

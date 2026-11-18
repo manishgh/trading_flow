@@ -411,6 +411,9 @@ builder.Services.AddSingleton<TradingFlow.Engine.Execution.IBrokerClient>(servic
         rawArchiveWriter);
 });
 
+// Read-only asset lookup (the Desk's "Add stock" check) without handing out the order-capable broker interface.
+builder.Services.AddSingleton<TradingFlow.Engine.Execution.IAssetTradingEligibilityProvider>(serviceProvider =>
+    serviceProvider.GetRequiredService<TradingFlow.Engine.Execution.IBrokerClient>());
 builder.Services.AddTransient<TradingFlow.Data.Catalysts.CatalystStreamer>();
 builder.Services.AddTransient<SymbolIntelligenceService>();
 builder.Services.AddAlpacaQuotes();

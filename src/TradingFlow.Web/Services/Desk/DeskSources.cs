@@ -12,6 +12,8 @@ namespace TradingFlow.Web.Services.Desk;
 public sealed record DeskSource(string Key, string Name, string Group, string Description, string? Query = null);
 public sealed record DeskMembership(string Symbol, string? Name, IReadOnlyList<DeskWishlist> Wishlists);
 public sealed record DeskWishlist(Guid Id, string Name, bool Observed);
+public enum DeskStockAddStatus { Added, AlreadyInGroup, Refused, Unavailable }
+public sealed record DeskStockAddResult(DeskStockAddStatus Status, string Symbol, string Message);
 public sealed record DeskSelection(DeskSource Source, IReadOnlyList<DeskMembership> Members,
     int TotalCount, DateTimeOffset? ScreenedAtUtc, string? Error)
 {
@@ -21,10 +23,14 @@ public sealed record DeskSelection(DeskSource Source, IReadOnlyList<DeskMembersh
 }
 
 /// <summary>Resolves observational membership without creating universes, candidates or orders.</summary>
-public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactory,
+public sealed partial class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactory,
     IWishlistRepository wishlists, ScreenerPresetService presets, IScreenerSnapshotSource screener,
-    IMemoryCache cache, EarningsMonitor? earnings = null, ResearchScreenSources? researchScreens = null)
+    IMemoryCache cache, EarningsMonitor? earnings = null, ResearchScreenSources? researchScreens = null,
+    TradingFlow.Engine.Execution.IAssetTradingEligibilityProvider? assets = null, ILogger<DeskSources>? logger = null,
+    AlpacaCredentialProvider? alpacaCredentials = null)
 {
+    /// <summary>How long "Add stock" waits for Alpaca's asset record before answering that the check is unavailable.</summary>
+    public TimeSpan AssetLookupTimeout { get; init; } = TimeSpan.FromSeconds(10);
     // Earnings groups come from the live earnings monitor. Membership is advisory: reporting is not an entry signal.
     public static readonly IReadOnlyList<DeskSource> EarningsSources = [
         new("earnings:today", "Earnings today", "Earnings", "Reporting today, plus last session's after-close reports that trade today. Membership is not an entry signal."),
@@ -214,6 +220,104 @@ public sealed class DeskSources(IDbContextFactory<TradingFlowDbContext> dbFactor
         if (existing?.Active == true) return; // Retrying a follow must not erase operator notes.
         await wishlists.AddOrUpdateItemAsync(wishlistId, symbol, existing?.DisplayName, existing?.Notes, ct);
     }
+
+    /// <summary>
+    /// Adds any typed symbol to one of the operator's own stock groups, whether or not the current view lists it.
+    /// A symbol already active in the group is left untouched (its notes stay). Otherwise Alpaca's asset record must
+    /// show an active, tradable US stock before the stock is added; unknown, inactive, non-tradable and non-stock
+    /// symbols are refused with the reason. If Alpaca cannot be asked, nothing is added. Group membership is the only
+    /// state changed: it neither starts a strategy nor places an order.
+    /// </summary>
+    public async Task<DeskStockAddResult> AddStockAsync(string? input, Guid wishlistId, CancellationToken ct)
+    {
+        var symbol = (input ?? "").Trim().ToUpperInvariant();
+        if (!StockSymbolPattern().IsMatch(symbol))
+            return new(DeskStockAddStatus.Refused, symbol, "Enter a stock symbol such as AAPL, or BRK.B for a share class: a letter, then up to 7 letters or digits.");
+        var target = (await FollowedListsAsync(ct)).SingleOrDefault(list => list.Id == wishlistId);
+        if (target is null)
+            return new(DeskStockAddStatus.Refused, symbol, "That stock group no longer exists. Reload the Desk and choose another group.");
+        var existing = target.Items.SingleOrDefault(item => item.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+        if (existing?.Active == true)
+            return new(DeskStockAddStatus.AlreadyInGroup, symbol, $"{symbol} is already in {target.Name}.");
+        var refusal = await CheckStockAsync(symbol, ct);
+        if (refusal is not null) return refusal;
+        return await AddCheckedStockAsync(target, symbol, existing, ct);
+    }
+
+    // Writes the checked stock into the group. If the write fails, the group is read again: a concurrent add of the same
+    // symbol (another tab or the phone) has put it there and counts as already added; any other failure (for example a
+    // locked database) is reported as not saved. A group deleted or frozen meanwhile is refused.
+    private async Task<DeskStockAddResult> AddCheckedStockAsync(Wishlist target, string symbol, WishlistItem? existing, CancellationToken ct)
+    {
+        try { await wishlists.AddOrUpdateItemAsync(target.Id, symbol, existing?.DisplayName, existing?.Notes, ct); }
+        catch (DbUpdateException ex)
+        {
+            Wishlist? current = null;
+            try { current = await wishlists.GetByIdAsync(target.Id, ct); }
+            catch (Exception readFailure) when (readFailure is not OperationCanceledException)
+            {
+                logger?.LogWarning(readFailure, "Desk could not re-read stock group {WishlistId} after a failed save.", target.Id);
+            }
+            if (current?.Items.Any(item => item.Active && item.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase)) == true)
+                return new(DeskStockAddStatus.AlreadyInGroup, symbol, $"{symbol} was just added to {target.Name} by another request.");
+            logger?.LogWarning(ex, "Desk could not save {Symbol} to stock group {WishlistId}.", symbol, target.Id);
+            return new(DeskStockAddStatus.Unavailable, symbol, $"The database did not save {symbol} to {target.Name}; the site log has the details. Retry in a moment.");
+        }
+        catch (InvalidOperationException)
+        {
+            return new(DeskStockAddStatus.Refused, symbol, "That stock group no longer exists or can no longer change. Reload the Desk and choose another group.");
+        }
+        logger?.LogInformation("Desk added {Symbol} to stock group {WishlistId}.", symbol, target.Id);
+        return new(DeskStockAddStatus.Added, symbol, $"Added {symbol} to {target.Name}. It appears with the next Desk update, within about 5 seconds.");
+    }
+
+    // Asks Alpaca for the symbol's asset record; returns null when it is an active, tradable US stock, else the reason.
+    // Missing keys, an error answer and no answer within AssetLookupTimeout are reported separately; details stay in the log.
+    private async Task<DeskStockAddResult?> CheckStockAsync(string symbol, CancellationToken ct)
+    {
+        if (assets is null || alpacaCredentials is { IsConfigured: false })
+            return new(DeskStockAddStatus.Unavailable, symbol, "Alpaca keys are not set on this site, so the symbol cannot be checked with Alpaca. Nothing was added.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(AssetLookupTimeout);
+        TradingFlow.Engine.Execution.AssetTradingEligibility? asset;
+        try { asset = await assets.GetEligibilityAsync(symbol, deadline.Token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger?.LogWarning("Desk lookup of {Symbol} got no Alpaca answer within {Timeout}.", symbol, AssetLookupTimeout);
+            return new(DeskStockAddStatus.Unavailable, symbol, $"Alpaca did not answer the lookup for {symbol} within {AssetLookupTimeout.TotalSeconds:0} seconds. Nothing was added; retry in a moment.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "Desk lookup of {Symbol} failed at Alpaca.", symbol);
+            return new(DeskStockAddStatus.Unavailable, symbol, DescribeLookupFailure(symbol, ex) + " Nothing was added.");
+        }
+        string? reason = asset switch
+        {
+            null => $"Alpaca has no asset with the symbol {symbol}. Check the spelling.",
+            { AssetClass: not "us_equity" } => $"{symbol} is not a US stock on Alpaca (asset class {asset.AssetClass ?? "not given"}).",
+            { Active: false } => $"Alpaca lists {symbol} as inactive, for example delisted or no longer trading.",
+            { Tradable: false } => $"Alpaca does not allow trading {symbol}, for example an over-the-counter stock.",
+            _ => null
+        };
+        return reason is null ? null : new(DeskStockAddStatus.Refused, symbol, reason + " Nothing was added.");
+    }
+
+    // Tells the operator which failure happened without provider details: Alpaca's error answers arrive as the
+    // broker client's "failed with HTTP nnn" message; an unreachable host is an HttpRequestException.
+    private static string DescribeLookupFailure(string symbol, Exception failure) =>
+        failure is HttpRequestException ? $"The site could not reach Alpaca to look up {symbol} (network or DNS failure)." :
+        HttpStatusPattern().Match(failure.Message) is { Success: true } status
+            ? status.Groups["code"].Value is "401" or "403"
+                ? $"Alpaca rejected this site's keys when looking up {symbol} (HTTP {status.Groups["code"].Value}). Check the Alpaca keys in the site settings."
+                : $"Alpaca answered the lookup for {symbol} with an error (HTTP {status.Groups["code"].Value}). Retry in a moment."
+            : $"The Alpaca lookup for {symbol} failed unexpectedly; the site log has the details.";
+
+    [GeneratedRegex(@"failed with HTTP (?<code>\d{3})", RegexOptions.CultureInvariant)]
+    private static partial Regex HttpStatusPattern();
+
+    // Exchange-listed US symbols: a letter, then letters/digits, with an optional one- or two-character class suffix.
+    [GeneratedRegex(@"\A[A-Z][A-Z0-9]{0,7}(?:\.[A-Z0-9]{1,2})?\z", RegexOptions.CultureInvariant)]
+    private static partial Regex StockSymbolPattern();
 
     public static DeskSelection Window(DeskSource source, IReadOnlyList<DeskMembership> members, int total,
         DateTimeOffset? screenedAt, string? error, int page, string search)

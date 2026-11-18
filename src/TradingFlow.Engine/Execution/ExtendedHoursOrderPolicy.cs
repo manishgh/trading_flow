@@ -30,7 +30,8 @@ public sealed record AssetTradingEligibility(
     bool OvernightTradable,
     DateTimeOffset ObservedAtUtc,
     bool Shortable = false,
-    string? BorrowStatus = null);
+    string? BorrowStatus = null,
+    string? AssetClass = null);
 
 public interface IAssetTradingEligibilityProvider
 {

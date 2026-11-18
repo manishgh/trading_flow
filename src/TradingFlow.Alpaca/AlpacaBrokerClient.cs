@@ -258,6 +258,10 @@ public sealed partial class AlpacaBrokerClient :
             root.TryGetProperty("shortable", out var shortable) && shortable.GetBoolean(),
             root.TryGetProperty("borrow_status", out var borrowStatus) && borrowStatus.ValueKind == JsonValueKind.String
                 ? borrowStatus.GetString()
+                : null,
+            // "us_equity", "crypto" or "us_option"; the Desk adds only US stocks to stock groups.
+            root.TryGetProperty("class", out var assetClass) && assetClass.ValueKind == JsonValueKind.String
+                ? assetClass.GetString()
                 : null);
         assetEligibilityCache[normalized] = new CachedAssetEligibility(eligibility, now);
         return eligibility;

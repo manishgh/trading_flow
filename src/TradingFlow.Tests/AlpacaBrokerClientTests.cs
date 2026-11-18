@@ -800,7 +800,7 @@ public class AlpacaBrokerClientTests : IDisposable
     public async Task GetEligibilityAsync_MapsOvernightEligibilityAndCachesAsset()
     {
         using var handler = new CapturingHandler(
-            responseBody: """{"symbol":"MSFT","status":"active","tradable":true,"overnight_tradable":true}""");
+            responseBody: """{"symbol":"MSFT","class":"us_equity","status":"active","tradable":true,"overnight_tradable":true}""");
         using var client = CreateClient(handler);
 
         var first = await client.GetEligibilityAsync("msft", CancellationToken.None);
@@ -810,6 +810,7 @@ public class AlpacaBrokerClientTests : IDisposable
         Assert.True(first.Active);
         Assert.True(first.Tradable);
         Assert.True(first.OvernightTradable);
+        Assert.Equal("us_equity", first.AssetClass);
         Assert.Equal(first, second);
         Assert.Equal(1, handler.RequestCount);
         Assert.Equal("/v2/assets/MSFT", handler.Path);

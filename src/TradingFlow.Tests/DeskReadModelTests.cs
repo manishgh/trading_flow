@@ -96,6 +96,115 @@ public sealed class DeskReadModelTests
         await Assert.ThrowsAsync<ArgumentException>(()=>sources.FollowAsync("all","AAPL",historical.Id,default));
 
     }
+    /// <summary>
+    /// The Desk adds any symbol to an own stock group, listed in the current view or not, once Alpaca confirms an
+    /// active, tradable US stock. Refusals, lookup failures and preparation revisions leave every group unchanged, and
+    /// a symbol already in the group keeps its notes without asking Alpaca again.
+    /// </summary>
+    [Fact]
+    public async Task AddStock_AddsAnyCheckedSymbolToAnOwnGroupAndRefusesWithTheReason()
+    {
+        await using var db=new CandidateWorkflowTestDatabase();await db.InitializeAsync();
+        var repository=new SqliteWishlistRepository(db);
+        var group=await repository.SaveAsync(List("Core","AAPL"),default);
+        await repository.AddOrUpdateItemAsync(group.Id,"AAPL","Apple","Keep my note",default);
+        var historical=await repository.SaveAsync(List("Preparation revision","OLD"),default);
+        await using(var context=db.CreateDbContext()) {
+            var definition=new PreparationDefinitionRecord{Id=Guid.NewGuid(),WorkflowId=Guid.NewGuid(),OwnerId="fixture",SettingsJson="{}"};
+            var occurrence=new PreparationOccurrenceRecord{Id=Guid.NewGuid(),DefinitionId=definition.Id,WorkflowId=definition.WorkflowId,SlotKey="fixture",SlotJson="{}"};
+            context.PreparationDefinitions.Add(definition);context.PreparationOccurrences.Add(occurrence);
+            context.PreparationReviews.Add(new(){Id=Guid.NewGuid(),OccurrenceId=occurrence.Id,WishlistId=historical.Id,OwnerId="fixture",IdempotencyKey="one",RequestSha256="hash",Json="{}"});await context.SaveChangesAsync(); }
+        static TradingFlow.Engine.Execution.AssetTradingEligibility Asset(string symbol,bool active=true,bool tradable=true,string assetClass="us_equity")=>
+            new(symbol,active,tradable,false,Now,AssetClass:assetClass);
+        var assets=new Mock<TradingFlow.Engine.Execution.IAssetTradingEligibilityProvider>(MockBehavior.Strict);
+        assets.Setup(x=>x.GetEligibilityAsync("NVDA",It.IsAny<CancellationToken>())).ReturnsAsync(Asset("NVDA"));
+        assets.Setup(x=>x.GetEligibilityAsync("BRK.B",It.IsAny<CancellationToken>())).ReturnsAsync(Asset("BRK.B"));
+        assets.Setup(x=>x.GetEligibilityAsync("NOPE",It.IsAny<CancellationToken>())).ReturnsAsync((TradingFlow.Engine.Execution.AssetTradingEligibility?)null);
+        assets.Setup(x=>x.GetEligibilityAsync("SIVE",It.IsAny<CancellationToken>())).ReturnsAsync(Asset("SIVE",active:false,tradable:false));
+        assets.Setup(x=>x.GetEligibilityAsync("OTCX",It.IsAny<CancellationToken>())).ReturnsAsync(Asset("OTCX",tradable:false));
+        assets.Setup(x=>x.GetEligibilityAsync("BTCUSD",It.IsAny<CancellationToken>())).ReturnsAsync(Asset("BTC/USD",assetClass:"crypto"));
+        assets.Setup(x=>x.GetEligibilityAsync("DOWN",It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("no route"));
+        using var cache=new MemoryCache(new MemoryCacheOptions());
+        var sources=new DeskSources(db,repository,new ScreenerPresetService(db,TimeProvider.System),Mock.Of<IScreenerSnapshotSource>(MockBehavior.Strict),cache,
+            assets:assets.Object,logger:NullLogger<DeskSources>.Instance);
+
+        assets.Setup(x=>x.GetEligibilityAsync("TSLA",It.IsAny<CancellationToken>())).ReturnsAsync(Asset("TSLA"));
+        await repository.AddOrUpdateItemAsync(group.Id,"TSLA","Tesla","Removed earlier",default);
+        await repository.RemoveItemAsync(group.Id,"TSLA",default);
+        Assert.Equal(DeskStockAddStatus.Added,(await sources.AddStockAsync("TSLA",group.Id,default)).Status);
+        var added=await sources.AddStockAsync(" nvda ",group.Id,default);
+        Assert.Equal((DeskStockAddStatus.Added,"NVDA"),(added.Status,added.Symbol));
+        Assert.Equal(DeskStockAddStatus.Added,(await sources.AddStockAsync("brk.b",group.Id,default)).Status);
+        Assert.Equal(DeskStockAddStatus.AlreadyInGroup,(await sources.AddStockAsync("AAPL",group.Id,default)).Status);
+        Assert.Equal(DeskStockAddStatus.AlreadyInGroup,(await sources.AddStockAsync("NVDA",group.Id,default)).Status);
+        foreach(var (symbol,reason) in new[]{("NOPE","no asset"),("SIVE","inactive"),("OTCX","does not allow trading"),("BTCUSD","not a US stock"),("A B",""),("$AAPL",""),("TOOLONGSYMBOL","")})
+        {
+            var refused=await sources.AddStockAsync(symbol,group.Id,default);
+            Assert.Equal(DeskStockAddStatus.Refused,refused.Status);Assert.Contains(reason,refused.Message);
+        }
+        var unavailable=await sources.AddStockAsync("DOWN",group.Id,default);
+        Assert.Equal(DeskStockAddStatus.Unavailable,unavailable.Status);Assert.DoesNotContain("no route",unavailable.Message);
+        Assert.Equal(DeskStockAddStatus.Refused,(await sources.AddStockAsync("NVDA",historical.Id,default)).Status);
+        Assert.Equal(DeskStockAddStatus.Refused,(await sources.AddStockAsync("NVDA",Guid.NewGuid(),default)).Status);
+
+        var items=(await repository.GetByIdAsync(group.Id,default))!.Items;
+        Assert.Equal(new[]{"AAPL","BRK.B","NVDA","TSLA"},items.Select(x=>x.Ticker).Order(StringComparer.Ordinal));
+        Assert.Equal("Keep my note",items.Single(x=>x.Ticker=="AAPL").Notes);
+        var tesla=items.Single(x=>x.Ticker=="TSLA");Assert.True(tesla.Active);Assert.Equal(("Tesla","Removed earlier"),(tesla.DisplayName,tesla.Notes));
+        Assert.Equal(new[]{"OLD"},(await repository.GetByIdAsync(historical.Id,default))!.Items.Select(x=>x.Ticker));
+        assets.Verify(x=>x.GetEligibilityAsync("AAPL",It.IsAny<CancellationToken>()),Times.Never);
+        assets.Verify(x=>x.GetEligibilityAsync("NVDA",It.IsAny<CancellationToken>()),Times.Once);
+        Assert.Equal(new[]{"AAPL","BRK.B","NVDA","TSLA"},(await sources.ResolveAsync("wishlist:"+group.Id,default)).Members.Select(x=>x.Symbol));
+    }
+
+    /// <summary>
+    /// Missing Alpaca keys, rejected keys, an Alpaca error answer, an unreachable Alpaca, no answer before the deadline,
+    /// a concurrent add of the same symbol and a failed database save each give their own answer instead of a generic
+    /// failure; only the concurrent add counts as the stock being in the group.
+    /// </summary>
+    [Fact]
+    public async Task AddStock_ReportsMissingKeysLookupFailuresAndSaveFailuresSeparately()
+    {
+        await using var db=new CandidateWorkflowTestDatabase();await db.InitializeAsync();
+        var group=List("Core","AAPL");
+        var lists=new Mock<IWishlistRepository>();
+        lists.Setup(x=>x.ListAsync(It.IsAny<CancellationToken>())).ReturnsAsync([group]);
+        lists.Setup(x=>x.AddOrUpdateItemAsync(group.Id,It.IsIn("NVDA","LOCK"),null,null,It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Microsoft.EntityFrameworkCore.DbUpdateException("save failed"));
+        // After the failed write, the group holds NVDA (another request added it) but not LOCK (the save really failed).
+        lists.Setup(x=>x.GetByIdAsync(group.Id,It.IsAny<CancellationToken>())).ReturnsAsync(List("Core","AAPL","NVDA"));
+        var assets=new Mock<TradingFlow.Engine.Execution.IAssetTradingEligibilityProvider>();
+        foreach(var symbol in new[]{"NVDA","LOCK"})
+            assets.Setup(x=>x.GetEligibilityAsync(symbol,It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TradingFlow.Engine.Execution.AssetTradingEligibility(symbol,true,true,false,Now,AssetClass:"us_equity"));
+        assets.Setup(x=>x.GetEligibilityAsync("SLOW",It.IsAny<CancellationToken>()))
+            .Returns(async (string _,CancellationToken token)=>{await Task.Delay(Timeout.Infinite,token);return null;});
+        assets.Setup(x=>x.GetEligibilityAsync("KEYS",It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Alpaca asset eligibility failed with HTTP 401: unauthorized. RawArchiveId=fixture."));
+        assets.Setup(x=>x.GetEligibilityAsync("BUSY",It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Alpaca asset eligibility failed with HTTP 503. RawArchiveId=fixture."));
+        assets.Setup(x=>x.GetEligibilityAsync("NET",It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("No such host"));
+        using var cache=new MemoryCache(new MemoryCacheOptions());
+        DeskSources Sources(params (string Key,string? Value)[] settings)=>new(db,lists.Object,new ScreenerPresetService(db,TimeProvider.System),
+            Mock.Of<IScreenerSnapshotSource>(),cache,assets:assets.Object,
+            alpacaCredentials:new AlpacaCredentialProvider(new ConfigurationBuilder().AddInMemoryCollection(settings.Select(x=>new KeyValuePair<string,string?>(x.Key,x.Value))).Build(),_=>null))
+            {AssetLookupTimeout=TimeSpan.FromMilliseconds(50)};
+
+        var noKeys=await Sources().AddStockAsync("NVDA",group.Id,default);
+        Assert.Equal(DeskStockAddStatus.Unavailable,noKeys.Status);Assert.Contains("keys are not set",noKeys.Message);
+        assets.Verify(x=>x.GetEligibilityAsync(It.IsAny<string>(),It.IsAny<CancellationToken>()),Times.Never);
+        var keyed=Sources(("Alpaca:KeyId","fixture-key"),("Alpaca:SecretKey","fixture-secret"));
+        var slow=await keyed.AddStockAsync("SLOW",group.Id,default);
+        Assert.Equal(DeskStockAddStatus.Unavailable,slow.Status);Assert.Contains("did not answer",slow.Message);
+        foreach(var (symbol,expected) in new[]{("KEYS","rejected this site's keys when looking up KEYS (HTTP 401)"),("BUSY","with an error (HTTP 503)"),("NET","could not reach Alpaca"),("LOCK","database did not save LOCK")})
+        {
+            var failed=await keyed.AddStockAsync(symbol,group.Id,default);
+            Assert.Equal(DeskStockAddStatus.Unavailable,failed.Status);Assert.Contains(expected,failed.Message);
+            Assert.DoesNotContain("RawArchiveId",failed.Message);Assert.DoesNotContain("No such host",failed.Message);
+        }
+        Assert.Equal(DeskStockAddStatus.AlreadyInGroup,(await keyed.AddStockAsync("NVDA",group.Id,default)).Status);
+    }
+
     [Fact]
     public async Task FailedScreener_IsNotASuccessfulEmptyResult()
     {

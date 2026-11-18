@@ -29,6 +29,17 @@ public static class DeskEndpoints
                 return Results.Ok(new { followed = true });
             } catch (ArgumentException ex) { return Results.BadRequest(new { message = ex.Message }); }
         });
+        // Adds any symbol to one of the operator's stock groups after Alpaca confirms an active, tradable US stock.
+        group.MapPost("/stocks", async (AddStock request, DeskSources sources, CancellationToken ct) => {
+            var result = await sources.AddStockAsync(request.Symbol, request.WishlistId, ct);
+            var body = new { status = result.Status.ToString(), symbol = result.Symbol, message = result.Message };
+            return result.Status switch
+            {
+                DeskStockAddStatus.Refused => Results.BadRequest(body),
+                DeskStockAddStatus.Unavailable => Results.Json(body, statusCode: StatusCodes.Status503ServiceUnavailable),
+                _ => Results.Ok(body)
+            };
+        });
         group.MapGet("/stream", StreamAsync);
         app.MapGroup("/api/v1/desk").RequireAuthorization().MapStockStrategyEndpoints();
         // Display quotes for the visible stocks travel on their own socket, so a slow snapshot cannot delay them.
@@ -42,6 +53,7 @@ public static class DeskEndpoints
     }
     public sealed record ImportScreen(string Name, string Url);
     public sealed record FollowStock(string Source, string Symbol, Guid WishlistId);
+    public sealed record AddStock(string? Symbol, Guid WishlistId);
 
     /// <summary>
     /// Called by both sign-out paths before the cookie is cleared: ends the user's Desk live-quote views. Hosts that do

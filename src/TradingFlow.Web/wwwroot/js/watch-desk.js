@@ -110,12 +110,12 @@
     // Load normal sources; expose a separate prepared source only after the owner-scoped read succeeds.
     async function sources(chosen, strictPrepared = true) {
         catalog = await api('sources');
-        el('source').replaceChildren();el('follow-list').replaceChildren();
+        el('source').replaceChildren();el('follow-list').replaceChildren();el('add-list').replaceChildren();
         for (const group of [...new Set(catalog.map(x=>x.group))]) {
             const optgroup=group ? document.createElement('optgroup') : document.createDocumentFragment();if(group)optgroup.label=group;
             for (const item of catalog.filter(x=>x.group===group)) {
                 optgroup.append(new Option(item.name,item.key));
-                if(item.key.startsWith('wishlist:')) el('follow-list').add(new Option(item.name,item.key.slice(9)));
+                if(item.key.startsWith('wishlist:')){el('follow-list').add(new Option(item.name,item.key.slice(9)));el('add-list').add(new Option(item.name,item.key.slice(9)));}
             }
             el('source').append(optgroup);
         }
@@ -778,6 +778,9 @@
     el('strategy-cancel').onclick=async()=>{const version=generation,id=currentJob?.jobId;if(!id)return;try{const job=await cancelAssessment(id);if(version===generation){currentJob=job;text('strategy-status',job.detail);applyCurrentAssessments();render();}}catch(error){if(version===generation)text('strategy-status',error.message);}};
     el('prev').onclick=()=>{page=Math.max(0,page-1);connect();};el('next').onclick=()=>{page++;connect();};el('sort').onchange=render;
     el('news-all').onclick=()=>{newsForAll=true;renderNews();};
+    // Add any symbol to an own stock group; the server checks it with Alpaca and explains a refusal.
+    el('add-open').onclick=()=>{el('add').hidden=false;text('add-status',el('add-list').options.length?'':'Create a stock group on the Groups page first.');el('add').elements.symbol.focus();};el('add-close').onclick=()=>{el('add').hidden=true;el('add-open').focus();};
+    el('add').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]');button.disabled=true;text('add-status','Checking with Alpaca…');try{const added=await api('stocks',{symbol:form.elements.symbol.value,wishlistId:el('add-list').value});text('add-status',added.message);form.elements.symbol.value='';}catch(e){text('add-status',e.message);}finally{button.disabled=false;form.elements.symbol.focus();}};
     el('import-open').onclick=()=>{el('import').hidden=false;el('import').elements.name.focus();};el('import-close').onclick=()=>{el('import').hidden=true;el('import-open').focus();};
     el('import').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]');button.disabled=true;try{const saved=await api('screens',{name:form.elements.name.value,url:form.elements.url.value});await sources(saved.key);el('import').hidden=true;form.reset();connect();}catch(e){text('import-status',e.message);}finally{button.disabled=false;}};
     el('follow').onsubmit=async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;try{await api('follow',{source:el('source').value,symbol:selected,wishlistId:el('follow-list').value});text('follow-status','Added. Membership refreshes with the next update.');}catch(e){text('follow-status',e.message);}finally{button.disabled=false;}};
