@@ -29,7 +29,7 @@ public sealed partial class IntradayBacktestIntegrationTests
         {
             var repo = TestRepository.FindRoot();
             var reader = new SimpleYamlReader();
-            var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+            var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root), reader);
             var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v3.yaml");
             if (!completedBreakout) strategyPath = Path.Combine(repo, "src", "TradingFlow.Tests", "Fixtures", "Strategies",
                 outwardRounding ? "opening-range-breakout-stop-market.v2.fixture.yaml" : "opening-range-breakout-stop-market.v1.fixture.yaml");
@@ -221,7 +221,7 @@ public sealed partial class IntradayBacktestIntegrationTests
         {
             var repo = TestRepository.FindRoot();
             var reader = new SimpleYamlReader();
-            var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+            var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root), reader);
             var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", strategyFile);
             var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
             var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", profileFile));

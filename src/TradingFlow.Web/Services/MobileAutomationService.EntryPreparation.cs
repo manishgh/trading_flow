@@ -206,7 +206,7 @@ public sealed partial class MobileAutomationService
             regimeOn,
             "shared_regime_gate",
             strategy.Regime is { IsActive: true }
-                ? $"{strategy.Regime.BenchmarkSymbol}:{strategy.Regime.SmaPeriod}:{decisionAtUtc:O}"
+                ? $"{strategy.Regime.EvidenceRule}:{decisionAtUtc:O}"
                 : $"not-required:{decisionAtUtc:O}",
             decisionAtUtc,
             JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime }));

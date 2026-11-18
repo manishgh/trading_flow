@@ -227,7 +227,28 @@ public sealed partial class SignalGenerator
             CloseAboveSmaPct: CloseAboveSmaPct(strategy, snapshot),
             TechnicalFactor: strategy.EntryRules.TechnicalFactor is { } factor
                 ? validatedFactor ?? TechnicalFactorCalculator.Analyze(factor, bars, snapshots, index, referenceBars,
-                    asOfUtc ?? bar.Timestamp.AddDays(1), expectedReferenceSessions) : null);
+                    asOfUtc ?? bar.Timestamp.AddDays(1), expectedReferenceSessions) : null,
+            PriorBollingerWidthPercentile: PriorBollingerWidthPercentile(snapshots, index, strategy.EntryRules.BollingerSqueezeLookbackBars));
+    }
+
+    /// <summary>
+    /// Rank (0-1) of the previous bar's Bollinger band width ((upper - lower) / middle, as <see cref="GetBollingerContext"/>)
+    /// among the <paramref name="lookback"/> widths ending on that previous bar: the share of those widths at or below it.
+    /// The signal bar is excluded because its own breakout widens the bands. Null when the rule is off, history is too
+    /// short or any width in the window is unavailable (the setup then fails closed).
+    /// </summary>
+    public static decimal? PriorBollingerWidthPercentile(IReadOnlyList<IndicatorSnapshot> snapshots, int index, int lookback)
+    {
+        if (lookback <= 0 || index < lookback) return null;
+        var widths = new decimal[lookback];
+        for (var offset = 0; offset < lookback; offset++)
+        {
+            if (GetBollingerContext(snapshots[index - lookback + offset]).WidthPct is not { } width) return null;
+            widths[offset] = width;
+        }
+
+        var previous = widths[^1];
+        return widths.Count(width => width <= previous) / (decimal)lookback;
     }
 
     private static bool HasRequiredEntryIndicators(

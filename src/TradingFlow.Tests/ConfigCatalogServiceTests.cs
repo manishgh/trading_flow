@@ -22,30 +22,20 @@ public sealed class ConfigCatalogServiceTests
 
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
 
-        Assert.Equal(new[]
-        {
-            // The single-stock swing artifacts were retired on 13 November 2026; the ETF trend core and its buy-and-hold
-            // control were added the same day, next to the opening-range breakout versions.
-            "etf.buy-and-hold-control@1.0.0",
-            "etf.trend-10m@1.0.0",
-            "technical.opening-range-breakout@1.2.0",
-            "technical.opening-range-breakout@2.0.0",
-            "technical.opening-range-breakout@2.1.0"
-        }, strategies.Select(strategy => $"{strategy.Identity.StrategyId}@{strategy.Identity.SemanticVersion}")
-            .Order(StringComparer.Ordinal));
-        var disabled = Assert.Single(catalog.GetDisabledResearchStrategies());
-        Assert.Equal("etf.rotation-12-1", disabled.Artifact.Identity.StrategyId);
-        Assert.Equal("1.0.0", disabled.Artifact.Identity.SemanticVersion);
-        Assert.Contains("parked for later standalone research", disabled.Reason, StringComparison.Ordinal);
-        Assert.Equal(["etf.buy-and-hold-control", "etf.trend-10m"], strategies
-            .Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "swing")
-            .Select(strategy => strategy.Identity.StrategyId).Order(StringComparer.Ordinal));
-        var dayStrategies = strategies.Where(strategy => StrategyHorizonResolver.Resolve(strategy.Definition) == "day").ToArray();
-        Assert.Equal(3, dayStrategies.Length);
-        Assert.All(dayStrategies, strategy => Assert.Contains(strategy.Definition.Timeframe, new[] { "5m", "15m" }));
-        Assert.All(strategies, strategy => Assert.Equal(StrategyLifecycleState.Research, strategy.Lifecycle));
-        Assert.DoesNotContain(strategies, strategy =>
-            strategy.FileName == "brian_shannon_mta_avwap_strategies.yaml");
+        // 18 November 2026: every registered strategy is switched off. The same-day opening-range versions were set aside, the
+        // ETF trend core and its control blocked (index and sector funds only judge the trend), ETF rotation stays parked,
+        // and the Bollinger squeeze is registered but not yet runnable until its remaining approved rules are built.
+        Assert.Empty(strategies);
+        var disabled = catalog.GetDisabledResearchStrategies()
+            .ToDictionary(item => $"{item.Artifact.Identity.StrategyId}@{item.Artifact.Identity.SemanticVersion}", item => item.Reason);
+        Assert.Equal(new[] { "etf.buy-and-hold-control@1.0.0", "etf.rotation-12-1@1.0.0", "etf.trend-10m@1.0.0",
+            "technical.bollinger-squeeze-breakout@1.0.0", "technical.opening-range-breakout@1.2.0",
+            "technical.opening-range-breakout@2.0.0", "technical.opening-range-breakout@2.1.0" }, disabled.Keys.Order(StringComparer.Ordinal));
+        Assert.Contains("parked for later standalone research", disabled["etf.rotation-12-1@1.0.0"], StringComparison.Ordinal);
+        Assert.Contains("Set aside 18 November 2026", disabled["technical.opening-range-breakout@2.1.0"], StringComparison.Ordinal);
+        Assert.Contains("Not yet runnable", disabled["technical.bollinger-squeeze-breakout@1.0.0"], StringComparison.Ordinal);
+        Assert.Contains("only to judge the market and sector trend", disabled["etf.trend-10m@1.0.0"], StringComparison.Ordinal);
+        Assert.Contains("only to judge the market and sector trend", disabled["etf.buy-and-hold-control@1.0.0"], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -133,8 +123,12 @@ public sealed class ConfigCatalogServiceTests
     {
         var root = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var catalog = new ConfigCatalogService(new ProjectPaths(root), reader,
-            CreateStrategyCatalog(root, reader), CreateExperimentStore(root, reader), new StrategyAuthorizationTestRegistry());
+        // Every operator strategy is switched off (18 Nov 2026); a test-owned catalog copy re-enables the set-aside ones so
+        // the resolver is exercised on both day (opening-range) and swing (ETF) identities.
+        using var folder = new TemporaryFolder();
+        var artifacts = new StrategyArtifactCatalog(root, TestRepository.SetAsideStrategiesEnabledCatalog(folder.Path), reader);
+        var store = new StrategyExperimentArtifactStore(Path.Combine(folder.Path, "experiments"), artifacts, reader, TradingFlow.Engine.Storage.AtomicFileArtifactWriter.Instance);
+        var catalog = new ConfigCatalogService(new ProjectPaths(root), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
         var resolver = new StrategyIdentityResolver(catalog);
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
         Assert.NotEmpty(strategies);

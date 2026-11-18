@@ -116,6 +116,34 @@ public sealed class RegimeCalendarTests
         Assert.False(RegimeCalendarBuilder.Build(new[] { Daily("2026-06-01", 10m) }, 0).IsActive);
     }
 
+    // Rising-average rule: ON needs the last close above its 3-close average AND that average above the average ending 2
+    // sessions earlier. The daily calendar, the date query and the timestamp query (live/paper) agree on every day.
+    [Fact]
+    public void RisingAverageRule_NeedsCloseAboveARisingAverage_AndAllQueriesAgree()
+    {
+        var closes = new (string Date, decimal Close)[]
+        {
+            ("2026-06-01", 10m), ("2026-06-02", 11m), ("2026-06-03", 12m), ("2026-06-04", 13m), ("2026-06-05", 14m),
+            ("2026-06-06", 30m), ("2026-06-07", 10m), ("2026-06-08", 9m), ("2026-06-09", 8m), ("2026-06-10", 9.5m),
+        };
+        var bars = closes.Select(item => Daily(item.Date, item.Close)).ToArray();
+        var calendar = RegimeCalendarBuilder.Build(bars, smaPeriod: 3, risingLookback: 2);
+
+        // 6 Jun decides from closes to 5 Jun: 14 > avg(12,13,14)=13, and 13 > avg(10,11,12)=11 -> ON.
+        Assert.True(RegimeCalendarBuilder.IsRegimeOnAsOf(bars, 3, new DateOnly(2026, 6, 6), 2));
+        // 5 Jun has only four earlier closes; five are needed -> OFF (fail closed).
+        Assert.False(RegimeCalendarBuilder.IsRegimeOnAsOf(bars, 3, new DateOnly(2026, 6, 5), 2));
+        // 11 Jun decides from closes to 10 Jun: 9.5 > avg(9,8,9.5)=8.83 but 8.83 < avg(30,10,9)=16.33 -> OFF (falling average).
+        Assert.False(RegimeCalendarBuilder.IsRegimeOnAsOf(bars, 3, new DateOnly(2026, 6, 11), 2));
+        Assert.True(RegimeCalendarBuilder.IsRegimeOnAsOf(bars, 3, new DateOnly(2026, 6, 11)));
+        foreach (var day in closes.Skip(1).Select(item => DateOnly.Parse(item.Date, System.Globalization.CultureInfo.InvariantCulture)))
+        {
+            var expected = RegimeCalendarBuilder.IsRegimeOnAsOf(bars, 3, day, 2);
+            Assert.Equal(expected, calendar.IsOn(new DateTimeOffset(day.ToDateTime(new TimeOnly(14, 30)), TimeSpan.Zero)));
+            Assert.Equal(expected, RegimeCalendarBuilder.IsRegimeOnAt(bars, 3, new DateTimeOffset(day.ToDateTime(new TimeOnly(14, 30)), TimeSpan.Zero), 2));
+        }
+    }
+
     [Fact]
     public void Inactive_IsAlwaysOn()
     {

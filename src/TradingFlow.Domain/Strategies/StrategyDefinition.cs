@@ -23,8 +23,24 @@ public sealed record StrategyDefinition(
 public sealed record RegimeRules(
     string BenchmarkSymbol,
     string Rule,
-    int SmaPeriod)
+    int SmaPeriod,
+    // 0 = off. Otherwise the average must also be higher than it was this many sessions earlier (a rising average).
+    // Omitted from serialized definitions when off, so existing strategies keep their recorded content.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int SmaRisingLookbackBars = 0)
 {
+    /// <summary>Completed daily closes one decision needs: the average's window plus the earlier average it is compared with.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int RequiredCloses => SmaPeriod + Math.Max(0, SmaRisingLookbackBars);
+
+    /// <summary>
+    /// The rule part of a regime evidence key ("SPY:50", or "SPY:50:rising20" with a rising average), so two strategies with
+    /// different rules on the same fund never share a recorded result. Keys of rules without the rising average are unchanged.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string EvidenceRule => SmaRisingLookbackBars > 0
+        ? $"{BenchmarkSymbol}:{SmaPeriod}:rising{SmaRisingLookbackBars}"
+        : $"{BenchmarkSymbol}:{SmaPeriod}";
+
     public const string PriceAboveSma = "price_above_sma";
     public const string Off = "off";
 
@@ -196,7 +212,11 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinCloseAboveSmaPct = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? CloseAboveSmaPeriod = null,
     // Sessions on which new entries may be decided (DecisionSchedules); null decides on every completed session.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DecisionSchedule = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? DecisionSchedule = null,
+    // Bollinger squeeze breakout setup: sessions whose band widths rank the previous session's width (0 = off) and the
+    // highest rank (0-1, share of those widths at or below it) that still counts as a squeeze.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int BollingerSqueezeLookbackBars = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxBollingerWidthPercentile = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,

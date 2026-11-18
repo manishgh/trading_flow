@@ -71,7 +71,7 @@ public sealed class RegimeGateService
         }
 
         // Over-fetch so the SMA has enough prior daily closes.
-        var start = now.AddDays(-((regime.SmaPeriod * 2) + 20));
+        var start = now.AddDays(-((regime.RequiredCloses * 2) + 20));
         var daily = await LoadBenchmarkDailyBarsAsync(provider, regime.BenchmarkSymbol, availableIntervals, start, now, cancellationToken);
         if (daily.Count == 0)
         {
@@ -79,7 +79,7 @@ public sealed class RegimeGateService
             return false;
         }
 
-        return RegimeCalendarBuilder.IsRegimeOnAt(daily, regime.SmaPeriod, now);
+        return RegimeCalendarBuilder.IsRegimeOnAt(daily, regime.SmaPeriod, now, regime.SmaRisingLookbackBars);
     }
 
     private static async Task<IReadOnlyList<OhlcvBar>> LoadIntervalAsync(

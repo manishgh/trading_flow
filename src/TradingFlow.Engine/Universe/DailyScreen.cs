@@ -10,7 +10,8 @@ public sealed record DailyScreenValues(
     decimal AverageShareVolume,
     decimal AverageDollarVolume,
     decimal? Atr,
-    int HistorySessions);
+    int HistorySessions,
+    decimal? AverageRangePercent = null);
 
 public sealed record DailyScreenResult(bool Eligible, DailyScreenValues? Values, string? Rejection);
 
@@ -43,8 +44,17 @@ public static class DailyScreen
         decimal? atr = rules.AtrPeriod is { } period ? Atr(priorBars, period) : null;
         if (rules.MinAtr is { } minAtr && (atr is null || atr <= minAtr))
             return Reject($"{ticker}: atr {(atr?.ToString("F2") ?? "n/a")} <= min {minAtr:F2}");
-        return new(true, new(ticker, price.Value, averageShareVolume, averageDollarVolume, atr, priorBars.Count), null);
+        decimal? averageRange = rules.MinAverageRangePercent is null ? null : AverageRangePercent(window, priorBars[^1].Close);
+        if (rules.MinAverageRangePercent is { } minRange && (averageRange is null || averageRange < minRange))
+            return Reject($"{ticker}: average_range_pct {(averageRange?.ToString("F2") ?? "n/a")} < min {minRange:F2}");
+        return new(true, new(ticker, price.Value, averageShareVolume, averageDollarVolume, atr, priorBars.Count, averageRange), null);
     }
+
+    // ADR%: the average daily range, mean(high - low) over the window, divided by the latest completed close x 100 (the
+    // user's definition, 18 Nov 2026). ATR differs by also counting overnight gaps; it stays the stop measure. Null when
+    // the latest close is not positive.
+    private static decimal? AverageRangePercent(IReadOnlyList<OhlcvBar> window, decimal latestClose) =>
+        latestClose <= 0m ? null : window.Average(bar => bar.High - bar.Low) / latestClose * 100m;
 
     // Wilder ATR from the standard indicator library over every supplied completed session.
     private static decimal? Atr(IReadOnlyList<OhlcvBar> bars, int period)

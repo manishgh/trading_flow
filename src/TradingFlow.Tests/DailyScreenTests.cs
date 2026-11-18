@@ -132,6 +132,33 @@ public sealed class DailyScreenCommandTests
         Assert.Null(TradingFlow.Cli.DailyScreenCommand.IncompleteReason(days, required, [new ShareSplit(days[0].AddDays(-30), 2m)], []));
     }
 
+    // ADR% (user definition, 18 Nov 2026): mean(high - low) over the 20-session window / latest completed close x 100.
+    // The ten oldest sessions (outside the window) have a $10 range that must not count; in the window ranges alternate
+    // $0.50 and $1.50 (mean $1.00) and the latest close is $25 while the others are $20, so ADR% is 1 / 25 x 100 = 4.
+    [Fact]
+    public void AverageRangePercent_IsTheWindowMeanDollarRangeOverTheLatestClose()
+    {
+        var rules = new DailyScreenRules(5m, DailyScreenPriceBasis.PriorClose, 20, MinAverageDollarVolume: 20_000_000m,
+            MinHistorySessions: 20, MinAverageRangePercent: 2.5m);
+        var start = new DateTimeOffset(2026, 4, 1, 4, 0, 0, TimeSpan.Zero);
+        var bars = Enumerable.Range(0, 30).Select(index =>
+        {
+            var range = index < 10 ? 10m : index % 2 == 0 ? 0.5m : 1.5m;
+            var close = index == 29 ? 25m : 20m;
+            return new OhlcvBar("ABC", start.AddDays(index), "1Day", close, close + range / 2m, close - range / 2m, close, 2_000_000m);
+        }).ToArray();
+
+        var admitted = DailyScreen.Evaluate("ABC", bars, null, rules);
+        Assert.True(admitted.Eligible);
+        Assert.Equal(4m, admitted.Values!.AverageRangePercent);
+
+        var rejected = DailyScreen.Evaluate("ABC", bars, null, rules with { MinAverageRangePercent = 4.01m });
+        Assert.False(rejected.Eligible);
+        Assert.Contains("average_range_pct 4.00 < min 4.01", rejected.Rejection);
+        Assert.Null(DailyScreen.Evaluate("ABC", bars, null, rules with { MinAverageRangePercent = null }).Values!.AverageRangePercent);
+        Assert.Throws<ArgumentException>(() => (rules with { MinAverageRangePercent = -1m }).Validate());
+    }
+
     // A suspected unrecorded split is listed with its overnight move and the mean volume on each side, so a 1-for-10 reverse
     // split (price x10, volume /10) can be told apart from a real move afterwards.
     [Fact]

@@ -16,11 +16,14 @@ public sealed record ResearchScreenInputs(
 
 /// <summary>The daily screen rules of a published screen, spelled as the command options (price basis as text).</summary>
 public sealed record ResearchScreenRuleValues(decimal MinPrice, string PriceBasis, int AverageSessions, decimal? MinAverageVolume,
-    decimal? MinAverageDollarVolume, int? AtrPeriod, decimal? MinAtr, int MinHistorySessions)
+    decimal? MinAverageDollarVolume, int? AtrPeriod, decimal? MinAtr, int MinHistorySessions,
+    // Left out of manifests when unused, so screens without the ADR% rule publish byte-identical manifests as before.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinAverageRangePercent = null)
 {
-    /// <summary>Records every value of the shared daily screen rules.</summary>
+    /// <summary>Records every value of the shared daily screen rules (screens published before the range rule read it as null).</summary>
     public static ResearchScreenRuleValues From(DailyScreenRules rules) => new(rules.MinPrice, DailyScreenRules.PriceBasisName(rules.PriceBasis),
-        rules.AverageLookbackSessions, rules.MinAverageShareVolume, rules.MinAverageDollarVolume, rules.AtrPeriod, rules.MinAtr, rules.MinHistorySessions);
+        rules.AverageLookbackSessions, rules.MinAverageShareVolume, rules.MinAverageDollarVolume, rules.AtrPeriod, rules.MinAtr, rules.MinHistorySessions,
+        rules.MinAverageRangePercent);
 }
 
 /// <summary>The ranking rules of a published screen, spelled as the command options (average as text).</summary>

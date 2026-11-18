@@ -179,7 +179,9 @@ public sealed class SimpleYamlReader
                 RequirePriceBelowSma200ForShort: OptionalBool(map, "entry_rules.require_price_below_sma200_for_short", false),
                 MinCloseAboveSmaPct: OptionalDecimal(map, "entry_rules.min_close_above_sma_pct"),
                 CloseAboveSmaPeriod: OptionalNullableInt(map, "entry_rules.close_above_sma_period"),
-                DecisionSchedule: OptionalNullableString(map, "entry_rules.decision_schedule")),
+                DecisionSchedule: OptionalNullableString(map, "entry_rules.decision_schedule"),
+                BollingerSqueezeLookbackBars: OptionalInt(map, "entry_rules.bollinger_squeeze_lookback_bars", 0),
+                MaxBollingerWidthPercentile: OptionalDecimal(map, "entry_rules.max_bollinger_width_percentile")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -284,10 +286,14 @@ public sealed class SimpleYamlReader
             return null;
         }
 
+        var rising = OptionalInt(map, "regime.sma_rising_lookback_bars", 0);
+        if (rising < 0)
+            throw new InvalidOperationException("regime.sma_rising_lookback_bars must be 0 (off) or a positive number of sessions.");
         return new RegimeRules(
             benchmark.Trim().ToUpperInvariant(),
             OptionalString(map, "regime.rule", RegimeRules.PriceAboveSma),
-            OptionalInt(map, "regime.sma_period", 50));
+            OptionalInt(map, "regime.sma_period", 50),
+            rising);
     }
 
     private static string ReadInitialStopMode(IReadOnlyDictionary<string, List<string>> map)
@@ -592,7 +598,8 @@ public sealed class SimpleYamlReader
             OptionalDecimal(runMap, prefix + "min_average_dollar_volume"),
             OptionalNullableInt(runMap, prefix + "atr_period"),
             OptionalDecimal(runMap, prefix + "min_atr"),
-            RequireInt(runMap, prefix + "min_history_sessions"));
+            RequireInt(runMap, prefix + "min_history_sessions"),
+            OptionalDecimal(runMap, prefix + "min_average_range_pct"));
         try { rules.Validate(); }
         catch (ArgumentException exception) { throw new InvalidDataException(exception.Message, exception); }
         return rules;
@@ -820,6 +827,20 @@ public sealed class SimpleYamlReader
         if ((rsi2ShortSetup && rules.MinShortReversionRsi2 is null) ||
             rules.MinShortReversionRsi2 is not (null or (> 0m and < 100m)))
             throw new InvalidOperationException("min_short_reversion_rsi2 is required for short_setup_type rsi2_overbought and must be above 0 and below 100.");
+        ValidateBollingerSqueeze(rules);
+    }
+
+    // The squeeze setup needs a width look-back, a rank maximum between 0 and 1 and a breakout look-back; the width fields
+    // are refused on other setups, where they would be silently ignored.
+    private static void ValidateBollingerSqueeze(EntryRules rules)
+    {
+        var squeeze = rules.SetupType.Equals("bollinger_squeeze_breakout", StringComparison.OrdinalIgnoreCase);
+        if (squeeze && (rules.BollingerSqueezeLookbackBars < 2 || rules.MaxBollingerWidthPercentile is not (> 0m and <= 1m) ||
+                rules.RecentHighLookbackBars < 1))
+            throw new InvalidOperationException("setup_type bollinger_squeeze_breakout needs bollinger_squeeze_lookback_bars of at least 2, " +
+                "max_bollinger_width_percentile above 0 and at most 1, and recent_high_lookback_bars of at least 1.");
+        if (!squeeze && (rules.BollingerSqueezeLookbackBars != 0 || rules.MaxBollingerWidthPercentile is not null))
+            throw new InvalidOperationException("bollinger_squeeze_lookback_bars and max_bollinger_width_percentile apply only to setup_type bollinger_squeeze_breakout.");
     }
 
     // Decision schedules must be known names on a daily rule. The entry-factor exit recomputes the long entry factor from the

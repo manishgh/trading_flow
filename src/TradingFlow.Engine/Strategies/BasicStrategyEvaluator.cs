@@ -81,7 +81,9 @@ public sealed class BasicStrategyEvaluator
 
         if (!PassesSetupType(strategy, signal))
         {
-            return $"setup_{strategy.EntryRules.SetupType}_not_triggered";
+            return strategy.EntryRules.SetupType.Equals("bollinger_squeeze_breakout", StringComparison.OrdinalIgnoreCase)
+                ? DescribeSqueezeRejection(strategy, signal)
+                : $"setup_{strategy.EntryRules.SetupType}_not_triggered";
         }
 
         var newsRejection = GetNewsSentimentRejection(strategy, signal);
@@ -277,9 +279,30 @@ public sealed class BasicStrategyEvaluator
             "momentum" => true,
             "mean_reversion_reclaim" => signal.IsMeanReversionReclaim,
             "rsi2_oversold" => signal.IsConnorsRsi2Oversold,
+            "bollinger_squeeze_breakout" => IsBollingerSqueezeBreakout(strategy, signal),
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
     }
+
+    // Bollinger squeeze breakout: the previous session's band width ranks at or below the strategy's maximum among its
+    // look-back widths, and the signal bar closes above the highest high of the preceding recent_high_lookback_bars.
+    // A missing width rank fails closed.
+    // The squeeze rejection with the matched values, for the audit pages: the previous session's width rank against the
+    // maximum (or "n/a" when it could not be measured) and whether the close broke the recent high.
+    private static string DescribeSqueezeRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var rank = signal.PriorBollingerWidthPercentile?.ToString("F3", invariant) ?? "n/a";
+        var maximum = strategy.EntryRules.MaxBollingerWidthPercentile?.ToString("F3", invariant) ?? "n/a";
+        return $"setup_bollinger_squeeze_breakout_not_triggered (PriorWidthRank: {rank}, MaxRank: {maximum}, " +
+            $"CloseAboveRecentHigh{strategy.EntryRules.RecentHighLookbackBars}: {signal.IsRecentHighBreakout})";
+    }
+
+    private static bool IsBollingerSqueezeBreakout(StrategyDefinition strategy, TradeSignal signal) =>
+        signal.IsRecentHighBreakout &&
+        signal.PriorBollingerWidthPercentile is { } rank &&
+        strategy.EntryRules.MaxBollingerWidthPercentile is { } maximum &&
+        rank <= maximum;
 
     private static string? GetResearchRuleRejection(StrategyDefinition strategy, TradeSignal signal)
     {

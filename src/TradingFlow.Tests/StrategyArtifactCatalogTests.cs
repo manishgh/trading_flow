@@ -21,6 +21,8 @@ public sealed class StrategyArtifactCatalogTests
                 "etf.buy-and-hold-control@1.0.0",
                 "etf.rotation-12-1@1.0.0",
                 "etf.trend-10m@1.0.0",
+                // Added 18 November 2026; the opening-range versions below stay registered but disabled.
+                "technical.bollinger-squeeze-breakout@1.0.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
                 "technical.opening-range-breakout@2.1.0"
@@ -49,9 +51,10 @@ public sealed class StrategyArtifactCatalogTests
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
-        Assert.Contains(artifacts, item =>
-            item.Identity.StrategyId == "technical.opening-range-breakout" &&
-            item.Identity.SemanticVersion == "1.2.0");
+        // The same-day opening-range versions were set aside on 18 November 2026; the squeeze swing strategy is registered but
+        // not selectable until its remaining approved rules (Nasdaq QQQ check, VIX sizing) are built.
+        Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.opening-range-breakout");
+        Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.bollinger-squeeze-breakout");
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId.StartsWith("swing.", StringComparison.Ordinal));
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.catalyst-drift");
@@ -93,7 +96,10 @@ public sealed class StrategyArtifactCatalogTests
     [Fact]
     public void ChangedResolvedContent_RequiresANewSemanticVersion()
     {
-        var catalog = CreateCatalog();
+        // Every operator strategy is switched off (18 Nov 2026); a test-owned copy re-enables the set-aside ones to supply a source.
+        using var folder = new TemporaryFolder();
+        var root = TestRepository.FindRoot();
+        var catalog = new StrategyArtifactCatalog(root, TestRepository.SetAsideStrategiesEnabledCatalog(folder.Path), new SimpleYamlReader());
         var source = catalog.GetSelectable(StrategySelectionMode.Backtest)[0];
         var changed = source.ResolvedStrategy with
         {

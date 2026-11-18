@@ -109,7 +109,8 @@ public sealed partial class DecisionContextProviderTests
     {
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+        // Every operator strategy is switched off (18 Nov 2026); a test-owned catalog copy re-enables the set-aside ones.
+        var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(fixture.Root), reader);
         var store = new StrategyExperimentArtifactStore(Path.Combine(fixture.Root, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
         if (bindProfiles)
         {

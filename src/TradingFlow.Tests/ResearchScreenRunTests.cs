@@ -113,7 +113,8 @@ public sealed class ResearchScreenRunTests
         using var root = new TemporaryFolder(folderName);
         var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var artifacts = new StrategyArtifactCatalog(repo, Path.Combine(repo, "configs", "strategy-catalog.json"), reader);
+        // ORB 2.1.0 is the vehicle for the shared research-screen run; it was set aside on 18 Nov, so a test-owned catalog copy enables it.
+        var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root.Path), reader);
         var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v5.yaml");
         var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
         var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "orb-published-recipe-whole-market-profile.yaml"));

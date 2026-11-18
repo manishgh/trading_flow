@@ -217,6 +217,11 @@ public sealed class StrategyAvailabilityTests
             var sourceManifest = Path.Combine(repo, "configs", "strategy-catalog.json");
             Directory.CreateDirectory(Path.GetDirectoryName(Manifest)!);
             File.Copy(sourceManifest, Manifest);
+            // These tests park and restore the opening-range versions; the operator catalog set them aside on 18 Nov 2026, so
+            // the copy starts with them enabled (every other entry, path and hash is the real one).
+            var copy = JsonNode.Parse(File.ReadAllText(Manifest))!;
+            TestRepository.EnableSetAsideStrategies(copy);
+            File.WriteAllText(Manifest, copy.ToJsonString());
             using var contents = JsonDocument.Parse(File.ReadAllText(Manifest));
             foreach (var item in contents.RootElement.GetProperty("strategies").EnumerateArray())
             {

@@ -33,6 +33,17 @@
       "derivedIndicatorProfileVersion": "2.2.0",
       "riskPolicy": "position-notional-no-stop-v1",
       "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
+    },
+    {
+      "profileId": "bollinger-squeeze-as-traded-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.4.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
     }
   ],
   "strategies": [
@@ -41,6 +52,8 @@
       "strategyId": "technical.opening-range-breakout",
       "semanticVersion": "1.2.0",
       "lifecycle": "research",
+      "enabled": false,
+      "disabledReason": "Set aside 18 November 2026: same-day strategy; the user moved research to swing strategies.",
       "admissionProfileId": "opening-range-breakout-next-open-research-v1",
       "reason": "Approved stage 2: fifteen-minute range, frozen body direction and twenty-session median opening RVOL > 1. Completed post-range five-minute close strictly beyond outward-valid trigger commits next-opening market entry (earliest 09:50 New York). Stop is completed breakout candle low/high rounded outward without added buffer. Known-close sizing, actual gap fills and 3R, lagged opening liquidity, existing protection/costs/caps/deadline and two filled parents with fresh post-resolution inside rearm. Diagnostic backtest research only."
     },
@@ -49,6 +62,8 @@
       "strategyId": "technical.opening-range-breakout",
       "semanticVersion": "2.0.0",
       "lifecycle": "research",
+      "enabled": false,
+      "disabledReason": "Set aside 18 November 2026: same-day strategy; the user moved research to swing strategies.",
       "admissionProfileId": "opening-range-breakout-recipe-research-v1",
       "reason": "Approved 8 November 2026: Zarattini, Barbon and Aziz (SSRN 4729284) trade rules as a rules check on the run's own stock list: 5-minute range and direction, opening volume at least its 14-session mean, stop order at the range, stop 10% of the 14-day ATR from the trigger, no target, one entry per stock per day. The paper's daily top-20 stock selection is not applied. Diagnostic backtest research only.",
       "derivedFromIdentity": {
@@ -62,6 +77,8 @@
       "strategyId": "technical.opening-range-breakout",
       "semanticVersion": "2.1.0",
       "lifecycle": "research",
+      "enabled": false,
+      "disabledReason": "Set aside 18 November 2026: same-day strategy; the user moved research to swing strategies.",
       "admissionProfileId": "opening-range-breakout-recipe-research-v1",
       "reason": "Approved 10 November 2026: 2.0.0 trade rules plus two published rules it lacked: stop measured from the actual entry fill (10% of the 14-day ATR) and exit at the session's official close with the order live until 16:00. Run with orb-published-recipe-profile.yaml for the paper's $0.0035/share commission and 4x gross exposure cap. The paper's daily top-20 stock selection is not applied. Diagnostic backtest research only.",
       "derivedFromIdentity": {
@@ -75,6 +92,8 @@
       "strategyId": "etf.trend-10m",
       "semanticVersion": "1.0.0",
       "lifecycle": "research",
+      "enabled": false,
+      "disabledReason": "Blocked 18 November 2026 by the user: index and sector funds are used only to judge the market and sector trend (regime gate, sector ranking), not traded as a strategy.",
       "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
       "reason": "Approved 13 November 2026 (docs/design-review/2026-11-13/etf-trend-core-design.md, option B): Faber (2007) timing rule on the 15 index and sector funds. At each month's last close hold a fund whose close is above its 210-session average, otherwise cash; fill at the next open; fixed equal slots without monthly rebalancing; 5 bps per side; as-traded bars without dividends. Research only."
     },
@@ -83,6 +102,8 @@
       "strategyId": "etf.buy-and-hold-control",
       "semanticVersion": "1.0.0",
       "lifecycle": "research",
+      "enabled": false,
+      "disabledReason": "Blocked 18 November 2026 by the user: index and sector funds are used only to judge the market and sector trend (regime gate, sector ranking), not traded as a strategy.",
       "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
       "reason": "Comparison control for etf.trend-10m@1.0.0, required by its pass rules: buys each fund at its first eligible month-end and never sells, with the same slots, timing, costs and bars. A measurement benchmark, never a strategy to trade."
     },
@@ -95,6 +116,16 @@
       "disabledReason": "Sector rotation is parked for later standalone research.",
       "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
       "reason": "Approved 13 November 2026 (docs/design-review/2026-11-13/etf-rotation-design.md): Faber (2010) relative strength with the Antonacci (2014) absolute filter on the 11 sector funds. Run on a list keeping the top 3 by 12-1 month return; at each month's last close buy a listed fund above its 210-session average, sell a held fund that left the list or fell to or below its average; fills at the next open; 3 slots with same-open swaps and marked-equity sizing (etf-rotation-profile.yaml); 5 bps per side; as-traded bars. Research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml",
+      "strategyId": "technical.bollinger-squeeze-breakout",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": false,
+      "disabledReason": "Not yet runnable (18 November 2026): the approved rules also need the Nasdaq-listed QQQ check and the VIX sizing (FRED, previous close: full size below 18, half size 18-22, no entries above 22). No economic run before both are built and reviewed.",
+      "admissionProfileId": "bollinger-squeeze-as-traded-research-v1",
+      "reason": "Approved 18 November 2026 (docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md, option A): Bollinger (2001) squeeze. Previous session band width in the lowest 15% of its 60 widths, close above the 10-session high, volume at least 1.5x the 20-session median, close in the top quarter of the range, SPY above its rising 50-day average (higher than 20 sessions earlier). Next-open entry, 1 ATR stop, 2.5R target, 10-session time exit, as-traded bars on a whole-market ADR% >= 2.5 screen. Diagnostic backtest research only."
     }
   ]
 }

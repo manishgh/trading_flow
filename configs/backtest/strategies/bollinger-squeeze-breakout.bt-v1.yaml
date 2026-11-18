@@ -1,0 +1,71 @@
+# Bollinger squeeze breakout, swing, long. Design: docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md
+# (approved 18 November 2026, option A). Source: John Bollinger, "Bollinger on Bollinger Bands" (2001), "The Squeeze":
+# a band-width low followed by a breakout. Differences from the source: the squeeze is the previous session's band width
+# ranking in the lowest 15% of the 60 widths ending that session (Bollinger uses a six-month low); the breakout is a close
+# above the 10-session high (not a band break); the 1.5x volume and top-quarter close confirmations, the 1 ATR stop,
+# 2.5 ATR target and 10-session time exit come from the user's plan, not from Bollinger. As-traded (unadjusted) daily bars,
+# for whole-market research screens that leave out stock-days with a split in the look-back.
+strategy_id: research.bollinger-squeeze-breakout.bt-v1
+strategy_name: RESEARCH Bollinger Squeeze Breakout V1 (swing, SPY rising-average gate, as-traded bars)
+source: bollinger_2001_bollinger_on_bollinger_bands_the_squeeze
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: bollinger_squeeze_breakout
+  bollinger_squeeze_lookback_bars: 60
+  max_bollinger_width_percentile: 0.15
+  recent_high_lookback_bars: 10
+  min_volume_spike: 1.5
+  volume_confirmation_mode: hard_gate
+  min_close_location_value: 0.75
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  require_positive_news: false
+regime:
+  benchmark: SPY
+  rule: price_above_sma
+  sma_period: 50
+  sma_rising_lookback_bars: 20
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 10
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

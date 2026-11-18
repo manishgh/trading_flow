@@ -57,6 +57,10 @@ public static class StrategyDecisionRequestAssembler
             throw new ArgumentException("Candidate identity requires its owning run ID.", nameof(runId));
         }
         requiredWarmupBars = Math.Max(requiredWarmupBars, runtimeStrategy.Definition.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0);
+        // The squeeze ranks the previous bar's 20-session Bollinger width among its look-back widths: the earliest of those
+        // widths needs 20 completed bars of its own, so look-back + 20 bars must exist before the setup can be judged.
+        if (runtimeStrategy.Definition.EntryRules.BollingerSqueezeLookbackBars > 0)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, runtimeStrategy.Definition.EntryRules.BollingerSqueezeLookbackBars + 20);
         // ORB needs its three completed five-minute range bars; its twenty-session volume qualification remains in the shared evaluator.
         if (runtimeStrategy.Definition.EntryRules.OpeningRangeBreakout is not null)
             requiredWarmupBars = Math.Max(requiredWarmupBars, 3);

@@ -27,6 +27,41 @@ internal static class TestRepository
         throw new DirectoryNotFoundException("Could not find trading_flow repository root.");
     }
 
+    /// <summary>
+    /// The strategies the operator switched off on 18 November 2026 that tests still use as vehicles for shared machinery:
+    /// the same-day opening-range versions (set aside) and the ETF trend core with its buy-and-hold control (blocked: index
+    /// and sector funds now only judge the trend). ETF rotation and the not-yet-runnable squeeze stay disabled.
+    /// </summary>
+    private static readonly HashSet<string> SetAsideStrategyIds =
+        ["technical.opening-range-breakout", "etf.trend-10m", "etf.buy-and-hold-control"];
+
+    /// <summary>
+    /// Writes a test-owned copy of the repository strategy catalog into <paramref name="folder"/> with the strategies set
+    /// aside on 18 November 2026 enabled, and returns its path. Tests that exercise the shared opening-range, intraday,
+    /// month-end and research-screen machinery through those recipes read this copy instead of re-enabling the strategies
+    /// for real runs. Every other entry, path and content hash is unchanged.
+    /// </summary>
+    public static string SetAsideStrategiesEnabledCatalog(string folder)
+    {
+        var catalog = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(FindRoot(), "configs", "strategy-catalog.json")))!;
+        EnableSetAsideStrategies(catalog);
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "strategy-catalog.json");
+        File.WriteAllText(path, catalog.ToJsonString());
+        return path;
+    }
+
+    /// <summary>Removes the switched-off flag from the set-aside entries of a parsed catalog (see <see cref="SetAsideStrategiesEnabledCatalog"/>).</summary>
+    public static void EnableSetAsideStrategies(System.Text.Json.Nodes.JsonNode catalog)
+    {
+        foreach (var entry in catalog["strategies"]!.AsArray())
+            if (SetAsideStrategyIds.Contains((string?)entry!["strategyId"] ?? ""))
+            {
+                entry.AsObject().Remove("enabled");
+                entry.AsObject().Remove("disabledReason");
+            }
+    }
+
     private static bool IsRepositoryRoot(string? path)
     {
         return !String.IsNullOrWhiteSpace(path) &&

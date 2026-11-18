@@ -35,10 +35,10 @@ public sealed class RegimeCalendar
     public bool IsOn(DateTimeOffset decisionTime) => !IsActive ||
         (evaluateAt?.Invoke(decisionTime) ?? onDates.Contains(DateOnly.FromDateTime(decisionTime.UtcDateTime)));
 
-    internal static RegimeCalendar FromBenchmark(IReadOnlySet<DateOnly> dates, IReadOnlyList<OhlcvBar> bars, int period)
+    internal static RegimeCalendar FromBenchmark(IReadOnlySet<DateOnly> dates, IReadOnlyList<OhlcvBar> bars, int period, int risingLookback)
     {
         var frozen = bars.ToArray();
-        return new(dates, true, time => RegimeCalendarBuilder.IsRegimeOnAt(frozen, period, time));
+        return new(dates, true, time => RegimeCalendarBuilder.IsRegimeOnAt(frozen, period, time, risingLookback));
     }
 }
 
@@ -50,7 +50,8 @@ public static class RegimeCalendarBuilder
     /// exceeds the average of the N closes ending on that prior day. Using only pre-D bars is
     /// the no-lookahead guarantee (a day never sees its own or any future close).
     /// </summary>
-    public static RegimeCalendar Build(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod)
+    /// <param name="risingLookback">0 = off; otherwise the average must also exceed the average ending that many sessions earlier.</param>
+    public static RegimeCalendar Build(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod, int risingLookback = 0)
     {
         if (smaPeriod <= 0) return RegimeCalendar.Inactive;
         if (benchmarkDailyBars.Count == 0) return RegimeCalendar.FromOnDates(new HashSet<DateOnly>());
@@ -61,27 +62,42 @@ public static class RegimeCalendarBuilder
             .Select(group => (Day: group.Key, Close: group.OrderBy(bar => bar.Timestamp).Last().Close))
             .OrderBy(item => item.Day)
             .ToArray();
+        var closes = ordered.Select(item => item.Close).ToArray();
 
         var onDates = new HashSet<DateOnly>();
-        for (var index = smaPeriod; index < ordered.Length; index++)
+        for (var index = 1; index < ordered.Length; index++)
         {
-            // Window is the N closes ending on the day before D (indices [index-smaPeriod, index-1]).
-            var window = ordered.AsSpan(index - smaPeriod, smaPeriod);
-            decimal sum = 0m;
-            foreach (var item in window)
-            {
-                sum += item.Close;
-            }
-
-            var sma = sum / smaPeriod;
-            var latestPriorClose = ordered[index - 1].Close;
-            if (latestPriorClose > sma)
+            // Day D is decided from the closes ending on the day before D (indices up to index-1).
+            if (IsOn(closes.AsSpan(0, index), smaPeriod, risingLookback))
             {
                 onDates.Add(ordered[index].Day);
             }
         }
 
-        return RegimeCalendar.FromBenchmark(onDates, benchmarkDailyBars, smaPeriod);
+        return RegimeCalendar.FromBenchmark(onDates, benchmarkDailyBars, smaPeriod, risingLookback);
+    }
+
+    /// <summary>
+    /// The one regime rule, applied to completed daily closes in date order ending with the latest close known before the
+    /// decision: ON when that close is above the average of the last <paramref name="period"/> closes and, when
+    /// <paramref name="risingLookback"/> is positive, that average is above the average ending <paramref name="risingLookback"/>
+    /// sessions earlier. Too few closes for either average is OFF (fail closed).
+    /// </summary>
+    internal static bool IsOn(ReadOnlySpan<decimal> priorCloses, int period, int risingLookback)
+    {
+        var rising = Math.Max(0, risingLookback);
+        if (period <= 0 || priorCloses.Length < period + rising) return false;
+        var current = Average(priorCloses.Slice(priorCloses.Length - period, period));
+        if (priorCloses[^1] <= current) return false;
+        return rising == 0 || current > Average(priorCloses.Slice(priorCloses.Length - period - rising, period));
+    }
+
+    // Arithmetic mean of a non-empty window of closes.
+    private static decimal Average(ReadOnlySpan<decimal> window)
+    {
+        decimal sum = 0m;
+        foreach (var close in window) sum += close;
+        return sum / window.Length;
     }
 
     /// <summary>
@@ -90,18 +106,19 @@ public static class RegimeCalendarBuilder
     /// today (used by the live/paper path). Insufficient history returns false, matching <see cref="Build"/>.
     /// This is the single-day equivalent of an on-date produced by <see cref="Build"/>.
     /// </summary>
-    public static bool IsRegimeOnAt(IReadOnlyList<OhlcvBar> bars, int period, DateTimeOffset decisionTime)
+    public static bool IsRegimeOnAt(IReadOnlyList<OhlcvBar> bars, int period, DateTimeOffset decisionTime, int risingLookback = 0)
     {
         if (period <= 0 || bars.Count == 0) return false;
         var known = bars.Where(bar => bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe)) <= decisionTime &&
                 (bar.KnownAtUtc is null || bar.KnownAtUtc <= decisionTime))
             .GroupBy(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime))
             .Select(group => group.OrderBy(bar => bar.KnownAtUtc ?? bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe))).Last())
-            .OrderBy(bar => bar.Timestamp).TakeLast(period).ToArray();
-        return known.Length == period && known[^1].Close > known.Average(bar => bar.Close);
+            .OrderBy(bar => bar.Timestamp).TakeLast(period + Math.Max(0, risingLookback)).Select(bar => bar.Close).ToArray();
+        return IsOn(known, period, risingLookback);
     }
 
-    public static bool IsRegimeOnAsOf(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod, DateOnly asOfDay)
+    /// <summary>Date-level query: the regime for entering on <paramref name="asOfDay"/> from closes dated strictly before it.</summary>
+    public static bool IsRegimeOnAsOf(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod, DateOnly asOfDay, int risingLookback = 0)
     {
         if (smaPeriod <= 0 || benchmarkDailyBars.Count == 0)
         {
@@ -113,21 +130,8 @@ public static class RegimeCalendarBuilder
             .Where(group => group.Key < asOfDay)
             .Select(group => (Day: group.Key, Close: group.OrderBy(bar => bar.Timestamp).Last().Close))
             .OrderBy(item => item.Day)
+            .Select(item => item.Close)
             .ToArray();
-
-        if (priorCloses.Length < smaPeriod)
-        {
-            return false;
-        }
-
-        var window = priorCloses.AsSpan(priorCloses.Length - smaPeriod, smaPeriod);
-        decimal sum = 0m;
-        foreach (var item in window)
-        {
-            sum += item.Close;
-        }
-
-        var sma = sum / smaPeriod;
-        return priorCloses[^1].Close > sma;
+        return IsOn(priorCloses, smaPeriod, risingLookback);
     }
 }

@@ -54,7 +54,7 @@ public sealed partial class BacktestRunner
                 {
                     provider ??= CreateProvider(run);
                     // Over-fetch so the SMA has enough prior daily closes before the window begins.
-                    var fetchStart = dataStart.AddDays(-((regime.SmaPeriod * 2) + 15));
+                    var fetchStart = dataStart.AddDays(-((regime.RequiredCloses * 2) + 15));
                     bars = await _regimeGate.LoadBenchmarkDailyBarsAsync(
                         provider,
                         regime.BenchmarkSymbol,
@@ -65,9 +65,9 @@ public sealed partial class BacktestRunner
                     barsByBenchmark[regime.BenchmarkSymbol] = bars;
                 }
 
-                if (bars.Count < regime.SmaPeriod + 1)
-                    throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod}; active market filter cannot be evaluated.");
-                calendars[strategy.StrategyId] = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod);
+                if (bars.Count < regime.RequiredCloses + 1)
+                    throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod} (rising over {regime.SmaRisingLookbackBars} sessions); active market filter cannot be evaluated.");
+                calendars[strategy.StrategyId] = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod, regime.SmaRisingLookbackBars);
             }
         }
         finally

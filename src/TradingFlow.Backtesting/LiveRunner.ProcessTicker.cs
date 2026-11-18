@@ -311,7 +311,7 @@ public sealed partial class LiveRunner
                 regimeOn,
                 "shared_regime_gate",
                 strategy.Regime is { IsActive: true }
-                    ? $"{strategy.Regime.BenchmarkSymbol}:{strategy.Regime.SmaPeriod}:{now:O}"
+                    ? $"{strategy.Regime.EvidenceRule}:{now:O}"
                     : $"not-required:{now:O}",
                 now,
                 JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime }));

@@ -25,6 +25,29 @@ public sealed class BasicStrategyEvaluatorTests
         else Assert.StartsWith("close_not_far_enough_below_sma20", rejection);
     }
 
+    // Bollinger squeeze breakout: needs the 10-session high breakout and the previous session's band-width rank at or below the
+    // maximum; a missing rank fails closed (design 2026-11-18 regime gate and Bollinger squeeze).
+    [Theory]
+    [InlineData(true, 0.10, true)]
+    [InlineData(true, 0.15, true)]
+    [InlineData(true, 0.1667, false)]
+    [InlineData(false, 0.10, false)]
+    [InlineData(true, null, false)]
+    public void GetLongEntryRejection_BollingerSqueezeBreakout_RequiresBreakoutAndATightPriorWidth(bool breakout, double? rank, bool accepted)
+    {
+        var strategy = CreateStrategy("bollinger_squeeze_breakout") with
+        {
+            EntryRules = CreateEntryRules("bollinger_squeeze_breakout") with
+                { BollingerSqueezeLookbackBars = 60, MaxBollingerWidthPercentile = 0.15m, RecentHighLookbackBars = 10 }
+        };
+        var signal = CreateSignal() with { IsRecentHighBreakout = breakout, PriorBollingerWidthPercentile = (decimal?)rank };
+
+        var rejection = new BasicStrategyEvaluator().GetLongEntryRejection(strategy, signal, 1m);
+
+        if (accepted) Assert.Null(rejection);
+        else Assert.StartsWith("setup_bollinger_squeeze_breakout_not_triggered (PriorWidthRank: ", rejection);
+    }
+
     [Fact]
     public void GetLongEntryRejection_Rsi2Setup_UsesDedicatedCompletedDailySignal()
     {

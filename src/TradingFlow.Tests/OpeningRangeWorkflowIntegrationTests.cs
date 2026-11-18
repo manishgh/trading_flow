@@ -72,7 +72,12 @@ public sealed class OpeningRangeWorkflowIntegrationTests
     public void OpeningRangeCatalog_RemainsBacktestOnlyUnderExplicitOperationalGrants()
     {
         var root = TestRepository.FindRoot();
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
+        // The operator catalog set ORB aside on 18 Nov 2026 (no backtest selection either); the registration rule is checked
+        // on a test-owned copy where the versions are enabled.
+        Assert.DoesNotContain(new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader())
+            .GetSelectable(StrategySelectionMode.Backtest), artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout");
+        using var folder = new TemporaryFolder();
+        var catalog = new StrategyArtifactCatalog(root, TestRepository.SetAsideStrategiesEnabledCatalog(folder.Path), new SimpleYamlReader());
         var artifacts = catalog.GetSelectable(StrategySelectionMode.Backtest)
             .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
         Assert.Equal(new[] { "1.2.0", "2.0.0", "2.1.0" }, artifacts.Select(artifact => artifact.Identity.SemanticVersion));

@@ -75,7 +75,8 @@ public sealed partial class PreparedMarketDataService
             var strategies = book.Strategies?.ToArray() ?? run.Strategies.Select(reader.ReadStrategy).ToArray();
             foreach (var regime in strategies.Select(strategy => strategy.Regime).Where(regime => regime is { IsActive: true }))
             {
-                var benchmarkStart = start.AddDays(-checked(regime!.SmaPeriod * 2 + 15));
+                // Same over-fetch as BacktestRunner.Regime: every close the average and its earlier comparison average read.
+                var benchmarkStart = start.AddDays(-checked(regime!.RequiredCloses * 2 + 15));
                 foreach (var interval in new[] { "1d" }.Concat(intervals.Where(interval => !TimeframeParser.IsDailyOrHigher(interval))).Distinct())
                     Add(regime.BenchmarkSymbol, interval, benchmarkStart, end);
             }

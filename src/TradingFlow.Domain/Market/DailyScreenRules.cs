@@ -22,7 +22,9 @@ public sealed record DailyScreenRules(
     decimal? MinAverageDollarVolume = null,
     int? AtrPeriod = null,
     decimal? MinAtr = null,
-    int MinHistorySessions = 1)
+    int MinHistorySessions = 1,
+    // Minimum ADR%: mean(high - low) over the averaging window divided by the latest completed close, x 100.
+    decimal? MinAverageRangePercent = null)
 {
     /// <summary>Wilder ATR weights the earliest of 100 sessions by about 0.2%, so older history cannot change a decision.</summary>
     public const int AtrStabilizationSessions = 100;
@@ -32,7 +34,7 @@ public sealed record DailyScreenRules(
     {
         if (MinPrice < 0m || AverageLookbackSessions < 1 || MinHistorySessions < 1 ||
             MinAtr is not null && AtrPeriod is not { } period || AtrPeriod is < 1 ||
-            MinAverageShareVolume is < 0m || MinAverageDollarVolume is < 0m || MinAtr is < 0m)
+            MinAverageShareVolume is < 0m || MinAverageDollarVolume is < 0m || MinAtr is < 0m || MinAverageRangePercent is < 0m)
             throw new ArgumentException("Daily screen rules need non-negative prices, positive look-backs, and an ATR period for an ATR minimum.");
     }
 

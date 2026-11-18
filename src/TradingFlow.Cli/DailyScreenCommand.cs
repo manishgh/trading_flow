@@ -20,6 +20,8 @@ public static class DailyScreenCommand
     /// Usage: research-daily-screen --catalog path --artifact-root path --bars datasetId --actions datasetId
     /// --from yyyy-MM-dd --to yyyy-MM-dd --out folder [--exclude-symbols file] with the stocks-in-play rules:
     /// --min-price 5 --price-basis session_open --average-sessions 14 --min-average-volume 1000000 --atr-period 14 --min-atr 0.5 --min-history 14.
+    /// Optional --min-average-range-pct N keeps stocks whose ADR% (mean high - low over the averaging window / latest close x 100) is at
+    /// least N percent and writes each one's value as average_range_pct.
     /// Optional ranking of each session's eligible stocks (published five-minute bar dataset with the 09:30 New York bars):
     /// --opening-bars datasetId --rank-measure first_five_minute_relative_volume --baseline-sessions 14 --baseline-average mean
     /// --min-relative-volume 1 --max-per-session 20.
@@ -44,7 +46,8 @@ public static class DailyScreenCommand
             MinAverageDollarVolume: Optional(options, "--min-average-dollar-volume"),
             AtrPeriod: options.TryGetValue("--atr-period", out var period) ? Int32.Parse(period, CultureInfo.InvariantCulture) : null,
             MinAtr: Optional(options, "--min-atr"),
-            MinHistorySessions: Int32.Parse(Require(options, "--min-history"), CultureInfo.InvariantCulture));
+            MinHistorySessions: Int32.Parse(Require(options, "--min-history"), CultureInfo.InvariantCulture),
+            MinAverageRangePercent: Optional(options, "--min-average-range-pct"));
         rules.Validate();
         var from = Date(Require(options, "--from"));
         var to = Date(Require(options, "--to"));
@@ -61,6 +64,8 @@ public static class DailyScreenCommand
         var ranking = await RankingAsync(options, catalog, reader, cancellationToken);
         var tier = ReadTier(options);
         var writesReturn = tier?.Measure == ResearchScreenLiquidityTier.Return12Minus1;
+        // The measured average daily range is written whenever the range rule is used, so each inclusion can be audited.
+        var writesRange = rules.MinAverageRangePercent is not null;
 
         var folder = Path.GetFullPath(Require(options, "--out"));
         Directory.CreateDirectory(folder);
@@ -78,7 +83,8 @@ public static class DailyScreenCommand
         await using (var suspectList = splitLookback is null ? null : new StreamWriter(Path.Combine(folder, SuspectedSplitsFileName)))
         {
             await eligible.WriteLineAsync("session_date,ticker,price,average_volume,average_dollar_volume,atr,history_sessions" +
-                (writesReturn ? "," + ResearchScreenLiquidityTier.Return12Minus1 : ""));
+                (writesReturn ? "," + ResearchScreenLiquidityTier.Return12Minus1 : "") +
+                (writesRange ? ",average_range_pct" : ""));
             if (splitDays is not null) await splitDays.WriteLineAsync("session_date,ticker,reason");
             if (suspectList is not null) await suspectList.WriteLineAsync("session_date,ticker,prior_close,open,move,volume_before,volume_after");
             if (incomplete is not null) await incomplete.WriteLineAsync("ticker,reason");
@@ -126,7 +132,8 @@ public static class DailyScreenCommand
                         await eligible.WriteLineAsync(string.Join(',', date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), values.Ticker,
                             Text(values.Price), Text(values.AverageShareVolume), Text(values.AverageDollarVolume), values.Atr is { } atr ? Text(atr) : "",
                             values.HistorySessions.ToString(CultureInfo.InvariantCulture)) +
-                            (writesReturn ? "," + (Return12Minus1(series, stockSplits, Array.IndexOf(sessions, date)) is { } r ? Text(r) : "") : ""));
+                            (writesReturn ? "," + (Return12Minus1(series, stockSplits, Array.IndexOf(sessions, date)) is { } r ? Text(r) : "") : "") +
+                            (writesRange ? "," + (values.AverageRangePercent is { } range ? Text(range) : "") : ""));
                     }
                 }
             }

@@ -132,12 +132,12 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         if (strategy.Regime is not { IsActive: true } rule)
             return new(true, "strategy_regime_not_required", "not-required", asOf, "{\"required\":false}");
         var bars = benchmarks.GetValueOrDefault(rule.BenchmarkSymbol) ?? [];
-        missing = MissingBenchmark(rule.BenchmarkSymbol, bars, rule.SmaPeriod, calendar, asOf, strategy.Session.ExchangeTimezone);
+        missing = MissingBenchmark(rule.BenchmarkSymbol, bars, rule.RequiredCloses, calendar, asOf, strategy.Session.ExchangeTimezone);
         if (missing is not null) return null;
         var available = bars.Where(bar => bar.Timestamp.AddDays(1) <= asOf && (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOf))
             .Select(bar => bar.Timestamp).Distinct().Count();
-        var eligible = RegimeCalendarBuilder.IsRegimeOnAt(bars, rule.SmaPeriod, asOf);
-        return new(eligible, "shared_regime_gate", $"{rule.BenchmarkSymbol}:{rule.SmaPeriod}:{asOf:O}", asOf,
+        var eligible = RegimeCalendarBuilder.IsRegimeOnAt(bars, rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars);
+        return new(eligible, "shared_regime_gate", $"{rule.EvidenceRule}:{asOf:O}", asOf,
             System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp) }));
     }
 
@@ -150,7 +150,7 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
             calendar, cutoff, strategy.Session.ExchangeTimezone);
         if (missing is not null) return missing;
         if (strategy.Regime is { IsActive: true } regime)
-            missing = MissingBenchmark(regime.BenchmarkSymbol, stock.RegimeBars, regime.SmaPeriod, calendar, cutoff, strategy.Session.ExchangeTimezone);
+            missing = MissingBenchmark(regime.BenchmarkSymbol, stock.RegimeBars, regime.RequiredCloses, calendar, cutoff, strategy.Session.ExchangeTimezone);
         if (missing is not null) return missing;
         if (strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor)
             missing = MissingBenchmark(factor.BenchmarkSymbol, stock.ReferenceBars, factor.LookbackBars + 1, calendar, cutoff, strategy.Session.ExchangeTimezone);

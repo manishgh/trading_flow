@@ -769,6 +769,7 @@ public sealed class RunConfigWriter
         if (rules.AtrPeriod is { } period) yaml.AppendLine($"    atr_period: {period.ToString(CultureInfo.InvariantCulture)}");
         if (rules.MinAtr is { } atr) yaml.AppendLine($"    min_atr: {Text(atr)}");
         yaml.AppendLine($"    min_history_sessions: {rules.MinHistorySessions.ToString(CultureInfo.InvariantCulture)}");
+        if (rules.MinAverageRangePercent is { } range) yaml.AppendLine($"    min_average_range_pct: {Text(range)}");
     }
 
     /// <summary>
@@ -944,6 +945,9 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  min_close_above_sma_pct", strategy.EntryRules.MinCloseAboveSmaPct);
         if (strategy.EntryRules.CloseAboveSmaPeriod is { } closeAboveSmaPeriod) yaml.AppendLine($"  close_above_sma_period: {closeAboveSmaPeriod}");
         if (strategy.EntryRules.DecisionSchedule is { } entrySchedule) yaml.AppendLine($"  decision_schedule: {entrySchedule}");
+        if (strategy.EntryRules.BollingerSqueezeLookbackBars != 0)
+            yaml.AppendLine($"  bollinger_squeeze_lookback_bars: {strategy.EntryRules.BollingerSqueezeLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+        AppendOptionalDecimal(yaml, "  max_bollinger_width_percentile", strategy.EntryRules.MaxBollingerWidthPercentile);
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -1034,6 +1038,8 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  benchmark: {regime.BenchmarkSymbol}");
             yaml.AppendLine($"  rule: {regime.Rule}");
             yaml.AppendLine($"  sma_period: {regime.SmaPeriod}");
+            if (regime.SmaRisingLookbackBars != 0)
+                yaml.AppendLine($"  sma_rising_lookback_bars: {regime.SmaRisingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
         }
 
         yaml.AppendLine("exit_rules:");
