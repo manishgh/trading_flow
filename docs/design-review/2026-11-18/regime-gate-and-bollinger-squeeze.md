@@ -215,3 +215,10 @@ new regime fields (none is enabled for paper).
   a timing flake, not a regression. Reviewer A and reviewer B requested changes (listing source behind prepared-data
   wrappers, QQQ not prepared, coverage count, lookup failures, Desk refresh robustness, ticker case, documentation) and
   accepted after the fixes. Condition from reviewer A: the first squeeze run's `.log` must show the listing coverage.
+
+## Installation on the local site (checkpoints 1 and 2), 18 November 2026
+
+Installed at 21:43 UTC after the Finviz close-capture window, with no Alpaca paper positions or open orders and no queued
+or running job. Release `ef538c9`; the replaced build is kept as `bin-before-ef538c9-20261118`. Readiness `ready`, FinBERT
+sidecar `ready`, no errors after start (two existing database-query notices). Effect for the operator: no strategy is
+runnable (opening-range set aside, ETF strategies blocked, squeeze not yet runnable until checkpoint 3).
