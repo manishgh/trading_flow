@@ -48,4 +48,14 @@ public interface IAlpacaMarketStateStreamClient : IDisposable
     Task SubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) => Task.CompletedTask;
 
     Task UnsubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// Waits until a provider subscription reply received after <paramref name="afterArrivalOrdinal"/> lists every
+    /// symbol in <paramref name="subscribed"/> and none in <paramref name="removed"/> on the quote channel.
+    /// Returns false on timeout, and null when this transport cannot report provider replies at all.
+    /// It only observes replies; it never consumes the execution acknowledgement queue.
+    /// </summary>
+    Task<bool?> WaitForQuoteSubscriptionAsync(long afterArrivalOrdinal, IReadOnlyCollection<string> subscribed,
+        IReadOnlyCollection<string> removed, TimeSpan timeout, CancellationToken cancellationToken) =>
+        Task.FromResult<bool?>(null);
 }

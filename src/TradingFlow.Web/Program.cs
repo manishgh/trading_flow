@@ -58,6 +58,9 @@ builder.Logging.AddJsonConsole(options =>
 // each SQL command it runs at Information: on 5 Nov 2026 that was 136 MB of a 141 MB log in 18 minutes
 // (about 74,000 lines). Failed commands are logged at Error and still appear.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+// SignalR writes invocation arguments (including one-use Desk quote capabilities) only at Debug; never log below Information.
+builder.Logging.AddFilter("Microsoft.AspNetCore.SignalR", LogLevel.Information);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Http.Connections", LogLevel.Information);
 var uiTestMode = String.Equals(
     Environment.GetEnvironmentVariable("TRADINGFLOW_UI_TEST_MODE"),
     "true",
@@ -338,6 +341,7 @@ builder.Services.AddSingleton<ResearchScreenSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskSources>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.IDeskAccountReader, TradingFlow.Web.Services.Desk.DeskAccountReader>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskReadService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.Desk.DeskQuoteViews>();
 builder.Services.AddSingleton<TradingEnvironmentService>();
 builder.Services.AddSingleton<OperationalStatusService>();
 builder.Services.AddSingleton<WorkspaceStatusService>();

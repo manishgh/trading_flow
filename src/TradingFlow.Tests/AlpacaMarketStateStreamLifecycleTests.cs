@@ -45,7 +45,7 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         await service.StartAsync(token);
         try
         {
-            await socket.ScopeReady.Task.WaitAsync(token);
+            await WaitForInitialSubscriptionsAsync(service, socket, token);
             var start = Assert.IsType<ChartAcceptanceStart>((await coordinator.StartAsync("admin", token)).Start);
             Assert.Equal(clock.GetUtcNow().AddMinutes(5), start.DeadlineUtc);
             Assert.Null((await coordinator.StartAsync("admin", token)).Start);
@@ -100,7 +100,7 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         await service.StartAsync(token);
         try
         {
-            await socket.ScopeReady.Task.WaitAsync(token);
+            await WaitForInitialSubscriptionsAsync(service, socket, token);
             Assert.NotNull((await coordinator.StartAsync("admin", token)).Start);
             await socket.AaplRemovalSent.Task.WaitAsync(token);
             await coordinator.StopAsync(token);
@@ -113,6 +113,122 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
             Assert.DoesNotContain("market:unsubscribe:MSFT", socket.Commands);
         }
         finally { await service.StopAsync(token); }
+    }
+
+    // Display quotes start on the leased socket while execution history is still warming, and only quotes under an
+    // acknowledged subscription on this connection, with a plausible provider clock, reach the display path.
+    [Fact]
+    public async Task DisplayQuotesStartBeforeExecutionWarmingAndRequireProviderAcknowledgement()
+    {
+        var clock = new PreviewClock();
+        var socket = new DispatchStream(clock) { QuoteReply = true };
+        var provider = new GatedWarmProvider();
+        using var service = CreateDiagnosticService(clock, socket, provider);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var token = timeout.Token;
+        var scope = Guid.NewGuid();
+        await service.ReplaceScopeAsync(scope, ["MSFT"], token);
+        await service.ReplaceDisplayQuotesAsync(scope, ["NVDA"], token);
+        await service.StartAsync(token);
+        try
+        {
+            await provider.WarmStarted.Task.WaitAsync(token);
+            await socket.ScopeReady.Task.WaitAsync(token);
+            await WaitUntilAsync(() => service.ReadDisplayQuote("NVDA").State == DisplayQuoteState.Acknowledged, token);
+            Assert.False(service.InitialSubscriptionsPublished);
+            Assert.Null(service.ReadDisplayQuote("NVDA").Entry);
+
+            await socket.DispatchAsync("""{"T":"q","S":"NVDA","bp":180.10,"bs":2,"ap":180.20,"as":3,"t":"2026-11-13T14:30:09Z"}""", token);
+            Assert.Equal(180.15m, service.ReadDisplayQuote("NVDA").Entry!.Quote.MidPrice);
+            await socket.DispatchAsync("""{"T":"q","S":"NVDA","bp":1,"bs":1,"ap":2,"as":1,"t":"2026-11-13T14:31:00Z"}""", token);
+            Assert.Equal(180.15m, service.ReadDisplayQuote("NVDA").Entry!.Quote.MidPrice);
+            await socket.DispatchAsync("""{"T":"q","S":"AMD","bp":1,"bs":1,"ap":2,"as":1,"t":"2026-11-13T14:30:09Z"}""", token);
+            Assert.Equal(DisplayQuoteState.NotSubscribed, service.ReadDisplayQuote("AMD").State);
+
+            provider.Release();
+            await WaitUntilAsync(() => service.InitialSubscriptionsPublished, token);
+        }
+        finally { await service.StopAsync(token); }
+        Assert.Equal(DisplayQuoteState.UpstreamUnavailable, service.ReadDisplayQuote("NVDA").State);
+    }
+
+    // A display subscription Alpaca never confirms is sent twice, then shown as unconfirmed; the shared socket stays.
+    [Fact]
+    public async Task UnacknowledgedDisplayQuotesAreReissuedOnceAndNeverReplaceTheSocket()
+    {
+        var clock = new PreviewClock();
+        var socket = new DispatchStream(clock) { QuoteReply = false };
+        using var service = CreateDiagnosticService(clock, socket, new EmptyMarketDataProvider());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var token = timeout.Token;
+        var scope = Guid.NewGuid();
+        await service.ReplaceScopeAsync(scope, ["MSFT"], token);
+        await service.ReplaceDisplayQuotesAsync(scope, ["NVDA"], token);
+        await service.StartAsync(token);
+        try
+        {
+            await WaitForInitialSubscriptionsAsync(service, socket, token);
+            await WaitUntilAsync(() => service.ReadDisplayQuote("NVDA").State == DisplayQuoteState.Unacknowledged, token);
+            Assert.Equal(2, socket.Commands.Count(command => command == "quotes:subscribe:NVDA"));
+            await socket.DispatchAsync("""{"T":"q","S":"NVDA","bp":180.10,"bs":2,"ap":180.20,"as":3,"t":"2026-11-13T14:30:09Z"}""", token);
+            Assert.Null(service.ReadDisplayQuote("NVDA").Entry);
+            Assert.Equal(1, socket.Connections);
+            Assert.False(service.RuntimeCompletion.IsCompleted);
+            Assert.DoesNotContain("market:unsubscribe:MSFT", socket.Commands);
+        }
+        finally { await service.StopAsync(token); }
+    }
+
+    // New Desk symbols may not grow the display union past its bound; existing owners keep theirs and shared symbols are free.
+    [Fact]
+    public async Task BoundedDeskDisplayQuotesShareTheUnionAndNeverEvictExistingOwners()
+    {
+        var clock = new PreviewClock();
+        using var service = CreateDiagnosticService(clock, new DispatchStream(clock), new EmptyMarketDataProvider());
+        var token = CancellationToken.None;
+        await service.ReplaceDisplayQuotesAsync(Guid.NewGuid(), ["AAPL", "MSFT", "NVDA"], token);
+
+        var desk = await service.ReplaceBoundedDisplayQuotesAsync(Guid.NewGuid(), ["MSFT", "TSLA", "AMD"], 4, token);
+        Assert.Equal(new[] { "AMD", "MSFT" }, desk.Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "AAPL", "AMD", "MSFT", "NVDA" }, (await service.GetDesiredDisplayQuotesAsync(token)).Order(StringComparer.Ordinal));
+
+        var overLimit = await service.ReplaceBoundedDisplayQuotesAsync(Guid.NewGuid(), ["NVDA", "QQQ"], 2, token);
+        Assert.Equal(new[] { "NVDA" }, overLimit);
+        Assert.Contains("AAPL", await service.GetDesiredDisplayQuotesAsync(token));
+    }
+
+    // Startup subscribes display quotes before execution warming completes, so wait for both explicitly.
+    private static async Task WaitForInitialSubscriptionsAsync(AlpacaMarketStateStreamService service, DispatchStream socket,
+        CancellationToken token)
+    {
+        await socket.ScopeReady.Task.WaitAsync(token);
+        await WaitUntilAsync(() => service.InitialSubscriptionsPublished, token);
+    }
+
+    // Poll a cheap in-memory condition until it holds or the test deadline cancels.
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken token)
+    {
+        while (!condition()) await Task.Delay(10, token);
+    }
+
+    // Holds execution warming open until released, so a test can observe what happens meanwhile.
+    private sealed class GatedWarmProvider : EmptyMarketDataProvider
+    {
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource WarmStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Let warming finish.
+        public void Release() => release.TrySetResult();
+
+        // Block every history read until released or cancelled.
+        public override async IAsyncEnumerable<OhlcvBar> GetBarsAsync(IReadOnlyCollection<string> tickers,
+            IReadOnlyCollection<string> intervals, DateTimeOffset start, DateTimeOffset end,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            WarmStarted.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            yield break;
+        }
     }
 
     // Compose the genuine stream and in-memory processor with a synthetic transport and REST source.
@@ -175,9 +291,9 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         await service.StartAsync(token);
         try
         {
-            await socket.ScopeReady.Task.WaitAsync(token);
+            await WaitForInitialSubscriptionsAsync(service, socket, token);
             var baselineCommands = socket.Commands.ToArray();
-            Assert.Equal(new[] { "market:subscribe:AAPL", "quotes:subscribe:MSFT" }, baselineCommands);
+            Assert.Equal(new[] { "market:subscribe:AAPL", "quotes:subscribe:MSFT" }, baselineCommands.Order(StringComparer.Ordinal));
             clock.Set("2026-11-13T14:34:30Z");
             var start = DateTimeOffset.Parse("2026-11-13T14:31:00Z");
             var baseBar = new OhlcvBar("AAPL", start, "1m", 100, 102, 99, 101, 50, "sip", "all", start.AddMinutes(1));
@@ -511,6 +627,8 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
         private readonly HashSet<string> subscriptions = new(StringComparer.Ordinal);
         private IAlpacaMarketDataReceiptObserver? observer;
         public bool RejectDiagnosticSubscribe { get; init; }
+        // What the synthetic provider reports for display quote subscriptions; null means it cannot report replies.
+        public bool? QuoteReply { get; init; }
         public long CurrentArrivalOrdinal { get; private set; }
         public DateTimeOffset? CurrentBatchReceivedAtUtc { get; private set; }
         public TaskCompletionSource AaplRemovalSent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -571,6 +689,10 @@ public sealed class AlpacaMarketStateStreamLifecycleTests
             Commands.Enqueue("quotes:unsubscribe:" + String.Join(",", tickers));
             return Task.CompletedTask;
         }
+
+        // Report the configured provider outcome for a display quote change immediately.
+        public Task<bool?> WaitForQuoteSubscriptionAsync(long afterArrivalOrdinal, IReadOnlyCollection<string> subscribed,
+            IReadOnlyCollection<string> removed, TimeSpan timeout, CancellationToken token) => Task.FromResult(QuoteReply);
 
         // Reuse the existing acknowledgement barrier and allow the real warm path to continue.
         public Task WaitForSubscriptionAcknowledgementAsync(IReadOnlyCollection<string> expected, CancellationToken token) =>

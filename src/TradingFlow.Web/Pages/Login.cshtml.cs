@@ -44,8 +44,10 @@ public sealed class LoginModel(SignInManager<TradingFlowUser> signInManager) : P
         return Page();
     }
 
+    // Ends this user's Desk live-quote views, then clears this browser's sign-in cookie.
     public async Task<IActionResult> OnPostLogoutAsync()
     {
+        await DeskEndpoints.RevokeQuoteViewsOnSignOutAsync(HttpContext);
         await signInManager.SignOutAsync();
         return RedirectToPage("/Login");
     }

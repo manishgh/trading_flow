@@ -16,15 +16,25 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
 {
     private readonly ClientWebSocket _webSocket = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
+    // Every provider reply is queued; quote-command replies between execution commands are skipped by the next
+    // execution wait, and the oldest entries are dropped beyond this bound so the queue cannot grow without limit.
+    private const int MaximumQueuedAcknowledgements = 64;
     private readonly Channel<(long Ordinal, DateTimeOffset Received, SubscriptionAcknowledgement Acknowledgement)> subscriptionAcknowledgements =
-        Channel.CreateUnbounded<(long Ordinal, DateTimeOffset Received, SubscriptionAcknowledgement Acknowledgement)>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+        Channel.CreateBounded<(long Ordinal, DateTimeOffset Received, SubscriptionAcknowledgement Acknowledgement)>(
+        new BoundedChannelOptions(MaximumQueuedAcknowledgements)
+        { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.DropOldest });
     private readonly AlpacaOptions _options;
     private readonly Uri _streamUrl;
     private readonly ILogger<AlpacaStreamClient>? _logger;
     private IAlpacaMarketDataReceiptObserver? receiptObserver;
     private string? diagnosticSymbol;
     private long currentArrivalOrdinal;
+    // Taken just before the latest bars/trades/statuses command was sent: the arrival ordinal, and the provider's
+    // execution channels as last reported. Published together so a waiter never mixes two commands' boundaries.
+    private MarketCommandBoundary marketBoundary = new(0, SubscriptionAcknowledgement.Empty);
+    // Newest provider subscription reply of any kind, published whole so readers never see a half-updated set.
+    private SubscriptionObservation? latestObservation;
+    private TaskCompletionSource observationChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public AlpacaStreamClient(AlpacaOptions options, ILogger<AlpacaStreamClient>? logger = null)
     {
@@ -89,6 +99,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             return Task.CompletedTask;
         }
 
+        MarkMarketCommand();
         return SendMessageAsync(
             new
             {
@@ -110,7 +121,8 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
 
     public Task UnsubscribeQuotesAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken) =>
         SendChannelAsync("unsubscribe", tickers, cancellationToken);
-
+    // Quote commands need no bookkeeping: their replies are queued like any other and recognised by the execution
+    // wait from their unchanged execution channels.
     private Task SendChannelAsync(string action, IReadOnlyCollection<string> tickers, CancellationToken cancellationToken)
     {
         var symbols = tickers
@@ -120,6 +132,50 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             .ToArray();
         return symbols.Length == 0 ? Task.CompletedTask : SendMessageAsync(new { action, quotes = symbols }, cancellationToken);
     }
+
+    // Record the boundary before an execution command: replies read up to here answer earlier commands, and a later
+    // reply still showing these execution channels answers a quote command, not this one.
+    // The ordinal is read first so a reply published in between is both considered and part of the prior state.
+    internal void MarkMarketCommand()
+    {
+        var ordinal = CurrentArrivalOrdinal;
+        var before = Volatile.Read(ref latestObservation)?.Acknowledgement ?? SubscriptionAcknowledgement.Empty;
+        Volatile.Write(ref marketBoundary, new MarketCommandBoundary(ordinal, before));
+    }
+
+    // Replies queued and not yet read by an execution wait.
+    internal int PendingExecutionAcknowledgements => subscriptionAcknowledgements.Reader.Count;
+
+    // Test seam for the arrival ordinal normally advanced by the read loop.
+    internal void SetArrivalOrdinal(long ordinal) => Interlocked.Exchange(ref currentArrivalOrdinal, ordinal);
+
+    /// <summary>
+    /// Waits on published replies only: the quote-channel set must contain every subscribed symbol and no removed one,
+    /// in a reply read after the command boundary. The execution acknowledgement queue is never read here.
+    /// </summary>
+    public async Task<bool?> WaitForQuoteSubscriptionAsync(long afterArrivalOrdinal, IReadOnlyCollection<string> subscribed,
+        IReadOnlyCollection<string> removed, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(timeout);
+        try
+        {
+            while (true)
+            {
+                var changed = Volatile.Read(ref observationChanged).Task;
+                if (Volatile.Read(ref latestObservation) is { } latest && latest.ArrivalOrdinal > afterArrivalOrdinal &&
+                    subscribed.All(symbol => latest.Acknowledgement.Quotes.Contains(symbol)) &&
+                    !removed.Any(symbol => latest.Acknowledgement.Quotes.Contains(symbol)))
+                    return true;
+                await changed.WaitAsync(deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
 
     /// <summary>
     /// Removes symbols from every channel owned by the shared connection. The
@@ -139,6 +195,7 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             return Task.CompletedTask;
         }
 
+        MarkMarketCommand();
         return SendMessageAsync(
             new
             {
@@ -205,11 +262,25 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
     }
 
     // Route only subscription replies through the single command reader, with their original receive identity.
+    // Every reply is also published whole for quote confirmation and for the next execution command's boundary.
     internal void QueueSubscriptionAcknowledgement(JsonElement element, long ordinal, DateTimeOffset received)
     {
-        if (TryParseSubscriptionAcknowledgement(element, out var acknowledgement))
-            subscriptionAcknowledgements.Writer.TryWrite((ordinal, received, acknowledgement!));
+        if (!TryParseSubscriptionAcknowledgement(element, out var acknowledgement)) return;
+        PublishObservation(new(ordinal, received, acknowledgement!));
+        subscriptionAcknowledgements.Writer.TryWrite((ordinal, received, acknowledgement!));
     }
+
+    // Replace the observation and wake every quote waiter; a waiter rechecks the newest observation itself.
+    private void PublishObservation(SubscriptionObservation observation)
+    {
+        Volatile.Write(ref latestObservation, observation);
+        Interlocked.Exchange(ref observationChanged, new(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
+    }
+
+    // The four channels an execution subscription owns; quotes and diagnostic mutation channels are not compared.
+    internal static bool ExecutionChannelsEqual(SubscriptionAcknowledgement left, SubscriptionAcknowledgement right) =>
+        left.Bars.SetEquals(right.Bars) && left.UpdatedBars.SetEquals(right.UpdatedBars) &&
+        left.Trades.SetEquals(right.Trades) && left.Statuses.SetEquals(right.Statuses);
 
     // Read the existing receive buffer's exact value boundaries without copying or re-encoding the event.
     internal static int ObserveEvent(IAlpacaMarketDataReceiptObserver observer, JsonElement element,
@@ -259,7 +330,9 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
             while (true)
             {
                 var (ordinal, received, acknowledgement) = await subscriptionAcknowledgements.Reader.ReadAsync(timeout.Token);
-                if (afterArrivalOrdinal is { } boundary && ordinal <= boundary) continue;
+                // A reply read before the latest execution command was sent answers an earlier command.
+                var boundary = Volatile.Read(ref marketBoundary);
+                if (ordinal <= (afterArrivalOrdinal ?? boundary.ArrivalOrdinal)) continue;
                 if (SubscriptionAcknowledgementMatchesExpected(acknowledgement, expected))
                 {
                     var mutationCoverage = diagnostic is not null && afterArrivalOrdinal is not null &&
@@ -267,6 +340,9 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
                     return new(ordinal, received, mutationCoverage);
                 }
                 if (afterArrivalOrdinal is not null) continue;
+                // A reply still showing the execution channels from before this command answers a display quote
+                // command sent earlier; it neither satisfies nor fails this wait.
+                if (ExecutionChannelsEqual(acknowledgement, boundary.Before)) continue;
                 if (diagnostic is not null && DiffersOnlyByDiagnostic(acknowledgement, expected, diagnostic))
                 {
                     // A normal owner requesting AAPL still needs the exact AAPL acknowledgement.
@@ -464,7 +540,19 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         IReadOnlySet<string> Quotes,
         IReadOnlySet<string> Statuses,
         IReadOnlySet<string>? Corrections = null,
-        IReadOnlySet<string>? CancelErrors = null);
+        IReadOnlySet<string>? CancelErrors = null)
+    {
+        private static readonly IReadOnlySet<string> None = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // The provider state before any subscription on a new connection.
+        internal static readonly SubscriptionAcknowledgement Empty = new(None, None, None, None, None);
+    }
+
+    // One whole provider reply with the order and time it was read; the connection is this client instance.
+    private sealed record SubscriptionObservation(long ArrivalOrdinal, DateTimeOffset ReceivedAtUtc, SubscriptionAcknowledgement Acknowledgement);
+
+    // The arrival ordinal and execution channels recorded just before an execution command was sent.
+    private sealed record MarketCommandBoundary(long ArrivalOrdinal, SubscriptionAcknowledgement Before);
 
     public void Dispose()
     {

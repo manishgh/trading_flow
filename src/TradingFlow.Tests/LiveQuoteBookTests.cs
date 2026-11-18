@@ -8,6 +8,9 @@ public sealed class LiveQuoteBookTests
 {
     private static JsonElement Parse(string json) => JsonSerializer.Deserialize<JsonElement>(json);
 
+    // Store a quote under one fixed subscription, received at its own provider time.
+    private static void Put(LiveQuoteBook book, AlpacaStreamQuote quote) => book.Update(quote, 1, 1, quote.Timestamp);
+
     [Fact]
     public void Parser_ReadsAStreamedQuoteAndIgnoresIncompleteOrOtherFrames()
     {
@@ -29,8 +32,8 @@ public sealed class LiveQuoteBookTests
     {
         var book = new LiveQuoteBook();
         var at = DateTimeOffset.Parse("2026-11-04T14:30:00Z");
-        book.Update(new AlpacaStreamQuote("OUST", 31.00m, 31.10m, 1m, 1m, at.AddSeconds(2)));
-        book.Update(new AlpacaStreamQuote("OUST", 30.00m, 30.10m, 1m, 1m, at)); // a late, older frame
+        Put(book, new AlpacaStreamQuote("OUST", 31.00m, 31.10m, 1m, 1m, at.AddSeconds(2)));
+        Put(book, new AlpacaStreamQuote("OUST", 30.00m, 30.10m, 1m, 1m, at)); // a late, older frame
 
         Assert.Equal(31.10m, book.Find("oust")!.AskPrice);
         var polled = new AlpacaLatestQuote("OUST", 31.20m, 31.30m, 1m, 1m, at.AddSeconds(1));
@@ -41,7 +44,7 @@ public sealed class LiveQuoteBookTests
         // An unsubscribed symbol or a lost connection removes the streamed price.
         book.Remove("OUST");
         Assert.Null(book.Find("OUST"));
-        book.Update(new AlpacaStreamQuote("CVS", 90m, 90.1m, 1m, 1m, at));
+        Put(book, new AlpacaStreamQuote("CVS", 90m, 90.1m, 1m, 1m, at));
         book.Clear();
         Assert.Null(book.Find("CVS"));
     }

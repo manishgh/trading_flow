@@ -44,8 +44,9 @@ public static class AuthApiEndpoints
             isAdministrator = context.User.IsInRole(TradingFlowRoles.Administrator)
         }));
 
-        group.MapPost("/logout", async (SignInManager<TradingFlowUser> signInManager) =>
+        group.MapPost("/logout", async (HttpContext context, SignInManager<TradingFlowUser> signInManager) =>
         {
+            await DeskEndpoints.RevokeQuoteViewsOnSignOutAsync(context);
             await signInManager.SignOutAsync();
             return Results.NoContent();
         });

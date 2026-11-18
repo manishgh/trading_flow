@@ -1,9 +1,13 @@
 # Independent live quotes for the Desk
 
-Status: proposed, not implemented. User requested real-time Desk prices through
-a browser websocket on 16 November. A and B independently reviewed the proposed
-direction and required the membership, bounds and acknowledgement rules below.
-The approved chart acceptance implementation continues separately.
+Status: approved by the user on 17 November 2026 ("Approve the Desk quote repair");
+implementation, tests and review status are in
+[the implementation record](../../verification/desk-live-quotes-implementation-2026-11-17.md); not yet
+installed on the local site until both reviewers accept.
+User requested real-time Desk prices through a browser websocket on 16 November.
+A and B independently reviewed the proposed direction and required the membership,
+bounds and acknowledgement rules below. The approved chart acceptance implementation
+continues separately.
 
 ## Observed problem
 

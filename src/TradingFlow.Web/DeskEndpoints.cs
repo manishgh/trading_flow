@@ -31,13 +31,33 @@ public static class DeskEndpoints
         });
         group.MapGet("/stream", StreamAsync);
         app.MapGroup("/api/v1/desk").RequireAuthorization().MapStockStrategyEndpoints();
+        // Display quotes for the visible stocks travel on their own socket, so a slow snapshot cannot delay them.
+        app.MapHub<DeskQuoteHub>(DeskQuoteHub.Path, options =>
+        {
+            options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
+            options.CloseOnAuthenticationExpiration = true;
+            options.ApplicationMaxBufferSize = 4 * 1024;
+            options.TransportMaxBufferSize = 64 * 1024;
+        }).RequireAuthorization();
     }
     public sealed record ImportScreen(string Name, string Url);
     public sealed record FollowStock(string Source, string Symbol, Guid WishlistId);
 
-    /// <summary>Streams bounded observation pages and the selected run's recorded strategy checks; never starts an evaluation.</summary>
+    /// <summary>
+    /// Called by both sign-out paths before the cookie is cleared: ends the user's Desk live-quote views. Hosts that do
+    /// not serve the Desk have no registry and nothing to revoke.
+    /// </summary>
+    public static Task RevokeQuoteViewsOnSignOutAsync(HttpContext context) =>
+        context.User.Identity?.IsAuthenticated == true && context.RequestServices.GetService<DeskQuoteViews>() is { } views
+            ? views.RevokeUserAsync(TradingFlow.Web.Services.Charts.ChartAccessPolicy.UserId(context.User))
+            : Task.CompletedTask;
+
+    /// <summary>
+    /// Streams bounded observation pages and the selected run's recorded strategy checks; never starts an evaluation.
+    /// Each cycle first renews this stream's quote view from the freshly resolved stocks, then reads the full snapshot.
+    /// </summary>
     private static async Task StreamAsync(HttpContext context, DeskSources sources, DeskReadService reader,
-        DeskStrategyAssessmentService assessments, TradingFlow.Web.Services.IDisplayQuoteSubscriptions subscriptions, TradingFlow.Web.Services.LiveQuoteBook quoteBook,
+        DeskStrategyAssessmentService assessments, DeskQuoteViews quoteViews,
         ILoggerFactory logs, TradingFlow.Web.Services.Charts.ChartAccessPolicy charts,
         TradingFlow.Application.Preparation.PreparationService preparation)
     {
@@ -82,16 +102,32 @@ public static class DeskEndpoints
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers["X-Accel-Buffering"] = "no";
         // The page's stocks join the one shared Alpaca SIP connection while this view is open.
-        var quoteScope = Guid.NewGuid();
+        var quoteView = Guid.NewGuid();
+        var user = TradingFlow.Web.Services.Charts.ChartAccessPolicy.UserId(context.User);
+        string? quoteReason = null;
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         try
         {
-            // A full snapshot every 5 seconds; streamed quotes in between, once a second.
+            // A full snapshot about every 5 seconds; live quotes travel separately on the Desk quote socket.
             // Reconnect bounds lifetime and refreshes authentication.
             for (var i = 0; i < 60 && !ct.IsCancellationRequested; i++)
             {
                 var selection = prepared is null ? await sources.ResolveAsync(key, ct, page, search) :
                     await sources.ResolvePreparedAsync(prepared, ct, page, search);
+                var offer = await quoteViews.RenewAsync(quoteView, user,
+                    selection.Members.Select(member => member.Symbol), ct);
+                // A signed-out view ends this stream; the browser's reconnect then needs a valid sign-in.
+                if (offer.Closed) break;
+                if (offer.Capability is not null || offer.Reason != quoteReason)
+                {
+                    // Sent only in this no-store event body, never in a URL or log; the socket consumes it once.
+                    quoteReason = offer.Reason;
+                    await context.Response.WriteAsync("event: view\ndata: " + JsonSerializer.Serialize(new
+                    {
+                        view = offer.ViewId, capability = offer.Capability, reason = offer.Reason, refused = offer.Refused
+                    }, json) + "\n\n", ct);
+                    await context.Response.Body.FlushAsync(ct);
+                }
                 var snapshot = await reader.ReadAsync(selection, ct);
                 if (strategy is not null && runId is not null && snapshot.Rows.Count > 0)
                 {
@@ -101,28 +137,11 @@ public static class DeskEndpoints
                     snapshot = snapshot with { Rows = snapshot.Rows.Select(row => row with {
                         StrategyAssessment = bySymbol.GetValueOrDefault(row.Membership.Symbol) }).ToArray() };
                 }
-                var symbols = snapshot.Rows.Select(row => row.Membership.Symbol).ToArray();
-                charts.RecordDisplayed(context.User, symbols);
-                await subscriptions.ReplaceDisplayQuotesAsync(quoteScope, symbols, ct);
-                snapshot = snapshot with { Rows = snapshot.Rows.Select(row => row with {
-                    Quote = quoteBook.Newest(row.Membership.Symbol, row.Quote) }).ToArray() };
+                charts.RecordDisplayed(context.User, snapshot.Rows.Select(row => row.Membership.Symbol).ToArray());
+                // Snapshot quotes come from the shared quote service, which already prefers a newer streamed quote.
                 await context.Response.WriteAsync("event: snapshot\ndata: " + JsonSerializer.Serialize(snapshot, json) + "\n\n", ct);
                 await context.Response.Body.FlushAsync(ct);
-                var sent = snapshot.Rows.ToDictionary(row => row.Membership.Symbol, row => row.Quote?.Timestamp, StringComparer.OrdinalIgnoreCase);
-                for (var tick = 0; tick < 5; tick++)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
-                    var changed = symbols.Select(quoteBook.Find)
-                        .Where(quote => quote is not null && (sent.GetValueOrDefault(quote.Ticker) is not { } last || quote.Timestamp > last))
-                        .Select(quote => quote!).ToArray();
-                    if (changed.Length == 0) continue;
-                    foreach (var quote in changed) sent[quote.Ticker] = quote.Timestamp;
-                    await context.Response.WriteAsync("event: quotes\ndata: " + JsonSerializer.Serialize(changed.Select(quote => new
-                    {
-                        symbol = quote.Ticker, quote.BidPrice, quote.AskPrice, quote.MidPrice, quote.BidSize, quote.AskSize, quote.Timestamp
-                    }), json) + "\n\n", ct);
-                    await context.Response.Body.FlushAsync(ct);
-                }
+                await Task.Delay(TimeSpan.FromSeconds(5), ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -137,7 +156,8 @@ public static class DeskEndpoints
         }
         finally
         {
-            await subscriptions.RemoveDisplayQuotesAsync(quoteScope, CancellationToken.None);
+            // Source/page/search replacement, reconnect and tab close all end this stream, and with it the quote view.
+            await quoteViews.RevokeAsync(quoteView);
         }
     }
 }

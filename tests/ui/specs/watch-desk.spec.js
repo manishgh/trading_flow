@@ -7,9 +7,9 @@ const sources=[{key:'all',name:'All followed stocks',group:'',description:'Acros
 // Feed the UI explicit completed daily SMA fixture values through its ordinary snapshot shape.
 function row(symbol,{held=false,stale=false,followed=true}={}){return {membership:{symbol,name:symbol==='AAPL'?'Apple Inc.':symbol,wishlists:followed?[{id,name:'Core',observed:true}]:[]},quote:{midPrice:200,bidPrice:199.95,askPrice:200.05,timestamp:new Date(Date.now()-(stale?3600000:2000)).toISOString()},quoteFreshness:stale?'stale':'current',previousClose:{close:198,sessionDate:'2026-09-24'},technical:{sma10:197.25,sma20:195.50,sma50:190.25,sma200:180.75,rsi:58.2,ema20:198,ema50:190,ema200:180,atr:4.2,relativeVolume:1.3,timeframe:'1d',timestamp:'2026-09-25T20:00:00Z',dataFeed:'sip'},observation:{state:'ready',detail:'260 completed daily sessions',evaluation:{shouldAlert:false,reason:'Participation below watch threshold',sourceBarTimestampUtc:'2026-09-25T20:00:00Z'}},holding:held?{symbol,quantity:10,averageEntry:180,costBasis:1800,marketValue:2000,unrealizedPl:200}:null,holdingsKnown:true,sessionVolume:{ticker:symbol,volume:1250000,barTimestamp:new Date(Date.now()-60000).toISOString(),sessionDate:new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),asOfUtc:new Date().toISOString(),feed:'sip'},newsSentiment:{positive:2,negative:2,neutral:1,unscored:3,available:true,windowStartUtc:new Date(Date.now()-3600000).toISOString(),asOfUtc:new Date().toISOString()},news:[{headline:symbol+' company update',url:'https://example.org/news/'+symbol,provider:'Fixture news',symbols:[symbol],publishedAtUtc:new Date().toISOString()}]};}
 function snapshot(source){const rows=source==='all'?[row('AAPL',{held:true}),row('MSFT',{stale:true}),row('NVDA')]:[row('TSLA',{followed:false})];return {selection:{source:sources.find(x=>x.key===source)||sources[0],totalCount:rows.length,screenedAtUtc:source==='all'?null:new Date().toISOString(),error:null},rows,account:{available:true,detail:'Alpaca paper account · broker unrealized P&L',readAtUtc:new Date().toISOString()},news:rows.flatMap(x=>x.news),newsCoverage:'Matched stored news · historical coverage may be incomplete.',session:'Regular',readAtUtc:new Date().toISOString(),feed:'SIP'};}
-let fixtureServer,fixtureUrl,paused=false;const connections=new Set();
+let fixtureServer,fixtureUrl,paused=false,quoteView=null;const connections=new Set();
 test.beforeAll(async()=>{
- fixtureServer=http.createServer((req,res)=>{res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','Access-Control-Allow-Origin':'*'});res.flushHeaders();connections.add(res);
+ fixtureServer=http.createServer((req,res)=>{res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','Access-Control-Allow-Origin':'*'});res.flushHeaders();connections.add(res);if(quoteView)res.write('event: view\ndata: '+JSON.stringify(quoteView)+'\n\n');
  const url=new URL(req.url,'http://fixture');const send=()=>{if(paused)return;const value=snapshot(url.searchParams.get('source'));const search=(url.searchParams.get('search')||'').toUpperCase();value.rows=value.rows.filter(x=>(x.membership.symbol+' '+x.membership.name).toUpperCase().includes(search));value.selection.matchedCount=value.rows.length;value.selection.page=0;value.selection.pageCount=1;res.write('event: snapshot\ndata: '+JSON.stringify(value)+'\n\n');};send();const timer=setInterval(send,5000);req.on('close',()=>{clearInterval(timer);connections.delete(res);});
  });await new Promise(resolve=>fixtureServer.listen(0,'127.0.0.1',resolve));fixtureUrl='http://127.0.0.1:'+fixtureServer.address().port;
 });
@@ -41,7 +41,7 @@ async function fixture(page, status = workspace()) {
 // Keep evidence and the two review actions present with overflow confined to the table on narrow screens.
 async function assertColumns(page) {
  const table = page.locator('.watch-table');
- await expect(table.locator('th')).toHaveText(['Stock','Price · age','Trade','Strategy','Position','News','Daily technicals','RVOL','Volume','Next action']);
+ await expect(table.locator('th')).toHaveText(['Stock','Mid price · age','Trade','Strategy','Position','News','Daily technicals','RVOL','Volume','Next action']);
  for (const row of await table.locator('tbody tr').all()) {
   await expect(row.locator('td')).toHaveCount(10);
   await expect(row.locator('[data-order-side]')).toHaveCount(2);
@@ -423,6 +423,58 @@ test('real follow API preserves notes, rejects nonmembers and refreshes membersh
  });
  expect(result.first).toBe(200);expect(result.retry).toBe(200);expect(result.missing).toBe(400);expect(result.current.isObserved).toBe(false);expect(result.current.items).toHaveLength(1);expect(result.current.items[0].notes).toBe('Preserve operator note');
  await page.reload();await page.locator('#watch-search').fill('AAPL');await expect(page.locator('#watch-rows')).toContainText('AAPL');
+});
+
+// Stand-in SignalR client: records each connection and lets the test push quote frames without a provider socket.
+const fakeSignalR=`window.signalR={HttpTransportType:{WebSockets:1},LogLevel:{None:6},HubConnectionBuilder:class{
+ withUrl(url,options){this.url=url;this.options=options;return this;} configureLogging(){return this;}
+ build(){const connection={url:this.url,options:this.options,start:()=>Promise.resolve(),onclose(callback){this.closed=callback;},
+  stop(){this.stopped=true;this.closed?.();return Promise.resolve();},
+  stream(name,capability){this.invoked={name,capability};const owner=this;return {subscribe(observer){owner.observer=observer;}};}};
+  (window.__quoteConnections||=[]).push(connection);return connection;}}};`;
+
+// Live quotes arrive on their own socket, patch rows without waiting for a snapshot, keep provider confirmation
+// separate from quote age, survive an older snapshot, and are labelled "Stream stopped" once the socket ends.
+test('desk live quotes use the one-use capability socket and keep provider state explicit',async({page})=>{
+ quoteView={view:'view-1',capability:'capability-one',reason:null,refused:[]};
+ try{
+  await page.route('**/lib/signalr-10.0.0/signalr.min.js*',route=>route.fulfill({contentType:'text/javascript',body:fakeSignalR}));
+  await fixture(page);await signIn(page);await page.goto('/Desk');
+  await expect(page.locator('#watch-rows tr')).toHaveCount(3);
+  await expect.poll(()=>page.evaluate(()=>window.__quoteConnections?.[0]?.invoked?.capability)).toBe('capability-one');
+  const connection=await page.evaluate(()=>({url:window.__quoteConnections[0].url,name:window.__quoteConnections[0].invoked.name,
+   stored:JSON.stringify({...localStorage})+JSON.stringify({...sessionStorage})+location.href}));
+  expect(connection.url).toBe('/api/v1/desk/quotes/hub');expect(connection.name).toBe('WatchQuotes');
+  expect(connection.stored).not.toContain('capability-one');
+  await page.evaluate(()=>{const now=new Date().toISOString();window.__quoteConnections[0].observer.next({kind:'quotes',view:'view-1',revision:1,sequence:1,upstream:'connected',removed:[],quotes:[
+   {symbol:'MSFT',state:'acknowledged',bidPrice:210,askPrice:210.2,midPrice:210.1,bidSize:1,askSize:1,timestamp:now,receivedAtUtc:now,feed:'sip'},
+   {symbol:'NVDA',state:'pending'},{symbol:'AAPL',state:'unacknowledged'}]});});
+  const msft=page.locator('#watch-rows tr',{hasText:'MSFT'}).locator('.watch-row-price');
+  await expect(msft).toContainText('$210.10');await expect(msft.locator('small')).toContainText('Live');
+  await expect(page.locator('#watch-connection')).toContainText('live-quote socket · Alpaca confirmed 1/3 · 1 awaiting Alpaca confirmation · 1 not confirmed by Alpaca');
+  expect(await msft.getAttribute('title')).toContain('Bid/ask midpoint, not last trade');
+  // The fixture's next snapshot carries an hour-old MSFT quote; the newer streamed quote stays.
+  await page.waitForTimeout(5500);
+  await expect(msft).toContainText('$210.10');
+  await page.evaluate(()=>{const socket=window.__quoteConnections[0];socket.observer.next({kind:'ended',view:'view-1',revision:1,sequence:2,upstream:'connected',quotes:[],removed:[],reason:'The five-minute live-quote socket lifetime ended'});socket.observer.complete();});
+  await expect(page.locator('#watch-connection')).toContainText('snapshot quotes only · The five-minute live-quote socket lifetime ended');
+  await expect(msft.locator('small')).toContainText('Stream stopped');
+ }finally{quoteView=null;}
+});
+
+// End to end on the isolated host: the real Desk stream issues the capability, the real quote hub accepts it over the
+// same-origin WebSocket and streams a frame; the capability travels only inside the invocation message.
+test('real desk stream capability opens the quote hub socket',async({page})=>{
+ const frames=[];let socketUrl='';
+ page.on('websocket',socket=>{if(!socket.url().includes('/api/v1/desk/quotes/hub'))return;socketUrl=socket.url();
+  socket.on('framesent',frame=>frames.push(['sent',String(frame.payload)]));socket.on('framereceived',frame=>frames.push(['received',String(frame.payload)]));});
+ await signInAsAdmin(page);await page.goto('/Desk');
+ await expect.poll(()=>frames.some(([direction,payload])=>direction==='received'&&payload.includes('"kind":"quotes"')),{timeout:15000}).toBe(true);
+ const invocation=frames.find(([direction,payload])=>direction==='sent'&&payload.includes('"target":"WatchQuotes"'));
+ expect(invocation).toBeTruthy();
+ const capability=JSON.parse(invocation[1].split('\u001e').find(part=>part.includes('WatchQuotes'))).arguments[0];
+ expect(capability.length).toBeGreaterThan(30);
+ expect(socketUrl).not.toContain(capability);expect(socketUrl).not.toContain('access_token');
 });
 
 test('news stays beside a scrolling stock list and unavailable quotes stay explicit',async({page})=>{

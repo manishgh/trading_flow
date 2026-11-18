@@ -9,7 +9,11 @@
     const desk = document.querySelector(".watch-desk");
     const isAdministrator = desk.dataset.administrator === "true";
     const operator = desk.dataset.operator;
-    let stream, generation = 0, lastStreamedQuoteAt = 0, snapshot, selected, newsForAll = true, catalog = [], newsSignature = '', connected = false;
+    let stream, generation = 0, snapshot, selected, newsForAll = true, catalog = [], newsSignature = '', connected = false;
+    // Live display quotes for the visible stocks: socket state, provider (Alpaca SIP) state and the latest item per stock.
+    const quoteSocket = { connection: null, view: null, state: 'idle', upstream: '', reason: '', items: new Map(), attempt: 0, closing: Promise.resolve() };
+    // "Live" needs the open socket, a streamed quote and Alpaca's current confirmation of that stock's subscription.
+    const isStreaming = row => row.quote?.source==='socket'&&quoteSocket.state==='live'&&row.quoteStream==='acknowledged';
     const rowNodes = new Map();
     const returnKey = 'tradingflow.desk.return.v1';
     const incoming = new URLSearchParams(location.search);
@@ -172,7 +176,7 @@
         restoredView=readOnlyReturn;
         if(!restoredView&&currentJob&&['queued','running'].includes(currentJob.status))cancelAssessment(currentJob.jobId).catch(()=>{});
         currentJob=null;currentStocks=new Map();currentSignature='';currentSubmitting=false;currentFailure='';el('strategy-refresh').disabled=false;
-        stream?.close();const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
+        stream?.close();stopQuoteSocket();quoteSocket.view=null;quoteSocket.items.clear();quoteSocket.reason='';const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
         syncChart(null);
         el('focus-content').hidden=true;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
         el('retry').hidden=true;text('connection','Connecting · live quotes');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
@@ -188,9 +192,13 @@
         el('prepared-source').hidden=!prepared;
         if(prepared)text('prepared-source',prepared.description+' · '+(Date.parse(prepared.expiresAtUtc)<=Date.now()?'Evidence expired; saved list for inspection.':'Advisory list; no entry authorization.'));
         stream=new EventSource('/api/desk/stream?'+streamQuery);
+        // The stream offers a one-use live-quote capability for exactly the stocks it resolved.
+        stream.addEventListener('view',event=>onQuoteView(JSON.parse(event.data),version));
         stream.addEventListener('snapshot',event=>{
             if(version!==generation)return;
-            snapshot=JSON.parse(event.data);connected=true;updateHealth();
+            snapshot=JSON.parse(event.data);connected=true;
+            for(const row of snapshot.rows)mergeLiveQuote(row);
+            updateHealth();
             text('session',({Regular:'Regular market',RegularMarket:'Regular market',Premarket:'Premarket',PreMarket:'Premarket',Postmarket:'Postmarket',PostMarket:'Postmarket',AfterHours:'After hours',Overnight:'Overnight',ClosedWeekend:'Market closed',Closed:'Market closed'})[snapshot.session]||snapshot.session.replace(/([a-z])([A-Z])/g,'$1 $2'));
             const warnings=[];
             if(snapshot.selection.error)warnings.push(snapshot.selection.error);
@@ -218,13 +226,80 @@
         });
         const unavailable=()=>{if(version!==generation)return;connected=false;el('retry').hidden=false;text('connection','Disconnected · reconnecting; displayed observations may be stale');if(!snapshot){el('empty').querySelector('strong').textContent='Market view unavailable';el('empty').querySelector('p').textContent='Check your connection or select another source. Reconnecting automatically.';}ageRows();renderFocus();};
         stream.onerror=unavailable;stream.addEventListener('unavailable',unavailable);
-        // Streamed SIP quotes arrive between snapshots; apply them to the rows already shown.
-        stream.addEventListener('quotes',event=>{
-            if(version!==generation||!snapshot)return;
-            const bySymbol=new Map(JSON.parse(event.data).map(quote=>[quote.symbol,quote]));
-            for(const row of snapshot.rows){const quote=bySymbol.get(row.membership.symbol);if(quote){row.quote={...row.quote,ticker:quote.symbol,bidPrice:quote.bidPrice,askPrice:quote.askPrice,midPrice:quote.midPrice,bidSize:quote.bidSize,askSize:quote.askSize,timestamp:quote.timestamp};row.quoteFreshness='current';}}
-            lastStreamedQuoteAt=Date.now();render();
-        });
+    }
+    // Close the quote socket; quotes already shown keep their own time and source labels.
+    // Returns when the old socket has closed, so its server slot is free before another socket asks for one.
+    function stopQuoteSocket(state='idle',reason=''){
+        const active=quoteSocket.connection;quoteSocket.connection=null;
+        quoteSocket.state=state;quoteSocket.reason=reason;
+        const done=active?active.stop().catch(()=>{}):Promise.resolve();
+        quoteSocket.closing=Promise.all([quoteSocket.closing,done]);
+        return quoteSocket.closing;
+    }
+    // A new view (stream reconnect, source, page or search) starts without live quotes; a renewed capability keeps them.
+    function onQuoteView(data,version){
+        if(version!==generation)return;
+        if(data.view!==quoteSocket.view){quoteSocket.view=data.view;quoteSocket.items.clear();quoteSocket.upstream='';}
+        quoteSocket.reason=data.reason||'';
+        if(data.capability)void openQuoteSocket(data.capability,data.view,version);
+        updateHealth();
+    }
+    // Open the Desk quote socket and present the capability once, in the invocation only; it is never stored or reused.
+    async function openQuoteSocket(capability,view,version){
+        const attempt=++quoteSocket.attempt;
+        await stopQuoteSocket('connecting',quoteSocket.reason);
+        if(attempt!==quoteSocket.attempt||version!==generation)return;
+        if(!window.signalR){quoteSocket.state='closed';quoteSocket.reason='Live-quote client unavailable';updateHealth();return;}
+        const active=new window.signalR.HubConnectionBuilder()
+            .withUrl('/api/v1/desk/quotes/hub',{transport:window.signalR.HttpTransportType.WebSockets,skipNegotiation:true})
+            .configureLogging(window.signalR.LogLevel.None).build();
+        quoteSocket.connection=active;
+        const closed=reason=>{if(quoteSocket.connection!==active)return;stopQuoteSocket('closed',reason);refreshLiveRows();};
+        // A server refusal (for example the per-user socket budget) arrives as the close error; show its reason.
+        const serverReason=error=>error?.message?.replace(/^.*HubException: /,'');
+        active.onclose(error=>closed(serverReason(error)||quoteSocket.reason||'Live-quote socket closed'));
+        try{
+            await active.start();
+            if(quoteSocket.connection!==active||version!==generation){void active.stop().catch(()=>{});return;}
+            quoteSocket.state='live';updateHealth();
+            active.stream('WatchQuotes',capability).subscribe({
+                next(frame){if(quoteSocket.connection===active&&version===generation&&frame.view===view)applyQuoteFrame(frame);},
+                complete(){closed(quoteSocket.reason||'Live-quote socket ended');},
+                error(error){closed(serverReason(error)||'Live-quote socket closed');}
+            });
+        }catch(error){closed(serverReason(error)||'Live-quote socket could not connect');}
+    }
+    // Patch only the rows whose quote changed; the table is not rebuilt or re-sorted for a quote tick.
+    function applyQuoteFrame(frame){
+        if(frame.kind==='ended'){quoteSocket.reason=frame.reason||'';return;}
+        quoteSocket.upstream=frame.upstream;
+        for(const symbol of frame.removed||[])quoteSocket.items.delete(symbol);
+        const changed=new Set(frame.removed||[]);
+        for(const item of frame.quotes||[]){
+            if(quoteSocket.items.size>=50&&!quoteSocket.items.has(item.symbol))continue;
+            quoteSocket.items.set(item.symbol,item);changed.add(item.symbol);
+        }
+        if(snapshot)for(const row of snapshot.rows)if(changed.has(row.membership.symbol)&&mergeLiveQuote(row))patchRow(row);
+        if(snapshot&&selected&&changed.has(selected))renderFocus();
+        updateHealth();
+    }
+    // Relabel streamed rows when the socket stops; their prices stay with their own provider times.
+    function refreshLiveRows(){
+        if(snapshot)for(const row of snapshot.rows)if(row.quote?.source==='socket')patchRow(row);
+        if(snapshot&&selected)renderFocus();
+        updateHealth();
+    }
+    function patchRow(row){const node=rowNodes.get(row.membership.symbol);if(node){updateStockRow(node,row);ageStockRow(node,row);updateRowAction(node,row);}}
+    // Use a streamed quote only when it is newer than the row's; a snapshot quote is never relabelled as streamed.
+    function mergeLiveQuote(row){
+        const item=quoteSocket.items.get(row.membership.symbol);
+        row.quoteStream=item?.state||null;
+        if(!item?.timestamp||item.state!=='acknowledged')return !!item;
+        const shown=Date.parse(row.quote?.timestamp||0)||0, offered=Date.parse(item.timestamp);
+        if(row.quote?.source==='socket'?offered<shown:offered<=shown)return true;
+        row.quote={ticker:item.symbol,bidPrice:item.bidPrice,askPrice:item.askPrice,midPrice:item.midPrice,bidSize:item.bidSize,askSize:item.askSize,
+            timestamp:item.timestamp,receivedAtUtc:item.receivedAtUtc,feed:item.feed||'sip',source:'socket'};
+        return true;
     }
     // Keep API errors and durable progress explicit; all decision calculations stay on the server.
     async function assessmentApi(path, body) {
@@ -283,16 +358,18 @@
     // Where the quote came from and how old it is. The server already picks the newest quote across
     // SIP (pre-market, regular, after hours) and Alpaca's overnight feed. Only an authoritative
     // closed session explains market closure; unknown sessions continue to show quote age.
+    // "Live" means this quote arrived on the open quote socket; a snapshot quote says "Snapshot" even in the regular session.
     function quoteAge(row) {
         const stamp=row.quote?.timestamp;if(!stamp)return 'No quote';
-        if(!connected)return 'Disconnected';
+        const streaming=isStreaming(row);
+        if(!connected&&!streaming)return 'Disconnected';
         const seconds=Math.floor((Date.now()-Date.parse(stamp))/1000);
         if(!Number.isFinite(seconds))return 'No quote';
         if(seconds < -5)return 'Clock mismatch';
         const age=seconds<60?Math.max(seconds,0)+'s':seconds<3600?Math.floor(seconds/60)+'m':Math.floor(seconds/3600)+'h';
         const session=String(snapshot?.session||'').toLowerCase();
         if(['closed','closedweekend','closed_weekend'].includes(session))return 'Market closed';
-        const label=row.quote.feed==='overnight'?'Overnight':session.startsWith('pre')?'Pre-market':session.startsWith('post')||session==='afterhours'?'After hours':'Live';
+        const label=row.quote.feed==='overnight'?'Overnight':session.startsWith('pre')?'Pre-market':session.startsWith('post')||session==='afterhours'?'After hours':streaming?'Live':row.quote.source==='socket'?'Stream stopped':'Snapshot';
         if(seconds<=120)return label+' · '+age;
         return 'Delayed · '+age+' ago';
     }
@@ -544,12 +621,28 @@
     // Short outcome of the selected strategy for a row and the first failed check behind it.
     function signalLabel(row){const a=row.strategyAssessment;if(!a)return 'Not selected';if(!['recorded','evaluated'].includes(a.state))return a.state==='missing'?'No data':a.state==='failed'?'Failed':a.state==='cancelled'?'Cancelled':'Warming';return a.expired?'Expired':a.checks.some(c=>!c.passed)?'Rejected':'Passed';}
     function signalReason(row){const a=row.strategyAssessment;if(!a)return 'Choose a strategy at the top';const failed=a.checks?.find(c=>!c.passed);return failed?(failed.rejectionCode||failed.gateName.replace(/^strategy:/,'').replaceAll('_',' ')):a.detail||'';}
-    function spreadDetail(row){const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;return (ask>0&&bid>0?number((ask-bid)/((ask+bid)/2)*100)+'% · ':'')+quoteAge(row);}
+    // The shown price is the bid/ask midpoint; it can stay unchanged while trades print, so bid, ask and time stay visible.
+    function spreadDetail(row){const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;return 'Bid/ask midpoint, not last trade · bid '+money(bid)+' · ask '+money(ask)+(ask>0&&bid>0?' · spread '+number((ask-bid)/((ask+bid)/2)*100)+'%':'')+' · '+(row.quote?.feed==='overnight'?'overnight feed':'SIP')+' · '+quoteAge(row);}
+    // Keep the page connection, the quote socket, Alpaca's subscription replies and quote age as separate facts.
     function updateHealth(){
         if(!snapshot||!connected)return;
+        const rows=snapshot.rows.length;
         const current=snapshot.rows.filter(r=>r.quote?.timestamp&&Date.now()-Date.parse(r.quote.timestamp)<=20000&&Date.parse(r.quote.timestamp)<=Date.now()+5000).length;
         const available=snapshot.rows.filter(r=>r.quote?.timestamp).length;
-        text('connection',snapshot.rows.length?`${current}/${snapshot.rows.length} current quotes · ${snapshot.rows.length-available} unavailable · ${Date.now()-lastStreamedQuoteAt<10000?'live SIP stream':'polled every 5s'}`:'Connected · no stocks in this view');
+        text('connection',rows?`${current}/${rows} current quotes · ${rows-available} unavailable · ${quoteSocketSummary()}`:'Connected · no stocks in this view');
+    }
+    // Describe the quote socket from its own state and Alpaca's replies, never from silence.
+    function quoteSocketSummary(){
+        const states=[...quoteSocket.items.values()].map(item=>item.state);
+        const count=state=>states.filter(value=>value===state).length;
+        if(quoteSocket.state==='connecting')return 'live-quote socket connecting · snapshot quotes meanwhile';
+        if(quoteSocket.state!=='live')return 'snapshot quotes only'+(quoteSocket.reason?' · '+quoteSocket.reason:'');
+        if(quoteSocket.upstream==='unavailable')return 'live-quote socket open · Alpaca SIP stream unavailable, snapshot quotes only';
+        const parts=['live-quote socket · Alpaca confirmed '+count('acknowledged')+'/'+snapshot.rows.length];
+        if(count('pending'))parts.push(count('pending')+' awaiting Alpaca confirmation');
+        if(count('unacknowledged'))parts.push(count('unacknowledged')+' not confirmed by Alpaca');
+        if(count('refused'))parts.push(count('refused')+' over the shared quote limit');
+        return parts.join(' · ');
     }
     // Use an exact paper candidate when one is present and pass only observed symbol, group and price otherwise.
     function orderReviewUrl(row,side){
@@ -590,7 +683,7 @@
         text('symbol',row.membership.symbol);text('name',row.membership.name||row.membership.wishlists.map(x=>x.name).join(' · ')||'Finviz discovery');
         const change=row.previousClose?.close>0&&row.quote?.midPrice!=null?(row.quote.midPrice/row.previousClose.close-1)*100:null;
         text('mid',money(row.quote?.midPrice));text('prev-close',row.previousClose?'Prev close '+money(row.previousClose.close)+(change==null?'':' · '+(change>0?'+':'')+number(change)+'%'):'');tone(el('prev-close'),change);
-        text('quote-detail',quoteAge(row)+' · spread '+(row.quote?.askPrice>0&&row.quote?.bidPrice>0?money(row.quote.askPrice-row.quote.bidPrice):'—'));el('quote-detail').title=when(row.quote?.timestamp);
+        text('quote-detail','Bid/ask midpoint · '+quoteAge(row)+' · bid '+money(row.quote?.bidPrice)+' · ask '+money(row.quote?.askPrice));el('quote-detail').title='Provider time '+when(row.quote?.timestamp)+(row.quote?.receivedAtUtc?' · received '+when(row.quote.receivedAtUtc):'')+' · '+(row.quote?.feed==='overnight'?'overnight feed':'SIP');
         const buyReason=orderRestrictionHint(row,'buy'),sellReason=orderRestrictionHint(row,'sell');
         reviewLink('buy',buyReason,row,'watch-order-help');
         reviewLink('sell',sellReason,row,sellReason===buyReason?'watch-order-help':'watch-exit-help');
@@ -653,8 +746,9 @@
     function ageStockRow(node,row){
         const price=node.querySelector('.watch-row-price'), position=node.querySelector('.watch-row-position');
         price.querySelector('small').textContent=rowQuoteAge(row);
-        price.title=spreadDetail(row)+' · '+when(row.quote?.timestamp);
-        price.classList.toggle('watch-stale',!connected||Date.now()-Date.parse(row.quote?.timestamp)>120000);
+        price.title=spreadDetail(row)+' · provider time '+when(row.quote?.timestamp);
+        const streaming=isStreaming(row);
+        price.classList.toggle('watch-stale',(!connected&&!streaming)||Date.now()-Date.parse(row.quote?.timestamp)>120000);
         const stale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
         position.querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' sh':'—';
         const pl=position.querySelector('small');
@@ -696,6 +790,7 @@
     window.addEventListener('pagehide', () => {
         saveDeskReturn();
         stream?.close();
+        stopQuoteSocket();
         generation++;
         void deskChart?.dispose();
         deskChart = null;

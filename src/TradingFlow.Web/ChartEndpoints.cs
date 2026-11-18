@@ -15,10 +15,10 @@ public static class ChartEndpoints
         && origin.AbsolutePath == "/" && String.IsNullOrEmpty(origin.Query)
         && String.IsNullOrEmpty(origin.Fragment) && String.IsNullOrEmpty(origin.UserInfo);
 
-    // Apply origin and credential-query checks before the SignalR upgrade, without weakening other API CSRF checks.
+    // Apply origin and credential-query checks before the chart and Desk quote SignalR upgrades, without weakening other API CSRF checks.
     public static void UseChartOriginGuard(this WebApplication app) => app.Use(async (context, next) =>
     {
-        if (context.Request.Path.StartsWithSegments("/api/v1/charts/hub") &&
+        if ((context.Request.Path.StartsWithSegments("/api/v1/charts/hub") || context.Request.Path.StartsWithSegments(DeskQuoteHub.Path)) &&
             (!HasSameOrigin(context.Request) || context.Request.Query.ContainsKey("access_token")))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
