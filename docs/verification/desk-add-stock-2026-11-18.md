@@ -59,3 +59,15 @@ concurrent add and a failed database save. All stay inside `DeskSources`; no new
   Alpaca merged into one message, a duplicate add answered with HTTP 500, missing tests, and an incomplete note. All
   were fixed as described above, and both accepted on re-check. Their remaining small points were also applied: a
   comment at `AlpacaTradingRestClient.DescribeFailure` says the Desk reads its "failed with HTTP nnn" wording.
+
+## Installation on the local site, 18 November 2026
+
+Before the restart the Alpaca paper account had no positions and no open orders, no job was queued or running, and
+the time (16:05 UTC) was outside the Finviz capture windows. Release `a24f387` was installed at 16:06 UTC with
+`update-site.ps1`. The build it replaced (`9a65f6b`) is kept as `bin-before-a24f387-20261118`, and the
+otherwise-unkept 14 November build that the script would have deleted from `bin-old` was renamed `bin-old-20261114`.
+Readiness `ready`, order stream connected, no errors after start; the served `watch-desk.js` calls `/api/desk/stocks`.
+
+Live check, signed in: "+ Add stock" opened the form with the operator's two groups ("volatile", "long"). The
+made-up symbol ZZZQX was answered by Alpaca's real asset lookup with "Alpaca has no asset with the symbol ZZZQX.
+Check the spelling. Nothing was added." No stock was added to the operator's groups during the check.
