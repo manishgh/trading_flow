@@ -38,3 +38,23 @@ result could not be verified or exceeds the comparison limits"):
   removal of an unreachable blank-name check (the settings reader already refuses a missing `run_name`), and a
   swapped-name test. Not added: a unit test through the page's own `ReadAsync` (it needs a full backtest job); the
   live check below exercises that path on the real jobs.
+
+## Installation and live check, 18 November 2026
+
+Exposure checked at 19:25 UTC (no Alpaca paper positions or open orders, no queued or running job, outside the
+Finviz capture windows). Release `6d60588` installed; the replaced build (`a24f387`) is kept as
+`bin-before-6d60588-20261118`. Readiness `ready`; the FinBERT sidecar stayed `ready`.
+
+Live result on `/Audit/etf-trend-dev-2017-2023_969a8fda1d839b52f2bd` (the 17.4 MB result): the refusal ("could not be
+verified or exceeds the comparison limits") is gone, so the publication now verifies. **The page still shows no
+curve and no workflow counts for these runs**, because of two further conditions that were not diagnosed before the
+proposal:
+
+1. The "Compare runs" equity overlay reads a published result only when the run also has decision records saved in
+   the database (`Audit.cshtml.cs` `BuildEquityAsync`, `summary.Total == 0` → "no persisted audit decisions found").
+   These 8 runs have none.
+2. Workflow evidence (`AuditWorkflowReader.FromPublished`) requires every accepted portfolio trade to be completed.
+   All 8 results have fewer completed than accepted trades (for example 0 of 15, 0 of 11,
+   109 of 120, 54 of 57), and the three Connors checks also report 20 failed work items.
+
+Both are separate rules needing their own approved design; nothing was changed for them.
