@@ -149,9 +149,16 @@ builder.Services.AddSingleton(services => new TradingFlow.Application.Jobs.Resea
     TradingFlow.Backtesting.ResearchFileStart.EngineCodeSha256(typeof(WorkflowRunConfiguration).Assembly,
         typeof(TradingFlow.Application.Jobs.RunWorkflowService).Assembly)));
 builder.Services.AddSingleton<SimpleYamlReader>();
+// Browser-test hosts (TRADINGFLOW_UI_TEST_MODE) may read a test-owned catalog copy named by
+// TRADINGFLOW_UI_STRATEGY_CATALOG, so tests can exercise strategies the operator has switched off. Every other host,
+// including the operator site, always reads the repository catalog; the variable is ignored outside UI test mode.
+var strategyCatalogPath = uiTestMode &&
+    Environment.GetEnvironmentVariable("TRADINGFLOW_UI_STRATEGY_CATALOG") is { Length: > 0 } uiTestCatalog
+        ? Path.GetFullPath(uiTestCatalog)
+        : Path.Combine(repositoryRoot, "configs", "strategy-catalog.json");
 builder.Services.AddSingleton(serviceProvider => new StrategyArtifactCatalog(
     repositoryRoot,
-    Path.Combine(repositoryRoot, "configs", "strategy-catalog.json"),
+    strategyCatalogPath,
     serviceProvider.GetRequiredService<SimpleYamlReader>()));
 builder.Services.AddSingleton<IArtifactWriter>(AtomicFileArtifactWriter.Instance);
 builder.Services.AddSingleton(serviceProvider => new StrategyExperimentArtifactStore(
