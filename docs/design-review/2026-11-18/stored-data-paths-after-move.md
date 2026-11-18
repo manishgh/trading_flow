@@ -106,3 +106,13 @@ message, the duplicated folder check and two missing purpose comments. All were 
 entries for jobs deleted while failing stay in memory until restart (one short entry per job), and no test asserts DI
 injection separately (the service test exercises the mapping inside a real job service). Both re-reviewed the code
 without re-running tests and accepted.
+
+## Addition: Backtests page badge, 18 November 2026
+
+The user approved including the Backtests page ("Yes, include it"). `BacktestResultAvailability.Observe` takes the
+`ProjectPaths` and reads the stored result path through `LocateStored`; `BacktestsModel` passes it at all three calls
+(selected result, progress response, recent-run badges). The publication-marker rule applies to the located path, and
+the stored reference is unchanged. New test `ResultStoredBeforeTheDataFolderMoved_IsFoundUnderTheConfiguredFolder`.
+Build 0 warnings/0 errors; focused tests including the Backtests page: **196/196 passed**. Reviewers A and B accepted.
+Not changed (both optional): the `paths` parameter stays optional, so a future caller could omit it; no extra test for a
+moved attempt file without its marker (the same located path feeds both checks).

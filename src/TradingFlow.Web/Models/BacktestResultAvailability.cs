@@ -1,4 +1,5 @@
 using TradingFlow.Application.Jobs;
+using TradingFlow.Web.Services;
 
 namespace TradingFlow.Web.Models;
 
@@ -7,8 +8,9 @@ public sealed record BacktestResultAvailability(string State, string Label, stri
 {
     public bool RequiresAttention => State == "unavailable";
 
-    // Inspect only the recorded location; never relocate, rewrite, publish or infer an artifact from a completed job status.
-    public static BacktestResultAvailability Observe(BacktestJobSnapshot job)
+    // Inspect the recorded location, reading a path stored before the data folder moved from the configured data folder
+    // (paths.LocateStored, a plain path mapping). Never move, rewrite, publish or infer an artifact from a job status.
+    public static BacktestResultAvailability Observe(BacktestJobSnapshot job, ProjectPaths? paths = null)
     {
         if (!job.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
             return new("pending", job.Status, "Result availability is assessed after execution completes.", job.Result is not null);
@@ -17,7 +19,7 @@ public sealed record BacktestResultAvailability(string State, string Label, stri
             return Missing("The completed job has no retained result payload. Locate and verify its original artifact before interpreting the run.", false);
 
         var summary = "Retained summary and monthly records, where present, remain visible below. ";
-        var reference = job.Result.ResultPath;
+        var reference = job.Result.ResultPath is { } stored && paths is not null ? paths.LocateStored(stored) : job.Result.ResultPath;
         if (string.IsNullOrWhiteSpace(reference))
             return Missing(summary + "The saved result has no original artifact reference. Locate and verify the original artifact before repair.", true);
 

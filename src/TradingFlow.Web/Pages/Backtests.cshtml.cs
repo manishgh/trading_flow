@@ -17,6 +17,7 @@ public sealed class BacktestsModel : PageModel
     private readonly BacktestJobService backtestJobs;
     private readonly IWishlistRepository wishlists;
     private readonly TradingFlow.Web.Services.Desk.DeskSources stockSources;
+    private readonly TradingFlow.Web.Services.ProjectPaths paths;
     public IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource> StockSources { get; private set; } = [];
 
     // Supplies the read-only list without making disabled paths available for selection.
@@ -27,13 +28,15 @@ public sealed class BacktestsModel : PageModel
         ConfigCatalogService catalog,
         OptimizationJobService optJobs,
         BacktestJobService backtestJobs,
-        IWishlistRepository wishlists, TradingFlow.Web.Services.Desk.DeskSources stockSources)
+        IWishlistRepository wishlists, TradingFlow.Web.Services.Desk.DeskSources stockSources,
+        TradingFlow.Web.Services.ProjectPaths paths)
     {
         this.catalog = catalog;
         this.optJobs = optJobs;
         this.backtestJobs = backtestJobs;
         this.wishlists = wishlists;
         this.stockSources = stockSources;
+        this.paths = paths;
     }
 
     [BindProperty] public string SelectedConfigPath { get; set; } = String.Empty;
@@ -124,7 +127,7 @@ public sealed class BacktestsModel : PageModel
     {
         await LoadDataAsync(configPath, strategyPath, wishlistId, cancellationToken);
         SelectedJob = JobId is { } id ? await backtestJobs.GetSnapshotAsync(id, cancellationToken) : null;
-        SelectedResultAvailability = SelectedJob is null ? null : BacktestResultAvailability.Observe(SelectedJob);
+        SelectedResultAvailability = SelectedJob is null ? null : BacktestResultAvailability.Observe(SelectedJob, paths);
     }
 
     /// <summary>
@@ -153,7 +156,7 @@ public sealed class BacktestsModel : PageModel
             ProgressPercent = Math.Round(progressPercent, 1),
             Elapsed = elapsed.ToString(ElapsedFormat),
             job.ErrorMessage,
-            ResultAvailability = BacktestResultAvailability.Observe(job),
+            ResultAvailability = BacktestResultAvailability.Observe(job, paths),
             PreparedMarketData = job.PreparedMarketData ?? job.Result?.PreparedMarketData,
             CanCancel = job.Status is "queued" or "running" or "cancelling",
             Events = job.Events.TakeLast(40),
@@ -199,7 +202,7 @@ public sealed class BacktestsModel : PageModel
             cancellationToken);
         OptimizationJobs = optJobs.List().Take(5).ToArray();
         BacktestJobs = await backtestJobs.RecentSnapshotsAsync(5, cancellationToken);
-        RecentResultAvailability = BacktestJobs.ToDictionary(job => job.JobId, BacktestResultAvailability.Observe);
+        RecentResultAvailability = BacktestJobs.ToDictionary(job => job.JobId, job => BacktestResultAvailability.Observe(job, paths));
         ResearchSnapshots = LoadResearchSnapshots();
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);

@@ -55,6 +55,26 @@ public sealed class BacktestResultAvailabilityTests : IDisposable
         Assert.Equal("present", BacktestResultAvailability.Observe(job).State);
     }
 
+    // A result recorded before the data folder moved is found at the same place under the configured data folder;
+    // without the mapping it stays unavailable, and the stored reference is never changed.
+    [Fact]
+    public void ResultStoredBeforeTheDataFolderMoved_IsFoundUnderTheConfiguredFolder()
+    {
+        var paths = new TradingFlow.Web.Services.ProjectPaths(
+            Path.Combine(root, "repository"), Path.Combine(root, "operator-data"), Path.Combine(root, "cache"));
+        var relative = Path.Combine("backtest", "results", ".durable-attempts", "job", "attempt", "result.json");
+        var current = Path.Combine(paths.DataRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(current)!);
+        File.WriteAllText(current, "{}");
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(current)!, DurableJobResultPublication.MarkerFileName), "{}");
+        var stored = Path.Combine(paths.RepositoryRoot, "data", relative);
+        var job = Job(Result(stored));
+
+        Assert.True(BacktestResultAvailability.Observe(job).RequiresAttention);
+        Assert.Equal("present", BacktestResultAvailability.Observe(job, paths).State);
+        Assert.Equal(stored, job.Result!.ResultPath);
+    }
+
     // Presence is deliberately narrower than validation, and failed/running jobs do not inherit a success badge.
     [Theory]
     [InlineData("running")]
