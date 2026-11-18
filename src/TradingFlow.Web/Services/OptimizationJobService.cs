@@ -48,8 +48,10 @@ public sealed class OptimizationJobService : IDurableJobHandler
     private readonly OptimizationJobServiceOptions options;
     private readonly ILogger<OptimizationJobService> logger;
     private readonly ResearchQueue research;
+    private readonly DurableResultMarkers markers;
     private readonly StrategyArtifactCatalog strategyArtifacts;
 
+    /// <summary>Creates the durable optimization handler; <paramref name="paths"/> locates results stored before the data folder moved.</summary>
     public OptimizationJobService(
         SimpleYamlReader yamlReader,
         BacktestRunner backtestRunner,
@@ -57,7 +59,8 @@ public sealed class OptimizationJobService : IDurableJobHandler
         OptimizationJobServiceOptions options,
         ResearchQueue research,
         StrategyArtifactCatalog strategyArtifacts,
-        ILogger<OptimizationJobService>? logger = null)
+        ILogger<OptimizationJobService>? logger = null,
+        ProjectPaths? paths = null)
     {
         this.yamlReader = yamlReader;
         this.backtestRunner = backtestRunner;
@@ -66,6 +69,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
         this.research = research;
         this.strategyArtifacts = strategyArtifacts;
         this.logger = logger ?? NullLogger<OptimizationJobService>.Instance;
+        markers = new DurableResultMarkers("optimization", this.logger, paths);
     }
 
     public string JobType => "optimization";
@@ -75,7 +79,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
     {
         foreach (var persisted in await repository.GetJobsAsync(JobType, cancellationToken))
         {
-            await PublishResultMarkerAsync(persisted, cancellationToken);
+            await markers.PublishAsync(persisted, cancellationToken);
             await RecordResearchResultAsync(persisted, cancellationToken);
             jobs[persisted.Id] = MutableOptimizationJob.FromPersisted(persisted, JsonOptions);
         }
@@ -216,7 +220,7 @@ public sealed class OptimizationJobService : IDurableJobHandler
 
     public async Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
-        await PublishResultMarkerAsync(persisted, cancellationToken);
+        await markers.PublishAsync(persisted, cancellationToken);
         await RecordResearchResultAsync(persisted, cancellationToken);
         var job = jobs.GetOrAdd(
             persisted.Id,
@@ -240,30 +244,11 @@ public sealed class OptimizationJobService : IDurableJobHandler
         try
         {
             await research.RecordResultAsync(persisted, token, async ct =>
-                persisted.ResultReference is { } reference ? await OptimizationPublication.ReadRecordedAsync(reference, ct) : null);
+                markers.Locate(persisted.ResultReference) is { } reference ? await OptimizationPublication.ReadRecordedAsync(reference, ct) : null);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Optimization {JobId} outcome could not be recorded in the research ledger.", persisted.Id);
-        }
-    }
-
-    private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await DurableJobResultPublication.PublishIfCompletedAsync(persisted, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(
-                exception,
-                "Durable optimization {JobId} result marker is not available yet; projection remains visible and the next refresh will retry.",
-                persisted.Id);
         }
     }
 

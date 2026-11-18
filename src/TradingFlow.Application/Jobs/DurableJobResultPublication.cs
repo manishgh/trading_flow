@@ -18,17 +18,23 @@ public static class DurableJobResultPublication
 {
     public const string MarkerFileName = ".durable-job-published.json";
 
+    /// <summary>
+    /// Writes the publication marker beside a completed job's result. <paramref name="locatedResultReference"/> is
+    /// where the stored reference is read today (the caller maps a path recorded before a data-folder move); the
+    /// stored job row is never changed. Throws <see cref="InvalidDataException"/> when the result does not exist.
+    /// </summary>
     public static async Task PublishIfCompletedAsync(
         PersistedJob job,
+        string? locatedResultReference,
         CancellationToken cancellationToken)
     {
         if (!job.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
-            String.IsNullOrWhiteSpace(job.ResultReference))
+            String.IsNullOrWhiteSpace(locatedResultReference))
         {
             return;
         }
 
-        var resultReference = Path.GetFullPath(job.ResultReference);
+        var resultReference = Path.GetFullPath(locatedResultReference);
         var durableAttemptSegment = $"{Path.DirectorySeparatorChar}.durable-attempts{Path.DirectorySeparatorChar}";
         if (!resultReference.Contains(durableAttemptSegment, StringComparison.OrdinalIgnoreCase))
         {

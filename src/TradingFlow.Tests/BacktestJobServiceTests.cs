@@ -572,6 +572,39 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
     }
 
     // Reuse the source catalog to validate exact strategy identities before monthly publication.
+    [Fact]
+    public async Task Refresh_ReadsAResultStoredBeforeTheDataFolderMovedWithoutMarkerWarnings()
+    {
+        var owner = CreateService(new ImmediateBacktestExecutor());
+        var started = await owner.StartAsync("relocated-result", configPath);
+        var queuedSnapshot = (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.SnapshotJson;
+        var lease = await repository.TryAcquireAsync(
+            started.JobId, "relocation-test", DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.NotNull(lease);
+        var paths = new ProjectPaths(
+            Path.Combine(testRoot, "repository"), Path.Combine(testRoot, "operator-data"), Path.Combine(testRoot, "cache"));
+        var relative = Path.Combine("backtest", "results", ".durable-attempts", "backtest",
+            started.JobId.ToString("N"), lease!.LeaseToken.ToString("N"), "result.json");
+        var stored = Path.Combine(paths.RepositoryRoot, "data", relative);
+        var current = Path.Combine(paths.DataRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(current)!);
+        await File.WriteAllTextAsync(current, "{}");
+        Assert.True(await repository.CompleteAsync(started.JobId, lease.LeaseToken, "completed", queuedSnapshot,
+            stored, null, DateTimeOffset.UtcNow, CancellationToken.None));
+        var logger = new RecordingLogger<BacktestJobService>();
+        var observer = new BacktestJobService(new ImmediateBacktestExecutor(), repository, new SimpleYamlReader(),
+            BacktestJobServiceOptions.Default, RetiredStrategyFixtures.Catalog(new SimpleYamlReader()),
+            SyntheticResearchQueue.For(repository), logger, paths);
+
+        await observer.InitializeAsync(CancellationToken.None);
+        await observer.RefreshProjectionAsync(CancellationToken.None);
+
+        Assert.Equal("completed", observer.Get(started.JobId)!.Status);
+        Assert.True(DurableJobResultPublication.IsPublished(current));
+        Assert.Equal(stored, (await repository.GetJobAsync(started.JobId, CancellationToken.None))!.ResultReference);
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("result marker", StringComparison.Ordinal));
+    }
+
     private BacktestJobService CreateService(
         IBacktestRunExecutor executor,
         BacktestJobServiceOptions? options = null,

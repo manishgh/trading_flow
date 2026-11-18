@@ -90,6 +90,7 @@ public sealed class BacktestJobService : IDurableJobHandler
     private readonly StrategyRunArtifactValidator strategyValidator;
     private readonly MonthlyRunResultWriter monthlyResults;
     private readonly ResearchQueue research;
+    private readonly DurableResultMarkers markers;
 
     /// <summary>Use the existing durable worker and immutable strategy validator for execution and monthly publication.</summary>
     public BacktestJobService(
@@ -99,7 +100,8 @@ public sealed class BacktestJobService : IDurableJobHandler
         BacktestJobServiceOptions options,
         StrategyArtifactCatalog strategyArtifacts,
         ResearchQueue research,
-        ILogger<BacktestJobService>? logger = null)
+        ILogger<BacktestJobService>? logger = null,
+        ProjectPaths? paths = null)
     {
         this.runner = runner;
         this.repository = repository;
@@ -107,6 +109,7 @@ public sealed class BacktestJobService : IDurableJobHandler
         this.research = research;
         this.options = ValidateOptions(options);
         this.logger = logger ?? NullLogger<BacktestJobService>.Instance;
+        markers = new DurableResultMarkers("backtest", this.logger, paths);
         strategyValidator = new StrategyRunArtifactValidator(yamlReader, strategyArtifacts);
         monthlyResults = new MonthlyRunResultWriter(strategyValidator);
     }
@@ -118,7 +121,7 @@ public sealed class BacktestJobService : IDurableJobHandler
     {
         foreach (var persisted in await repository.GetJobsAsync(JobType, cancellationToken))
         {
-            await PublishResultMarkerAsync(persisted, cancellationToken);
+            await markers.PublishAsync(persisted, cancellationToken);
             await RecordResearchResultAsync(persisted, cancellationToken);
             jobs[persisted.Id] = MutableBacktestJob.FromPersisted(persisted, JsonOptions);
         }
@@ -348,7 +351,7 @@ public sealed class BacktestJobService : IDurableJobHandler
         PersistedJob persisted,
         CancellationToken cancellationToken)
     {
-        await PublishResultMarkerAsync(persisted, cancellationToken);
+        await markers.PublishAsync(persisted, cancellationToken);
         await RecordResearchResultAsync(persisted, cancellationToken);
         var job = jobs.GetOrAdd(
             persisted.Id,
@@ -379,30 +382,11 @@ public sealed class BacktestJobService : IDurableJobHandler
         try
         {
             await research.RecordResultAsync(persisted, token, async ct =>
-                persisted.ResultReference is { } reference ? await BacktestResearchPublication.VerifyAsync(reference, ct) : null);
+                markers.Locate(persisted.ResultReference) is { } reference ? await BacktestResearchPublication.VerifyAsync(reference, ct) : null);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Backtest {JobId} outcome could not be recorded in the research ledger.", persisted.Id);
-        }
-    }
-
-    private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await DurableJobResultPublication.PublishIfCompletedAsync(persisted, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(
-                exception,
-                "Durable backtest {JobId} result marker is not available yet; projection remains visible and the next refresh will retry.",
-                persisted.Id);
         }
     }
 

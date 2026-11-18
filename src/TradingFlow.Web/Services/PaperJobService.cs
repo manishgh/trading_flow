@@ -57,6 +57,7 @@ public sealed class PaperJobService : IDurableJobHandler
     private readonly PaperRuntimeFactory runtimeFactory;
     private readonly ILogger<PaperJobService> logger;
     private readonly ILogger<LiveRunner> liveRunnerLogger;
+    private readonly DurableResultMarkers markers;
     private readonly IArtifactWriter artifactWriter;
     private readonly ICandleStore candleStore;
     private readonly IOrderSubmissionService? orderSubmissionService;
@@ -104,9 +105,9 @@ public sealed class PaperJobService : IDurableJobHandler
     {
         this.yamlReader = yamlReader;
         _ = alpacaCredentials;
-        _ = paths;
         this.runtimeFactory = runtimeFactory ?? new PaperRuntimeFactory(alpacaCredentials, paths, alpacaNewsLogger);
         this.logger = logger ?? NullLogger<PaperJobService>.Instance;
+        markers = new DurableResultMarkers("paper run", this.logger, paths);
         this.liveRunnerLogger = liveRunnerLogger ?? NullLogger<LiveRunner>.Instance;
         _ = alpacaNewsLogger ?? NullLogger<TradingFlow.Alpaca.AlpacaNewsProvider>.Instance;
         this.artifactWriter = artifactWriter ?? AtomicFileArtifactWriter.Instance;
@@ -140,7 +141,7 @@ public sealed class PaperJobService : IDurableJobHandler
 
         foreach (var pJob in allJobs)
         {
-            await PublishResultMarkerAsync(pJob, cancellationToken);
+            await markers.PublishAsync(pJob, cancellationToken);
             var job = new MutablePaperJob(pJob.Id, pJob.RunName, pJob.ConfigPath, pJob.CreatedAt)
             {
                 Status = pJob.Status,
@@ -781,7 +782,7 @@ public sealed class PaperJobService : IDurableJobHandler
 
     public async Task OnTerminalPublishedAsync(PersistedJob persisted, CancellationToken cancellationToken)
     {
-        await PublishResultMarkerAsync(persisted, cancellationToken);
+        await markers.PublishAsync(persisted, cancellationToken);
         var job = jobs.GetOrAdd(
             persisted.Id,
             _ => new MutablePaperJob(persisted.Id, persisted.RunName, persisted.ConfigPath, persisted.CreatedAt));
@@ -800,25 +801,6 @@ public sealed class PaperJobService : IDurableJobHandler
             job.Report("cancelled", "Paper runner drained and cancellation is complete.", null, 0, 0);
         }
 
-    }
-
-    private async Task PublishResultMarkerAsync(PersistedJob persisted, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await DurableJobResultPublication.PublishIfCompletedAsync(persisted, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(
-                exception,
-                "Durable paper run {JobId} result marker is not available yet; projection remains visible and the next refresh will retry.",
-                persisted.Id);
-        }
     }
 
     private static bool IsTerminalStatus(string status)

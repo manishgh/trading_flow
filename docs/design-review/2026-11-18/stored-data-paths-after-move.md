@@ -1,6 +1,7 @@
 # Reading results saved before the data folder moved
 
-Status: proposal, 18 November 2026. Awaiting the user's approval; nothing is implemented.
+Status: approved by the user on 18 November 2026 ("approved your last message"); implemented, independently reviewed
+and accepted. Implementation record at the end of this document.
 
 ## What was observed
 
@@ -72,3 +73,36 @@ these 8 runs.
 
 Not part of this change: the older database copy at `C:\project\trading_flow\data\tradingflow.db` (512 MB plus a
 150 MB write-ahead file, last written 14 November 00:42). It is core data; removing it needs its own explicit approval.
+
+## Implementation record, 18 November 2026
+
+- `ProjectPaths.LocateStored` maps a fully qualified path inside `<repository>\data` to the same relative path under
+  `DataRoot`. It returns the path unchanged when it is relative, already under `DataRoot` (so a data folder nested in
+  `<repository>\data` is never mapped twice), outside the default folder, or when both folders are the same.
+  `ProjectPaths.RelativeInside` is the single "is this path inside that folder" rule, now also used by
+  `AuditEquityReader.Confine` and `ConfineConfig` (it also rejects `../` written with `/`, which is stricter).
+- `DurableResultMarkers` replaces the three identical marker methods in the backtest, optimization and paper job
+  services. The failure reason is the exception type, its error code and the located path, never the message (a failed
+  marker write names a new random temporary file each attempt). An add-or-swap loop makes exactly one of two concurrent
+  failures log. `DurableJobResultPublication.PublishIfCompletedAsync` takes the located reference explicitly; the stored
+  job row is unchanged. Research-ledger verification reads the located path.
+- `AuditEquityReader.ReadStoredResultAsync` is shared by both Audit readers (settings path, its `results_root`, result).
+- Not changed: the Backtests page badge (`BacktestResultAvailability.Observe`) still checks only the stored location,
+  so the eight pre-move runs still show "Result unavailable" there. The design did not list it; both reviewers advised
+  raising it with the user as a separate decision.
+
+**Tests.** New `StoredDataPathTests` (mapping inside/outside/look-alike/already current/nested/trailing separator/letter
+case/unmoved; warning once, again on a changed reason, once on recovery; a failed marker write with a new temporary file
+each attempt logs once; non-completed jobs skipped), a former-folder Audit read in `AuditEquityReaderTests`, and a real
+`BacktestJobService` refresh with a former-folder result in `BacktestJobServiceTests`. Debug build of the test project:
+0 warnings, 0 errors. Focused and direct-consumer tests (stored paths, audit readers, the three job services, durable
+job processing, data-root resolver, result availability, production composition, Audit page, chart endpoints, research
+screens): **160/160 passed** after all review fixes.
+
+**Independent review.** Reviewer A (plan/execution) first asked for a reason key that ignores the temporary-file name
+and a test through a real job service; reviewer B (code/design) found the same reason-key defect, a double mapping when
+the data folder sits inside `<repository>\data`, a possible double warning under concurrency, a misleading recovery
+message, the duplicated folder check and two missing purpose comments. All were fixed except two accepted points:
+entries for jobs deleted while failing stay in memory until restart (one short entry per job), and no test asserts DI
+injection separately (the service test exercises the mapping inside a real job service). Both re-reviewed the code
+without re-running tests and accepted.

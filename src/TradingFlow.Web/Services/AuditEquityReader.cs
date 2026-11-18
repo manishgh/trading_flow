@@ -22,17 +22,32 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
         if (job is null || job.Status != "completed" || String.IsNullOrWhiteSpace(job.ResultReference))
             return new([],"The completed result artifact is unavailable.");
         try {
-            ConfineConfig(paths, job.ConfigPath);
-            var root = yaml.ReadBacktestRun(job.ConfigPath).ResultsRoot;
-            return await ReadPublishedAsync(runName, root, job.ResultReference, token);
+            return Series(runName, await ReadStoredResultAsync(paths, yaml, runName, job.ConfigPath, job.ResultReference, token));
         } catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException or UnauthorizedAccessException) {
             return new([],"The published result could not be verified or exceeds the comparison limits. Open the original job for details.");
         }
     }
 
-    public static async Task<AuditEquityResult> ReadPublishedAsync(string runName, string root, string resultPath, CancellationToken token)
+    /// <summary>
+    /// Reads a completed backtest's published result from the settings and result paths stored on its job row.
+    /// Paths recorded before the data folder moved are read from the configured data folder (see
+    /// <see cref="ProjectPaths.LocateStored"/>); nothing stored is rewritten and all confinement and hash checks apply.
+    /// </summary>
+    internal static Task<(BacktestResult Result, BacktestArtifactManifest Manifest)?> ReadStoredResultAsync(ProjectPaths paths,
+        SimpleYamlReader yaml, string runName, string storedConfigPath, string storedResultReference, CancellationToken token)
     {
-        var published = await ReadResultAsync(runName, root, resultPath, token);
+        var configPath = ConfineConfig(paths, paths.LocateStored(storedConfigPath));
+        var root = paths.LocateStored(yaml.ReadBacktestRun(configPath).ResultsRoot);
+        return ReadResultAsync(runName, root, paths.LocateStored(storedResultReference), token);
+    }
+
+    /// <summary>Reads display curves from a result path already located under its results root.</summary>
+    public static async Task<AuditEquityResult> ReadPublishedAsync(string runName, string root, string resultPath, CancellationToken token) =>
+        Series(runName, await ReadResultAsync(runName, root, resultPath, token));
+
+    // Turns a verified publication into display curves, stating why none is shown when evidence is absent or incomplete.
+    private static AuditEquityResult Series(string runName, (BacktestResult Result, BacktestArtifactManifest Manifest)? published)
+    {
         if (published is null) return new([],"The result has no published manifest; no curve is inferred from a truncated UI snapshot.");
         var result = published.Value.Result;
         if(result.RunName != runName || !result.EconomicResultsComplete)
@@ -81,8 +96,7 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
     internal static string ConfineConfig(ProjectPaths paths, string path) {
         var file = Path.GetFullPath(path);
         foreach (var root in new[] { paths.ConfigsRoot, paths.GeneratedBacktestConfigsRoot }) {
-            var relative = Path.GetRelativePath(Path.GetFullPath(root), file);
-            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".."+Path.DirectorySeparatorChar)) continue;
+            if (ProjectPaths.RelativeInside(root, file) is null) continue;
             Confine(root == paths.ConfigsRoot ? paths.RepositoryRoot : paths.DataRoot, root);
             return Confine(root, file);
         }
@@ -91,8 +105,7 @@ public sealed class AuditEquityReader(BacktestJobService jobs, IDurableJobReposi
 
     internal static string Confine(string root,string path) {
         root=Path.GetFullPath(root); path=Path.GetFullPath(path);
-        var relative=Path.GetRelativePath(root,path);
-        if(Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".."+Path.DirectorySeparatorChar)) throw new InvalidDataException("Result escapes its configured directory.");
+        var relative=ProjectPaths.RelativeInside(root,path) ?? throw new InvalidDataException("Result escapes its configured directory.");
         var current=root;
         if((File.GetAttributes(root)&FileAttributes.ReparsePoint)!=0) throw new InvalidDataException("Linked artifact root is unavailable.");
         foreach(var part in relative.Split(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)) {

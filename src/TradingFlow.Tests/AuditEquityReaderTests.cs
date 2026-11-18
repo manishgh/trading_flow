@@ -67,15 +67,35 @@ public sealed class AuditEquityReaderTests : IDisposable
         Assert.StartsWith(paths.DataRoot,paths.GeneratedBacktestConfigsRoot);
         Assert.StartsWith(paths.DataRoot,paths.GeneratedPaperConfigsRoot);
     }
+    [Fact] public async Task ResultStoredBeforeTheDataFolderMovedIsReadFromTheConfiguredFolder() {
+        var paths = new ProjectPaths(Path.Combine(root,"repository"),Path.Combine(root,"operator-data"),Path.Combine(root,"cache"));
+        string Former(params string[] parts) => Path.Combine([paths.RepositoryRoot,"data",.. parts]);
+        Directory.CreateDirectory(paths.GeneratedBacktestConfigsRoot);
+        var original = await File.ReadAllTextAsync(Path.Combine(TestRepository.FindRoot(),"configs/backtest/swing-backtest-profile.yaml"));
+        // The frozen settings file still names the former folder, exactly as the operator's pre-move run files do.
+        var yaml = System.Text.RegularExpressions.Regex.Replace(original,@"(?m)^\s+results_root:.*$","  results_root: "+Former("backtest","results").Replace('\\','/'));
+        await File.WriteAllTextAsync(Path.Combine(paths.GeneratedBacktestConfigsRoot,"run.yaml"),yaml);
+        await WriteAsync(2,Path.Combine(paths.DataRoot,"backtest","results","attempt"));
+        var storedConfig = Former("runtime","configs","backtest","run.yaml");
+        var storedResult = Former("backtest","results","attempt","result.json");
+        var reader = new TradingFlow.Engine.Configuration.SimpleYamlReader();
 
-    private async Task<string> WriteAsync(int days) {
+        var published = await AuditEquityReader.ReadStoredResultAsync(paths,reader,"run",storedConfig,storedResult,default);
+
+        Assert.NotNull(published);
+        Assert.Equal("run",published.Value.Result.RunName);
+        Assert.Throws<InvalidDataException>(()=>AuditEquityReader.ConfineConfig(paths,storedConfig));
+    }
+
+    private async Task<string> WriteAsync(int days, string? directory = null) {
+        var folder=directory ?? root; Directory.CreateDirectory(folder);
         var start=new DateTimeOffset(2020,1,1,12,0,0,TimeSpan.Zero);
         var trades=Enumerable.Range(0,days).Select(i=>new BacktestTrade("AAA","Strategy","long",start.AddDays(i).AddHours(-1),start.AddDays(i),1,10,11,9,12,"target",1,0,1)).ToArray();
         var strategy=new StrategyBacktestResult("id","Strategy","fixture",10000,10000+days,days,days/100m,0,days,0,days,days,0,days,0,trades);
         var result=new BacktestResult("run","unused",start,start.AddDays(days),10000,10000+days,days,days/100m,0,days,0,null,days,days,days,0,days,0,[strategy],[],null!,trades,[],[],[]);
-        var path=Path.Combine(root,"result.json");
+        var path=Path.Combine(folder,"result.json");
         await File.WriteAllTextAsync(path,JsonSerializer.Serialize(result));
-        var reference=await BacktestArtifactIntegrity.CreateReferenceAsync(root,"backtest_result",path,1);
+        var reference=await BacktestArtifactIntegrity.CreateReferenceAsync(folder,"backtest_result",path,1);
         var manifest=new BacktestArtifactManifest(1,Guid.NewGuid().ToString(),"run",start,true,new(1,1,0,[]),[reference]);
         await File.WriteAllTextAsync(Path.ChangeExtension(path,".manifest.json"),JsonSerializer.Serialize(manifest));
         return path;
