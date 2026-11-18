@@ -45,3 +45,16 @@ and KNDI headlines and 23 negative cases, window test, release-without-figures w
 filter test). Earnings browser spec **9/9**; six other browser specs that open the Earnings page **80/80**. Reviewer A
 (plan/execution) and reviewer B (code/design) first requested changes (preview-style headlines counted as releases;
 no window check; missing view test; scroll behaviour) and accepted after the fixes.
+
+## Installation on the local site, 18 November 2026
+
+Exposure checked before each restart (Alpaca paper positions and open orders `[]`; no queued or running jobs). Release
+`0a84409` was installed at 14:38 UTC (previous build kept as `bin-before-0a84409-20261118`), then `9a65f6b` with the
+scroll change at 14:41 UTC (the intermediate `0a84409` copy it replaced was removed). Readiness `ready`, order stream
+connected, no errors and no result-marker warnings after start.
+
+Live check: ICCM and KNDI are the two rows on today's page with "Reported · figures not yet published" (EPS badge
+"Figures not yet published"), first result sign 13:25 and 12:00 UTC, card line "Results out · first seen … · figures
+not yet published". Their explanation sentence was saved by the previous build and still uses the old wording until
+their next analysis pass. Selecting KNDI showed "KNDI · 1" story and "All news" returned all 65; selecting ICCM from the
+top of the page scrolled the news column into view with only ICCM's results story.
