@@ -74,6 +74,29 @@ resolutions are summarised in the table and trade-offs above. Their re-review ve
   views. Remaining low-impact gap: a stream whose view had already expired or been refused before sign-out can create
   a new view afterwards and hold its subscriptions for up to about five minutes; it cannot stream to the signed-out
   browser. A recommends, without requiring, an endpoint test with a stalled snapshot before installation.
-- **User decision, 18 November 2026:** the user approved sign-out ending Desk live-quote views on all of their devices ("Yes, all devices"). With that, both reviewers accept the change.
+- **User decision, 18 November 2026:** the user approved sign-out ending Desk live-quote views on all of their devices ("Yes, all devices"). With that, both reviewers accept the change. Committed and installed as recorded below.
 
+
+## Installation on the local site, 18 November 2026
+
+- Committed as `786dbaf` on local `main`; not pushed (no GitHub synchronization).
+- Before installing: the local site was **not running**. Windows restarted at 11:58 local time on 18 November, and the
+  site's last log line was at 01:29:59 UTC; it had not been started again. Data drive `V:` was mounted with
+  `V:\trading_flow\data` present.
+- Exposure check at 11:07 UTC (read-only Alpaca paper API, configured account, status ACTIVE): `/v2/positions` returned
+  `[]` and `/v2/orders?status=open` returned `[]`, so 0 positions and 0 open orders. Read-only database check: 15 jobs
+  (9 completed, 3 failed, 3 cancelled; none queued or running), 30 candidates all expired, 0 order intents, 0 risk
+  reservations. The `runs` table still lists 63 rows as `running`; these are the stale records described in audit
+  item B4, not live work.
+- `dotnet publish src/TradingFlow.Web/TradingFlow.Web.csproj -c Release` succeeded into a staging folder (244 files).
+  The previous build was kept as `C:\project\tradingflow-site\bin-before-786dbaf-20261118`; the new build became `bin`.
+  Web DLL SHA-256 `5CCFA66E8A2E3179245C7FFC5EB197768005F09CFFA57BF3C7B4B1120843F4DA`. Started with the existing
+  launcher (`update-site.ps1 -StartOnly`, strategy-gated paper policy unchanged) at about 11:09 UTC.
+- After start: `/health` HTTP 200 within about 10 s; `/health/trading-readiness` reported `ready`, entries allowed,
+  order stream connected, recovery cycle healthy, account reconciliation `clean` with 0 differences, no blocks.
+  The SIP market-data stream connected. No Error or Critical log lines; the only warnings were the pre-existing
+  "durable backtest result marker is not available" messages also present before the restart.
+- Served `/js/watch-desk.js` contains the quote socket path; anonymous requests to the quote hub and the Desk stream
+  are refused with HTTP 401.
+- Not yet verified on the installed site: a signed-in Desk receiving real Alpaca quotes over the new socket.
 Logs: `.tmp/desk-quotes/` (session scratch).
