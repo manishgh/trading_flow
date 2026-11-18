@@ -7,6 +7,27 @@ Source: [Fable audit](../research/tradingflow-audit-2026-11-14.md).
 
 ## Current status
 
+**18 November 2026, 13:40 UTC.** Release `786dbaf` (Desk live quotes on their own socket, approved 17 November) is
+installed on port 10088 and verified with real pre-market SIP quotes; see
+[its record](../verification/desk-live-quotes-implementation-2026-11-17.md). Facts checked today, read-only:
+
+- The approved one-share AAPL paper test did **not** run. Alpaca lists no paper orders and no fills after
+  15 November 00:00 UTC. Its authorization named Monday 16 November only and says not to move it silently to another
+  date, so a new date needs the user's decision. Private paper chart markers and real fill telemetry (B6) stay
+  unverified until a test fills.
+- Scheduled Finviz capture is running. The latest slot (17 November, 21:15 UTC) captured both saved screens:
+  HTTP 200, one attempt each, 5 and 14 rows, raw archives retained. Whole-screen membership remains unverified, as
+  designed. The site was down from about 01:30 to 11:09 UTC on 18 November after a Windows restart; no slot falls in
+  that gap.
+- The live chart diagnostic is installed, off by default, and has not been run.
+- `C:\project\tradingflow-site\logs\site.log` reached 3.8 GB in five days. 2.07 million of its 3.2 million lines were
+  one warning repeated with a stack trace on every refresh: three durable backtest jobs whose `result.json` does not
+  exist ("result marker is not available yet"). At the user's request the site was restarted (account flat, no
+  open orders) and the log deleted; its 432 Error/Critical lines, mostly 13–14 November, are kept in
+  `logs\site-errors-20261113-20261118.log`. The warning continues, so the log regrows at roughly the same rate until
+  that retry is fixed.
+- The `runs` table still lists 63 rows as `running` with no live work behind them.
+
 **Current installed checkpoint, 16 November, 09:22 Berlin:** compiled Release
 `319e79a` is installed and running on port 10088. It contains the approved bounded
 live-chart diagnostic (default-off) and requested chart status beside the Desk
