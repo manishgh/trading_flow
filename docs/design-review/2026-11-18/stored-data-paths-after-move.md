@@ -116,3 +116,26 @@ the stored reference is unchanged. New test `ResultStoredBeforeTheDataFolderMove
 Build 0 warnings/0 errors; focused tests including the Backtests page: **196/196 passed**. Reviewers A and B accepted.
 Not changed (both optional): the `paths` parameter stays optional, so a future caller could omit it; no extra test for a
 moved attempt file without its marker (the same located path feeds both checks).
+
+## Installation on the local site, 18 November 2026
+
+- Waited for the 14:00 UTC scheduled Finviz slot to finish (both screens captured, HTTP 200, one attempt each, 5 and
+  15 rows). Exposure check at 14:11 UTC: Alpaca paper `/v2/positions` and `/v2/orders?status=open` both `[]`; jobs 9
+  completed, 3 failed, 3 cancelled, none queued or running.
+- Release publish of `b9d3aaf` (244 files, Web DLL SHA-256
+  `205A93B7FD3DD9C13DA0CFA5A6A56A3C8BAC15D327EA529817DB948078C28ACA`) became `C:\project\tradingflow-site\bin`; the
+  previous build is kept as `bin-before-b9d3aaf-20261118`. Started with `update-site.ps1 -StartOnly` at 14:11:30 UTC.
+- After start: `/health` 200 in about 3 s; readiness `ready`, entries allowed, order stream connected, recovery
+  healthy. In the first minute the new build logged 0 result-marker warnings (the previous build logged about 8 per
+  second), 0 errors and 1 unrelated warning (an Entity Framework query notice).
+- Backtests page: the recent runs show "Result file present", none "Result unavailable".
+
+**Correction to the expected outcome.** The design expected the Audit page to open these 8 runs afterwards. It does not,
+for two reasons that are independent of the folder move and were not diagnosed before the proposal:
+
+1. The Audit page finds a job by its database run name (for example `etf-trend-dev-2017-2023_9903699c70d122d66676`),
+   then requires the published manifest's run name to be identical. The manifests carry the generated settings-file
+   name (`etf-trend-dev-2017-2023-9903699c70d122d66676-1e5b…-20261113163800492-…`), so all 8 fail the identity check.
+2. The Audit page refuses a `result.json` larger than 10,000,000 bytes. Three of the 8 are larger (12.4, 16.6 and 12.5 MB); the other five are 1.2–9.2 MB.
+
+Both are separate defects needing their own approved design; nothing was changed for them.
