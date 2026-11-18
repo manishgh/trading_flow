@@ -12,7 +12,10 @@ public sealed record ResearchScreenInputs(
     string DailyBarsDatasetId,
     string CorporateActionsDatasetId,
     string? OpeningBarsDatasetId,
-    string? ExchangeSessionsDatasetId);
+    string? ExchangeSessionsDatasetId,
+    // Frozen security-master snapshot whose listing exchanges runs on this screen read (Nasdaq home-market regime rule).
+    // Left out of manifests when unset, so earlier screens keep their exact bytes.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SecurityMasterDatasetId = null);
 
 /// <summary>The daily screen rules of a published screen, spelled as the command options (price basis as text).</summary>
 public sealed record ResearchScreenRuleValues(decimal MinPrice, string PriceBasis, int AverageSessions, decimal? MinAverageVolume,

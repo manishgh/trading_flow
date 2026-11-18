@@ -87,7 +87,7 @@ public sealed class ResearchQueue(IResearchStartRegistry registry, IDurableJobRe
         var variantKey = EvidenceCanonicalJson.ComputeSha256(strategy);
         var datasets = screen is null
             ? ["discovery-snapshot:" + run.UniverseSnapshotId.ToString("N")]
-            : new[] { screen.DailyBarsDatasetId, screen.ExchangeSessionsDatasetId, screen.CorporateActionsDatasetId,
+            : new[] { screen.DailyBarsDatasetId, screen.ExchangeSessionsDatasetId, screen.CorporateActionsDatasetId, screen.SecurityMasterDatasetId,
                     "screen-manifest:" + screen.ManifestSha256, "screen-membership:" + screen.RankedListSha256 }
                 .Where(id => id is not null).Select(id => id!)
                 .Concat(screen.FiveMinuteDatasetIds).Concat(screen.OneMinuteDatasetIds).Concat(screen.HourlyDatasetIds ?? [])

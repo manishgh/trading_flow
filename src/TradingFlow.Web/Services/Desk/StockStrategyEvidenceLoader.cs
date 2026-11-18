@@ -14,7 +14,9 @@ namespace TradingFlow.Web.Services.Desk;
 public sealed record StockStrategyEvidence(TickerMarketState? Market, IReadOnlyList<CatalystEvent> News,
     StrategyEligibilityEvidence? Regime, IReadOnlyList<OhlcvBar>? ReferenceBars,
     IReadOnlyList<DateOnly>? ReferenceSessions, DrawdownDecisionContext? DrawdownContext, string? Missing,
-    CatalystQueryResult? NewsCoverage = null, IReadOnlyList<OhlcvBar>? RegimeBars = null);
+    CatalystQueryResult? NewsCoverage = null, IReadOnlyList<OhlcvBar>? RegimeBars = null,
+    // Nasdaq home-market rule: the stock's listing exchange (broker asset record) and the home-market fund's bars (QQQ).
+    IReadOnlyList<OhlcvBar>? HomeMarketBars = null, string? ListingExchange = null);
 public sealed record StockStrategyEvidenceBatch(DateTimeOffset AsOfUtc,
     IReadOnlyDictionary<string, StockStrategyEvidence> Stocks,
     IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Calendar);
@@ -55,6 +57,8 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                 profile.Execution.AllowExtendedHoursTrading, strategy.Session.ExchangeTimezone,
                 new("strategy_assessment", profile.RunName, profile.Provider), profile.Engine.MaxRetainedReplayBars), provider, deadline.Token);
             var benchmarks = await LoadBenchmarksAsync(strategy, provider, download, start, end, deadline.Token);
+            var listings = strategy.Regime is { IsActive: true, UsesNasdaqHomeMarket: true }
+                ? await LoadListingsAsync(profile, symbols.Where(market.TickerStates.ContainsKey).ToArray(), deadline.Token) : null;
             var news = await LoadNewsAsync(strategy, symbols, newsProvider, clock.GetUtcNow(), deadline.Token);
             var asOf = clock.GetUtcNow();
             var result = new Dictionary<string, StockStrategyEvidence>(StringComparer.Ordinal);
@@ -63,7 +67,8 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                 market.TickerStates.TryGetValue(symbol, out var state);
                 var missing = state is null ? market.Failures.GetValueOrDefault(symbol) ?? "No candles returned for this stock."
                     : MissingCurrentMarket(state, required, calendar, asOf, strategy.Session.ExchangeTimezone);
-                var regime = ResolveRegime(strategy, benchmarks, calendar, asOf, out var regimeMissing);
+                var listing = listings?.GetValueOrDefault(symbol);
+                var regime = ResolveRegime(strategy, benchmarks, calendar, asOf, listing, out var regimeMissing);
                 missing ??= regimeMissing;
                 var query = news.GetValueOrDefault(symbol);
                 var factor = strategy.EntryRules.TechnicalFactor;
@@ -75,7 +80,8 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                     FrozenManifestDecisionContextProvider.FromConfig(profile.Engine), symbol, asOf,
                     state.BarsByTimeframe, "diagnostic_replay", deadline.Token);
                 result[symbol] = new(state, query?.Events ?? [], regime, reference, sessions, context, missing,
-                    query, strategy.Regime is { IsActive: true } rule ? benchmarks.GetValueOrDefault(rule.BenchmarkSymbol) : null);
+                    query, strategy.Regime is { IsActive: true } rule ? benchmarks.GetValueOrDefault(rule.BenchmarkSymbol) : null,
+                    strategy.Regime is { UsesNasdaqHomeMarket: true } home ? benchmarks.GetValueOrDefault(home.NasdaqListingBenchmark!) : null, listing);
             }
             return new(asOf, result, calendar);
         }
@@ -95,7 +101,11 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         IMarketDataProvider provider, IReadOnlyList<string> intervals, DateTimeOffset start, DateTimeOffset end, CancellationToken token)
     {
         var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (strategy.Regime is { IsActive: true } regime) symbols.Add(regime.BenchmarkSymbol);
+        if (strategy.Regime is { IsActive: true } regime)
+        {
+            symbols.Add(regime.BenchmarkSymbol);
+            if (regime.UsesNasdaqHomeMarket) symbols.Add(regime.NasdaqListingBenchmark!);
+        }
         if (strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor) symbols.Add(factor.BenchmarkSymbol);
         var result = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
         var reader = new RegimeGateService();
@@ -123,10 +133,63 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         return result;
     }
 
-    /// <summary>Calls the same regime calculator only after sufficient observed benchmark bars are proved.</summary>
+    /// <summary>
+    /// Each symbol's listing exchange from the broker's asset records, for the Nasdaq home-market rule. A symbol the broker
+    /// cannot describe is left out (its entry is then refused as listing_exchange_unknown); no broker means no listings.
+    /// </summary>
+    private async Task<Dictionary<string, string>> LoadListingsAsync(BacktestRunConfig profile, IReadOnlyList<string> symbols, CancellationToken token)
+    {
+        var listings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var now = clock.GetUtcNow();
+        var uncached = new List<string>();
+        foreach (var symbol in symbols)
+        {
+            if (listingCache.TryGetValue(symbol, out var cached) && now - cached.ReadAtUtc < ListingCacheLifetime) listings[symbol] = cached.Exchange;
+            else uncached.Add(symbol);
+        }
+        if (uncached.Count == 0) return listings;
+        var broker = factory.CreateBrokerClient(profile);
+        if (broker is null) return listings;
+        try
+        {
+            foreach (var symbol in uncached)
+            {
+                try
+                {
+                    if ((await broker.GetEligibilityAsync(symbol, token))?.Exchange is not { Length: > 0 } exchange) continue;
+                    listings[symbol] = exchange;
+                    listingCache[symbol] = (exchange, now);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // One failed lookup (rate limit, server error) marks only that stock; it is refused as
+                    // listing_exchange_lookup_failed, as on the live path, and the other stocks are still assessed.
+                    listings[symbol] = ListingLookupFailed;
+                }
+            }
+        }
+        finally
+        {
+            (broker as IDisposable)?.Dispose();
+        }
+        return listings;
+    }
+
+    // Listing exchanges read from the broker, kept for an hour across Desk refreshes so each refresh does not repeat one
+    // asset request per stock. Only successful lookups are kept.
+    private static readonly TimeSpan ListingCacheLifetime = TimeSpan.FromHours(1);
+    // Marks a stock whose broker lookup failed in this refresh (never cached, never a real exchange code).
+    private const string ListingLookupFailed = "lookup_failed";
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Exchange, DateTimeOffset ReadAtUtc)> listingCache =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Calls the same regime calculator only after sufficient observed benchmark bars are proved. Under the Nasdaq home-market
+    /// rule the stock also needs a known listing, and a Nasdaq listing needs the home-market fund on (same reasons as backtests).
+    /// </summary>
     private static StrategyEligibilityEvidence? ResolveRegime(StrategyDefinition strategy,
         IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> benchmarks,
-        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateTimeOffset asOf, out string? missing)
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateTimeOffset asOf, string? listing, out string? missing)
     {
         missing = null;
         if (strategy.Regime is not { IsActive: true } rule)
@@ -137,8 +200,23 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         var available = bars.Where(bar => bar.Timestamp.AddDays(1) <= asOf && (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOf))
             .Select(bar => bar.Timestamp).Distinct().Count();
         var eligible = RegimeCalendarBuilder.IsRegimeOnAt(bars, rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars);
+        string? rejection = eligible ? null : RegimeCalendar.MarketOffReason;
+        if (eligible && rule.UsesNasdaqHomeMarket)
+        {
+            if (listing == ListingLookupFailed) rejection = RegimeCalendar.ListingExchangeLookupFailedReason;
+            else if (String.IsNullOrWhiteSpace(listing)) rejection = RegimeCalendar.ListingExchangeUnknownReason;
+            else if (listing.Equals(RegimeRules.NasdaqExchange, StringComparison.OrdinalIgnoreCase))
+            {
+                var home = benchmarks.GetValueOrDefault(rule.NasdaqListingBenchmark!) ?? [];
+                missing = MissingBenchmark(rule.NasdaqListingBenchmark!, home, rule.RequiredCloses, calendar, asOf, strategy.Session.ExchangeTimezone);
+                if (missing is not null) return null;
+                if (!RegimeCalendarBuilder.IsRegimeOnAt(home, rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars))
+                    rejection = RegimeCalendar.NasdaqMarketOffReason;
+            }
+            eligible = rejection is null;
+        }
         return new(eligible, "shared_regime_gate", $"{rule.EvidenceRule}:{asOf:O}", asOf,
-            System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp) }));
+            System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp), listing, rejection }));
     }
 
     /// <summary>Checks the complete prepared evidence at the actual decision time after source refresh, without inventing newer coverage.</summary>
@@ -151,6 +229,11 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         if (missing is not null) return missing;
         if (strategy.Regime is { IsActive: true } regime)
             missing = MissingBenchmark(regime.BenchmarkSymbol, stock.RegimeBars, regime.RequiredCloses, calendar, cutoff, strategy.Session.ExchangeTimezone);
+        // A Nasdaq-listed stock under the home-market rule also needs current home-market fund bars at the decision time.
+        if (missing is null && strategy.Regime is { IsActive: true, UsesNasdaqHomeMarket: true } homeRule &&
+            RegimeRules.NasdaqExchange.Equals(stock.ListingExchange, StringComparison.OrdinalIgnoreCase))
+            missing = MissingBenchmark(homeRule.NasdaqListingBenchmark!, stock.HomeMarketBars, homeRule.RequiredCloses, calendar, cutoff,
+                strategy.Session.ExchangeTimezone);
         if (missing is not null) return missing;
         if (strategy.EntryRules.TechnicalFactor is { Metric: TechnicalFactorRules.RelativeRoc } factor)
             missing = MissingBenchmark(factor.BenchmarkSymbol, stock.ReferenceBars, factor.LookbackBars + 1, calendar, cutoff, strategy.Session.ExchangeTimezone);

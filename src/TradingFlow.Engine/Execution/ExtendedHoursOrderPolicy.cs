@@ -31,7 +31,9 @@ public sealed record AssetTradingEligibility(
     DateTimeOffset ObservedAtUtc,
     bool Shortable = false,
     string? BorrowStatus = null,
-    string? AssetClass = null);
+    string? AssetClass = null,
+    // Listing exchange (Alpaca code: NASDAQ, NYSE, ARCA, AMEX, BATS, OTC), read by the Nasdaq home-market regime rule.
+    string? Exchange = null);
 
 public interface IAssetTradingEligibilityProvider
 {

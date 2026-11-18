@@ -90,7 +90,7 @@ Per-stock rule — **decision needed (A recommended):**
 Not included in this version (each would be a later, separately counted variant): halving position size instead of
 blocking entries in a weak market; the intraday "SPY falls more than 1.2 × ATR" rule (intraday is set aside).
 
-Recipe change: the existing `regime:` block gains `sma_rising_lookback_bars: 20` and `home_market: nasdaq_listing_qqq`
+Recipe change: the existing `regime:` block gains `sma_rising_lookback_bars: 20` and `nasdaq_listing_benchmark: QQQ`
 (option A). Live/paper and backtest keep using the same `RegimeGateService` code.
 
 ## 4. Top sector funds
@@ -185,3 +185,33 @@ new regime fields (none is enabled for paper).
 - Browser tests (Backtests, workflow and workspace specs): 113 passed, **8 failed** — each needs at least one runnable
   strategy on the Backtests page and the operator catalog now has none. The test site reads the repository catalog at a
   fixed path; letting it read a test-owned copy is a small product setting awaiting the user's decision.
+
+## Checkpoint 2 — Nasdaq home-market rule (option A), 18 November 2026
+
+- **Recipe:** `regime.nasdaq_listing_benchmark: QQQ`. Every entry needs SPY on (close above its rising 50-day average);
+  a stock listed on Nasdaq also needs QQQ on under the same rule; other listings need only SPY. QQQM adds nothing (same
+  index, shorter history); QQQJ is not used.
+- **Refusal reasons** (identical in backtests, paper and the Desk): `market_regime_off_on_entry_day` (SPY off),
+  `nasdaq_market_regime_off_on_entry_day` (QQQ off for a Nasdaq listing), `listing_exchange_unknown` (no listing known),
+  and on the live/paper path `listing_exchange_lookup_failed` (the broker's asset lookup failed, for example a rate limit).
+  Every missing piece refuses the entry; nothing is guessed.
+- **Where the listing comes from:** backtests read the frozen Alpaca security-master snapshot of 30 Oct 2026 (dataset
+  `6720a7d9…`, 33,556 assets, collected with `status=all`, so delisted stocks are included), named by
+  `providers.evidence_catalog.security_master_dataset` and recorded in the research screen with
+  `research-daily-screen --security-master <dataset ID>`. Paper trading and the Desk read the broker's current asset
+  record (the Desk keeps listings for an hour across refreshes; one failed lookup affects only that stock).
+- **Known bias, accepted with option A:** the snapshot is the current listing, applied to past dates. A stock that moved
+  between exchanges is judged by today's exchange; a symbol the snapshot lists on two exchanges (reused ticker) is left
+  out and refused. Each run logs how many of its stocks have no usable listing; above 5 % it is a warning to escalate to the
+  operator (user rule: escalate only above 5 % universe loss).
+- **Prepared runs** now also prepare QQQ history with the same early start as SPY.
+- **Live/Desk difference:** when QQQ bars are missing, paper trading refuses with `nasdaq_market_regime_off_on_entry_day`
+  (fail closed) while the Desk reports the stock's strategy check as "data missing"; both block the entry.
+- **Not covered by unit tests:** a full evidence-catalog backtest through `BacktestRunner` with the home-market rule (it
+  needs a published security-master fixture); the first real run's log records the listing coverage instead.
+- **Verification:** focused suites 316/316; full .NET suite 4,259 passed, 1 failed, 6 skipped — the failure
+  (`LiveRunnerIntegrationTests.RunAsync_SubmitsTechnicalExitClose_ForActiveStrategyPosition`, a strategy without a regime
+  rule, so the changed path is not exercised) took 5 s under full-suite load and passed 3/3 alone and in its class (37/37):
+  a timing flake, not a regression. Reviewer A and reviewer B requested changes (listing source behind prepared-data
+  wrappers, QQQ not prepared, coverage count, lookup failures, Desk refresh robustness, ticker case, documentation) and
+  accepted after the fixes. Condition from reviewer A: the first squeeze run's `.log` must show the listing coverage.

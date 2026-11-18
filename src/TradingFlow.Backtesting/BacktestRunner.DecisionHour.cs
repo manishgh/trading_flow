@@ -228,7 +228,9 @@ public sealed partial class BacktestRunner
     {
         var eligibilityDay = EligibilitySession(decisionTime);
         var universeEligible = universeMembership is null || universeMembership.IsMember(ticker, eligibilityDay);
-        var regimeEligible = regimeCalendar is null || regimeCalendar.IsOn(decisionTime);
+        // Per stock: the benchmark, and for a Nasdaq listing under the home-market rule also QQQ; the reason names the part that failed.
+        var regimeRejection = regimeCalendar?.RejectionFor(decisionTime, ticker);
+        var regimeEligible = regimeRejection is null;
         var universe = new StrategyEligibilityEvidence(universeEligible,
             universeMembership is null ? "static_run_universe" : "historical_universe_membership",
             $"{ticker}:{eligibilityDay:yyyy-MM-dd}", decisionTime,
@@ -236,7 +238,7 @@ public sealed partial class BacktestRunner
         var regime = new StrategyEligibilityEvidence(regimeEligible,
             regimeCalendar is null ? "strategy_has_no_regime_gate" : "historical_regime_calendar",
             $"{strategy.StrategyId}:{eligibilityDay:yyyy-MM-dd}", decisionTime,
-            System.Text.Json.JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible }));
+            System.Text.Json.JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible, regimeRejection }));
         return (universe, regime);
     }
 }

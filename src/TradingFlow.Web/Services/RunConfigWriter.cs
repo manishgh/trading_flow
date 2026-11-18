@@ -1040,6 +1040,8 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  sma_period: {regime.SmaPeriod}");
             if (regime.SmaRisingLookbackBars != 0)
                 yaml.AppendLine($"  sma_rising_lookback_bars: {regime.SmaRisingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+            if (regime.NasdaqListingBenchmark is { } nasdaqBenchmark)
+                yaml.AppendLine($"  nasdaq_listing_benchmark: {nasdaqBenchmark}");
         }
 
         yaml.AppendLine("exit_rules:");
@@ -1272,6 +1274,8 @@ public sealed class RunConfigWriter
         }
         if (catalog.CorporateActionsDatasetId is { } actions)
             yaml.AppendLine($"    corporate_actions_dataset: {RunYamlScalar(actions, prefix + "corporate_actions_dataset")}");
+        if (catalog.SecurityMasterDatasetId is { } securityMaster)
+            yaml.AppendLine($"    security_master_dataset: {RunYamlScalar(securityMaster, prefix + "security_master_dataset")}");
     }
 
     /// <summary>Retain the profile's validation assumptions, including its dated universe evidence.</summary>

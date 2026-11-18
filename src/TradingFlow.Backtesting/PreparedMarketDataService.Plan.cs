@@ -78,7 +78,11 @@ public sealed partial class PreparedMarketDataService
                 // Same over-fetch as BacktestRunner.Regime: every close the average and its earlier comparison average read.
                 var benchmarkStart = start.AddDays(-checked(regime!.RequiredCloses * 2 + 15));
                 foreach (var interval in new[] { "1d" }.Concat(intervals.Where(interval => !TimeframeParser.IsDailyOrHigher(interval))).Distinct())
+                {
                     Add(regime.BenchmarkSymbol, interval, benchmarkStart, end);
+                    // The Nasdaq home-market fund (QQQ) is judged by the same rule, so it needs the same history.
+                    if (regime.UsesNasdaqHomeMarket) Add(regime.NasdaqListingBenchmark!, interval, benchmarkStart, end);
+                }
             }
             // A strategy that exits at the official close reads each session's daily close.
             if (strategies.Any(strategy => strategy.EntryRules.OpeningRangeBreakout is { ExitAtSessionClose: true }))

@@ -253,7 +253,9 @@ public sealed record EvidenceCatalogProviderConfig(
     IReadOnlyList<string> FiveMinuteDatasetIds,
     IReadOnlyList<string> OneMinuteDatasetIds,
     string? CorporateActionsDatasetId = null,
-    IReadOnlyList<string>? HourlyDatasetIds = null);
+    IReadOnlyList<string>? HourlyDatasetIds = null,
+    // Frozen Alpaca security-master snapshot naming each symbol's listing exchange (Nasdaq home-market regime rule).
+    string? SecurityMasterDatasetId = null);
 
 public sealed record AlpacaProviderConfig(
     string DataFeed);

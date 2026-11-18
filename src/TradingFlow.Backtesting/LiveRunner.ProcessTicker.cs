@@ -226,13 +226,10 @@ public sealed partial class LiveRunner
                 continue;
             }
 
-            var regimeOn = strategy.Regime is not { IsActive: true } regimeRule ||
-                await _regimeGate.IsRegimeOnAsync(
-                    regimeRule,
-                    provider,
-                    run.Intervals,
-                    now,
-                    cancellationToken);
+            // Per stock: the benchmark, and under the Nasdaq home-market rule the listing (from the broker's asset record) and QQQ.
+            var regimeRejection = strategy.Regime is not { IsActive: true } regimeRule ? null :
+                await _regimeGate.RegimeRejectionAsync(regimeRule, provider, run.Intervals, now, ticker, _brokerClient, cancellationToken);
+            var regimeOn = regimeRejection is null;
 
             if (_candidateDecisions is null || _executionRunContext is null)
             {
@@ -314,7 +311,7 @@ public sealed partial class LiveRunner
                     ? $"{strategy.Regime.EvidenceRule}:{now:O}"
                     : $"not-required:{now:O}",
                 now,
-                JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime }));
+                JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection }));
             var setupKey = StrategyDecisionRequestAssembler.CreateSetupKey(
                 strategy.StrategyId,
                 strategy.Timeframe,

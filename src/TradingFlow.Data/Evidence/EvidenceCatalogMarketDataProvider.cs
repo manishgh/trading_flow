@@ -23,7 +23,8 @@ namespace TradingFlow.Data.Evidence;
 /// datasets and partitions read, so prepared data records them and a rerun reads identical inputs.
 /// </summary>
 public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMarketSessionScheduleProvider,
-    IMarketDataProvenanceProvider, IMarketDataCacheSourceDescriptorProvider, IHistoricalMarketDataEvidenceProvider, IShareSplitProvider
+    IMarketDataProvenanceProvider, IMarketDataCacheSourceDescriptorProvider, IHistoricalMarketDataEvidenceProvider, IShareSplitProvider,
+    IListingExchangeSource
 {
     public const string ProviderName = "evidence_catalog";
     private const string Exchange = "XNYS";
@@ -255,6 +256,33 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
     }
 
     /// <summary>
+    /// Symbol → listing exchange (Alpaca codes) for US stocks in the frozen security-master snapshot
+    /// (providers.evidence_catalog.security_master_dataset). It is the snapshot's current listing, not a history. A symbol the
+    /// snapshot lists for several securities on different exchanges is left out, so such stocks fail closed in the
+    /// Nasdaq home-market rule. Refuses when no snapshot is configured.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, string>> LoadListingExchangesAsync(CancellationToken cancellationToken)
+    {
+        var id = config.SecurityMasterDatasetId ?? throw new InvalidOperationException(
+            "providers.evidence_catalog.security_master_dataset is not set; the run cannot name listing exchanges.");
+        var dataset = await RequireDatasetAsync(id, EvidenceDatasetKind.SecurityMaster, cancellationToken);
+        return ListingExchanges(await reader.ReadSecurityMasterSnapshotsAsync(dataset, cancellationToken));
+    }
+
+    /// <summary>
+    /// The listing rule of <see cref="LoadListingExchangesAsync"/>: US stocks only, symbols upper-cased, and a symbol whose
+    /// rows name more than one exchange is left out (ambiguous, so the home-market rule refuses it).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ListingExchanges(IEnumerable<SecurityMasterSnapshotEvidenceRow> rows)
+    {
+        return rows.Where(row => row.AssetClass.Equals("us_equity", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(row => row.Symbol.Trim().ToUpperInvariant(), StringComparer.Ordinal)
+            .Select(group => (Symbol: group.Key, Exchanges: group.Select(row => row.Exchange.Trim().ToUpperInvariant()).Distinct().ToArray()))
+            .Where(item => item.Exchanges.Length == 1)
+            .ToDictionary(item => item.Symbol, item => item.Exchanges[0], StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Reads a frozen dataset's committed manifest and refuses it unless its content fingerprint (the dataset ID computed from
     /// the manifest) equals the frozen ID and it has the expected kind.
     /// </summary>
@@ -403,7 +431,7 @@ public sealed class EvidenceCatalogMarketDataProvider : IMarketDataProvider, IMa
         public Task<IReadOnlyList<SentimentAssessmentEvidenceRow>> ReadSentimentAssessmentsAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("The evidence catalog provider reads market bars and exchange sessions only.");
         public Task<IReadOnlyList<SecurityMasterSnapshotEvidenceRow>> ReadSecurityMasterSnapshotsAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException("The evidence catalog provider reads market bars and exchange sessions only.");
+            inner.Value.ReadSecurityMasterSnapshotsAsync(manifest, cancellationToken);
         public Task<IReadOnlyList<SymbolIntervalEvidenceRow>> ReadSymbolIntervalsAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("The evidence catalog provider reads market bars and exchange sessions only.");
         public Task<IReadOnlyList<CorporateActionEvidenceRow>> ReadCorporateActionsAsync(EvidenceDatasetManifest manifest, CancellationToken cancellationToken = default) =>

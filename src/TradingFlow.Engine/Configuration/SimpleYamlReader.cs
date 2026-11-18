@@ -289,11 +289,15 @@ public sealed class SimpleYamlReader
         var rising = OptionalInt(map, "regime.sma_rising_lookback_bars", 0);
         if (rising < 0)
             throw new InvalidOperationException("regime.sma_rising_lookback_bars must be 0 (off) or a positive number of sessions.");
+        var nasdaq = OptionalNullableString(map, "regime.nasdaq_listing_benchmark")?.Trim().ToUpperInvariant();
+        if (nasdaq is not null && (nasdaq.Length == 0 || nasdaq == benchmark.Trim().ToUpperInvariant()))
+            throw new InvalidOperationException("regime.nasdaq_listing_benchmark must name a fund other than regime.benchmark, for example QQQ.");
         return new RegimeRules(
             benchmark.Trim().ToUpperInvariant(),
             OptionalString(map, "regime.rule", RegimeRules.PriceAboveSma),
             OptionalInt(map, "regime.sma_period", 50),
-            rising);
+            rising,
+            nasdaq);
     }
 
     private static string ReadInitialStopMode(IReadOnlyDictionary<string, List<string>> map)
@@ -553,7 +557,8 @@ public sealed class SimpleYamlReader
             Path.GetFullPath(RequireString(runMap, prefix + "artifact_root")),
             RequireString(runMap, prefix + "ranked_list_sha256"), RequireString(runMap, prefix + "daily_dataset"),
             RequireString(runMap, prefix + "exchange_sessions_dataset"), five, OptionalList(runMap, prefix + "one_minute_datasets"),
-            OptionalNullableString(runMap, prefix + "corporate_actions_dataset"), OptionalList(runMap, prefix + "hourly_datasets") is { Count: > 0 } hourly ? hourly : null);
+            OptionalNullableString(runMap, prefix + "corporate_actions_dataset"), OptionalList(runMap, prefix + "hourly_datasets") is { Count: > 0 } hourly ? hourly : null,
+            OptionalNullableString(runMap, prefix + "security_master_dataset"));
     }
 
     /// <summary>

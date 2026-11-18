@@ -262,6 +262,9 @@ public sealed partial class AlpacaBrokerClient :
             // "us_equity", "crypto" or "us_option"; the Desk adds only US stocks to stock groups.
             root.TryGetProperty("class", out var assetClass) && assetClass.ValueKind == JsonValueKind.String
                 ? assetClass.GetString()
+                : null,
+            root.TryGetProperty("exchange", out var exchange) && exchange.ValueKind == JsonValueKind.String
+                ? exchange.GetString()
                 : null);
         assetEligibilityCache[normalized] = new CachedAssetEligibility(eligibility, now);
         return eligibility;

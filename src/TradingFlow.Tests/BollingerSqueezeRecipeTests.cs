@@ -44,6 +44,7 @@ public sealed class BollingerSqueezeRecipeTests
             strategy.EntryRules.RecentHighLookbackBars));
         Assert.Equal((1.5m, "hard_gate", 0.75m), (strategy.EntryRules.MinVolumeSpike, strategy.EntryRules.VolumeConfirmationMode,
             strategy.EntryRules.MinCloseLocationValue));
+        Assert.Equal("QQQ", strategy.Regime!.NasdaqListingBenchmark);
         Assert.Equal(("SPY", 50, 20, 70), (strategy.Regime!.BenchmarkSymbol, strategy.Regime.SmaPeriod, strategy.Regime.SmaRisingLookbackBars,
             strategy.Regime.RequiredCloses));
         Assert.Equal((1.0m, 2.5m, 10), (strategy.ExitRules.StopAtrMultiple, strategy.ExitRules.TargetRMultiple, strategy.ExitRules.MaxHoldBars));
@@ -55,6 +56,7 @@ public sealed class BollingerSqueezeRecipeTests
     [InlineData("  max_bollinger_width_percentile: 0.15", "  max_bollinger_width_percentile: 1.5")]
     [InlineData("  bollinger_squeeze_lookback_bars: 60", "  bollinger_squeeze_lookback_bars: 1")]
     [InlineData("  sma_rising_lookback_bars: 20", "  sma_rising_lookback_bars: -1")]
+    [InlineData("  nasdaq_listing_benchmark: QQQ", "  nasdaq_listing_benchmark: SPY")]
     public void Recipe_RefusesInconsistentSqueezeOrRegimeFields(string original, string replacement)
     {
         var text = File.ReadAllText(Path.Combine(Root, RecipePath));

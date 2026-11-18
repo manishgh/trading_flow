@@ -91,7 +91,7 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == membership).ToArray();
         if (manifest.RankingRules is null)
             return new(name, sha, membership, inputs.DailyBarsDatasetId, sessions, [], [],
-                inputs.CorporateActionsDatasetId, DatasetsOf(collected, "1h"));
+                inputs.CorporateActionsDatasetId, DatasetsOf(collected, "1h"), inputs.SecurityMasterDatasetId);
         string[] Of(string timeframe) => DatasetsOf(collected, timeframe);
         var five = Of("5m");
         if (five.Length == 0)
@@ -102,7 +102,7 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
             throw new InvalidOperationException($"No one-minute bar dataset collected for ranked list {membership} of research screen " +
                 $"'{name}' is in the evidence catalog. Plan it with evidence-plan-minute-bars and collect it first.");
         return new(name, sha, membership, inputs.DailyBarsDatasetId, sessions, five, minute,
-            inputs.CorporateActionsDatasetId);
+            inputs.CorporateActionsDatasetId, SecurityMasterDatasetId: inputs.SecurityMasterDatasetId);
     }
 
     /// <summary>The run settings (providers.evidence_catalog) that let a run read exactly the referenced datasets.</summary>
@@ -114,7 +114,7 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
     public EvidenceCatalogProviderConfig ProviderConfig(ResearchScreenReference reference) => new(paths.EvidenceCatalogPath,
         paths.EvidenceObjectRoot, reference.RankedListSha256, reference.DailyBarsDatasetId, reference.ExchangeSessionsDatasetId,
         reference.FiveMinuteDatasetIds, reference.OneMinuteDatasetIds, reference.CorporateActionsDatasetId,
-        reference.HourlyDatasetIds);
+        reference.HourlyDatasetIds, reference.SecurityMasterDatasetId);
 
     /// <summary>The provider reference a source preview records: screen name, manifest SHA-256 and ranked-list SHA-256.</summary>
     public static string ProviderReference(PublishedResearchScreen screen) =>

@@ -29,8 +29,9 @@ public sealed partial class BacktestRunner
         {
             if (membership is not null && !membership.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)))
                 excluded[candidate.CandidateId] = "universe_membership_missing";
-            else if (calendars.TryGetValue(candidate.StrategyId, out var calendar) && !calendar.IsOn(candidate.EntryTimestamp))
-                excluded[candidate.CandidateId] = "market_regime_off_on_entry_day";
+            else if (calendars.TryGetValue(candidate.StrategyId, out var calendar) &&
+                calendar.RejectionFor(candidate.EntryTimestamp, candidate.Ticker) is { } regimeRejection)
+                excluded[candidate.CandidateId] = regimeRejection;
         }
         var outcome = await binding.ExecuteAsync(new(run.RunName, run.Portfolio, strategies, candidates, bars, excluded), cancellationToken);
         if (outcome.UnavailableReasons.Count > 0 && outcome.Failures.Count == 0)

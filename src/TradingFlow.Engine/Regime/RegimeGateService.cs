@@ -82,6 +82,42 @@ public sealed class RegimeGateService
         return RegimeCalendarBuilder.IsRegimeOnAt(daily, regime.SmaPeriod, now, regime.SmaRisingLookbackBars);
     }
 
+    /// <summary>
+    /// Live/paper per-stock query with the same reasons as the backtest calendar (<see cref="RegimeCalendar.RejectionFor"/>):
+    /// null when a new entry in <paramref name="ticker"/> is allowed now; otherwise the benchmark is off, or under the Nasdaq
+    /// home-market rule the stock's listing exchange is unknown (no asset source, no asset record or no exchange), or the
+    /// stock is listed on Nasdaq and the home-market fund (QQQ) is off. Every missing piece fails closed.
+    /// </summary>
+    public async Task<string?> RegimeRejectionAsync(
+        RegimeRules regime,
+        IMarketDataProvider provider,
+        IReadOnlyList<string> availableIntervals,
+        DateTimeOffset now,
+        string ticker,
+        TradingFlow.Engine.Execution.IAssetTradingEligibilityProvider? assets,
+        CancellationToken cancellationToken)
+    {
+        if (!await IsRegimeOnAsync(regime, provider, availableIntervals, now, cancellationToken))
+            return regime.IsActive ? RegimeCalendar.MarketOffReason : null;
+        if (!regime.IsActive || !regime.UsesNasdaqHomeMarket) return null;
+        string? exchange;
+        try
+        {
+            exchange = assets is null ? null : (await assets.GetEligibilityAsync(ticker, cancellationToken))?.Exchange;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // A failed asset lookup (rate limit, server error, network) refuses the entry with an audited reason instead of
+            // ending the ticker's evaluation with an error.
+            return RegimeCalendar.ListingExchangeLookupFailedReason;
+        }
+        if (String.IsNullOrWhiteSpace(exchange)) return RegimeCalendar.ListingExchangeUnknownReason;
+        if (!exchange.Equals(RegimeRules.NasdaqExchange, StringComparison.OrdinalIgnoreCase)) return null;
+        var homeMarket = regime with { BenchmarkSymbol = regime.NasdaqListingBenchmark!, NasdaqListingBenchmark = null };
+        return await IsRegimeOnAsync(homeMarket, provider, availableIntervals, now, cancellationToken)
+            ? null : RegimeCalendar.NasdaqMarketOffReason;
+    }
+
     private static async Task<IReadOnlyList<OhlcvBar>> LoadIntervalAsync(
         IMarketDataProvider provider,
         string ticker,

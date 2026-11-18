@@ -6,7 +6,7 @@
 # 2.5 ATR target and 10-session time exit come from the user's plan, not from Bollinger. As-traded (unadjusted) daily bars,
 # for whole-market research screens that leave out stock-days with a split in the look-back.
 strategy_id: research.bollinger-squeeze-breakout.bt-v1
-strategy_name: RESEARCH Bollinger Squeeze Breakout V1 (swing, SPY rising-average gate, as-traded bars)
+strategy_name: RESEARCH Bollinger Squeeze Breakout V1 (swing, SPY rising-average gate, QQQ for Nasdaq listings, as-traded bars)
 source: bollinger_2001_bollinger_on_bollinger_bands_the_squeeze
 version: 1
 timeframe: 1d
@@ -38,6 +38,7 @@ regime:
   rule: price_above_sma
   sma_period: 50
   sma_rising_lookback_bars: 20
+  nasdaq_listing_benchmark: QQQ
 confluence:
   enabled: false
   timeframe: 1d

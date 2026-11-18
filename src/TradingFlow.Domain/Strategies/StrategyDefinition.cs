@@ -26,8 +26,18 @@ public sealed record RegimeRules(
     int SmaPeriod,
     // 0 = off. Otherwise the average must also be higher than it was this many sessions earlier (a rising average).
     // Omitted from serialized definitions when off, so existing strategies keep their recorded content.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int SmaRisingLookbackBars = 0)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int SmaRisingLookbackBars = 0,
+    // Home-market fund for Nasdaq-listed stocks (option A of the 18 Nov 2026 design: "QQQ"). When set, a stock listed on
+    // Nasdaq also needs this fund to pass the same rule; other listings need only the benchmark. Omitted when unset.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? NasdaqListingBenchmark = null)
 {
+    /// <summary>Alpaca's exchange code for a Nasdaq listing, as in its asset records and the security master.</summary>
+    public const string NasdaqExchange = "NASDAQ";
+
+    /// <summary>True when the stock's own listing market also has to pass the rule.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsesNasdaqHomeMarket => !String.IsNullOrWhiteSpace(NasdaqListingBenchmark);
+
     /// <summary>Completed daily closes one decision needs: the average's window plus the earlier average it is compared with.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public int RequiredCloses => SmaPeriod + Math.Max(0, SmaRisingLookbackBars);
@@ -37,9 +47,11 @@ public sealed record RegimeRules(
     /// different rules on the same fund never share a recorded result. Keys of rules without the rising average are unchanged.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public string EvidenceRule => SmaRisingLookbackBars > 0
-        ? $"{BenchmarkSymbol}:{SmaPeriod}:rising{SmaRisingLookbackBars}"
-        : $"{BenchmarkSymbol}:{SmaPeriod}";
+    public string EvidenceRule =>
+        (SmaRisingLookbackBars > 0
+            ? $"{BenchmarkSymbol}:{SmaPeriod}:rising{SmaRisingLookbackBars}"
+            : $"{BenchmarkSymbol}:{SmaPeriod}") +
+        (UsesNasdaqHomeMarket ? $":nasdaq{NasdaqListingBenchmark}" : "");
 
     public const string PriceAboveSma = "price_above_sma";
     public const string Off = "off";

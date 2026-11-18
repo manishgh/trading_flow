@@ -69,7 +69,7 @@ public static class ResearchFileStart
     {
         var catalog = run.Provider.Equals("evidence_catalog", StringComparison.OrdinalIgnoreCase) ? run.Providers.EvidenceCatalog : null;
         var datasets = catalog is null ? new[] { "unverified-provider:" + run.Provider } :
-            new[] { catalog.DailyDatasetId, catalog.ExchangeSessionsDatasetId, catalog.CorporateActionsDatasetId,
+            new[] { catalog.DailyDatasetId, catalog.ExchangeSessionsDatasetId, catalog.CorporateActionsDatasetId, catalog.SecurityMasterDatasetId,
                     "screen-membership:" + catalog.RankedListSha256, run.Universe?.RankedMembership?.ManifestSha256,
                     run.Engine.ExecutionSourceManifestSha256, run.Engine.EvidenceDependencyGraphSha256 }
                 .Where(value => value is not null).Select(value => value!)

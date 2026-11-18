@@ -15,11 +15,49 @@ public sealed class RegimeCalendar
 
     private readonly Func<DateTimeOffset, bool>? evaluateAt;
 
-    private RegimeCalendar(IReadOnlySet<DateOnly> onDates, bool active, Func<DateTimeOffset, bool>? evaluateAt = null)
+    // Option A of the 18 Nov 2026 design: the home-market fund's calendar (QQQ) and each symbol's listing exchange.
+    private readonly RegimeCalendar? nasdaqCalendar;
+    private readonly IReadOnlyDictionary<string, string>? listingExchanges;
+
+    /// <summary>Rejection when the benchmark (for example SPY) fails the rule.</summary>
+    public const string MarketOffReason = "market_regime_off_on_entry_day";
+    /// <summary>Rejection when a Nasdaq-listed stock's home-market fund (QQQ) fails the rule.</summary>
+    public const string NasdaqMarketOffReason = "nasdaq_market_regime_off_on_entry_day";
+    /// <summary>Rejection when the home-market rule is on but the stock's listing exchange is not known (fails closed).</summary>
+    public const string ListingExchangeUnknownReason = "listing_exchange_unknown";
+    /// <summary>Rejection (live/paper) when the broker's asset lookup for the stock failed, for example a rate limit (fails closed).</summary>
+    public const string ListingExchangeLookupFailedReason = "listing_exchange_lookup_failed";
+
+    private RegimeCalendar(IReadOnlySet<DateOnly> onDates, bool active, Func<DateTimeOffset, bool>? evaluateAt = null,
+        RegimeCalendar? nasdaqCalendar = null, IReadOnlyDictionary<string, string>? listingExchanges = null)
     {
         this.onDates = onDates;
         IsActive = active;
         this.evaluateAt = evaluateAt;
+        this.nasdaqCalendar = nasdaqCalendar;
+        this.listingExchanges = listingExchanges;
+    }
+
+    /// <summary>
+    /// The same benchmark calendar, extended so a stock listed on Nasdaq also needs <paramref name="nasdaq"/> (the QQQ
+    /// calendar) to be on. <paramref name="exchanges"/> maps each symbol to its listing exchange (Alpaca codes).
+    /// </summary>
+    public RegimeCalendar WithNasdaqHomeMarket(RegimeCalendar nasdaq, IReadOnlyDictionary<string, string> exchanges) =>
+        new(onDates, IsActive, evaluateAt, nasdaq ?? throw new ArgumentNullException(nameof(nasdaq)),
+            exchanges ?? throw new ArgumentNullException(nameof(exchanges)));
+
+    /// <summary>
+    /// Why a new entry in <paramref name="ticker"/> is not allowed at <paramref name="decisionTime"/>, or null when it is:
+    /// the benchmark must be on; with the home-market rule a stock must have a known listing exchange, and a Nasdaq listing
+    /// also needs the home-market fund on. Without the home-market rule this equals <see cref="IsOn(DateTimeOffset)"/>.
+    /// </summary>
+    public string? RejectionFor(DateTimeOffset decisionTime, string ticker)
+    {
+        if (!IsOn(decisionTime)) return MarketOffReason;
+        if (!IsActive || nasdaqCalendar is null) return null;
+        if (!listingExchanges!.TryGetValue(ticker.Trim().ToUpperInvariant(), out var exchange)) return ListingExchangeUnknownReason;
+        return exchange.Equals(TradingFlow.Domain.Strategies.RegimeRules.NasdaqExchange, StringComparison.OrdinalIgnoreCase) &&
+            !nasdaqCalendar.IsOn(decisionTime) ? NasdaqMarketOffReason : null;
     }
 
     public bool IsActive { get; }

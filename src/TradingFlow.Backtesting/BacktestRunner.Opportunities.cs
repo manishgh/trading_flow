@@ -21,7 +21,8 @@ public sealed partial class BacktestRunner
         var gates = frozenCandidates.Select(candidate => new BacktestOpportunityEntryEligibility(
             candidate.CandidateId, candidate.EntryTimestamp.ToUniversalTime(),
             universe?.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)) ?? true,
-            regimes is null || !regimes.TryGetValue(candidate.StrategyId, out var regime) || regime.IsOn(candidate.EntryTimestamp)))
+            regimes is null || !regimes.TryGetValue(candidate.StrategyId, out var regime) ||
+                regime.RejectionFor(candidate.EntryTimestamp, candidate.Ticker) is null))
             .ToImmutableArray();
         return new(runName, portfolio, strategies.ToImmutableArray(), frozenCandidates, marketBars.ToImmutableArray(), gates);
     }

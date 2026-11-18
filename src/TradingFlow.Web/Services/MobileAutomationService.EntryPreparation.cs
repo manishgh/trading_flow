@@ -140,6 +140,22 @@ public sealed partial class MobileAutomationService
             strategy.EntryRules.RequirePriceAboveSma200Daily;
     }
 
+    // The shared per-stock regime check. Under the Nasdaq home-market rule it reads the stock's listing from a broker client
+    // created for this lookup and disposed afterwards; without a broker client the listing is unknown and the entry is refused.
+    private async Task<string?> MobileRegimeRejectionAsync(RegimeRules regime, BacktestRunConfig runConfig, IMarketDataProvider provider,
+        string ticker, DateTimeOffset decisionAtUtc, CancellationToken cancellationToken)
+    {
+        var broker = regime.UsesNasdaqHomeMarket ? runtimeFactory.CreateBrokerClient(runConfig) : null;
+        try
+        {
+            return await regimeGate.RegimeRejectionAsync(regime, provider, runConfig.Intervals, decisionAtUtc, ticker, broker, cancellationToken);
+        }
+        finally
+        {
+            (broker as IDisposable)?.Dispose();
+        }
+    }
+
     private async Task<PreparedEntryExecution> PrepareStrategyEntryExecutionAsync(
         BacktestRunConfig runConfig,
         AuthorizedRuntimeStrategy runtimeStrategy,
@@ -173,13 +189,9 @@ public sealed partial class MobileAutomationService
                 state.AllBars.Min(bar => bar.Timestamp),
                 decisionAtUtc,
                 cancellationToken);
-        var regimeOn = strategy.Regime is not { IsActive: true } regimeRule ||
-            await regimeGate.IsRegimeOnAsync(
-                regimeRule,
-                provider,
-                runConfig.Intervals,
-                decisionAtUtc,
-                cancellationToken);
+        var regimeRejection = strategy.Regime is not { IsActive: true } regimeRule ? null :
+            await MobileRegimeRejectionAsync(regimeRule, runConfig, provider, ticker, decisionAtUtc, cancellationToken);
+        var regimeOn = regimeRejection is null;
         var latest = strategySnapshots[^1];
         var setupDuration = TimeframeParser.Parse(strategy.Timeframe);
         var setupAvailableAtUtc = latest.Timestamp.Add(setupDuration).ToUniversalTime();
@@ -209,7 +221,7 @@ public sealed partial class MobileAutomationService
                 ? $"{strategy.Regime.EvidenceRule}:{decisionAtUtc:O}"
                 : $"not-required:{decisionAtUtc:O}",
             decisionAtUtc,
-            JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime }));
+            JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection }));
         var setupKey = $"{strategy.StrategyId}:{latest.Timestamp.ToUniversalTime():O}";
         var request = StrategyDecisionRequestAssembler.Create(
             runtimeStrategy,

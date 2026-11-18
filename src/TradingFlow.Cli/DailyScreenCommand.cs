@@ -180,8 +180,18 @@ public static class DailyScreenCommand
                 throw new InvalidDataException($"--sessions dataset '{sessionsId}' is a {manifest.Kind} dataset, not exchange sessions.");
             sessions = manifest.DatasetId;
         }
+        // Optional --security-master names the frozen Alpaca security-master snapshot whose listing exchanges runs on this
+        // screen read for the Nasdaq home-market regime rule; it must be a security-master dataset.
+        string? securityMaster = null;
+        if (options.TryGetValue("--security-master", out var securityMasterId))
+        {
+            var manifest = await Manifest(catalog, securityMasterId, cancellationToken);
+            if (manifest.Kind != EvidenceDatasetKind.SecurityMaster)
+                throw new InvalidDataException($"--security-master dataset '{securityMasterId}' is a {manifest.Kind} dataset, not a security master.");
+            securityMaster = manifest.DatasetId;
+        }
         var inputs = new ResearchScreenInputs(Require(options, "--bars"), Require(options, "--actions"),
-            options.TryGetValue("--opening-bars", out var opening) ? opening : null, sessions);
+            options.TryGetValue("--opening-bars", out var opening) ? opening : null, sessions, securityMaster);
         return await ResearchScreenManifest.PublishAsync(folder, inputs, rules, ranking, from, to, DailyRankingOutput.IssuerIdentityBasis,
             excludeFile is null ? null : Path.GetFullPath(excludeFile), cancellationToken, splitRule, tier,
             options.TryGetValue("--include-symbols", out var includeFile) ? Path.GetFullPath(includeFile) : null);

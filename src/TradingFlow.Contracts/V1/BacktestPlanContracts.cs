@@ -24,7 +24,8 @@ public sealed record BacktestStockSource(string Key, string Name, string Kind, G
 /// </summary>
 public sealed record ResearchScreenReference(string ScreenName, string ManifestSha256, string RankedListSha256,
     string DailyBarsDatasetId, string ExchangeSessionsDatasetId, IReadOnlyList<string> FiveMinuteDatasetIds,
-    IReadOnlyList<string> OneMinuteDatasetIds, string? CorporateActionsDatasetId = null, IReadOnlyList<string>? HourlyDatasetIds = null)
+    IReadOnlyList<string> OneMinuteDatasetIds, string? CorporateActionsDatasetId = null, IReadOnlyList<string>? HourlyDatasetIds = null,
+    string? SecurityMasterDatasetId = null)
 {
     /// <summary>True when both references name the same screen fingerprints and the same datasets.</summary>
     public bool SameInputs(ResearchScreenReference other) =>
@@ -32,7 +33,8 @@ public sealed record ResearchScreenReference(string ScreenName, string ManifestS
         DailyBarsDatasetId == other.DailyBarsDatasetId && ExchangeSessionsDatasetId == other.ExchangeSessionsDatasetId &&
         FiveMinuteDatasetIds.SequenceEqual(other.FiveMinuteDatasetIds) && OneMinuteDatasetIds.SequenceEqual(other.OneMinuteDatasetIds) &&
         CorporateActionsDatasetId == other.CorporateActionsDatasetId &&
-        (HourlyDatasetIds ?? []).SequenceEqual(other.HourlyDatasetIds ?? []);
+        (HourlyDatasetIds ?? []).SequenceEqual(other.HourlyDatasetIds ?? []) &&
+        SecurityMasterDatasetId == other.SecurityMasterDatasetId;
 }
 
 /// <summary>
