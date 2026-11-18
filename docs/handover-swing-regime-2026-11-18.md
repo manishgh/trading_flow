@@ -1,7 +1,48 @@
-# Handover — swing strategies, market regime and VIX (state at 18 November 2026, ~22:15 UTC)
+# Handover — swing strategies, market regime and VIX (state at 18 November 2026, ~22:20 UTC)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
+
+**Rule (user, 18 Nov):** after every checkpoint, update this file — tick what is done, keep what remains — and commit it.
+
+## Goal
+
+**The user can run every long and short swing strategy from the web app** (Backtests page), without command-line steps.
+Each item below still needs written design approval before building (AGENTS.md), two independent reviewers, the
+affected tests, and installation on `C:\project\tradingflow-site`.
+
+## Checklist
+
+Market and stock filters
+- [x] SPY rising-average regime rule (checkpoint 1, `d252620`)
+- [x] ADR% screen rule, user's definition (checkpoint 1)
+- [x] QQQ for Nasdaq-listed stocks (checkpoint 2, `ef538c9`)
+- [ ] VIX sizing from FRED, previous close: full < 18, half 18–22, no longs > 22 (checkpoint 3 — approved, next)
+- [ ] Reversed regime for shorts (SPY/QQQ below falling 50-day, or VIX high) — needs design
+- [ ] Sector-fund rank labels on trades (report only) — assigned to the first run's report
+
+Long strategies
+- [x] Bollinger squeeze breakout v1 built (registered, disabled until checkpoint 3)
+- [ ] Enable the squeeze after checkpoint 3 and run the 6-month diagnostic (May–Oct 2026) with the full `.log`
+- [ ] Swing ORB on news — design approved (option B: decide after the close, buy next open); build
+- [ ] 21-EMA trend pullback — needs design (registered experiment V2-01 attaches here)
+
+Short strategies (each needs the reversed regime and a frozen borrowing rule; respect SEC Rule 201)
+- [ ] Squeeze breakdown — needs design
+- [ ] 21-EMA rejection (dead-cat bounce) — needs design
+- [ ] Swing ORB gap-down on bad news — needs design
+- [ ] Engine short setups for these (today only the retired RSI-2 short setups exist)
+
+Running it from the web app
+- [x] Backtests page can select published research screens, strategies, dates, capital and risk (existing)
+- [x] Browser tests use a test-owned catalog (`532d8ac`)
+- [ ] Web page to build a research screen (today `research-daily-screen` is CLI-only) — needs design
+- [ ] Web page to collect five-minute bars for a screen (today CLI-only) — needs design
+- [ ] Each strategy enabled in the catalog once built and reviewed
+
+Housekeeping
+- [x] Handover written (`8e75ab0`) and kept as this checklist
+- [ ] Delete session scratch files at the end of the session (list under Housekeeping below)
 
 ## What the user wants (in their words, condensed)
 
