@@ -98,5 +98,12 @@ resolutions are summarised in the table and trade-offs above. Their re-review ve
   "durable backtest result marker is not available" messages also present before the restart.
 - Served `/js/watch-desk.js` contains the quote socket path; anonymous requests to the quote hub and the Desk stream
   are refused with HTTP 401.
-- Not yet verified on the installed site: a signed-in Desk receiving real Alpaca quotes over the new socket.
-Logs: `.tmp/desk-quotes/` (session scratch).
+- Signed-in check on the installed site, 12:55 UTC (07:55 New York, pre-market), operator signed in by the user,
+  Desk group "All followed stocks" (30 stocks): the connection line read "15/30 current quotes · 1 unavailable ·
+  live-quote socket · Alpaca confirmed 30/30". Over 15 seconds, 22 of the 30 displayed prices changed without a page
+  reload. Fresh rows showed provider times seconds old (for example ASTS bid $27.95 / ask $28.10, SIP, pre-market,
+  provider time 12:55:34 UTC). Rows whose last SIP quote was older were labelled "Delayed" with their real age (for
+  example BXDC, last quote 12:01:22 UTC) rather than shown as live. SIVE showed "No quote": Alpaca's
+  `/v2/stocks/quotes/latest?symbols=SIVE&feed=sip` returned HTTP 200 with no quote, and `/v2/assets/SIVE` reports an
+  inactive, non-tradable OTC asset, so the empty value is the provider's, not a transport failure.
+- Session scratch logs in `.tmp/desk-quotes/` were deleted after this check.
