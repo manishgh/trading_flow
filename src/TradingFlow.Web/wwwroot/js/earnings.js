@@ -599,9 +599,14 @@
     function showNewsFor(ticker) {
         newsScopeTicker = ticker.toUpperCase();
         render();
-        // "nearest" leaves an already visible news column in place; reduced-motion users get an instant jump.
-        const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-        newsFeed.closest("aside")?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+        // Bring the start of the news column into view unless it already sits in the upper half of the screen, so a
+        // visible column is not moved; reduced-motion users get an instant jump.
+        const rail = newsFeed.closest("aside");
+        const top = rail?.getBoundingClientRect().top;
+        if (rail && (top < 0 || top > window.innerHeight / 2)) {
+            const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+            rail.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        }
     }
 
     // Shows news for one selected stock, or for every stock the current filters list, from both providers.

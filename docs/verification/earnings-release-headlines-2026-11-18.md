@@ -25,7 +25,7 @@ research behaviour changed.
   server's first result sign instead of repeating the rule. The Result filter counts these rows as observed; under the
   EPS buttons they appear only under "All results".
 - **Fix B.** The ticker on each card and a "<TICKER> news" button show only that stock's news (both providers) and
-  bring the news list into view (instant under reduced motion). "All news" is always visible and shows news for every
+  bring the start of the news list into view unless it is already in the upper half of the screen (instant under reduced motion; first tried as "nearest", which left only 63 of 630 pixels visible on the live site, reviewed again and accepted). "All news" is always visible and shows news for every
   stock the filters list; a selected stock that the filters stop listing returns to all news.
 
 ## Known limits (from review)
