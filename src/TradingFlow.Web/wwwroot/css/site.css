@@ -4007,6 +4007,8 @@ td.select-column {
 .earnings-identity { min-width: 0; }
 .earnings-identity-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .earnings-identity-line h3 { font-size: 19px; letter-spacing: -0.01em; margin: 0; }
+.earnings-ticker-news { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.earnings-ticker-news:hover, .earnings-ticker-news:focus-visible { color: var(--color-accent-600, inherit); }
 .earnings-company { font-size: 13px; color: var(--color-neutral-800); }
 .earnings-cap { font-size: 11px; color: var(--color-neutral-700); }
 .earnings-meta {

@@ -257,6 +257,10 @@ public static class EarningsApiEndpoints
         var revenueEstimate = analysis?.EffectiveRevenueEstimateMillions ?? calendarEvent.RevenueEstimateMillions;
         var revenueActual = analysis?.EffectiveRevenueActualMillions ?? calendarEvent.RevenueActualMillions;
         var revenueSurprise = analysis?.EffectiveRevenueSurprisePercent ?? calendarEvent.RevenueSurprisePercent;
+        // A results headline without figures: the row reads "reported, figures not yet published", not "pending".
+        var releasedWithoutFigures = EarningsWatchWindow.ReleasedWithoutFigures(calendarEvent, analysis) &&
+            eps.Actual is null && revenueActual is null;
+        var firstResultSign = FirstResultSign(calendarEvent, analysis);
         var newYork = TimeZoneInfo.ConvertTime(calendarEvent.ScheduledAtUtc, EarningsTimeZones.NewYork);
         var reportDate = calendarEvent.ReportDateExchange;
         // The Earnings page lists each reporting day on its own: the previous day's after-close reports stay on
@@ -281,7 +285,7 @@ public static class EarningsApiEndpoints
             eps.Actual,
             eps.SurprisePercent,
             eps.Outcome.ToString(),
-            EarningsEpsOutcomeClassifier.Format(eps.Outcome),
+            releasedWithoutFigures ? "Figures not yet published" : EarningsEpsOutcomeClassifier.Format(eps.Outcome),
             revenueEstimate,
             revenueActual,
             revenueSurprise,
@@ -293,7 +297,7 @@ public static class EarningsApiEndpoints
             calendarEvent.ResultFirstSeenAtUtc,
             resultAssessment.ToString(),
             FormatBreakoutAssessment(breakoutAssessment),
-            EarningsAssessmentLabel.Format(resultAssessment, breakoutAssessment),
+            releasedWithoutFigures ? "Reported · figures not yet published" : EarningsAssessmentLabel.Format(resultAssessment, breakoutAssessment),
             analysis?.Reason ?? (awaitingFirstAnalysis
                 ? "Analysis starts an hour before the scheduled slot, or as soon as a result appears."
                 : "No analysis was saved while this event was watched."),
@@ -323,7 +327,9 @@ public static class EarningsApiEndpoints
             item.LatestTrade?.TradedAtUtc,
             PercentChange(analysis?.PreReleaseReferenceClose, item.LatestTrade?.Price),
             ResultSeenBeforeSlot(calendarEvent, analysis),
-            EarningsWatchWindow.IsReported(FirstResultSign(calendarEvent, analysis), requestAtUtc));
+            EarningsWatchWindow.IsReported(firstResultSign, requestAtUtc),
+            firstResultSign,
+            releasedWithoutFigures);
     }
 
     /// <summary>Percent change from a reference price to a later price, or null when either is missing or the reference is 0.</summary>

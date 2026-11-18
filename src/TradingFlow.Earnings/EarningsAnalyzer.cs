@@ -60,6 +60,8 @@ public sealed class EarningsAnalyzer
         var resultNews = FindResultNews(calendarEvent, news, normalizedNow);
         var resolvedResult = ResolveResult(calendarEvent, resultNews);
         var result = AssessResult(resolvedResult);
+        // A release headline without figures still means the results are out: the card stops waiting for the slot.
+        var released = result != EarningsResultAssessment.Unknown || ReleaseSeen(calendarEvent, resultNews);
         var effectivePublicationTime = EffectivePublicationTime(calendarEvent, resultNews);
         var completedBars = bars
             .Where(bar => bar.Ticker.Equals(calendarEvent.Ticker, StringComparison.OrdinalIgnoreCase))
@@ -69,7 +71,7 @@ public sealed class EarningsAnalyzer
             .ToArray();
         // Before the release the reference stops at the scheduled time; once the result is out it stops at the
         // earliest evidence of the release. Every later branch uses this same reference.
-        var referenceCutoff = result == EarningsResultAssessment.Unknown && normalizedNow < calendarEvent.ScheduledAtUtc
+        var referenceCutoff = !released && normalizedNow < calendarEvent.ScheduledAtUtc
             ? calendarEvent.ScheduledAtUtc
             : effectivePublicationTime;
         var engine = Volatile.Read(ref indicators);
@@ -86,7 +88,7 @@ public sealed class EarningsAnalyzer
             CreateSnapshot(calendarEvent, normalizedNow, result, breakout, reason, resultNews, resolvedResult,
                 latestBar, referenceBar, referenceHigh);
 
-        if (result == EarningsResultAssessment.Unknown && normalizedNow < calendarEvent.ScheduledAtUtc)
+        if (!released && normalizedNow < calendarEvent.ScheduledAtUtc)
         {
             return Unassessed(EarningsBreakoutAssessment.AwaitingRelease, "Scheduled earnings have not been released.", latestCompletedBar);
         }
@@ -121,7 +123,7 @@ public sealed class EarningsAnalyzer
             normalizedNow,
             result,
             assessment,
-            $"{DescribeResult(result)}; {evidence}.",
+            $"{DescribeResult(result, ReleaseSeen(calendarEvent, resultNews))}; {evidence}.",
             resultNews,
             resolvedResult,
             completedBars[^1],
@@ -223,9 +225,9 @@ public sealed class EarningsAnalyzer
         var priceConfirmed = latest.CurrentPrice > referenceHigh;
         string[] evidence =
         [
-            epsSurprise is null ? "EPS result not yet reported"
+            epsSurprise is null ? "EPS beat or miss not yet known"
                 : epsSurprise > 0m ? $"EPS beat by {epsSurprise:F1}%" : $"EPS did not beat ({epsSurprise:F1}%)",
-            revenueSurprise is null ? "revenue result not yet reported"
+            revenueSurprise is null ? "revenue beat or miss not yet known"
                 : revenueSurprise > 0m ? $"revenue beat by {revenueSurprise:F1}%" : $"revenue did not beat ({revenueSurprise:F1}%)",
             priceConfirmed
                 ? $"close {latest.CurrentPrice:F2} is above pre-release high {referenceHigh:F2}"
@@ -240,14 +242,22 @@ public sealed class EarningsAnalyzer
         return (assessment, String.Join("; ", evidence));
     }
 
-    /// <summary>The opening sentence of an assessed card's reason.</summary>
-    private static string DescribeResult(EarningsResultAssessment result) => result switch
+    /// <summary>
+    /// The opening sentence of an assessed card's reason. Without figures, a matched release headline means the
+    /// results are out but cannot be judged yet; nothing is inferred from the headline's wording.
+    /// </summary>
+    private static string DescribeResult(EarningsResultAssessment result, bool releaseSeen) => result switch
     {
         EarningsResultAssessment.Positive => "Earnings result is positive",
         EarningsResultAssessment.Mixed => "Earnings result is mixed",
         EarningsResultAssessment.Negative => "Earnings result is negative",
+        _ when releaseSeen => "Results were released (headline matched); EPS and revenue figures are not yet published",
         _ => "Earnings result is not yet available"
     };
+
+    /// <summary>True when the matched headline shows the results were published (shared rule, including the release-window check).</summary>
+    private static bool ReleaseSeen(EarningsCalendarEvent calendarEvent, PersistedNewsItem? resultNews) =>
+        EarningsWatchWindow.HeadlineShowsRelease(calendarEvent, resultNews?.Headline, resultNews?.Timestamp);
 
     private static EarningsResultAssessment AssessResult(ResolvedEarningsResult result)
     {

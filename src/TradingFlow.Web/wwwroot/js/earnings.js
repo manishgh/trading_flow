@@ -320,12 +320,21 @@
         identity.className = "earnings-identity";
         const line = document.createElement("div");
         line.className = "earnings-identity-line";
-        line.append(text("h3", item.ticker));
+        // Selecting the stock shows only its news (both providers) in the news list and brings that list into view.
+        const heading = document.createElement("h3");
+        const tickerButton = text("button", item.ticker, "earnings-ticker-news");
+        tickerButton.type = "button";
+        tickerButton.title = `Show only ${item.ticker} news`;
+        tickerButton.addEventListener("click", () => showNewsFor(item.ticker));
+        heading.append(tickerButton);
+        line.append(heading);
         line.append(text("span", item.companyName, "earnings-company"));
         line.append(text("span", marketCap(item.marketCapMillions), "earnings-cap"));
         identity.append(line);
         const firstSign = firstResultSign(item);
-        if (firstSign) identity.append(text("div", `Results out · first seen ${threeClocks(firstSign)}`, "earnings-meta earnings-released"));
+        if (firstSign) identity.append(text("div",
+            `Results out · first seen ${threeClocks(firstSign)}${item.releasedWithoutFigures ? " · figures not yet published" : ""}`,
+            "earnings-meta earnings-released"));
         const providerName = item.provider === "finviz" ? "Finviz" : item.provider;
         identity.append(text("div",
             `${providerName} slot · ${item.releaseWindowLabel} · ${threeClocks(item.scheduledAtUtc)} · ` +
@@ -415,12 +424,10 @@
         return card;
     }
 
-    // The earliest sign the result was out: the provider first showing it, or its news headline. Null before then.
+    // The earliest sign the result was out, as the server's shared watch-window rule decided it (the provider
+    // showing a result, or a matched results headline, with or without figures). Null before then.
     function firstResultSign(item) {
-        // A headline counts only when a result was found, as on the server: an announcement is not a result.
-        const newsSign = String(item.resultAssessment || "Unknown") === "Unknown" ? null : item.resultNewsPublishedAtUtc;
-        const signs = [item.resultFirstSeenAtUtc, newsSign].filter(Boolean);
-        return signs.length ? signs.reduce((a, b) => (new Date(a) <= new Date(b) ? a : b)) : null;
+        return item.firstResultSignAtUtc || null;
     }
 
     /* The price block at the top right: the latest trade when the monitor has one, otherwise the last completed
@@ -516,12 +523,9 @@
             actions.append(order);
         }
 
-        const evidence = text("button", "Show evidence", "btn btn-secondary btn-md");
+        const evidence = text("button", `${item.ticker} news`, "btn btn-secondary btn-md");
         evidence.type = "button";
-        evidence.addEventListener("click", () => {
-            newsScopeTicker = item.ticker.toUpperCase();
-            render();
-        });
+        evidence.addEventListener("click", () => showNewsFor(item.ticker));
         actions.append(evidence);
 
         // The review link navigates to a separate authenticated ticket; this calendar cannot route.
@@ -591,7 +595,21 @@
 
     /* --- evidence rail ------------------------------------------------------ */
 
+    // Narrows the news list to one stock and scrolls it into view; "All news" returns to every listed stock.
+    function showNewsFor(ticker) {
+        newsScopeTicker = ticker.toUpperCase();
+        render();
+        // "nearest" leaves an already visible news column in place; reduced-motion users get an instant jump.
+        const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        newsFeed.closest("aside")?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+    }
+
+    // Shows news for one selected stock, or for every stock the current filters list, from both providers.
     function renderNews(items, visibleItems) {
+        // A selected stock that the filters no longer list falls back to all listed stocks.
+        if (newsScopeTicker && visibleItems && !visibleItems.some(item => item.ticker.toUpperCase() === newsScopeTicker)) {
+            newsScopeTicker = null;
+        }
         let scoped = items;
         if (newsScopeTicker) {
             scoped = items.filter(item => window.TradingFlowNews.symbols(item.tickers).includes(newsScopeTicker.toUpperCase()));
@@ -604,8 +622,11 @@
             });
         }
 
-        newsCount.textContent = String(scoped.length);
-        newsScopeClear.hidden = !newsScopeTicker;
+        newsCount.textContent = newsScopeTicker ? `${newsScopeTicker} · ${scoped.length}` : String(scoped.length);
+        newsScopeClear.setAttribute("aria-pressed", String(!newsScopeTicker));
+        newsScopeClear.title = newsScopeTicker
+            ? `Showing ${newsScopeTicker} only. Show news for every listed stock.`
+            : "Showing news for every stock the filters list.";
         if (!scoped.length) { syncChildren(newsFeed, [emptyNote(newsFeed)]); return; }
 
         // A story that arrives after the page first loaded flashes and says NEW for a minute; changing filters never re-flashes old ones.

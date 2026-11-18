@@ -37,6 +37,23 @@ public sealed class EarningsViewTests
         Assert.Equal("BBB", Assert.Single(result.Items).Ticker);
     }
 
+    /// <summary>
+    /// A row whose results headline was seen without figures counts as an observed result, not as EPS-pending, so
+    /// ICCM-style releases leave the "Pending" view once their release is known.
+    /// </summary>
+    [Fact]
+    public async Task ReleasedWithoutFiguresIsObservedAndNotPending()
+    {
+        var service = new EarningsViewService(Mock.Of<IWishlistRepository>(), Mock.Of<IDeskAccountReader>());
+        var user = new ClaimsPrincipal(new ClaimsIdentity());
+        var released = Response.Items[0] with { Id = "released", Ticker = "REL", ReleasedWithoutFigures = true };
+        var response = Response with { Items = [Response.Items[0], released] };
+
+        Assert.Equal("REL", Assert.Single((await service.FilterAsync(response, new() { Result = "observed" }, user, default)).Items).Ticker);
+        Assert.Equal("UNKNOWN", Assert.Single((await service.FilterAsync(response, new() { Result = "pending" }, user, default)).Items).Ticker);
+        Assert.Equal("UNKNOWN", Assert.Single((await service.FilterAsync(response, new() { Assessment = "pending" }, user, default)).Items).Ticker);
+    }
+
     [Fact]
     public async Task SectorAndNewsEvidenceFiltersUseRowSectorsAndTheNewsPanel()
     {

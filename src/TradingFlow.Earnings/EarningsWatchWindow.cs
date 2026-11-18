@@ -18,15 +18,44 @@ public static class EarningsWatchWindow
 
     /// <summary>
     /// The earliest sign the result was out: the provider first showing it, or the result headline the last
-    /// analysis matched. The headline counts only when that analysis found a result, so an announcement such as
-    /// "Acme to report third-quarter results" cannot end the watch before the release.
+    /// analysis matched. The headline counts when that analysis found a result, or when the headline itself says the
+    /// results were published (<see cref="EarningsNewsResultExtractor.IsResultsRelease"/>), as small issuers' releases
+    /// often carry no figures and Finviz may post none for hours. An announcement such as "Acme to report
+    /// third-quarter results" still cannot end the watch before the release.
     /// </summary>
     public static DateTimeOffset? FirstResultSign(EarningsCalendarEvent calendarEvent, EarningsAnalysisSnapshot? latest) =>
         new[]
         {
             calendarEvent.ResultFirstSeenAtUtc,
-            latest is { ResultAssessment: not EarningsResultAssessment.Unknown } ? latest.ResultNewsPublishedAtUtc : null
+            HeadlineShowsRelease(calendarEvent, latest) ? latest!.ResultNewsPublishedAtUtc : null
         }.Min();
+
+    /// <summary>
+    /// True when the latest analysis has a matched headline that shows the results are out but no figures were
+    /// available to assess them: the card reads "reported, figures not yet published" rather than "pending".
+    /// </summary>
+    public static bool ReleasedWithoutFigures(EarningsCalendarEvent calendarEvent, EarningsAnalysisSnapshot? latest) =>
+        latest is { ResultAssessment: EarningsResultAssessment.Unknown, EffectiveEpsActual: null, EffectiveRevenueActualMillions: null } &&
+        (calendarEvent.EpsActual ?? calendarEvent.ReportedEpsActual) is null && calendarEvent.RevenueActualMillions is null &&
+        HeadlineShowsRelease(calendarEvent, latest);
+
+    /// <summary>
+    /// The single rule for whether a matched headline shows the results are out. A structured result headline
+    /// ("EPS $4.30 Beats $4.07 Estimate") always counts. A release headline without figures counts only once the
+    /// slot's release window has opened (<see cref="EarningsCalendarDates.ReleaseWindowStartUtc"/>), so a
+    /// misworded preview published earlier cannot end the watch, collapse the card or move the pre-release reference.
+    /// </summary>
+    public static bool HeadlineShowsRelease(EarningsCalendarEvent calendarEvent, string? headline, DateTimeOffset? publishedAtUtc) =>
+        headline is not null && publishedAtUtc is { } published &&
+        (EarningsNewsResultExtractor.TryExtract(headline, out _) ||
+         EarningsNewsResultExtractor.IsResultsRelease(headline) &&
+         published >= EarningsCalendarDates.ReleaseWindowStartUtc(calendarEvent));
+
+    // A matched headline counts as the release when the analysis assessed a result or the headline rule says so.
+    private static bool HeadlineShowsRelease(EarningsCalendarEvent calendarEvent, EarningsAnalysisSnapshot? latest) =>
+        latest?.ResultNewsPublishedAtUtc is not null &&
+        (latest.ResultAssessment != EarningsResultAssessment.Unknown ||
+         HeadlineShowsRelease(calendarEvent, latest.NewsHeadline, latest.ResultNewsPublishedAtUtc));
 
     /// <summary>True once <see cref="FollowTime"/> has passed since the result was first seen.</summary>
     public static bool IsReported(DateTimeOffset? firstResultSign, DateTimeOffset nowUtc) =>

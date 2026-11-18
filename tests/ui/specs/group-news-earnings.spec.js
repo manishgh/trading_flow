@@ -240,8 +240,17 @@ test('shared News preserves safe provenance and Earnings scopes exact symbols',a
   await expect(page.locator('#earnings-news-feed [data-news-item]')).toHaveCount(2);
   await expect(page.locator('#earnings-news-feed script')).toHaveCount(0);
   await expect(page.locator('#earnings-news-feed a[href^="javascript:"]')).toHaveCount(0);
-  await page.locator('.earnings-event').filter({has:page.getByRole('heading',{name:'AA',exact:true})}).getByRole('button',{name:'Show evidence'}).click();
-  await expect(page.locator('#earnings-news-count')).toHaveText('1');
+  // Selecting a stock by its ticker shows only that stock's news; "All news" returns to every listed stock.
+  await page.locator('.earnings-event').filter({has:page.getByRole('heading',{name:'AAA',exact:true})}).getByRole('button',{name:'AAA',exact:true}).click();
+  await expect(page.locator('#earnings-news-count')).toHaveText('AAA · 1');
+  await expect(page.locator('#earnings-news-feed')).toContainText('Different AAA report');
+  await expect(page.locator('#earnings-news-feed')).not.toContainText('Exact AA report');
+  await expect(page.locator('#earnings-news-scope-clear')).toHaveAttribute('aria-pressed','false');
+  await page.locator('#earnings-news-scope-clear').click();
+  await expect(page.locator('#earnings-news-count')).toHaveText('2');
+  await expect(page.locator('#earnings-news-scope-clear')).toHaveAttribute('aria-pressed','true');
+  await page.locator('.earnings-event').filter({has:page.getByRole('heading',{name:'AA',exact:true})}).getByRole('button',{name:'AA news'}).click();
+  await expect(page.locator('#earnings-news-count')).toHaveText('AA · 1');
   await expect(page.locator('#earnings-news-feed')).toContainText('Exact AA report');
   await expect(page.locator('#earnings-news-feed')).not.toContainText('Different AAA report');
   await expect(page.locator('#earnings-news-feed')).toContainText('Reported evidence for AA');

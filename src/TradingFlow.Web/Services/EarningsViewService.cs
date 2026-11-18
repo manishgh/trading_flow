@@ -105,7 +105,7 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
                 Range(x.RevenueActualMillions,query.MinRevenueActual,query.MaxRevenueActual))
             .Where(x => Matches(query.Provider, x.Provider) && Matches(query.NewsProvider, x.NewsProvider))
             .Where(x => Matches(query.Day, x.DayGroup) && Matches(query.Breakout, x.BreakoutAssessment))
-            .Where(x => query.Assessment == "pending" ? x.EpsActual is null : Matches(query.Assessment == "inline" ? "Met" : query.Assessment, x.EpsOutcome))
+            .Where(x => query.Assessment == "pending" ? x.EpsActual is null && !x.ReleasedWithoutFigures : Matches(query.Assessment == "inline" ? "Met" : query.Assessment, x.EpsOutcome))
             .Where(x => query.HasNews != true || !String.IsNullOrWhiteSpace(x.NewsHeadline) || newsTickers.Contains(x.Ticker))
             .Where(x => Range(x.EpsSurprisePercent, query.MinEpsSurprise, query.MaxEpsSurprise) &&
                 Range(x.RevenueSurprisePercent, query.MinRevenueSurprise, query.MaxRevenueSurprise) &&
@@ -131,5 +131,6 @@ public sealed class EarningsViewService(IWishlistRepository groups, IDeskAccount
         String.Equals(filter.Trim(), value, StringComparison.OrdinalIgnoreCase);
     private static bool Range(decimal? value, decimal? min, decimal? max) => min is null && max is null ||
         value is { } known && (min is null || known >= min) && (max is null || known <= max);
-    private static bool HasObservedResult(EarningsCalendarItemResponse row) => row.EpsActual is not null || row.RevenueActualMillions is not null || row.ResultFirstSeenAtUtc is not null;
+    // Observed: provider figures, the provider first showing a result, or a results headline without figures.
+    private static bool HasObservedResult(EarningsCalendarItemResponse row) => row.EpsActual is not null || row.RevenueActualMillions is not null || row.ResultFirstSeenAtUtc is not null || row.ReleasedWithoutFigures;
 }

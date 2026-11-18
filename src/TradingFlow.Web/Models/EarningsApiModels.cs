@@ -110,7 +110,11 @@ public sealed record EarningsCalendarItemResponse(
     bool ResultSeenBeforeSlot = false,
     // True one hour after the result was first seen (EarningsWatchWindow): analysis has stopped and the page
     // lists the event in a collapsed section at the end of its day so upcoming reports stay on top.
-    bool IsReported = false);
+    bool IsReported = false,
+    // The earliest sign the results were out (EarningsWatchWindow.FirstResultSign), so the page never re-derives it.
+    DateTimeOffset? FirstResultSignAtUtc = null,
+    // True when a matched headline shows the results were published but no EPS or revenue figures exist yet.
+    bool ReleasedWithoutFigures = false);
 
 public sealed record PreviousEarningsResultResponse(
     DateOnly ReportDateExchange,

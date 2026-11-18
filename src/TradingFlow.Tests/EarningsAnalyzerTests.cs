@@ -218,7 +218,32 @@ public sealed class EarningsAnalyzerTests
             DateTimeOffset.Parse("2026-07-31T14:35:00Z"));
 
         Assert.Equal(EarningsBreakoutAssessment.InsufficientData, result.BreakoutAssessment);
-        Assert.Contains("revenue result not yet reported", result.Reason, StringComparison.Ordinal);
+        Assert.Contains("revenue beat or miss not yet known", result.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A company release headline without figures, seen before the slot, means the results are out: the card is
+    /// no longer "awaiting release" and says the figures are not yet published, without inventing a result.
+    /// </summary>
+    [Fact]
+    public void Analyze_ReleaseHeadlineWithoutFiguresIsReleasedButUnassessed()
+    {
+        var analyzer = new EarningsAnalyzer(CreateIndicatorEngine(), EarningsMonitorOptions.Default);
+        var scheduled = DateTimeOffset.Parse("2026-07-31T13:30:00Z");
+        var calendarEvent = CreateEvent(scheduled, epsSurprise: null, revenueSurprise: null);
+        calendarEvent.CompanyName = "Test Corp";
+        var releasedAt = scheduled.AddMinutes(-90);
+        var result = analyzer.Analyze(
+            calendarEvent,
+            CreateBars(scheduled),
+            [new PersistedNewsItem { Id = "release", Ticker = "TEST", Timestamp = releasedAt,
+                Headline = "Test Corp Reports Unaudited Financial Results for the Nine Months Ended June 30, 2026", Provider = "finviz" }],
+            scheduled.AddMinutes(-30));
+
+        Assert.Equal(EarningsResultAssessment.Unknown, result.ResultAssessment);
+        Assert.NotEqual(EarningsBreakoutAssessment.AwaitingRelease, result.BreakoutAssessment);
+        Assert.Equal(releasedAt, result.ResultNewsPublishedAtUtc);
+        Assert.StartsWith("Results were released (headline matched); EPS and revenue figures are not yet published", result.Reason, StringComparison.Ordinal);
     }
 
     [Fact]
