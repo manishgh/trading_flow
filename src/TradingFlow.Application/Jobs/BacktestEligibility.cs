@@ -18,7 +18,7 @@ public static class BacktestEligibility
         {
             var rules = new DailyScreenRules(requested.MinPrice, DailyScreenRules.ParsePriceBasis(requested.PriceBasis),
                 requested.AverageSessions, requested.MinAverageVolume, requested.MinAverageDollarVolume, requested.AtrPeriod,
-                requested.MinAtr, requested.MinHistorySessions);
+                requested.MinAtr, requested.MinHistorySessions, requested.MinAverageRangePct);
             rules.Validate();
             rules.RequireKnownBeforeEntry(!ExecutionReplayPolicy.IsIntradayCandle(executionReplayPolicyId));
             _ = ToRanking(requested, executionReplayPolicyId);

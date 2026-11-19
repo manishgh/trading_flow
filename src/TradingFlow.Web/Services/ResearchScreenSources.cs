@@ -107,9 +107,14 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
     }
 
     /// <summary>The run settings (providers.evidence_catalog) that let a run read exactly the referenced datasets.</summary>
-    /// <summary>IDs of the collected datasets that hold only bars of one timeframe, in ordinal order.</summary>
+    /// <summary>IDs of the collected datasets that hold only bars of one timeframe (full RTH window for 5m), in ordinal order.</summary>
     private static string[] DatasetsOf(IEnumerable<EvidenceDatasetManifest> collected, string timeframe) =>
-        collected.Where(dataset => dataset.Partitions.All(partition => partition.Provenance.Timeframe == timeframe))
+        collected.Where(dataset =>
+                dataset.Partitions.Count > 0 &&
+                dataset.Partitions.All(partition => partition.Provenance.Timeframe == timeframe) &&
+                (!String.Equals(timeframe, "5m", StringComparison.OrdinalIgnoreCase) ||
+                 !dataset.Attributes.TryGetValue("new_york_window", out var window) ||
+                 String.Equals(window, "09:30-16:00", StringComparison.Ordinal)))
             .Select(dataset => dataset.DatasetId).Order(StringComparer.Ordinal).ToArray();
 
     public EvidenceCatalogProviderConfig ProviderConfig(ResearchScreenReference reference) => new(paths.EvidenceCatalogPath,

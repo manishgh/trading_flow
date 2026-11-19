@@ -303,6 +303,10 @@
                     <label for="EligibilityMinHistorySessions">Minimum history (sessions)</label>
                     <input class="input" id="EligibilityMinHistorySessions" name="EligibilityMinHistorySessions" type="number" min="1" step="1" value="20" />
                 </div>
+                <div class="field">
+                    <label for="EligibilityMinAverageRangePct">Minimum ADR% (%)</label>
+                    <input class="input" id="EligibilityMinAverageRangePct" name="EligibilityMinAverageRangePct" type="number" min="0" step="any" />
+                </div>
             </div>
             <p class="note" id="EligibilityHelp">Optional. Enter a minimum price to switch it on. Each stock may then trade only on days it passes these rules, judged from completed earlier sessions (and that day's open when chosen). Blank thresholds are not applied. Every stock's eligible days are saved with the results.</p>
         </fieldset>
@@ -354,6 +358,7 @@
        Main column - one of three phases
        ======================================================================= *@
     <div class="lab-main">
+        <partial name="_ResearchScreensPanel" />
         @if (Model.SelectedJobMissing)
         {
             <section class="lab-panel" role="status">
@@ -488,6 +493,7 @@
 
 @section Scripts {
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
+    <script src="~/js/research-screens.js" asp-append-version="true" defer></script>
     @if (Model.Phase == "running" && job is not null)
     {
         <script src="~/js/lab-progress.js" asp-append-version="true" data-job-id="@job.JobId" defer></script>

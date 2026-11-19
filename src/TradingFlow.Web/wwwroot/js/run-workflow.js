@@ -376,7 +376,8 @@
         return { minPrice, priceBasis: form.elements.EligibilityPriceBasis.value,
             averageSessions: optionalNumber('EligibilityAverageSessions'), minHistorySessions: optionalNumber('EligibilityMinHistorySessions'),
             minAverageVolume: optionalNumber('EligibilityMinAverageVolume'), minAverageDollarVolume: optionalNumber('EligibilityMinAverageDollarVolume'),
-            atrPeriod: optionalNumber('EligibilityAtrPeriod'), minAtr: optionalNumber('EligibilityMinAtr') };
+            atrPeriod: optionalNumber('EligibilityAtrPeriod'), minAtr: optionalNumber('EligibilityMinAtr'),
+            minAverageRangePct: optionalNumber('EligibilityMinAverageRangePct') };
     }
     // Describes the saved group order and daily eligibility so the reviewer sees exactly what the plan stores.
     function describePlanSelection(plan) {
@@ -389,6 +390,7 @@
         if (set(rules.minAverageVolume)) parts.push(`average volume at least ${rules.minAverageVolume} shares`);
         if (set(rules.minAverageDollarVolume)) parts.push(`average dollar volume at least $${rules.minAverageDollarVolume}`);
         if (set(rules.minAtr)) parts.push(`ATR(${rules.atrPeriod}) above $${rules.minAtr}`);
+        if (set(rules.minAverageRangePct)) parts.push(`ADR% at least ${rules.minAverageRangePct}%`);
         return `${order}. Daily eligibility from earlier sessions: ${parts.join(', ')}.`;
     }
     // Parses the human-entered rows; the server performs authoritative membership/capital validation.

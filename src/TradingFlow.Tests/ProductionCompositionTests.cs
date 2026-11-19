@@ -187,7 +187,7 @@ public sealed class ProductionCompositionTests
             services.Where(item => item.ServiceType == typeof(IHostedService)).Select(ResolveHostedServiceType).ToArray());
     }
 
-    /// <summary>Pin the production allow-list to the two approved paused jobs and the empty UI-test branch.</summary>
+    /// <summary>Pin the production allow-list to the approved paused historical/observational jobs and the empty UI-test branch.</summary>
     [Fact]
     public void RuntimeComposition_PausedJobPolicyAllowsOnlyAssessmentAndHistoricalBacktest()
     {
@@ -195,7 +195,7 @@ public sealed class ProductionCompositionTests
         var normalized = System.Text.RegularExpressions.Regex.Replace(program, @"\s+", " ");
         Assert.Contains(
             "AllowedJobTypes: runtimeEnabled ? null : new HashSet<string>(uiTestMode ? [] : " +
-            "[TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type, \"backtest\"], StringComparer.Ordinal)",
+            "[TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type, \"backtest\", ResearchEvidenceJobService.Type], StringComparer.Ordinal)",
             normalized,
             StringComparison.Ordinal);
     }

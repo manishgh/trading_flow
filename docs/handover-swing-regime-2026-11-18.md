@@ -1,4 +1,4 @@
-# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~20:20 UTC)
+# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~21:35 UTC)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
@@ -40,9 +40,9 @@ Short strategies (each uses Checkpoint 7 reversed regime, frozen borrow fee, and
 Running it from the web app
 - [x] Backtests page can select published research screens, strategies, dates, capital and risk (existing)
 - [x] Browser tests use a test-owned catalog (`532d8ac`)
-- [ ] Web page to build a research screen (today `research-daily-screen` is CLI-only) — needs design
-- [ ] Web page to collect five-minute bars for a screen (today CLI-only) — needs design
-- [ ] Each strategy enabled in the catalog once built and reviewed
+- [x] Web page to build a research screen (Checkpoint 9: collapsible `_ResearchScreensPanel.cshtml` on Backtests backed by durable `research_evidence` jobs and shared `ResearchDailyScreenPublisher`, plus `Minimum ADR%` in `Daily eligibility filters`)
+- [x] Web page to collect five-minute bars for a screen (Checkpoint 9: two-step Estimate -> Confirm & Collect flow via shared `IntradayBarsCollectionPlanner` with `PriorSessions = 21`, held sessions, and full-RTH `09:30-16:00` catalog subtraction)
+- [x] Each strategy enabled in the catalog once built and reviewed (all 10 swing artifacts — 4 Long + 4 Short + V2-01 Long & Short — enabled for research backtests only; paper/live remain unauthorized)
 
 Housekeeping
 - [x] Handover written (`8e75ab0`) and kept as this checklist
@@ -64,7 +64,7 @@ Housekeeping
 
 | Document | Status |
 |---|---|
-| `docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md` | approved 19 Nov 2026: all 4 long + 4 short archetypes, strategy-owned ADR%/DV filter, Checkpoints 4–10 (Batches 1–3 / Checkpoints 4–8 done) |
+| `docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md` | approved 19 Nov 2026: all 4 long + 4 short archetypes, strategy-owned ADR%/DV filter, Checkpoints 4–10 (Checkpoints 4–9 done; Checkpoint 10 next) |
 | `docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md` | approved (option A); checkpoints 1–3 done, squeeze enabled for research backtests |
 | `docs/design-review/2026-11-18/swing-orb-and-vix-gate-proposal.md` | swing ORB approved with option B ("all approved"); VIX part superseded by the user's choice above |
 | `docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md` | registered experiment, host = 21-EMA pullback (not the squeeze) |
@@ -72,7 +72,18 @@ Housekeeping
 
 ## Done (commits)
 
-- Batch 3 — Checkpoints 7 & 8 (Shared Short Foundation + All 4 Short Mirror Strategies + V2-01 Short, 19 Nov): added
+- Checkpoint 9 (Web UI Research Screen Builder, Two-Step 5-Minute Bar Collector & `Minimum ADR%` Daily Eligibility, 19 Nov):
+  extracted shared `ResearchDailyScreenPublisher` (atomic staging-folder promotion + cleanup, async progress, core-data
+  non-overwrite guard), `DailyRankingOutput`, `IntradayBarsCollectionPlanner` (`PriorSessions = 21`, held non-eligible
+  sessions, $O(\text{partitions})$ session-sharded `09:30-16:00` `5m` catalog subtraction), and
+  `EvidenceDatasetCollectionRunner` into `TradingFlow.Data` (thin CLI adapters, `TradingFlow.Web` compiler-isolated from
+  `TradingFlow.Research.*`); wired `ResearchEvidenceJobService` (`research_evidence` durable job handler, zero new
+  `IHostedService`), `/api/v1/backtests/research-screens/*` endpoints, `_ResearchScreensPanel.cshtml` +
+  `research-screens.js` (`window.tradingFlowFetch` CSRF + `pagehide` abort, `#StockSource` refresh), and Option 1
+  `EligibilityMinAverageRangePct` across `Backtests.cshtml`, `run-workflow.js`, `BacktestEligibilityRules`, and
+  `BacktestEligibility` (`0 warnings / 0 errors` across 18 projects, `85/85` focused tests green, both independent
+  reviewers ACCEPT in Round 2).
+- `1905584` Batch 3 — Checkpoints 7 & 8 (Shared Short Foundation + All 4 Short Mirror Strategies + V2-01 Short, 19 Nov): added
   reversed SPY/QQQ falling-SMA regime (`price_below_falling_sma`), short VIX sizing (`vix_no_new_shorts_below: 18` /
   `vix_short_full_risk_above: 22`), annualized closing-fill short borrow fee (`ShortBorrowCostCalculator`,
   `short_borrow_apr_pct`) reconciled across `BacktestTrade`, `NativeDailySessionLedger`, `BacktestOpportunityShadowReplay`,

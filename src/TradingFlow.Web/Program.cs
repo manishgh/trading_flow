@@ -251,6 +251,10 @@ builder.Services.AddSingleton(new BacktestJobServiceOptions(
 builder.Services.AddSingleton<BacktestJobService>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
     serviceProvider.GetRequiredService<BacktestJobService>());
+builder.Services.AddSingleton<TradingFlow.Data.Evidence.Collection.IEvidenceDatasetCollectionRunner, TradingFlow.Data.Evidence.Collection.EvidenceDatasetCollectionRunner>();
+builder.Services.AddSingleton<ResearchEvidenceJobService>();
+builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
+    serviceProvider.GetRequiredService<ResearchEvidenceJobService>());
 builder.Services.AddSingleton(new OptimizationJobServiceOptions(
     MaximumConcurrentJobs: ParsePositiveInteger(
         builder.Configuration["Optimizations:MaxConcurrentJobs"]
@@ -788,6 +792,12 @@ builder.Services.AddSingleton<IReadOnlyDictionary<string, TradingFlow.Applicatio
             MaximumPendingJobs = services.GetRequiredService<PaperJobServiceOptions>().MaximumPendingJobs,
             MaximumConcurrentWorkers = services.GetRequiredService<PaperJobServiceOptions>().MaximumConcurrentJobs,
             ProjectionRefreshInterval = services.GetRequiredService<PaperJobServiceOptions>().SnapshotInterval
+        },
+        [ResearchEvidenceJobService.Type] = TradingFlow.Application.Jobs.DurableJobWorkerOptions.Default with
+        {
+            MaximumPendingJobs = 8,
+            MaximumConcurrentWorkers = 1,
+            ProjectionRefreshInterval = TimeSpan.FromSeconds(1)
         }
     };
 });
@@ -797,7 +807,7 @@ builder.Services.AddSingleton(new DurableJobHostOptions(TimeSpan.FromSeconds(Par
         ?? Environment.GetEnvironmentVariable("TRADINGFLOW_DURABLE_JOB_SHUTDOWN_DRAIN_S"),
     (int)DurableJobHostOptions.Default.ShutdownDrainTimeout.TotalSeconds)),
     AllowedJobTypes: runtimeEnabled ? null : new HashSet<string>(uiTestMode ? [] :
-        [TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type, "backtest"], StringComparer.Ordinal)));
+        [TradingFlow.Web.Services.Desk.CurrentStockStrategyAssessmentService.Type, "backtest", ResearchEvidenceJobService.Type], StringComparer.Ordinal)));
 
 var app = builder.Build();
 // Reject an incomplete production host before starting workers; report missing names without exposing secrets.

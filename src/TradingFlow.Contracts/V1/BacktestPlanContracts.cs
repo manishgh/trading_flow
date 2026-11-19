@@ -63,7 +63,9 @@ public sealed record SaveBacktestPlanRequest(StartBacktestRequest Run, int? Grou
 public sealed record BacktestEligibilityRules(decimal MinPrice, string PriceBasis, int AverageSessions, int MinHistorySessions,
     decimal? MinAverageVolume = null, decimal? MinAverageDollarVolume = null, int? AtrPeriod = null, decimal? MinAtr = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    BacktestRankingRules? Ranking = null);
+    BacktestRankingRules? Ranking = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    decimal? MinAverageRangePct = null);
 
 /// <summary>
 /// Per-session ranking of the eligible stocks. Measure is first_five_minute_relative_volume (09:30-09:35 New York volume

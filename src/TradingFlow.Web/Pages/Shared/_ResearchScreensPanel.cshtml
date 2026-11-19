@@ -1,0 +1,131 @@
+@* Collapsible point-in-time Research Screen builder and two-step 5-minute bar collector.
+   Rendered OUTSIDE the Backtest RunBacktest <form> and uses type="button" controls only so
+   existing Backtests form submission and Playwright selectors remain completely unaffected. *@
+<details class="lab-optional research-screens-panel" data-research-screens-panel>
+    <summary>Research screens &amp; 5-minute bars <span>Point-in-time data</span></summary>
+    <div class="lab-panel" style="margin-top:0.75rem;">
+        <div data-rs-global-status class="note" role="status" aria-live="polite" hidden></div>
+
+        <fieldset class="lab-block" style="margin-bottom:1.25rem;">
+            <legend class="section-heading">1 · Build a point-in-time research screen</legend>
+            <p class="note">
+                Publishes a fingerprinted <code>eligible.csv</code> and <code>screen-manifest.json</code> from cataloged
+                daily bars, corporate actions, exchange sessions, security master, and frozen FRED VIXCLS closes.
+                Existing screen folders are never overwritten.
+            </p>
+            <div class="lab-parameters">
+                <div class="field">
+                    <label for="RsScreenName">Screen name</label>
+                    <input class="input" id="RsScreenName" type="text" maxlength="96" placeholder="swing-adr25-may-oct-2026" data-rs-screen-name />
+                </div>
+                <div class="field">
+                    <label for="RsFromDate">From date (NY)</label>
+                    <input class="input" id="RsFromDate" type="date" value="2026-05-01" data-rs-from />
+                </div>
+                <div class="field">
+                    <label for="RsToDate">To date (NY)</label>
+                    <input class="input" id="RsToDate" type="date" value="2026-10-30" data-rs-to />
+                </div>
+                <div class="field">
+                    <label for="RsDailyBars">Daily bars dataset (1d)</label>
+                    <select class="input" id="RsDailyBars" data-rs-daily-bars></select>
+                </div>
+                <div class="field">
+                    <label for="RsCorporateActions">Corporate actions dataset</label>
+                    <select class="input" id="RsCorporateActions" data-rs-corporate-actions></select>
+                </div>
+                <div class="field">
+                    <label for="RsExchangeSessions">Exchange sessions (XNYS)</label>
+                    <select class="input" id="RsExchangeSessions" data-rs-exchange-sessions></select>
+                </div>
+                <div class="field">
+                    <label for="RsSecurityMaster">Security master (Nasdaq/QQQ)</label>
+                    <select class="input" id="RsSecurityMaster" data-rs-security-master></select>
+                </div>
+                <div class="field">
+                    <label for="RsExclusionList">Exclude fund/ETF symbol list</label>
+                    <select class="input" id="RsExclusionList" data-rs-exclusion-list></select>
+                </div>
+                <div class="field">
+                    <label for="RsMinPrice">Min price (USD)</label>
+                    <input class="input" id="RsMinPrice" type="number" min="0.01" step="any" value="5" data-rs-min-price />
+                </div>
+                <div class="field">
+                    <label for="RsPriceBasis">Price basis</label>
+                    <select class="input" id="RsPriceBasis" data-rs-price-basis>
+                        <option value="prior_close" selected>Previous close (prior_close)</option>
+                        <option value="session_open">Session open (session_open)</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="RsAverageSessions">Averaging window (sessions)</label>
+                    <input class="input" id="RsAverageSessions" type="number" min="1" step="1" value="20" data-rs-average-sessions />
+                </div>
+                <div class="field">
+                    <label for="RsMinDollarVolume">Min avg dollar volume (USD)</label>
+                    <input class="input" id="RsMinDollarVolume" type="number" min="0" step="any" value="20000000" data-rs-min-dollar-volume />
+                </div>
+                <div class="field">
+                    <label for="RsMinAdrPct">Min ADR% (20-session)</label>
+                    <input class="input" id="RsMinAdrPct" type="number" min="0" step="any" value="2.5" data-rs-min-adr-pct />
+                </div>
+                <div class="field">
+                    <label for="RsMinHistory">Min history (sessions)</label>
+                    <input class="input" id="RsMinHistory" type="number" min="1" step="1" value="253" data-rs-min-history />
+                </div>
+                <div class="field">
+                    <label for="RsSplitLookback">Exclude split lookback (sessions)</label>
+                    <input class="input" id="RsSplitLookback" type="number" min="1" step="1" value="253" data-rs-split-lookback />
+                </div>
+                <div class="field">
+                    <label>
+                        <input type="checkbox" id="RsIncludeFredVix" checked data-rs-include-fred-vix />
+                        Download &amp; freeze FRED VIXCLS closes with screen
+                    </label>
+                </div>
+            </div>
+            <div style="margin-top:0.75rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+                <button class="btn btn-primary" type="button" data-rs-build-btn>Build Research Screen</button>
+                <span class="note" data-rs-build-status role="status" aria-live="polite"></span>
+            </div>
+        </fieldset>
+
+        <fieldset class="lab-block">
+            <legend class="section-heading">2 · Collect 5-minute bars (estimate first, confirm to download)</legend>
+            <p class="note">
+                Step 1 inspects the catalog and calculates exact missing stock-sessions, HTTP batch count, and estimated
+                size without downloading anything. Step 2 unlocks only after reviewing Step 1's estimate.
+            </p>
+            <div class="lab-parameters">
+                <div class="field">
+                    <label for="RsPlanScreen">Published research screen</label>
+                    <select class="input" id="RsPlanScreen" data-rs-plan-screen></select>
+                </div>
+                <div class="field">
+                    <label for="RsPlanFrom">From date (NY)</label>
+                    <input class="input" id="RsPlanFrom" type="date" data-rs-plan-from />
+                </div>
+                <div class="field">
+                    <label for="RsPlanTo">To date (NY)</label>
+                    <input class="input" id="RsPlanTo" type="date" data-rs-plan-to />
+                </div>
+                <div class="field">
+                    <label for="RsPriorSessions">Prior baseline sessions</label>
+                    <input class="input" id="RsPriorSessions" type="number" min="0" max="250" step="1" value="21" data-rs-prior-sessions />
+                </div>
+                <div class="field">
+                    <label>
+                        <input type="checkbox" id="RsIncludeHeldSessions" checked data-rs-include-held />
+                        Include post-eligibility held sessions (for 5m stop/target replay)
+                    </label>
+                </div>
+            </div>
+            <div style="margin-top:0.75rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+                <button class="btn btn-secondary" type="button" data-rs-plan-btn>Estimate 5-Minute Bar Download</button>
+                <button class="btn btn-primary" type="button" data-rs-collect-btn hidden disabled>Confirm &amp; Collect 5-Minute Bars</button>
+            </div>
+            <div class="note" data-rs-plan-summary role="status" aria-live="polite" style="margin-top:0.75rem;overflow-wrap:anywhere;"></div>
+            <div class="note" data-rs-collect-status role="status" aria-live="polite" style="margin-top:0.5rem;overflow-wrap:anywhere;"></div>
+        </fieldset>
+    </div>
+</details>

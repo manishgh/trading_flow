@@ -82,6 +82,7 @@ public static class TradingApiV1Endpoints
         group.MapWishlistBulkEndpoints();
         group.MapRunWorkflowEndpoints();
         group.MapBacktestPlanEndpoints();
+        group.MapResearchScreenEndpoints();
         group.MapWarmupQueueEndpoints();
         group.MapTradingLimitEndpoints();
         group.MapPreparationEndpoints();
