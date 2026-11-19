@@ -123,9 +123,9 @@
       "semanticVersion": "1.0.0",
       "lifecycle": "research",
       "enabled": false,
-      "disabledReason": "Not yet runnable (18 November 2026): the approved VIX sizing (FRED VIXCLS, previous close: full size below 18, half size 18-22, no entries above 22) is not built yet. No economic run before it is built and reviewed.",
+      "disabledReason": "Not yet runnable (19 November 2026): VIX sizing (FRED VIXCLS, previous close: full size below 18, half size 18-22, no entries above 22) is built and awaiting final review and explicit Step 2 catalog enablement before any economic run.",
       "admissionProfileId": "bollinger-squeeze-as-traded-research-v1",
-      "reason": "Approved 18 November 2026 (docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md, option A): Bollinger (2001) squeeze. Previous session band width in the lowest 15% of its 60 widths, close above the 10-session high, volume at least 1.5x the 20-session median, close in the top quarter of the range, SPY above its rising 50-day average (higher than 20 sessions earlier), and for Nasdaq-listed stocks QQQ under the same rule. Next-open entry, 1 ATR stop, 2.5R target, 10-session time exit, as-traded bars on a whole-market ADR% >= 2.5 screen. Diagnostic backtest research only."
+      "reason": "Approved 18 November 2026 (docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md, option A): Bollinger (2001) squeeze. Previous session band width in the lowest 15% of its 60 widths, close above the 10-session high, volume at least 1.5x the 20-session median, close in the top quarter of the range, SPY above its rising 50-day average (higher than 20 sessions earlier), for Nasdaq-listed stocks QQQ under the same rule, and FRED VIXCLS previous-session sizing (full 0.5% risk below 18, half risk 18-22, no new longs above 22). Next-open entry, 1 ATR stop, 2.5R target, 10-session time exit, as-traded bars on a whole-market ADR% >= 2.5 screen. Diagnostic backtest research only."
     }
   ]
 }

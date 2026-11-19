@@ -10,7 +10,9 @@ namespace TradingFlow.Backtesting;
 
 public sealed record EventPortfolioReplayRequest(string RunName, PortfolioConfig Portfolio,
     IReadOnlyList<StrategyDefinition> Strategies, IReadOnlyList<BacktestCandidateTrade> Candidates,
-    IReadOnlyCollection<OhlcvBar> MarketBars, IReadOnlyDictionary<string, string> ExcludedCandidates);
+    IReadOnlyCollection<OhlcvBar> MarketBars, IReadOnlyDictionary<string, string> ExcludedCandidates,
+    // Per candidate ID: the regime's per-entry risk scale (VIX sizing) when below 1; absent candidates take full risk.
+    IReadOnlyDictionary<string, decimal>? EntryRiskScales = null);
 public sealed record EventPortfolioReplayBinding(
     Func<EventPortfolioReplayRequest, CancellationToken, Task<EventPortfolioReplayOutcome>> ExecuteAsync);
 public sealed record EventPortfolioDisposition(string CandidateId, bool Accepted, string Reason, int RequestedQuantity = 0);
@@ -234,7 +236,8 @@ public static partial class EventPortfolioExecution
                 candidate.EntryPrice, candidate.StopLossPrice > 0m
                     ? PlannedStopRequest.FromResolvedPrice(PlannedStopKind.Structural, candidate.StopLossPrice)
                     : PlannedStopRequest.NoStop(),
-                new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct),
+                new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct,
+                    request.EntryRiskScales?.GetValueOrDefault(candidate.CandidateId, 1m) ?? 1m),
                 new(0,
                     request.Portfolio.FixedBuyFee, request.Portfolio.FixedSellFee), requested));
             if (!plan.IsAccepted || plan.Order is null)

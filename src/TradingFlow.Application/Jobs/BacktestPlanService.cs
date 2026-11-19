@@ -46,6 +46,7 @@ public sealed class BacktestPlanService(IApplicationEventRepository events, IUni
         if (request.Run.ConfigurationSha256 is { } reviewedHash &&
             !configurationHash.Equals(reviewedHash, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The backtest profile changed since this preview. Preview the groups again before saving.");
+        RunWorkflowService.RequireRegimeScreenInputs(settings, screen?.Reference);
         return new(0, clock.GetUtcNow(), request.Run with { ConfigurationSha256 = configurationHash }, cohorts, count, limits.Backtest,
             "Cohorts use the source stocks after explicit exclusions. The original source snapshot is retained; current wishlist/Finviz membership does not establish historical membership.", source,
             configurationHash, request.ExcludedSymbols, evidence, settings, groupOrder, groupOrder is null ? null : request.GroupSeed, screen?.Reference);

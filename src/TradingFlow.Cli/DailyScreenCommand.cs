@@ -1,8 +1,14 @@
 using System.Globalization;
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using TradingFlow.Data.Evidence;
 using TradingFlow.Data.Evidence.Parquet;
+using TradingFlow.Data.Reference;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Research;
+using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Universe;
 
 namespace TradingFlow.Cli;
@@ -28,7 +34,8 @@ public static class DailyScreenCommand
     /// Optional --sessions datasetId names the XNYS exchange-session dataset backtests of this screen read; it is recorded in
     /// screen-manifest.json, which is always written with every input, rule and output fingerprint. Optional
     /// --exclude-split-lookback N leaves a stock out on any day whose N-session look-back contains a split known by that day,
-    /// listing each such day in split-exclusions.csv (reason split_in_lookback) and the count in the manifest.
+    /// listing each such day in split-exclusions.csv (reason split_in_lookback) and the count in the manifest. Optional
+    /// --fred-vix VIXCLS stores a fingerprinted copy of FRED's VIX closes with the screen for VIX sizing in its backtests.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
     {
@@ -156,11 +163,61 @@ public static class DailyScreenCommand
         if (required is not null)
             output.WriteLine($"Complete stocks from {required.Min():yyyy-MM-dd}: {completeStocks} kept, {incompleteStocks} left out ({IncompleteStocksFileName}).");
         if (tier is not null) output.WriteLine($"Rank tier: ranks {tier.FromRank}-{tier.ToRank} by {tier.Measure} of earlier sessions.");
+        using (var handler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
+        using (var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) })
+        {
+            http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
+            await WriteFrozenVixAsync(options.GetValueOrDefault("--fred-vix"), folder, to, http, DateTimeOffset.UtcNow, output, cancellationToken);
+        }
         var manifestSha = await PublishManifestAsync(options, catalog, rules, ranking?.Rules, from, to, folder, excludeFile,
             new ResearchScreenSplitRule(splitLookback, splitExcluded, suspectedExcluded, required?.Min(),
                 required is null ? null : completeStocks, required is null ? null : incompleteStocks), cancellationToken, tier);
         output.WriteLine($"Manifest {ResearchScreenManifest.FileName} SHA-256 {manifestSha}.");
         return 0;
+    }
+
+    /// <summary>
+    /// --fred-vix VIXCLS: downloads FRED's complete VIXCLS file once and stores its exact bytes as fred-vixcls.csv beside the
+    /// screen's other outputs, with fred-vixcls-receipt.json (URL, request time, HTTP status, size, SHA-256, date range). The
+    /// manifest then fingerprints both, so backtests of this screen read this frozen copy for VIX sizing. The file is parsed
+    /// before it is written, so a malformed download is refused. Pre-existing VIX CSV or receipt files in the output folder
+    /// are always refused up front before downloading or fingerprinting so original provider receipts are never overwritten.
+    /// </summary>
+    public static async Task WriteFrozenVixAsync(string? series, string folder, DateOnly screenEnd, HttpClient http,
+        DateTimeOffset requestedAtUtc, TextWriter output, CancellationToken cancellationToken)
+    {
+        var csvPath = Path.Combine(folder, ResearchScreenManifest.FredVixFileName);
+        var receiptPath = Path.Combine(folder, ResearchScreenManifest.FredVixReceiptFileName);
+        if (File.Exists(csvPath) || File.Exists(receiptPath))
+            throw new InvalidOperationException(
+                $"'{folder}' already holds a frozen VIX copy or receipt ('{ResearchScreenManifest.FredVixFileName}' / " +
+                $"'{ResearchScreenManifest.FredVixReceiptFileName}'); refusing to overwrite or reuse earlier provider evidence. Use an empty output folder.");
+        if (series is null) return;
+        if (!series.Trim().Equals(RegimeRules.FredVixSeries, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"--fred-vix supports only {RegimeRules.FredVixSeries}; got '{series}'.");
+        var download = await FredSeriesFile.DownloadAsync(http, RegimeRules.FredVixSeries, requestedAtUtc, cancellationToken);
+        var closes = VixCloseSeries.ParseFredCsv(Encoding.UTF8.GetString(download.Bytes));
+        await File.WriteAllBytesAsync(csvPath, download.Bytes, cancellationToken);
+        var sha256 = ResearchScreenManifest.Sha256(download.Bytes);
+        var receipt = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["series"] = RegimeRules.FredVixSeries,
+            ["url"] = download.Url.ToString(),
+            ["requested_at_utc"] = download.RequestedAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+            ["http_status"] = download.HttpStatus,
+            ["bytes"] = download.Bytes.Length,
+            ["sha256"] = sha256,
+            ["published_closes"] = closes.Count,
+            ["first_observation_date"] = closes.FirstDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["last_observation_date"] = closes.LastDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["note"] = "Downloaded once at requested_at_utc. Observation dates are FRED's; they are not the times the closes were first published."
+        };
+        await File.WriteAllTextAsync(receiptPath, JsonSerializer.Serialize(receipt,
+            new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        output.WriteLine($"Frozen FRED VIXCLS copy: {closes.Count} closes from {closes.FirstDate:yyyy-MM-dd} to {closes.LastDate:yyyy-MM-dd}, " +
+            $"HTTP {download.HttpStatus}, {download.Bytes.Length} bytes, SHA-256 {sha256}.");
+        if (closes.LastDate is not { } last || last < screenEnd)
+            output.WriteLine($"Warning: the VIX copy ends before the screen's last session {screenEnd:yyyy-MM-dd}; entries after its last close are refused.");
     }
 
     /// <summary>

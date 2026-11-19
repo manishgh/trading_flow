@@ -17,7 +17,11 @@ public sealed record IntradayPortfolioReplayRequest(PortfolioConfig Portfolio,
     IReadOnlyDictionary<(string Ticker, DateOnly Session), decimal>? SessionClosePrices = null,
     // Optional one-minute bars of selected stocks on selected days; they decide the order of an entry and a stop that fall
     // in the same five-minute bar. Absent minutes keep the worst-case reading.
-    IReadOnlyCollection<OhlcvBar>? MinuteBars = null);
+    IReadOnlyCollection<OhlcvBar>? MinuteBars = null,
+    // Per candidate ID: entries refused by the strategy's regime calendar (reason), and the per-entry risk scale (VIX sizing)
+    // of allowed entries below full risk. Built by the same admission helper as the event portfolio.
+    IReadOnlyDictionary<string, string>? ExcludedCandidates = null,
+    IReadOnlyDictionary<string, decimal>? EntryRiskScales = null);
 public sealed record IntradayReplayEvent(string CandidateId, string Ticker, DateTimeOffset TimestampUtc,
     string State, string Reason, int Quantity = 0, decimal? Price = null,
     decimal? StopPrice = null, decimal? TargetPrice = null, DateTimeOffset? EffectiveAfterUtc = null)
@@ -236,6 +240,9 @@ public static partial class IntradayPortfolioExecution
         /// </summary>
         private void Admit(BacktestCandidateTrade candidate, DateTimeOffset clock, DateTimeOffset deadline)
         {
+            // The regime gate comes first, as in the daily and event portfolios.
+            if (request.ExcludedCandidates?.TryGetValue(candidate.CandidateId, out var excluded) == true)
+            { Reject(candidate, excluded); return; }
             var evidence = candidate.IntradayExecution!;
             var marketEntry = evidence.EntryOrderMode is IntradayEntryOrderMode.StopMarket or IntradayEntryOrderMode.NextBarMarket;
             if (!ValidOrderClock(evidence, clock, SessionDeadline(candidate, deadline), marketEntry))
@@ -284,7 +291,8 @@ public static partial class IntradayPortfolioExecution
             var exitFee = side == PlannedOrderSide.Long ? request.Portfolio.FixedSellFee : request.Portfolio.FixedBuyFee;
             var plan = new SharedOrderRiskPlanner().Plan(new(candidate.Ticker, side, equity,
                 evidence.LimitPrice, PlannedStopRequest.FromResolvedPrice(PlannedStopKind.Structural, candidate.StopLossPrice),
-                new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct),
+                new(request.Portfolio.AccountRiskBudgetPct, request.Portfolio.MaxPositionNotionalPct,
+                    request.EntryRiskScales?.GetValueOrDefault(candidate.CandidateId, 1m) ?? 1m),
                 new(strategy.Execution.SlippageBps, entryFee, exitFee), notional));
             if (!plan.IsAccepted || plan.Order is null)
             { Reject(candidate, "order_plan:" + plan.Rejection?.Code); return null; }

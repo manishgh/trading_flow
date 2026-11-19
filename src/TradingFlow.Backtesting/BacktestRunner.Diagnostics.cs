@@ -650,8 +650,11 @@ public sealed partial class BacktestRunner
                     continue;
                 }
 
-                // Layer-2 regime gate: no new entries on days the market regime is off.
-                if (regimeCalendar?.RejectionFor(candidate.EntryTimestamp, candidate.Ticker) is { } regimeRejection)
+                // Layer-2 regime gate: evaluate benchmark, optional Nasdaq home-market, and optional VIX sizing once per entry.
+                var regimeDecision = regimeCalendar is null
+                    ? RegimeEntryDecision.Allowed
+                    : regimeCalendar.EntryDecisionFor(candidate.EntryTimestamp, candidate.Ticker);
+                if (regimeDecision.Rejection is { } regimeRejection)
                 {
                     admissionAudit.Reject(candidate, regimeRejection);
                     continue;
@@ -703,7 +706,9 @@ public sealed partial class BacktestRunner
                             candidate.StopLossPrice),
                     new OrderPlanningRiskLimits(
                         portfolio.AccountRiskBudgetPct,
-                        portfolio.MaxPositionNotionalPct),
+                        portfolio.MaxPositionNotionalPct,
+                        // VIX sizing: half risk between the thresholds, full risk otherwise (evaluated once above).
+                        regimeDecision.RiskScale),
                     new EstimatedOrderExecutionCosts(
                         SlippageBps: 0m,
                         FixedEntryFee: portfolio.FixedBuyFee,

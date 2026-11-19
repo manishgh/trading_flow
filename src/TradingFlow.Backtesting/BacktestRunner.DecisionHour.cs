@@ -228,17 +228,23 @@ public sealed partial class BacktestRunner
     {
         var eligibilityDay = EligibilitySession(decisionTime);
         var universeEligible = universeMembership is null || universeMembership.IsMember(ticker, eligibilityDay);
-        // Per stock: the benchmark, and for a Nasdaq listing under the home-market rule also QQQ; the reason names the part that failed.
-        var regimeRejection = regimeCalendar?.RejectionFor(decisionTime, ticker);
+        // Per stock: the benchmark, optional Nasdaq home-market, and optional VIX sizing evaluated once; the reason names the part that failed.
+        var regimeDecision = regimeCalendar is null
+            ? RegimeEntryDecision.Allowed
+            : regimeCalendar.EntryDecisionFor(decisionTime, ticker);
+        var regimeRejection = regimeDecision.Rejection;
         var regimeEligible = regimeRejection is null;
         var universe = new StrategyEligibilityEvidence(universeEligible,
             universeMembership is null ? "static_run_universe" : "historical_universe_membership",
             $"{ticker}:{eligibilityDay:yyyy-MM-dd}", decisionTime,
             System.Text.Json.JsonSerializer.Serialize(new { Ticker = ticker, eligibilityDay, universeEligible }));
+        var regimeEvidenceJson = regimeCalendar is { UsesVix: true }
+            ? System.Text.Json.JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible, regimeRejection, vix = regimeDecision.Vix, riskScale = regimeDecision.RiskScale })
+            : System.Text.Json.JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible, regimeRejection });
         var regime = new StrategyEligibilityEvidence(regimeEligible,
             regimeCalendar is null ? "strategy_has_no_regime_gate" : "historical_regime_calendar",
             $"{strategy.StrategyId}:{eligibilityDay:yyyy-MM-dd}", decisionTime,
-            System.Text.Json.JsonSerializer.Serialize(new { strategy.StrategyId, eligibilityDay, regimeEligible, regimeRejection }));
+            regimeEvidenceJson);
         return (universe, regime);
     }
 }

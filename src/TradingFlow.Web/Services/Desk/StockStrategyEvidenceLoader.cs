@@ -28,7 +28,8 @@ public interface IStockStrategyEvidenceLoader
 }
 
 /// <summary>Collects existing provider/pipeline evidence; strategy conditions remain entirely in the shared kernel.</summary>
-public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICandleStore candles, TimeProvider clock)
+public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICandleStore candles, TimeProvider clock,
+    IVixCloseSource? vixCloses = null)
     : IStockStrategyEvidenceLoader
 {
     /// <summary>Uses the profile's bounded pipeline and collection timeout; classification receipts precede the decision cutoff.</summary>
@@ -60,6 +61,9 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
             var listings = strategy.Regime is { IsActive: true, UsesNasdaqHomeMarket: true }
                 ? await LoadListingsAsync(profile, symbols.Where(market.TickerStates.ContainsKey).ToArray(), deadline.Token) : null;
             var news = await LoadNewsAsync(strategy, symbols, newsProvider, clock.GetUtcNow(), deadline.Token);
+            var vix = strategy.Regime is { IsActive: true, UsesVix: true }
+                ? await VixRegime.TryLoadLatestAsync(vixCloses, deadline.Token)
+                : null;
             var asOf = clock.GetUtcNow();
             var result = new Dictionary<string, StockStrategyEvidence>(StringComparer.Ordinal);
             foreach (var symbol in symbols)
@@ -68,7 +72,7 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                 var missing = state is null ? market.Failures.GetValueOrDefault(symbol) ?? "No candles returned for this stock."
                     : MissingCurrentMarket(state, required, calendar, asOf, strategy.Session.ExchangeTimezone);
                 var listing = listings?.GetValueOrDefault(symbol);
-                var regime = ResolveRegime(strategy, benchmarks, calendar, asOf, listing, out var regimeMissing);
+                var regime = ResolveRegime(strategy, benchmarks, calendar, asOf, listing, vix, out var regimeMissing);
                 missing ??= regimeMissing;
                 var query = news.GetValueOrDefault(symbol);
                 var factor = strategy.EntryRules.TechnicalFactor;
@@ -184,12 +188,15 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Calls the same regime calculator only after sufficient observed benchmark bars are proved. Under the Nasdaq home-market
-    /// rule the stock also needs a known listing, and a Nasdaq listing needs the home-market fund on (same reasons as backtests).
+    /// Calls the shared <see cref="RegimeGateService.Evaluate"/> helper only after sufficient observed benchmark bars are
+    /// proved. Under the Nasdaq home-market rule a Nasdaq listing with missing home-market bars reports data missing (so
+    /// the Desk surfaces missing data rather than a market-off refusal); otherwise SPY, Nasdaq/QQQ, and VIX sizing use the
+    /// exact same decision order and refusal reasons as backtests and paper trading.
     /// </summary>
-    private static StrategyEligibilityEvidence? ResolveRegime(StrategyDefinition strategy,
+    internal static StrategyEligibilityEvidence? ResolveRegime(StrategyDefinition strategy,
         IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> benchmarks,
-        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateTimeOffset asOf, string? listing, out string? missing)
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateTimeOffset asOf, string? listing, VixCloseSeries? vix,
+        out string? missing)
     {
         missing = null;
         if (strategy.Regime is not { IsActive: true } rule)
@@ -199,24 +206,29 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         if (missing is not null) return null;
         var available = bars.Where(bar => bar.Timestamp.AddDays(1) <= asOf && (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOf))
             .Select(bar => bar.Timestamp).Distinct().Count();
-        var eligible = RegimeCalendarBuilder.IsRegimeOnAt(bars, rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars);
-        string? rejection = eligible ? null : RegimeCalendar.MarketOffReason;
-        if (eligible && rule.UsesNasdaqHomeMarket)
+
+        var lookupFailed = listing == ListingLookupFailed;
+        var exchange = lookupFailed ? null : listing;
+        IReadOnlyList<OhlcvBar>? homeBars = null;
+        if (rule.UsesNasdaqHomeMarket &&
+            !lookupFailed &&
+            !String.IsNullOrWhiteSpace(exchange) &&
+            exchange.Equals(RegimeRules.NasdaqExchange, StringComparison.OrdinalIgnoreCase) &&
+            RegimeCalendarBuilder.IsRegimeOnAt(VixRegime.FilterTradingDayBars(bars, calendar), rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars))
         {
-            if (listing == ListingLookupFailed) rejection = RegimeCalendar.ListingExchangeLookupFailedReason;
-            else if (String.IsNullOrWhiteSpace(listing)) rejection = RegimeCalendar.ListingExchangeUnknownReason;
-            else if (listing.Equals(RegimeRules.NasdaqExchange, StringComparison.OrdinalIgnoreCase))
-            {
-                var home = benchmarks.GetValueOrDefault(rule.NasdaqListingBenchmark!) ?? [];
-                missing = MissingBenchmark(rule.NasdaqListingBenchmark!, home, rule.RequiredCloses, calendar, asOf, strategy.Session.ExchangeTimezone);
-                if (missing is not null) return null;
-                if (!RegimeCalendarBuilder.IsRegimeOnAt(home, rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars))
-                    rejection = RegimeCalendar.NasdaqMarketOffReason;
-            }
-            eligible = rejection is null;
+            homeBars = benchmarks.GetValueOrDefault(rule.NasdaqListingBenchmark!) ?? [];
+            missing = MissingBenchmark(rule.NasdaqListingBenchmark!, homeBars, rule.RequiredCloses, calendar, asOf, strategy.Session.ExchangeTimezone);
+            if (missing is not null) return null;
         }
-        return new(eligible, "shared_regime_gate", $"{rule.EvidenceRule}:{asOf:O}", asOf,
-            System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp), listing, rejection }));
+
+        var decision = RegimeGateService.Evaluate(rule, bars, asOf, exchange, lookupFailed, homeBars, vix, calendar);
+        var eligible = decision.Rejection is null;
+        var rejection = decision.Rejection;
+        var evidenceJson = decision.Vix is null
+            ? System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp), listing, rejection })
+            : System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp), listing, rejection,
+                vix = decision.Vix, decision.RiskScale });
+        return new(eligible, "shared_regime_gate", $"{rule.EvidenceRule}:{asOf:O}", asOf, evidenceJson);
     }
 
     /// <summary>Checks the complete prepared evidence at the actual decision time after source refresh, without inventing newer coverage.</summary>

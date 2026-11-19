@@ -76,6 +76,33 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
                 "which the decision-hour strategy needs. Plan it with evidence-plan-minute-bars --eligible eligible.csv --timeframe 1Hour and collect it first.");
     }
 
+    /// <summary>
+    /// Refuses a backtest configuration when selected strategies require frozen VIX closes or a Nasdaq security master
+    /// that the chosen stock source or research screen does not provide.
+    /// </summary>
+    internal static void RequireRegimeScreenInputs(IEnumerable<StrategyDefinition> strategies, ResearchScreenReference? screen)
+    {
+        var activeRegimes = strategies.Select(strategy => strategy.Regime).Where(regime => regime is { IsActive: true }).ToArray();
+        if (activeRegimes.Any(regime => regime!.UsesVix))
+        {
+            if (screen is null)
+                throw new InvalidOperationException(
+                    "VIX sizing in a backtest needs a published research screen with a frozen FRED VIXCLS copy (research-daily-screen --fred-vix); " +
+                    "select a published research screen before starting.");
+            if (String.IsNullOrWhiteSpace(screen.FredVixSha256))
+                throw new InvalidOperationException(
+                    $"Research screen '{screen.ScreenName}' was published without a frozen FRED VIXCLS copy; " +
+                    "VIX sizing needs a screen published with research-daily-screen --fred-vix.");
+        }
+        if (screen is not null && activeRegimes.Any(regime => regime!.UsesNasdaqHomeMarket) &&
+            String.IsNullOrWhiteSpace(screen.SecurityMasterDatasetId))
+        {
+            throw new InvalidOperationException(
+                $"Research screen '{screen.ScreenName}' was published without a frozen security-master dataset; " +
+                "the Nasdaq home-market rule needs a screen published with research-daily-screen --security-master <dataset ID>.");
+        }
+    }
+
     /// <summary>True when the reviewed source is a published research screen.</summary>
     private static bool IsResearchScreen(UniversePreviewResponse source) => source.Members.Any(member =>
         member.Sources.Any(item => item.SourceKind == TradingFlow.Domain.Discovery.DiscoverySourceKinds.ResearchScreen));
@@ -126,7 +153,9 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
                 item.Definition.StrategyName, item.Definition.Execution.SlippageBps,
                 item.Artifact.DerivedFromIdentity is { } parent ? new(parent.StrategyId, parent.SemanticVersion, parent.ContentSha256) : null,
                 new(item.Artifact.AdmissionProfile.ProfileId, item.Artifact.AdmissionProfile.ProfileVersion,
-                    item.Artifact.AdmissionProfile.ExecutionTimingPolicy, item.Artifact.AdmissionProfile.RiskPolicy))).ToArray(),
+                    item.Artifact.AdmissionProfile.ExecutionTimingPolicy, item.Artifact.AdmissionProfile.RiskPolicy),
+                RequiresFrozenVix: item.Definition.Regime is { IsActive: true, UsesVix: true },
+                RequiresSecurityMaster: item.Definition.Regime is { IsActive: true, UsesNasdaqHomeMarket: true })).ToArray(),
             string.Join(Environment.NewLine, selected.Select(item =>
                 $"{item.Definition.StrategyName}: {ExecutionAssumptionNote(run, item.Definition)}")),
             StrategyHorizonResolver.Resolve(selected[0].Definition),
@@ -230,16 +259,19 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
         var selected = request.Strategies.Select(identity => SelectStrategy(options, identity)).ToArray();
         var profile = reader.ReadBacktestRun(config.Path);
         RankedMembershipReference? ranked = null;
+        ResearchScreenReference? screenReference = null;
         if (IsResearchScreen(universe))
         {
             // A research-screen run reads only the frozen evidence-catalog datasets and the screen's membership list. The
             // switch happens before the profile is resolved, so even the session calendar comes from the catalog, never Alpaca.
             var (screen, reference) = await ReadResearchScreenAsync(universe, token);
+            screenReference = reference;
             RequireHourlyBarsForDecisionHourStrategies(reference, selected.Select(option => option.Artifact.AdmissionProfile.ExecutionTimingPolicy));
             profile = profile with { Provider = TradingFlow.Data.Evidence.EvidenceCatalogMarketDataProvider.ProviderName,
                 Providers = profile.Providers with { EvidenceCatalog = researchScreens!.ProviderConfig(reference) } };
             ranked = new RankedMembershipReference(screen.ManifestPath, screen.ManifestSha256);
         }
+        RequireRegimeScreenInputs(selected.Select(option => option.Definition), screenReference);
         var run = await ResolveEffectiveProfileAsync(profile, selected, request, token);
         if (universe.Horizon != StrategyHorizonResolver.Resolve(selected[0].Definition))
             throw new InvalidOperationException("The source preview horizon differs from the selected strategy. Preview the stock source again for this strategy.");

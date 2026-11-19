@@ -189,13 +189,34 @@ public sealed partial class BacktestRunner
         var membership = screen.ToMembership(NewYorkDate(evaluationStart), NewYorkDate(windowEnd.AddTicks(-1)));
         var eligibleDays = run.Tickers.ToDictionary(ticker => ticker, ticker => membership.EligibleDays(ticker)
             .Select(day => day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)).ToArray(), StringComparer.OrdinalIgnoreCase);
-        var payload = new
-        {
-            runName = run.RunName, researchScreen = screen.Name, manifestSha256 = screen.ManifestSha256, rankedListSha256 = screen.RankedListSha256,
-            rules = new { screen.Manifest.ScreenRules, screen.Manifest.RankingRules }, issuerIdentityBasis = screen.Manifest.IssuerIdentityBasis,
-            exclusionsFile = "ranked-daily-exclusions.csv (in the research screen, identified by the manifest SHA-256)",
-            eligibleDays, rankedSessions = membership.SessionRankings.Select(PublishedSessionRanking).ToArray()
-        };
+        var vixSnapshot = screen.Manifest.Outputs.ContainsKey(TradingFlow.Engine.Universe.ResearchScreenManifest.FredVixFileName)
+            ? TradingFlow.Engine.Universe.PublishedResearchScreen.ReadFrozenVix(screen.Folder, screen.ManifestSha256)
+            : null;
+        object payload = vixSnapshot is null
+            ? new
+            {
+                runName = run.RunName, researchScreen = screen.Name, manifestSha256 = screen.ManifestSha256, rankedListSha256 = screen.RankedListSha256,
+                rules = new { screen.Manifest.ScreenRules, screen.Manifest.RankingRules }, issuerIdentityBasis = screen.Manifest.IssuerIdentityBasis,
+                exclusionsFile = "ranked-daily-exclusions.csv (in the research screen, identified by the manifest SHA-256)",
+                eligibleDays, rankedSessions = membership.SessionRankings.Select(PublishedSessionRanking).ToArray()
+            }
+            : new
+            {
+                runName = run.RunName, researchScreen = screen.Name, manifestSha256 = screen.ManifestSha256, rankedListSha256 = screen.RankedListSha256,
+                rules = new { screen.Manifest.ScreenRules, screen.Manifest.RankingRules }, issuerIdentityBasis = screen.Manifest.IssuerIdentityBasis,
+                exclusionsFile = "ranked-daily-exclusions.csv (in the research screen, identified by the manifest SHA-256)",
+                eligibleDays, rankedSessions = membership.SessionRankings.Select(PublishedSessionRanking).ToArray(),
+                frozenVix = new
+                {
+                    fileName = TradingFlow.Engine.Universe.ResearchScreenManifest.FredVixFileName,
+                    sha256 = vixSnapshot.FileSha256,
+                    receiptSha256 = vixSnapshot.ReceiptSha256,
+                    publishedCloses = vixSnapshot.Closes.Count,
+                    firstDate = vixSnapshot.Closes.FirstDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+                    lastDate = vixSnapshot.Closes.LastDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+                    protectedCutoffDate = vixSnapshot.ProtectedCutoffDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+                }
+            };
         await _artifactWriter.WriteTextAsync(Path.Combine(run.ResultsRoot, "universe", $"{run.RunName}-daily-eligibility.json"),
             JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         progress?.Report(BacktestProgress.StageOnly("resolved_universe",

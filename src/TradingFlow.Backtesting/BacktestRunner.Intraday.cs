@@ -39,7 +39,7 @@ public sealed partial class BacktestRunner
         UniverseMembership? membership = null)
     {
         progress?.Report(BacktestProgress.StageOnly("intraday_candidates", "Evaluating completed intraday entry evidence."));
-        await BuildRegimeCalendarsAsync(run, [strategy], preparedMarket.DataStart, preparedMarket.WindowEnd, token);
+        var regimeCalendars = await BuildRegimeCalendarsAsync(run, [strategy], preparedMarket.DataStart, preparedMarket.WindowEnd, token);
         var sessions = candidateSessionSchedules ?? throw new InvalidDataException("Intraday execution requires the archived exchange calendar.");
         // A frozen ranked list limits evaluation, coverage checks and one-minute bars to each stock's member sessions.
         var rankedMembers = run.Universe?.RankedMembership is not null ? membership : null;
@@ -57,8 +57,10 @@ public sealed partial class BacktestRunner
             ? await LoadSessionClosePricesAsync(run, preparedMarket.DataStart, preparedMarket.WindowEnd, token) : null;
         var minutes = rankedMembers is null ? null
             : await LoadMemberMinuteBarsAsync(run, rankedMembers, preparedMarket.DataStart, preparedMarket.WindowEnd, token);
+        // Regime refusals and VIX risk scales use the same admission helper as the event portfolio (membership is applied above).
+        var (regimeExcluded, riskScales) = EntryAdmissions(eligible, null, regimeCalendars);
         var replay = IntradayPortfolioExecution.Replay(new(run.Portfolio, [strategy], eligible, bars,
-            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet, closes, minutes), token);
+            sessions, preparedMarket.WindowStart, preparedMarket.WindowEnd, quiet, closes, minutes, regimeExcluded, riskScales), token);
         if (minutes is not null) await PublishEntryBarMinuteOrderAsync(run, replay, minutes.Count, token);
         var outcome = IntradayOutcome(replay, candidates, batches, preparedMarket.WindowStart, notEligible);
         IntradayPortfolioEvidence.Publish(hypotheses, execution, candidates, replay);

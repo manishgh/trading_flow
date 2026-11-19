@@ -89,9 +89,10 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         var sessions = inputs.ExchangeSessionsDatasetId ?? throw new InvalidOperationException(
             $"Research screen '{name}' names no exchange-session dataset. Publish it again with research-daily-screen --sessions <XNYS dataset ID>.");
         var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == membership).ToArray();
+        var fredVixSha = manifest.Outputs.GetValueOrDefault(ResearchScreenManifest.FredVixFileName);
         if (manifest.RankingRules is null)
             return new(name, sha, membership, inputs.DailyBarsDatasetId, sessions, [], [],
-                inputs.CorporateActionsDatasetId, DatasetsOf(collected, "1h"), inputs.SecurityMasterDatasetId);
+                inputs.CorporateActionsDatasetId, DatasetsOf(collected, "1h"), inputs.SecurityMasterDatasetId, fredVixSha);
         string[] Of(string timeframe) => DatasetsOf(collected, timeframe);
         var five = Of("5m");
         if (five.Length == 0)
@@ -102,7 +103,7 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
             throw new InvalidOperationException($"No one-minute bar dataset collected for ranked list {membership} of research screen " +
                 $"'{name}' is in the evidence catalog. Plan it with evidence-plan-minute-bars and collect it first.");
         return new(name, sha, membership, inputs.DailyBarsDatasetId, sessions, five, minute,
-            inputs.CorporateActionsDatasetId, SecurityMasterDatasetId: inputs.SecurityMasterDatasetId);
+            inputs.CorporateActionsDatasetId, SecurityMasterDatasetId: inputs.SecurityMasterDatasetId, FredVixSha256: fredVixSha);
     }
 
     /// <summary>The run settings (providers.evidence_catalog) that let a run read exactly the referenced datasets.</summary>

@@ -54,7 +54,7 @@ public sealed class SharedOrderRiskPlanner
                 "The requested stop does not create positive adverse price risk.");
         }
 
-        var accountRiskBudget = request.AccountEquity * (request.RiskLimits.AccountRiskBudgetPct / 100m);
+        var accountRiskBudget = request.AccountEquity * (request.RiskLimits.EffectiveAccountRiskBudgetPct / 100m);
         var fixedFees = request.ExecutionCosts.TotalFixedFees;
         if (fixedFees >= accountRiskBudget)
         {
@@ -141,7 +141,7 @@ public sealed class SharedOrderRiskPlanner
                 EstimatedPriceLossPerShare: entryPrice,
                 fixedFees,
                 PlannedLoss: deployedNotional + fixedFees,
-                AccountRiskBudget: request.AccountEquity * (request.RiskLimits.AccountRiskBudgetPct / 100m)));
+                AccountRiskBudget: request.AccountEquity * (request.RiskLimits.EffectiveAccountRiskBudgetPct / 100m)));
     }
 
     private static OrderPlanningResult? ValidateRequest(OrderPlanningRequest request)
@@ -171,6 +171,14 @@ public sealed class SharedOrderRiskPlanner
             return Reject(
                 OrderPlanRejectionCode.InvalidRiskLimits,
                 "Risk percentages must each be greater than zero and no greater than 100.");
+        }
+
+        // The regime's per-entry scale may only reduce the budget (VIX sizing halves it); it never raises or removes it.
+        if (request.RiskLimits.EntryRiskScale is <= 0m or > 1m)
+        {
+            return Reject(
+                OrderPlanRejectionCode.InvalidRiskLimits,
+                "The per-entry risk scale must be greater than zero and no greater than 1.");
         }
 
         if (request.ExecutionCosts.SlippageBps < 0m ||

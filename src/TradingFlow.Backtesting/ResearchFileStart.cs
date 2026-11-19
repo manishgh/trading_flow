@@ -68,9 +68,11 @@ public static class ResearchFileStart
         string variantKey, string configHash, string? objective, IReadOnlyDictionary<string, object>? parameters)
     {
         var catalog = run.Provider.Equals("evidence_catalog", StringComparison.OrdinalIgnoreCase) ? run.Providers.EvidenceCatalog : null;
+        var fredVixDataset = ResolveFrozenVixDatasetId(run);
         var datasets = catalog is null ? new[] { "unverified-provider:" + run.Provider } :
             new[] { catalog.DailyDatasetId, catalog.ExchangeSessionsDatasetId, catalog.CorporateActionsDatasetId, catalog.SecurityMasterDatasetId,
                     "screen-membership:" + catalog.RankedListSha256, run.Universe?.RankedMembership?.ManifestSha256,
+                    fredVixDataset,
                     run.Engine.ExecutionSourceManifestSha256, run.Engine.EvidenceDependencyGraphSha256 }
                 .Where(value => value is not null).Select(value => value!)
                 .Concat(catalog.FiveMinuteDatasetIds).Concat(catalog.OneMinuteDatasetIds).Concat(catalog.HourlyDatasetIds ?? [])
@@ -109,6 +111,22 @@ public static class ResearchFileStart
             partitions, objective ?? "completed_executions",
             ["Any missing required evidence or incomplete execution", "Investment success policy awaits explicit approval."],
             catalog is not null && partitionFrozen && run.Engine.ExecutionSourceManifestPath is null && run.Engine.EvidenceManifestPath is null);
+    }
+
+    /// <summary>
+    /// Reads the screen manifest's frozen FRED VIXCLS SHA-256 when the run references a published research screen on disk
+    /// that includes the VIX copy, returning its trial-registry dataset tag ("fred-vixcls:&lt;sha256&gt;"), or null otherwise.
+    /// </summary>
+    private static string? ResolveFrozenVixDatasetId(BacktestRunConfig run)
+    {
+        if (run.Universe?.RankedMembership is not { } ranked || !File.Exists(ranked.ManifestPath))
+            return null;
+        var folder = Path.GetDirectoryName(ranked.ManifestPath);
+        if (String.IsNullOrWhiteSpace(folder)) return null;
+        var (manifest, _, _) = TradingFlow.Engine.Universe.PublishedResearchScreen.ReadDefinition(folder, ranked.ManifestSha256);
+        return manifest.Outputs.TryGetValue(TradingFlow.Engine.Universe.ResearchScreenManifest.FredVixFileName, out var sha)
+            ? "fred-vixcls:" + sha
+            : null;
     }
 
     /// <summary>Preserves all exact structured formula and cost data in the registry's existing string contract.</summary>

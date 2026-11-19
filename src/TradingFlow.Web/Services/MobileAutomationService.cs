@@ -11,6 +11,7 @@ using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
+using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Risk;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Engine.Strategies;
@@ -42,7 +43,7 @@ public sealed partial class MobileAutomationService
     private readonly IStrategyCandidateDecisionOrchestrator? candidateDecisions;
     private readonly ManualEntryOptions manualEntryOptions;
     private readonly TimeProvider timeProvider;
-    private readonly TradingFlow.Engine.Regime.RegimeGateService regimeGate = new();
+    private readonly RegimeGateService regimeGate;
 
     public MobileAutomationService(
         SimpleYamlReader yamlReader,
@@ -58,7 +59,9 @@ public sealed partial class MobileAutomationService
         IProtectiveOrderInvariantService? protectiveOrders = null,
         ICandidateRepository? candidateRepository = null,
         ManualEntryOptions? manualEntryOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        // FRED's latest VIX closes for strategies with VIX sizing; without it their entries are refused as vix_lookup_failed.
+        IVixCloseSource? vixCloses = null)
     {
         this.yamlReader = yamlReader;
         this.runtimeFactory = runtimeFactory;
@@ -76,6 +79,7 @@ public sealed partial class MobileAutomationService
             : new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), candidateRepository);
         this.manualEntryOptions = manualEntryOptions ?? new ManualEntryOptions(ManualEntryPolicy.StrategyGated);
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        regimeGate = new(vixCloses);
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -515,7 +519,9 @@ public sealed partial class MobileAutomationService
         ValidatedEntryCandidate Candidate,
         bool OperatorOverride,
         IndicatorSnapshot? OperatorSnapshot = null,
-        StrategyOrderPlan? OrderPlan = null);
+        StrategyOrderPlan? OrderPlan = null,
+        // The regime's per-entry risk scale (VIX sizing: 0.5 between the thresholds), applied when the order is sized.
+        decimal EntryRiskScale = 1m);
 
     private static string ResolveEntryOrderType(BacktestRunConfig run) =>
         String.IsNullOrWhiteSpace(run.Execution.EntryOrderType)

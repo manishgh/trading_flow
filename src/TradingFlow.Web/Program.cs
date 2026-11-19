@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
@@ -13,6 +14,7 @@ using TradingFlow.Data.Earnings;
 using TradingFlow.Data.Discovery;
 using TradingFlow.Data.Evidence;
 using TradingFlow.Data.Evidence.Governance;
+using TradingFlow.Data.Reference;
 using TradingFlow.Data.Wishlists;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
@@ -291,6 +293,23 @@ builder.Services.AddSingleton(new PaperJobServiceOptions(
             ?? Environment.GetEnvironmentVariable("TRADINGFLOW_PAPER_RECOVERY_READY_TIMEOUT_S"),
         (int)PaperJobServiceOptions.Default.RecoveryReadinessTimeout.TotalSeconds))));
 builder.Services.AddSingleton<IPaperJobRecoveryService, PaperJobRecoveryService>();
+// FRED's latest VIX closes for paper trading and the Desk (strategies with VIX sizing); one cached reader per host.
+builder.Services.AddHttpClient(FredVixCloseSource.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AutomaticDecompression = DecompressionMethods.All
+});
+builder.Services.AddSingleton<IVixCloseSource>(serviceProvider =>
+{
+    var clients = serviceProvider.GetRequiredService<IHttpClientFactory>();
+    return new FredVixCloseSource(
+        () => clients.CreateClient(FredVixCloseSource.HttpClientName),
+        serviceProvider.GetRequiredService<TimeProvider>(),
+        serviceProvider.GetRequiredService<ILogger<FredVixCloseSource>>());
+});
 builder.Services.AddSingleton<PaperJobService>();
 builder.Services.AddScoped<PaperRunViewService>();
 builder.Services.AddScoped<PaperExecutionComparisonService>();

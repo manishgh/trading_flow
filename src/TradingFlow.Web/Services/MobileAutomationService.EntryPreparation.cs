@@ -10,6 +10,7 @@ using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
+using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Risk;
 using TradingFlow.Engine.Strategies;
 
@@ -142,13 +143,14 @@ public sealed partial class MobileAutomationService
 
     // The shared per-stock regime check. Under the Nasdaq home-market rule it reads the stock's listing from a broker client
     // created for this lookup and disposed afterwards; without a broker client the listing is unknown and the entry is refused.
-    private async Task<string?> MobileRegimeRejectionAsync(RegimeRules regime, BacktestRunConfig runConfig, IMarketDataProvider provider,
-        string ticker, DateTimeOffset decisionAtUtc, CancellationToken cancellationToken)
+    // With VIX sizing the decision also carries the per-entry risk scale applied when the order is sized.
+    private async Task<RegimeEntryDecision> MobileRegimeDecisionAsync(RegimeRules regime, BacktestRunConfig runConfig,
+        IMarketDataProvider provider, string ticker, DateTimeOffset decisionAtUtc, CancellationToken cancellationToken)
     {
         var broker = regime.UsesNasdaqHomeMarket ? runtimeFactory.CreateBrokerClient(runConfig) : null;
         try
         {
-            return await regimeGate.RegimeRejectionAsync(regime, provider, runConfig.Intervals, decisionAtUtc, ticker, broker, cancellationToken);
+            return await regimeGate.EntryDecisionAsync(regime, provider, runConfig.Intervals, decisionAtUtc, ticker, broker, cancellationToken);
         }
         finally
         {
@@ -156,6 +158,12 @@ public sealed partial class MobileAutomationService
         }
     }
 
+    /// <summary>
+    /// Evaluates a strategy-gated mobile entry at <paramref name="decisionAtUtc"/> through the shared decision kernel,
+    /// applying the regime gate (benchmark, optional Nasdaq home-market, and optional VIX sizing) and carrying the
+    /// resulting per-entry risk scale to order planning. Throws when required timeframe data is unavailable or the
+    /// candidate decision does not trigger.
+    /// </summary>
     private async Task<PreparedEntryExecution> PrepareStrategyEntryExecutionAsync(
         BacktestRunConfig runConfig,
         AuthorizedRuntimeStrategy runtimeStrategy,
@@ -189,8 +197,9 @@ public sealed partial class MobileAutomationService
                 state.AllBars.Min(bar => bar.Timestamp),
                 decisionAtUtc,
                 cancellationToken);
-        var regimeRejection = strategy.Regime is not { IsActive: true } regimeRule ? null :
-            await MobileRegimeRejectionAsync(regimeRule, runConfig, provider, ticker, decisionAtUtc, cancellationToken);
+        var regimeDecision = strategy.Regime is not { IsActive: true } regimeRule ? RegimeEntryDecision.Allowed :
+            await MobileRegimeDecisionAsync(regimeRule, runConfig, provider, ticker, decisionAtUtc, cancellationToken);
+        var regimeRejection = regimeDecision.Rejection;
         var regimeOn = regimeRejection is null;
         var latest = strategySnapshots[^1];
         var setupDuration = TimeframeParser.Parse(strategy.Timeframe);
@@ -221,7 +230,10 @@ public sealed partial class MobileAutomationService
                 ? $"{strategy.Regime.EvidenceRule}:{decisionAtUtc:O}"
                 : $"not-required:{decisionAtUtc:O}",
             decisionAtUtc,
-            JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection }));
+            // The VIX reading is recorded only for strategies with VIX sizing, so other strategies' evidence is unchanged.
+            regimeDecision.Vix is not { } vixReading
+                ? JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection })
+                : JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection, vix = vixReading, regimeDecision.RiskScale }));
         var setupKey = $"{strategy.StrategyId}:{latest.Timestamp.ToUniversalTime():O}";
         var request = StrategyDecisionRequestAssembler.Create(
             runtimeStrategy,
@@ -278,7 +290,8 @@ public sealed partial class MobileAutomationService
                 persisted.Candidate.Version,
                 persisted.Candidate.SemanticDecisionSha256),
             OperatorOverride: false,
-            OrderPlan: orderPlan);
+            OrderPlan: orderPlan,
+            EntryRiskScale: regimeDecision.RiskScale);
     }
 
     private async Task<PreparedEntryExecution> PrepareAutomationEntryExecutionAsync(
@@ -363,6 +376,11 @@ public sealed partial class MobileAutomationService
             OperatorSnapshot: latest);
     }
 
+    /// <summary>
+    /// Sizes a strategy-gated mobile entry order via <see cref="StrategyOrderPlanner"/> using the portfolio risk limits
+    /// and the regime's per-entry risk scale (<see cref="PreparedEntryExecution.EntryRiskScale"/>). Throws if the
+    /// canonical order plan is missing or rejected by risk limits.
+    /// </summary>
     private static FinalizedOrder PrepareStrategyOrder(
         BacktestRunConfig runConfig,
         string ticker,
@@ -378,7 +396,8 @@ public sealed partial class MobileAutomationService
                 accountEquity,
                 new OrderPlanningRiskLimits(
                     runConfig.Portfolio.AccountRiskBudgetPct,
-                    runConfig.Portfolio.MaxPositionNotionalPct),
+                    runConfig.Portfolio.MaxPositionNotionalPct,
+                    execution.EntryRiskScale),
                 runConfig.Portfolio.FixedBuyFee,
                 runConfig.Portfolio.FixedSellFee));
         return orderPlan.Order

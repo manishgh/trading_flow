@@ -32,6 +32,7 @@ public sealed partial class BacktestRunner
         var active = strategies.Where(strategy => strategy.Regime is { IsActive: true }).ToArray();
 
         IMarketDataProvider? provider = null;
+        VixCloseSeries? frozenVix = null;
         var barsByBenchmark = new Dictionary<string, IReadOnlyList<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -68,9 +69,15 @@ public sealed partial class BacktestRunner
 
                 if (bars.Count < regime.RequiredCloses + 1)
                     throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod} (rising over {regime.SmaRisingLookbackBars} sessions); active market filter cannot be evaluated.");
-                var calendar = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod, regime.SmaRisingLookbackBars);
+                var calendar = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod, regime.SmaRisingLookbackBars, candidateSessionSchedules);
                 if (regime.UsesNasdaqHomeMarket)
                     calendar = await WithNasdaqHomeMarketAsync(run, provider!, regime, calendar, dataStart, windowEnd, cancellationToken);
+                if (regime.UsesVix)
+                {
+                    var lastNeeded = calendar.PreviousSessionAt(windowEnd.AddTicks(-1));
+                    frozenVix ??= LoadFrozenVix(run, lastNeeded);
+                    calendar = calendar.WithVix(regime, frozenVix, candidateSessionSchedules);
+                }
                 calendars[strategy.StrategyId] = calendar;
             }
         }
@@ -92,6 +99,55 @@ public sealed partial class BacktestRunner
         return calendars;
     }
 
+    /// <summary>
+    /// The frozen VIX closes a backtest reads for VIX sizing: the fingerprinted FRED copy published with the run's research
+    /// screen (universe.ranked_membership). The screen's manifest SHA-256 is part of the run's recorded inputs, so the copy is
+    /// recorded with them. A run without a research screen, or on a screen published without the copy, is refused.
+    /// </summary>
+    private VixCloseSeries LoadFrozenVix(BacktestRunConfig run, DateOnly? lastNeeded)
+    {
+        var ranked = run.Universe?.RankedMembership ?? throw new InvalidOperationException(
+            "VIX sizing in a backtest needs a published research screen with a frozen FRED VIXCLS copy (research-daily-screen --fred-vix); " +
+            "this run names no research screen.");
+        var snapshot = TradingFlow.Engine.Universe.PublishedResearchScreen.ReadFrozenVix(
+            Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
+        var closes = snapshot.Closes;
+        _logger.LogInformation("VIX sizing reads the frozen FRED VIXCLS copy {File} (SHA-256 {Sha256}, receipt SHA-256 {ReceiptSha256}): {Count} closes from {First} to {Last}.",
+            TradingFlow.Engine.Universe.ResearchScreenManifest.FredVixFileName, snapshot.FileSha256, snapshot.ReceiptSha256, closes.Count, closes.FirstDate, closes.LastDate);
+        // Entries after the copy's last close are refused as vix_close_unknown_for_previous_session; say so once, up front.
+        if (lastNeeded is { } needed && (closes.LastDate is not { } last || last < needed))
+            _logger.LogWarning("The frozen VIX copy ends on {Last}, before the run's last session ({Needed}); entries after it are refused as {Reason}.",
+                closes.LastDate, lastNeeded, VixRegime.CloseUnknownReason);
+        return closes;
+    }
+
+    /// <summary>
+    /// The universe and regime admission of each candidate for replays that admit candidates themselves (event portfolio,
+    /// intraday): candidates refused by the universe or the strategy's regime calendar, with their reasons, and the per-entry
+    /// risk scale (VIX sizing) of allowed candidates whose scale is below 1. Same order and reasons as the daily portfolio.
+    /// </summary>
+    internal static (Dictionary<string, string> Excluded, Dictionary<string, decimal> RiskScales) EntryAdmissions(
+        IEnumerable<BacktestCandidateTrade> candidates, UniverseMembership? membership, IReadOnlyDictionary<string, RegimeCalendar> calendars)
+    {
+        var excluded = new Dictionary<string, string>(StringComparer.Ordinal);
+        var scales = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
+        {
+            if (membership is not null && !membership.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)))
+            {
+                excluded[candidate.CandidateId] = "universe_membership_missing";
+                continue;
+            }
+            if (!calendars.TryGetValue(candidate.StrategyId, out var calendar)) continue;
+            var decision = calendar.EntryDecisionFor(candidate.EntryTimestamp, candidate.Ticker);
+            if (decision.Rejection is { } regimeRejection)
+                excluded[candidate.CandidateId] = regimeRejection;
+            else if (decision.RiskScale < 1m)
+                scales[candidate.CandidateId] = decision.RiskScale;
+        }
+        return (excluded, scales);
+    }
+
     // Option A of the 18 Nov 2026 design: adds the home-market fund's calendar (QQQ, same rule) and every symbol's listing
     // exchange from the run's frozen listing source. A run whose data source cannot name listings is refused, not guessed.
     private async Task<RegimeCalendar> WithNasdaqHomeMarketAsync(BacktestRunConfig run, IMarketDataProvider provider, RegimeRules regime,
@@ -106,7 +162,7 @@ public sealed partial class BacktestRunner
             throw new InvalidOperationException("The listing-exchange source returned no listings; the Nasdaq home-market rule cannot be evaluated.");
         RecordListingCoverage(run, exchanges);
         return calendar.WithNasdaqHomeMarket(
-            RegimeCalendarBuilder.Build(nasdaqBars, regime.SmaPeriod, regime.SmaRisingLookbackBars), exchanges);
+            RegimeCalendarBuilder.Build(nasdaqBars, regime.SmaPeriod, regime.SmaRisingLookbackBars, candidateSessionSchedules), exchanges);
     }
 
     // Listings come from the run's own data source. Prepared and cached runs wrap that source, so when the wrapper cannot

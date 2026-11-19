@@ -29,10 +29,26 @@ public sealed record RegimeRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int SmaRisingLookbackBars = 0,
     // Home-market fund for Nasdaq-listed stocks (option A of the 18 Nov 2026 design: "QQQ"). When set, a stock listed on
     // Nasdaq also needs this fund to pass the same rule; other listings need only the benchmark. Omitted when unset.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? NasdaqListingBenchmark = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? NasdaqListingBenchmark = null,
+    // VIX sizing (checkpoint 3 of the 18 Nov 2026 design), long strategies only. The VIX close of the session before the
+    // entry (the same session whose benchmark close the regime rule reads) decides: below VixFullRiskBelow full per-trade
+    // risk; from VixFullRiskBelow to VixNoLongsAbove (both included) the per-trade risk times VixReducedRiskScale; above
+    // VixNoLongsAbove no new entry. All four are set together or not at all; omitted when unset so other strategies keep
+    // their recorded content.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? VixSeries = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixFullRiskBelow = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixNoLongsAbove = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixReducedRiskScale = null)
 {
     /// <summary>Alpaca's exchange code for a Nasdaq listing, as in its asset records and the security master.</summary>
     public const string NasdaqExchange = "NASDAQ";
+
+    /// <summary>The only VIX series supported: FRED's daily CBOE Volatility Index close.</summary>
+    public const string FredVixSeries = "VIXCLS";
+
+    /// <summary>True when the previous session's VIX close also sizes or refuses new entries.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsesVix => !String.IsNullOrWhiteSpace(VixSeries);
 
     /// <summary>True when the stock's own listing market also has to pass the rule.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -51,7 +67,8 @@ public sealed record RegimeRules(
         (SmaRisingLookbackBars > 0
             ? $"{BenchmarkSymbol}:{SmaPeriod}:rising{SmaRisingLookbackBars}"
             : $"{BenchmarkSymbol}:{SmaPeriod}") +
-        (UsesNasdaqHomeMarket ? $":nasdaq{NasdaqListingBenchmark}" : "");
+        (UsesNasdaqHomeMarket ? $":nasdaq{NasdaqListingBenchmark}" : "") +
+        (UsesVix ? FormattableString.Invariant($":vix{VixSeries}:{VixFullRiskBelow}:{VixNoLongsAbove}:{VixReducedRiskScale}") : "");
 
     public const string PriceAboveSma = "price_above_sma";
     public const string Off = "off";
@@ -60,6 +77,38 @@ public sealed record RegimeRules(
         !string.IsNullOrWhiteSpace(BenchmarkSymbol) &&
         Rule.Equals(PriceAboveSma, StringComparison.OrdinalIgnoreCase) &&
         SmaPeriod > 0;
+
+    /// <summary>
+    /// Checks all regime invariants (rising-average look-back, home-market symbol, and VIX sizing completeness/bounds).
+    /// When <paramref name="direction"/> is provided, also enforces that VIX sizing is configured on long strategies only.
+    /// Throws <see cref="InvalidOperationException"/> with a concrete explanation when any setting is inconsistent.
+    /// </summary>
+    public void Validate(string? direction = null)
+    {
+        if (SmaRisingLookbackBars < 0)
+            throw new InvalidOperationException("regime.sma_rising_lookback_bars must be zero or positive.");
+        if (NasdaqListingBenchmark is not null &&
+            (String.IsNullOrWhiteSpace(NasdaqListingBenchmark) ||
+             NasdaqListingBenchmark.Trim().Equals(BenchmarkSymbol?.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("regime.nasdaq_listing_benchmark must name a fund other than regime.benchmark, for example QQQ.");
+
+        var hasSeries = !String.IsNullOrWhiteSpace(VixSeries);
+        var hasAnyVix = hasSeries || VixFullRiskBelow is not null || VixNoLongsAbove is not null || VixReducedRiskScale is not null;
+        if (!hasAnyVix) return;
+
+        if (!hasSeries || VixFullRiskBelow is null || VixNoLongsAbove is null || VixReducedRiskScale is null)
+            throw new InvalidOperationException("VIX sizing needs all of regime.vix_series, regime.vix_full_risk_below, " +
+                "regime.vix_no_new_longs_above and regime.vix_reduced_risk_scale.");
+        var normalizedSeries = VixSeries!.Trim().ToUpperInvariant();
+        if (normalizedSeries != FredVixSeries)
+            throw new InvalidOperationException($"regime.vix_series must be {FredVixSeries} (FRED's daily VIX close); got '{VixSeries}'.");
+        if (VixFullRiskBelow <= 0m || VixNoLongsAbove < VixFullRiskBelow)
+            throw new InvalidOperationException("regime.vix_full_risk_below must be positive and no higher than regime.vix_no_new_longs_above.");
+        if (VixReducedRiskScale <= 0m || VixReducedRiskScale >= 1m)
+            throw new InvalidOperationException("regime.vix_reduced_risk_scale must be above 0 and below 1 (for example 0.5 for half risk).");
+        if (direction is not null && !direction.Equals("long", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("VIX sizing is defined for long strategies only (direction: long).");
+    }
 }
 
 public sealed record EntryRules(

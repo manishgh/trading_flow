@@ -287,17 +287,31 @@ public sealed class SimpleYamlReader
         }
 
         var rising = OptionalInt(map, "regime.sma_rising_lookback_bars", 0);
-        if (rising < 0)
-            throw new InvalidOperationException("regime.sma_rising_lookback_bars must be 0 (off) or a positive number of sessions.");
         var nasdaq = OptionalNullableString(map, "regime.nasdaq_listing_benchmark")?.Trim().ToUpperInvariant();
-        if (nasdaq is not null && (nasdaq.Length == 0 || nasdaq == benchmark.Trim().ToUpperInvariant()))
-            throw new InvalidOperationException("regime.nasdaq_listing_benchmark must name a fund other than regime.benchmark, for example QQQ.");
-        return new RegimeRules(
+        var regime = new RegimeRules(
             benchmark.Trim().ToUpperInvariant(),
             OptionalString(map, "regime.rule", RegimeRules.PriceAboveSma),
             OptionalInt(map, "regime.sma_period", 50),
             rising,
             nasdaq);
+        regime = ReadVixSizing(map, regime);
+        regime.Validate(RequireString(map, "direction"));
+        return regime;
+    }
+
+    /// <summary>
+    /// Reads the optional VIX sizing fields of the regime block (regime.vix_series, vix_full_risk_below,
+    /// vix_no_new_longs_above, vix_reduced_risk_scale) onto <paramref name="regime"/>; completeness, series, threshold
+    /// ordering, scale bounds, and long-only direction are enforced by <see cref="RegimeRules.Validate"/>.
+    /// </summary>
+    private static RegimeRules ReadVixSizing(IReadOnlyDictionary<string, List<string>> map, RegimeRules regime)
+    {
+        var series = OptionalNullableString(map, "regime.vix_series")?.Trim().ToUpperInvariant();
+        var fullBelow = OptionalDecimal(map, "regime.vix_full_risk_below");
+        var offAbove = OptionalDecimal(map, "regime.vix_no_new_longs_above");
+        var scale = OptionalDecimal(map, "regime.vix_reduced_risk_scale");
+        if (series is null && fullBelow is null && offAbove is null && scale is null) return regime;
+        return regime with { VixSeries = series, VixFullRiskBelow = fullBelow, VixNoLongsAbove = offAbove, VixReducedRiskScale = scale };
     }
 
     private static string ReadInitialStopMode(IReadOnlyDictionary<string, List<string>> map)

@@ -24,16 +24,9 @@ public sealed partial class BacktestRunner
         IReadOnlyDictionary<string, RegimeCalendar> calendars, IExecutionEventSink journal, CancellationToken cancellationToken)
     {
         var binding = eventPortfolioReplay ?? throw new InvalidOperationException("The SIP portfolio requires a frozen event source binding.");
-        var excluded = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var candidate in candidates)
-        {
-            if (membership is not null && !membership.IsMember(candidate.Ticker, DateOnly.FromDateTime(candidate.EntryTimestamp.UtcDateTime)))
-                excluded[candidate.CandidateId] = "universe_membership_missing";
-            else if (calendars.TryGetValue(candidate.StrategyId, out var calendar) &&
-                calendar.RejectionFor(candidate.EntryTimestamp, candidate.Ticker) is { } regimeRejection)
-                excluded[candidate.CandidateId] = regimeRejection;
-        }
-        var outcome = await binding.ExecuteAsync(new(run.RunName, run.Portfolio, strategies, candidates, bars, excluded), cancellationToken);
+        var (excluded, riskScales) = EntryAdmissions(candidates, membership, calendars);
+        var outcome = await binding.ExecuteAsync(new(run.RunName, run.Portfolio, strategies, candidates, bars, excluded, riskScales),
+            cancellationToken);
         if (outcome.UnavailableReasons.Count > 0 && outcome.Failures.Count == 0)
             throw new InvalidDataException("An unavailable event portfolio must provide explicit execution failures.");
         var audit = new PortfolioAdmissionAudit();

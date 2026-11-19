@@ -44,6 +44,42 @@ public class BacktestRunnerExecutionQualityTests
         Assert.Equal("AAA", trades[0].Ticker);
     }
 
+    // VIX sizing in the daily portfolio: the previous session's VIX close halves the planned risk between 18 and 22 and
+    // refuses the entry above 22. 1% of 10,000 = 100 risk; a 1.00 stop distance gives 100 shares at full risk, 50 at half.
+    [Fact]
+    public void BuildPortfolioTrades_VixSizing_HalvesRiskBetweenThresholdsAndRefusesAbove()
+    {
+        var method = typeof(BacktestRunner).GetMethod(
+            "BuildPortfolioTrades",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        var portfolio = new PortfolioConfig(10_000m, 1.0m, 100m, 5, 0m, 0m, 1, false);
+        var candidates = new[]
+        {
+            // A small gain on the first trade keeps equity a little above 10,000 after its fees, so the full-risk entry is 100 shares.
+            Candidate("HALF", "2026-06-02T13:31:00Z", "2026-06-02T13:40:00Z", 10m, 9m, 11m, "time_exit"),
+            Candidate("FULL", "2026-06-03T13:31:00Z", "2026-06-03T13:40:00Z", 10m, 9m, 10m, "time_exit"),
+            Candidate("OFF", "2026-06-04T13:31:00Z", "2026-06-04T13:40:00Z", 10m, 9m, 10m, "time_exit")
+        };
+        var rules = new RegimeRules("SPY", RegimeRules.PriceAboveSma, 3, VixSeries: "VIXCLS", VixFullRiskBelow: 18m,
+            VixNoLongsAbove: 22m, VixReducedRiskScale: 0.5m);
+        var spy = Enumerable.Range(0, 20).Select(i => new DateTimeOffset(2026, 5, 15, 0, 0, 0, TimeSpan.Zero).AddDays(i))
+            .Select((day, i) => new OhlcvBar("SPY", day, "1d", 100m + i, 100m + i, 100m + i, 100m + i, 1_000m)).ToArray();
+        var vix = TradingFlow.Engine.Regime.VixCloseSeries.From(new Dictionary<DateOnly, decimal>
+        {
+            [new(2026, 6, 1)] = 20m, [new(2026, 6, 2)] = 15m, [new(2026, 6, 3)] = 25m
+        });
+        var regime = RegimeCalendarBuilder.Build(spy, 3).WithVix(rules, vix);
+
+        var trades = (IReadOnlyList<BacktestTrade>)method.Invoke(null, [portfolio, ConfirmedEntryStrategy(), candidates, null, regime])!;
+
+        Assert.Equal(["HALF", "FULL"], trades.Select(trade => trade.Ticker).ToArray());
+        Assert.Equal(50, trades[0].ShareQuantity);
+        Assert.Equal(100, trades[1].ShareQuantity);
+        Assert.Equal(TradingFlow.Engine.Regime.VixRegime.OffReason,
+            regime.RejectionFor(DateTimeOffset.Parse("2026-06-04T13:31:00Z", System.Globalization.CultureInfo.InvariantCulture), "OFF"));
+    }
+
     [Fact]
     public void BuildPortfolioTrades_ParticipationLimitedEntry_RecordsRequestedAndFilledQuantity()
     {

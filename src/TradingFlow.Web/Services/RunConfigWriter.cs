@@ -1042,6 +1042,14 @@ public sealed class RunConfigWriter
                 yaml.AppendLine($"  sma_rising_lookback_bars: {regime.SmaRisingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
             if (regime.NasdaqListingBenchmark is { } nasdaqBenchmark)
                 yaml.AppendLine($"  nasdaq_listing_benchmark: {nasdaqBenchmark}");
+            if (regime.UsesVix)
+            {
+                // The four VIX sizing values are written together, exactly as the reader requires them.
+                yaml.AppendLine($"  vix_series: {regime.VixSeries}");
+                yaml.AppendLine($"  vix_full_risk_below: {regime.VixFullRiskBelow!.Value.ToString(CultureInfo.InvariantCulture)}");
+                yaml.AppendLine($"  vix_no_new_longs_above: {regime.VixNoLongsAbove!.Value.ToString(CultureInfo.InvariantCulture)}");
+                yaml.AppendLine($"  vix_reduced_risk_scale: {regime.VixReducedRiskScale!.Value.ToString(CultureInfo.InvariantCulture)}");
+            }
         }
 
         yaml.AppendLine("exit_rules:");

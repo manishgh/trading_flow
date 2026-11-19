@@ -58,12 +58,12 @@ public sealed class NasdaqHomeMarketRegimeTests
             .ReturnsAsync(new AssetTradingEligibility("JPM", true, true, false, Decision, Exchange: "NYSE"));
         var gate = new RegimeGateService();
 
-        Assert.Equal(RegimeCalendar.NasdaqMarketOffReason, await gate.RegimeRejectionAsync(Rule, provider, ["1d"], Decision, "MSFT", assets.Object, default));
-        Assert.Null(await gate.RegimeRejectionAsync(Rule, provider, ["1d"], Decision, "JPM", assets.Object, default));
-        Assert.Equal(RegimeCalendar.ListingExchangeUnknownReason, await gate.RegimeRejectionAsync(Rule, provider, ["1d"], Decision, "NEWCO", assets.Object, default));
-        Assert.Equal(RegimeCalendar.ListingExchangeUnknownReason, await gate.RegimeRejectionAsync(Rule, provider, ["1d"], Decision, "JPM", null, default));
+        Assert.Equal(RegimeCalendar.NasdaqMarketOffReason, (await gate.EntryDecisionAsync(Rule, provider, ["1d"], Decision, "MSFT", assets.Object, default)).Rejection);
+        Assert.Null((await gate.EntryDecisionAsync(Rule, provider, ["1d"], Decision, "JPM", assets.Object, default)).Rejection);
+        Assert.Equal(RegimeCalendar.ListingExchangeUnknownReason, (await gate.EntryDecisionAsync(Rule, provider, ["1d"], Decision, "NEWCO", assets.Object, default)).Rejection);
+        Assert.Equal(RegimeCalendar.ListingExchangeUnknownReason, (await gate.EntryDecisionAsync(Rule, provider, ["1d"], Decision, "JPM", null, default)).Rejection);
         // Without the home-market rule no asset lookup happens.
-        Assert.Null(await gate.RegimeRejectionAsync(Rule with { NasdaqListingBenchmark = null }, provider, ["1d"], Decision, "MSFT", null, default));
+        Assert.Null((await gate.EntryDecisionAsync(Rule with { NasdaqListingBenchmark = null }, provider, ["1d"], Decision, "MSFT", null, default)).Rejection);
     }
 
     // A failed broker lookup refuses the entry with its own audited reason instead of failing the ticker's evaluation, and a
@@ -76,7 +76,7 @@ public sealed class NasdaqHomeMarketRegimeTests
         assets.Setup(x => x.GetEligibilityAsync("MSFT", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Alpaca asset eligibility failed with HTTP 429."));
         Assert.Equal(RegimeCalendar.ListingExchangeLookupFailedReason,
-            await new RegimeGateService().RegimeRejectionAsync(Rule, provider, ["1d"], Decision, "MSFT", assets.Object, default));
+            (await new RegimeGateService().EntryDecisionAsync(Rule, provider, ["1d"], Decision, "MSFT", assets.Object, default)).Rejection);
 
         var calendar = RegimeCalendarBuilder.Build(Daily("SPY", rising: true), 3).WithNasdaqHomeMarket(
             RegimeCalendarBuilder.Build(Daily("QQQ", rising: true), 3), new Dictionary<string, string> { ["BRK.B"] = "NYSE" });

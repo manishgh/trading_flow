@@ -13,6 +13,7 @@ using TradingFlow.Engine.Storage;
 using TradingFlow.Data.Catalysts;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Engine.Execution;
+using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Risk;
 using TradingFlow.Domain.Discovery;
 using TradingFlow.Domain.Persistence;
@@ -226,9 +227,11 @@ public sealed partial class LiveRunner
                 continue;
             }
 
-            // Per stock: the benchmark, and under the Nasdaq home-market rule the listing (from the broker's asset record) and QQQ.
-            var regimeRejection = strategy.Regime is not { IsActive: true } regimeRule ? null :
-                await _regimeGate.RegimeRejectionAsync(regimeRule, provider, run.Intervals, now, ticker, _brokerClient, cancellationToken);
+            // Per stock: the benchmark, under the Nasdaq home-market rule the listing (from the broker's asset record) and QQQ,
+            // and with VIX sizing the previous session's VIX close (refusal, or the risk scale applied when the order is sized).
+            var regimeDecision = strategy.Regime is not { IsActive: true } regimeRule ? RegimeEntryDecision.Allowed :
+                await _regimeGate.EntryDecisionAsync(regimeRule, provider, run.Intervals, now, ticker, _brokerClient, cancellationToken);
+            var regimeRejection = regimeDecision.Rejection;
             var regimeOn = regimeRejection is null;
 
             if (_candidateDecisions is null || _executionRunContext is null)
@@ -311,7 +314,10 @@ public sealed partial class LiveRunner
                     ? $"{strategy.Regime.EvidenceRule}:{now:O}"
                     : $"not-required:{now:O}",
                 now,
-                JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection }));
+                // The VIX reading is recorded only for strategies with VIX sizing, so other strategies' evidence is unchanged.
+                regimeDecision.Vix is not { } vixReading
+                    ? JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection })
+                    : JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection, vix = vixReading, regimeDecision.RiskScale }));
             var setupKey = StrategyDecisionRequestAssembler.CreateSetupKey(
                 strategy.StrategyId,
                 strategy.Timeframe,
@@ -488,7 +494,8 @@ public sealed partial class LiveRunner
                             account.Equity,
                             new OrderPlanningRiskLimits(
                                 run.Portfolio.AccountRiskBudgetPct,
-                                run.Portfolio.MaxPositionNotionalPct),
+                                run.Portfolio.MaxPositionNotionalPct,
+                                regimeDecision.RiskScale),
                             run.Portfolio.FixedBuyFee,
                             run.Portfolio.FixedSellFee));
                     var order = finalizedOrderPlan.Order;

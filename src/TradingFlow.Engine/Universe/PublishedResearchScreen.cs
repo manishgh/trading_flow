@@ -4,6 +4,7 @@ using System.Text.Json;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Regime;
 
 namespace TradingFlow.Engine.Universe;
 
@@ -73,6 +74,16 @@ public sealed record ResearchScreenLiquidityTier(int FromRank, int ToRank, strin
 public sealed record ResearchScreenFile(string FileName, string Sha256);
 
 /// <summary>
+/// Verified frozen FRED VIXCLS closes read from a published research screen, along with the verified SHA-256 hashes of
+/// both the CSV file and its download receipt and any protected research observation cutoff date applied.
+/// </summary>
+public sealed record FrozenVixSnapshot(
+    VixCloseSeries Closes,
+    string FileSha256,
+    string ReceiptSha256,
+    DateOnly? ProtectedCutoffDate = null);
+
+/// <summary>
 /// screen-manifest.json, written by research-daily-screen beside its outputs: schema and code version, input dataset IDs,
 /// every screen and ranking rule value, the window, the fund-exclusion file with its SHA-256 and the SHA-256 of every output
 /// file. Holds no clock reading, so identical inputs publish identical bytes.
@@ -104,10 +115,15 @@ public sealed record ResearchScreenManifest(
     public const string RankedListFileName = "ranked-daily-list.csv";
     public const string RankedCountsFileName = "ranked-daily-counts.csv";
 
+    /// <summary>FRED's VIXCLS file as downloaded with --fred-vix (exact bytes), read by backtests for VIX sizing.</summary>
+    public const string FredVixFileName = "fred-vixcls.csv";
+    /// <summary>The download receipt of <see cref="FredVixFileName"/>: URL, request time, HTTP status, size and date range.</summary>
+    public const string FredVixReceiptFileName = "fred-vixcls-receipt.json";
+
     /// <summary>The output files research-daily-screen may write, in publication order.</summary>
     public static readonly IReadOnlyList<string> OutputFileNames =
         ["eligible.csv", "daily-counts.csv", RankedListFileName, RankedCountsFileName, "ranked-daily-exclusions.csv", "split-exclusions.csv",
-            "incomplete-stocks.csv"];
+            "incomplete-stocks.csv", FredVixFileName, FredVixReceiptFileName];
 
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -202,7 +218,7 @@ public sealed class PublishedResearchScreen
         var (manifest, manifestSha, _) = ReadDefinition(full, expectedManifestSha256);
         if (TradingFlow.Domain.Research.ResearchObservationBoundary.Current is { } cutoff)
         {
-            var lastFullyVisible = TimeZoneInfo.ConvertTime(cutoff, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
+            var lastFullyVisible = TimeZoneInfo.ConvertTime(cutoff, VixRegime.NewYorkTimeZone);
             if (manifest.To >= DateOnly.FromDateTime(lastFullyVisible.DateTime))
                 throw new InvalidDataException("The published screen includes protected membership dates. Use a separately published development-only list.");
         }
@@ -221,6 +237,50 @@ public sealed class PublishedResearchScreen
             manifest.Outputs.ContainsKey(ResearchScreenManifest.RankedCountsFileName)
                 ? ReadQualified(Path.Combine(full, ResearchScreenManifest.RankedCountsFileName)) : new Dictionary<DateOnly, int>(),
             new Dictionary<string, HashSet<DateOnly>>());
+    }
+
+    /// <summary>
+    /// The verified frozen VIX closes published with a screen (research-daily-screen --fred-vix): the manifest must match
+    /// <paramref name="expectedManifestSha256"/>, must fingerprint both <see cref="ResearchScreenManifest.FredVixFileName"/>
+    /// and <see cref="ResearchScreenManifest.FredVixReceiptFileName"/>, and both files' bytes must match their recorded hashes.
+    /// Under a protected research boundary, closes on or after its New York date are dropped. Refuses a screen published
+    /// without the VIX copy or receipt, naming the option that adds them.
+    /// </summary>
+    public static FrozenVixSnapshot ReadFrozenVix(string folder, string expectedManifestSha256)
+    {
+        var full = Path.GetFullPath(folder);
+        var screenName = Path.GetFileName(full);
+        var (manifest, _, _) = ReadDefinition(full, expectedManifestSha256);
+        if (!manifest.Outputs.TryGetValue(ResearchScreenManifest.FredVixFileName, out var expectedCsvSha))
+            throw new InvalidDataException($"Research screen '{screenName}' was published without a frozen VIX copy; VIX sizing " +
+                "needs a screen published with research-daily-screen --fred-vix.");
+        if (!manifest.Outputs.TryGetValue(ResearchScreenManifest.FredVixReceiptFileName, out var expectedReceiptSha))
+            throw new InvalidDataException($"Research screen '{screenName}' was published without a frozen VIX receipt " +
+                $"('{ResearchScreenManifest.FredVixReceiptFileName}'); VIX sizing needs a screen published with research-daily-screen --fred-vix.");
+
+        var csvPath = Path.Combine(full, ResearchScreenManifest.FredVixFileName);
+        var csvBytes = File.ReadAllBytes(csvPath);
+        var actualCsvSha = ResearchScreenManifest.Sha256(csvBytes);
+        if (!actualCsvSha.Equals(expectedCsvSha, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"'{ResearchScreenManifest.FredVixFileName}' in research screen '{screenName}' has " +
+                $"SHA-256 {actualCsvSha}, its manifest records {expectedCsvSha}.");
+
+        var receiptPath = Path.Combine(full, ResearchScreenManifest.FredVixReceiptFileName);
+        var receiptBytes = File.ReadAllBytes(receiptPath);
+        var actualReceiptSha = ResearchScreenManifest.Sha256(receiptBytes);
+        if (!actualReceiptSha.Equals(expectedReceiptSha, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"'{ResearchScreenManifest.FredVixReceiptFileName}' in research screen '{screenName}' has " +
+                $"SHA-256 {actualReceiptSha}, its manifest records {expectedReceiptSha}.");
+
+        var closes = VixCloseSeries.ParseFredCsv(System.Text.Encoding.UTF8.GetString(csvBytes));
+        DateOnly? protectedCutoffDate = null;
+        if (TradingFlow.Domain.Research.ResearchObservationBoundary.Current is { } cutoff)
+        {
+            var nyCutoff = TimeZoneInfo.ConvertTime(cutoff, VixRegime.NewYorkTimeZone);
+            protectedCutoffDate = DateOnly.FromDateTime(nyCutoff.DateTime);
+            closes = closes.Before(protectedCutoffDate.Value);
+        }
+        return new FrozenVixSnapshot(closes, actualCsvSha, actualReceiptSha, protectedCutoffDate);
     }
 
     /// <summary>Reads only the frozen input and output fingerprints. Does not open a membership or observation file.</summary>

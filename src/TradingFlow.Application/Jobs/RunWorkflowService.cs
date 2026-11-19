@@ -75,6 +75,7 @@ public sealed partial class RunWorkflowService(
         ResearchScreenReference? screen = null;
         if (source.Members.Any(member => member.Sources.Any(item => item.SourceKind == DiscoverySourceKinds.ResearchScreen)))
             screen = await configuration.ResolveResearchScreenReferenceAsync(source, token);
+        RequireRegimeScreenInputs(settings, screen);
         var variants = request.Strategies.Select(strategy => ResearchQueue.WorkflowVariant(strategy, request, screen, settings)).ToArray();
         var jobId = ResearchQueue.WorkflowJobId(request.IdempotencyKey);
         var start = new FrozenResearchStart(ResearchStartIdentity.StartId("web-backtest", request.IdempotencyKey), ResearchStartKind.Portfolio,
@@ -114,6 +115,33 @@ public sealed partial class RunWorkflowService(
             request.CachePolicy is not ("use_cache" or "refresh") || request.Strategies is null || request.Strategies.Count == 0 ||
             request.Strategies.Any(item => item is null) || request.Strategies.Distinct().Count() != request.Strategies.Count)
             throw new InvalidOperationException("Select valid backtest dates, distinct strategies, positive portfolio limits, cache policy and full retention.");
+    }
+
+    /// <summary>
+    /// Refuses a backtest before registering a trial start when any selected strategy requires frozen regime inputs
+    /// (VIX sizing or a Nasdaq security master) that the chosen stock source or research screen does not provide.
+    /// </summary>
+    public static void RequireRegimeScreenInputs(BacktestResolvedSettingsResponse? settings, ResearchScreenReference? screen)
+    {
+        if (settings is null) return;
+        if (settings.Strategies.Any(strategy => strategy.RequiresFrozenVix))
+        {
+            if (screen is null)
+                throw new InvalidOperationException(
+                    "VIX sizing in a backtest needs a published research screen with a frozen FRED VIXCLS copy (research-daily-screen --fred-vix); " +
+                    "select a published research screen before starting.");
+            if (String.IsNullOrWhiteSpace(screen.FredVixSha256))
+                throw new InvalidOperationException(
+                    $"Research screen '{screen.ScreenName}' was published without a frozen FRED VIXCLS copy; " +
+                    "VIX sizing needs a screen published with research-daily-screen --fred-vix.");
+        }
+        if (screen is not null && settings.Strategies.Any(strategy => strategy.RequiresSecurityMaster) &&
+            String.IsNullOrWhiteSpace(screen.SecurityMasterDatasetId))
+        {
+            throw new InvalidOperationException(
+                $"Research screen '{screen.ScreenName}' was published without a frozen security-master dataset; " +
+                "the Nasdaq home-market rule needs a screen published with research-daily-screen --security-master <dataset ID>.");
+        }
     }
 
     /// <summary>Admits the exact reviewed stock receipt and its membership mode through the normal paper queue.</summary>

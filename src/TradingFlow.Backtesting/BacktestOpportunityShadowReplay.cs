@@ -15,7 +15,9 @@ public interface IBacktestOpportunityObserver
 
 public sealed record BacktestOpportunityEntryEligibility(string CandidateId,
     DateTimeOffset EntryTimestampUtc, bool UniverseEligible, bool RegimeEligible,
-    string EvidenceSource = "original_runner_entry_time_universe_and_regime_gates");
+    string EvidenceSource = "original_runner_entry_time_universe_and_regime_gates",
+    string? RegimeRejection = null,
+    decimal EntryRiskScale = 1m);
 
 /// <summary>Every candidate before portfolio selection, with no mutable membership/provider state.</summary>
 public sealed record BacktestOpportunitySnapshot(string RunName, PortfolioConfig Portfolio,

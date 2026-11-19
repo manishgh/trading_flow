@@ -75,8 +75,24 @@ public sealed partial class PreparedMarketDataService
             var strategies = book.Strategies?.ToArray() ?? run.Strategies.Select(reader.ReadStrategy).ToArray();
             foreach (var regime in strategies.Select(strategy => strategy.Regime).Where(regime => regime is { IsActive: true }))
             {
+                if (regime!.UsesVix)
+                {
+                    var ranked = run.Universe?.RankedMembership ?? throw new InvalidOperationException(
+                        "VIX sizing in a backtest needs a published research screen with a frozen FRED VIXCLS copy (research-daily-screen --fred-vix); " +
+                        "this run names no research screen.");
+                    _ = TradingFlow.Engine.Universe.PublishedResearchScreen.ReadFrozenVix(
+                        Path.GetDirectoryName(ranked.ManifestPath)!, ranked.ManifestSha256);
+                }
+                if (regime.UsesNasdaqHomeMarket &&
+                    run.Provider.Equals("evidence_catalog", StringComparison.OrdinalIgnoreCase) &&
+                    String.IsNullOrWhiteSpace(run.Providers.EvidenceCatalog?.SecurityMasterDatasetId))
+                {
+                    throw new InvalidOperationException(
+                        $"The Nasdaq home-market rule ({regime.NasdaqListingBenchmark}) requires providers.evidence_catalog.security_master_dataset " +
+                        "from a research screen published with research-daily-screen --security-master <dataset ID>.");
+                }
                 // Same over-fetch as BacktestRunner.Regime: every close the average and its earlier comparison average read.
-                var benchmarkStart = start.AddDays(-checked(regime!.RequiredCloses * 2 + 15));
+                var benchmarkStart = start.AddDays(-checked(regime.RequiredCloses * 2 + 15));
                 foreach (var interval in new[] { "1d" }.Concat(intervals.Where(interval => !TimeframeParser.IsDailyOrHigher(interval))).Distinct())
                 {
                     Add(regime.BenchmarkSymbol, interval, benchmarkStart, end);

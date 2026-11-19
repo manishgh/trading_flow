@@ -6,7 +6,7 @@
 # 2.5 ATR target and 10-session time exit come from the user's plan, not from Bollinger. As-traded (unadjusted) daily bars,
 # for whole-market research screens that leave out stock-days with a split in the look-back.
 strategy_id: research.bollinger-squeeze-breakout.bt-v1
-strategy_name: RESEARCH Bollinger Squeeze Breakout V1 (swing, SPY rising-average gate, QQQ for Nasdaq listings, as-traded bars)
+strategy_name: RESEARCH Bollinger Squeeze Breakout V1 (swing, SPY rising-average gate, QQQ for Nasdaq listings, VIX sizing, as-traded bars)
 source: bollinger_2001_bollinger_on_bollinger_bands_the_squeeze
 version: 1
 timeframe: 1d
@@ -39,6 +39,13 @@ regime:
   sma_period: 50
   sma_rising_lookback_bars: 20
   nasdaq_listing_benchmark: QQQ
+  # VIX sizing (user decision 18 Nov 2026): FRED VIXCLS close of the session before the entry. Below 18 the normal 0.5% risk;
+  # 18 to 22 (both included) half of it (0.25%); above 22 no new long entry (vix_regime_off_on_entry_day). A missing close
+  # refuses the entry. Backtests read the frozen copy published with the research screen (--fred-vix); paper reads FRED.
+  vix_series: VIXCLS
+  vix_full_risk_below: 18
+  vix_no_new_longs_above: 22
+  vix_reduced_risk_scale: 0.5
 confluence:
   enabled: false
   timeframe: 1d

@@ -25,7 +25,9 @@ public sealed record BacktestStockSource(string Key, string Name, string Kind, G
 public sealed record ResearchScreenReference(string ScreenName, string ManifestSha256, string RankedListSha256,
     string DailyBarsDatasetId, string ExchangeSessionsDatasetId, IReadOnlyList<string> FiveMinuteDatasetIds,
     IReadOnlyList<string> OneMinuteDatasetIds, string? CorporateActionsDatasetId = null, IReadOnlyList<string>? HourlyDatasetIds = null,
-    string? SecurityMasterDatasetId = null)
+    string? SecurityMasterDatasetId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? FredVixSha256 = null)
 {
     /// <summary>True when both references name the same screen fingerprints and the same datasets.</summary>
     public bool SameInputs(ResearchScreenReference other) =>
@@ -34,7 +36,8 @@ public sealed record ResearchScreenReference(string ScreenName, string ManifestS
         FiveMinuteDatasetIds.SequenceEqual(other.FiveMinuteDatasetIds) && OneMinuteDatasetIds.SequenceEqual(other.OneMinuteDatasetIds) &&
         CorporateActionsDatasetId == other.CorporateActionsDatasetId &&
         (HourlyDatasetIds ?? []).SequenceEqual(other.HourlyDatasetIds ?? []) &&
-        SecurityMasterDatasetId == other.SecurityMasterDatasetId;
+        SecurityMasterDatasetId == other.SecurityMasterDatasetId &&
+        FredVixSha256 == other.FredVixSha256;
 }
 
 /// <summary>
@@ -101,7 +104,11 @@ public sealed record BacktestResolvedSettingsResponse(string ConfigurationKey, s
     string? AccountLossReplay = null);
 
 public sealed record BacktestStrategySettingsResponse(StrategyReference Identity, string Name, decimal SlippageBps,
-    StrategyReference? DerivedFromIdentity, TradingFlow.Contracts.Operator.StrategyAdmissionProfileResponse? AdmissionProfile);
+    StrategyReference? DerivedFromIdentity, TradingFlow.Contracts.Operator.StrategyAdmissionProfileResponse? AdmissionProfile,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool RequiresFrozenVix = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool RequiresSecurityMaster = false);
 public sealed record BacktestCohortExecution(long PlanId, string CohortName,
     IReadOnlyList<string> Symbols, decimal StartingCapital, StrategyReference Strategy);
 public sealed record BacktestPlanStartResponse(long PlanId, string IdempotencyKey,

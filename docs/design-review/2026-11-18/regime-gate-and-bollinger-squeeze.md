@@ -222,3 +222,63 @@ Installed at 21:43 UTC after the Finviz close-capture window, with no Alpaca pap
 or running job. Release `ef538c9`; the replaced build is kept as `bin-before-ef538c9-20261118`. Readiness `ready`, FinBERT
 sidecar `ready`, no errors after start (two existing database-query notices). Effect for the operator: no strategy is
 runnable (opening-range set aside, ETF strategies blocked, squeeze not yet runnable until checkpoint 3).
+
+## Checkpoint 3 — VIX sizing from FRED, 18–19 November 2026
+
+- **Recipe** (`regime:` block, all four together or none; omitted from serialized rules when unset, so other strategies keep
+  their content hashes): `vix_series: VIXCLS`, `vix_full_risk_below: 18`, `vix_no_new_longs_above: 22`,
+  `vix_reduced_risk_scale: 0.5`. `RegimeRules.Validate` (invoked by `SimpleYamlReader`, `RegimeCalendar.WithVix`, and
+  `VixRegime.Decide`) refuses a partial block, another series, thresholds out of order, a scale outside (0, 1) and any
+  strategy that is not `direction: long` (the rule was approved for long entries only).
+- **Which VIX close & authoritative session alignment:** the close of the exchange session before the entry, defined as the
+  date of the latest completed benchmark (SPY) daily bar known at the decision — the same close the SPY rule reads. When an
+  authoritative exchange session schedule (`IMarketSessionScheduleProvider` / `candidateSessionSchedules`) is available,
+  non-trading-day bars (such as Sunday overnight or holiday bars from sub-daily resampling) are ignored and a stale
+  benchmark missing the expected previous completed trading session fails closed as `market_regime_off_on_entry_day` instead
+  of falling back to an older VIX close (`D-2`). `RegimeCalendar` pre-indexes benchmark bars and trading-day schedules once
+  for $O(\log N)$ zero-allocation lookups across multi-year whole-market runs. A value FRED lists for a holiday (for example
+  7 Sep 2026) is never used; a session FRED has not published refuses the entry instead of falling back to an older close.
+  Below 18: the strategy's normal risk (0.5 %). 18 to 22, both included: half (0.25 %). Above 22: no new long entry.
+- **Refusal reasons** (identical in backtests, paper, mobile automation, shadow replay and the Desk via the shared
+  `RegimeGateService.Evaluate` helper and `RegimeCalendar.EntryDecisionFor`): `vix_regime_off_on_entry_day` (above 22),
+  `vix_close_unknown_for_previous_session` (FRED lists no close for that session), `vix_lookup_failed` (paper/Desk: the FRED
+  request failed or no reader is configured). The SPY and QQQ checks come first.
+- **One multiplier & shadow-replay parity:** `OrderPlanningRiskLimits.EntryRiskScale` (default 1; must be above 0 and at
+  most 1) scales the account risk budget inside `SharedOrderRiskPlanner`. The daily portfolio, the event portfolio, the
+  intraday replay, independent opportunity shadow replay (`BacktestOpportunityEntryEligibility` captures `RegimeRejection`
+  and `EntryRiskScale`), the paper runner and mobile automation pass the scale their regime check returned. The event and
+  intraday replays get refusals and scales from one helper (`BacktestRunner.EntryAdmissions`). The intraday replay did not
+  read the regime calendar before; it now applies it at admission like the event portfolio (no intraday strategy declares a
+  regime rule, so no result changes).
+- **Backtest data, pre-flight protection & run evidence:** `research-daily-screen --fred-vix VIXCLS` downloads FRED's
+  complete file once (with UTF-8 BOM stripping and `observation_date`/`DATE` header validation) and stores its exact bytes
+  as `fred-vixcls.csv` with `fred-vixcls-receipt.json` (URL, request time, HTTP status, size, SHA-256, first and last
+  observation date) in the screen folder. Pre-existing VIX CSV or receipt files in the output folder are refused up front
+  whether or not `--fred-vix` is supplied, so earlier provider receipts are never overwritten. The screen manifest
+  fingerprints both files; `ResearchScreenReference.FredVixSha256` carries the CSV hash into `SameInputs` and the trial
+  registry (`fred-vixcls:<sha256>` in `ResearchQueue.WorkflowVariant` and `ResearchFileStart.Variant`). Pre-flight checks in
+  `RunWorkflowService`, `BacktestPlanService`, `WorkflowRunConfiguration`, and `PreparedMarketDataService` refuse a VIX run
+  without a frozen VIX screen (or a Nasdaq evidence-catalog run without `security_master_dataset`) before registering a
+  trial start or downloading bars. `PublishedResearchScreen.ReadFrozenVix` re-hashes both `fred-vixcls.csv` and
+  `fred-vixcls-receipt.json`, drops closes on or after a protected research boundary using cross-platform New York time,
+  records the frozen VIX provenance (`fileName`, `sha256`, `receiptSha256`, `publishedCloses`, `firstDate`, `lastDate`,
+  `protectedCutoffDate`) in `{runName}-daily-eligibility.json`, logs the hashes and date range, and warns when the copy ends
+  before the run's last needed session (`windowEnd.AddTicks(-1)`).
+- **Paper and Desk:** `FredVixCloseSource` (disposable, disposing each `HttpClient`, with gzip/deflate decompression and
+  structured failure warning logs) reads `fredgraph.csv?id=VIXCLS` (last 40 days) and reuses a successful read for 15
+  minutes; failures are not cached. Decision evidence in backtests (`EligibilityEvidence`), paper (`LiveRunner`), mobile
+  automation and the Desk (`StockStrategyEvidenceLoader`) records the VIX decision and `RiskScale` only for strategies with
+  VIX sizing, so other strategies' evidence bytes are unchanged.
+- **Not changed:** the Desk's manual order ticket plan (operator-entered orders, not strategy entries) and operator-direct
+  entries keep the profile's full risk budget. `technical.bollinger-squeeze-breakout@1.0.0` stays `enabled: false` in
+  `configs/strategy-catalog.json` until Step 2 explicitly enables it after Checkpoint 3 sign-off.
+- **Verification:** Solution build (`TradingFlow.sln`) succeeded with 0 warnings and 0 errors across all 18 projects.
+  Focused suites passed 140/140. Full .NET suite passed 4,288/4,295 (1 failed, 6 skipped) — the single failure
+  (`LiveRunnerIntegrationTests.RunAsync_BatchedCandlePipeline_WritesMetricsAndAuditsEndToEnd`, a strategy without a regime
+  rule and a 5 s timeout) timed out under full-suite CPU load and passed 37/37 when `LiveRunnerIntegrationTests` ran in
+  isolation. Independent Reviewer 1 (`plan-reviewer`, plan/causality/execution) and Reviewer 2 (`code-reviewer`,
+  architecture/maintainability/config-driven design) requested changes in Round 1 (authoritative exchange-session freshness
+  and non-trading-day bar filtering, opportunity shadow-replay scale and refusal parity, $O(\log N)$ pre-indexed
+  benchmark/schedule lookups, pre-flight screen checks and trial-registry/run-evidence VIX hashes, receipt hash
+  verification, resource disposal, BOM/header checks, DRY gate evaluation and structured failure warnings) and both
+  accepted after the fixes.

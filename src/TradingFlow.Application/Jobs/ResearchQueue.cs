@@ -88,7 +88,8 @@ public sealed class ResearchQueue(IResearchStartRegistry registry, IDurableJobRe
         var datasets = screen is null
             ? ["discovery-snapshot:" + run.UniverseSnapshotId.ToString("N")]
             : new[] { screen.DailyBarsDatasetId, screen.ExchangeSessionsDatasetId, screen.CorporateActionsDatasetId, screen.SecurityMasterDatasetId,
-                    "screen-manifest:" + screen.ManifestSha256, "screen-membership:" + screen.RankedListSha256 }
+                    "screen-manifest:" + screen.ManifestSha256, "screen-membership:" + screen.RankedListSha256,
+                    screen.FredVixSha256 is { } vixSha ? "fred-vixcls:" + vixSha : null }
                 .Where(id => id is not null).Select(id => id!)
                 .Concat(screen.FiveMinuteDatasetIds).Concat(screen.OneMinuteDatasetIds).Concat(screen.HourlyDatasetIds ?? [])
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();

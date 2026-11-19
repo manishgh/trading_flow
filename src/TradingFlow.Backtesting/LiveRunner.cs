@@ -8,6 +8,7 @@ using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
+using TradingFlow.Engine.Regime;
 using TradingFlow.Engine.Strategies;
 using TradingFlow.Engine.Storage;
 using TradingFlow.Data.Catalysts;
@@ -41,7 +42,9 @@ public sealed partial class LiveRunner(
     IStrategyDecisionContextProvider? decisionContextProvider = null,
     LivePipelineHealth? initialPipelineHealth = null,
     Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null,
-    bool exitOnly = false)
+    bool exitOnly = false,
+    // FRED's latest VIX closes for strategies with VIX sizing; without it their entries are refused as vix_lookup_failed.
+    IVixCloseSource? vixCloses = null)
 {
     private readonly IStrategyDecisionContextProvider? _configuredDecisionContextProvider = decisionContextProvider;
     private IStrategyDecisionContextProvider? _decisionContextProvider;
@@ -65,7 +68,7 @@ public sealed partial class LiveRunner(
         ? null
         : new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), candidateRepository);
     private readonly TimeSpan _iterationInterval = ResolveIterationInterval(iterationInterval);
-    private readonly TradingFlow.Engine.Regime.RegimeGateService _regimeGate = new();
+    private readonly RegimeGateService _regimeGate = new(vixCloses);
     private IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> runtimeStrategies =
         new Dictionary<StrategyDefinition, AuthorizedRuntimeStrategy>(StrategyReferenceComparer.Instance);
 

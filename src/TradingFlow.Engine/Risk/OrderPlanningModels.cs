@@ -28,9 +28,19 @@ public enum OrderPlanRejectionCode
     PlannedLossExceedsAccountRiskBudget
 }
 
+/// <param name="EntryRiskScale">
+/// The one per-entry multiplier of the account risk budget, from the strategy's regime rule (VIX sizing): 1 = the
+/// strategy's normal risk, 0.5 = half. Every backtest and paper path passes the value its regime check returned, so the
+/// same entry is sized the same way everywhere. Must be above 0 and at most 1.
+/// </param>
 public sealed record OrderPlanningRiskLimits(
     decimal AccountRiskBudgetPct,
-    decimal MaxPositionNotionalPct);
+    decimal MaxPositionNotionalPct,
+    decimal EntryRiskScale = 1m)
+{
+    /// <summary>The account risk budget this entry may use, in percent of equity, after the per-entry scale.</summary>
+    public decimal EffectiveAccountRiskBudgetPct => AccountRiskBudgetPct * EntryRiskScale;
+}
 
 public sealed record EstimatedOrderExecutionCosts(
     decimal SlippageBps = 0m,
