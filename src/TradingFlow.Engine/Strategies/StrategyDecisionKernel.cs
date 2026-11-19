@@ -83,8 +83,8 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 orderPlan,
                 noEntryReason,
                 rules = rules.Select(rule => new { rule.Stage, rule.Code, rule.Passed }).ToArray(),
-                catalysts = AvailableCatalysts(request.Catalysts, asOfUtc)
-                    .Select(ToSemanticCatalyst)
+                catalysts = AvailableCatalysts(request, asOfUtc)
+                    .Select(catalyst => ToSemanticCatalyst(catalyst, request))
                     .ToArray()
             };
             if (request.Strategy.EntryRules.DrawdownQualification is { Mode: "gate" } activeDrawdown &&
@@ -120,7 +120,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 discovery = request.Candidate.Discovery,
                 marketState = request.Candidate.MarketState,
                 market = CreateMarketAudit(request),
-                attachedCatalyst = signal?.Catalyst is null ? null : AvailableCatalysts(request.Catalysts, asOfUtc)
+                attachedCatalyst = signal?.Catalyst is null ? null : AvailableCatalysts(request, asOfUtc)
                     .LastOrDefault(item => item.Event == signal.Catalyst),
                 universe = request.Candidate.Universe,
                 regime = request.Candidate.Regime,
@@ -258,14 +258,28 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         });
 
         var pointInTimeSnapshots = AttachPointInTimeCatalysts(
-            request.SnapshotsByTimeframe,
-            request.Catalysts,
+            request,
             asOfUtc);
+        var fiveMinuteBars = request.BarsByTimeframe.TryGetValue("5m", out var completedFiveMinute)
+            ? (IReadOnlyList<OhlcvBar>)completedFiveMinute
+            : null;
+        var availableCatalystEvents = AvailableCatalysts(request, asOfUtc)
+            .Select(item => item.Event)
+            .ToArray();
         var signal = signalGenerator.CreateTradeSignal(
             request.Strategy,
             setupBars,
             pointInTimeSnapshots[request.Strategy.Timeframe],
-            setupSnapshots.Length - 1, request.ReferenceBars?.ToArray(), request.AsOfUtc, request.ReferenceSessionDates?.ToArray(), validatedFactor);
+            setupSnapshots.Length - 1,
+            request.ReferenceBars?.ToArray(),
+            request.AsOfUtc,
+            request.ReferenceSessionDates?.ToArray(),
+            validatedFactor,
+            fiveMinuteBars,
+            availableCatalystEvents,
+            request.SessionSchedules,
+            UsesHistoricalReceiptDelayContract(request),
+            fiveMinuteBarsSortedAscending: true);
         if (signal is null)
         {
             AddRule(rules, "qualification", "setup_signal_not_available", false, "signal_generator", new
@@ -554,6 +568,21 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                 provisionalLast: IsDecisionHour(request));
         }
 
+        if (request.Strategy.EntryRules.OpeningRangeMinutes > 0 && !requiredTimeframes.Contains("5m"))
+        {
+            if (!request.BarsByTimeframe.TryGetValue("5m", out var fiveMinuteBars))
+            {
+                throw new InvalidOperationException("Required daily sub-session timeframe 5m is unavailable.");
+            }
+
+            ValidateCompletedBarSeries(
+                request.Candidate.Identity.Symbol,
+                "5m",
+                fiveMinuteBars,
+                request.AsOfUtc,
+                request.Candidate.MarketState);
+        }
+
         if (request.Strategy.EntryRules.DrawdownQualification is { } drawdownRules)
         {
             drawdownRules.Validate();
@@ -752,46 +781,146 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
         }
     }
 
+    // Validates an auxiliary completed bar series (such as 5m sub-session confirmation on a 1d strategy) for symbol,
+    // timeframe, strictly increasing timestamps, causal completion, receipt time, and matching provenance. Allows
+    // 0 or 1 completed bars so later-eligible stocks on early backtest days fail closed cleanly via market_state_not_warm.
+    private static void ValidateCompletedBarSeries(
+        string symbol,
+        string timeframe,
+        ImmutableArray<OhlcvBar> bars,
+        DateTimeOffset asOfUtc,
+        StrategyMarketStateEvidence marketEvidence)
+    {
+        var duration = TimeframeParser.Parse(timeframe);
+        DateTimeOffset? previous = null;
+        for (var index = 0; index < bars.Length; index++)
+        {
+            var bar = bars[index];
+            if (!bar.Ticker.Equals(symbol, StringComparison.OrdinalIgnoreCase) ||
+                !bar.Timeframe.Equals(timeframe, StringComparison.OrdinalIgnoreCase) ||
+                previous is { } prior && bar.Timestamp <= prior ||
+                bar.Timestamp.Add(duration) > asOfUtc ||
+                bar.KnownAtUtc is { } knownAt && knownAt > asOfUtc ||
+                !bar.DataFeed.Equals(marketEvidence.Feed, StringComparison.OrdinalIgnoreCase) ||
+                !bar.AdjustmentPolicy.Equals(marketEvidence.AdjustmentPolicy, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"{symbol} {timeframe} market evidence is misaligned, incomplete, future-known, or has mixed provenance at index {index}.");
+            }
+
+            previous = bar.Timestamp;
+        }
+    }
+
+    // True only when a backtest strategy explicitly declares the frozen historical receipt-delay assumption.
+    // Paper, live, and Desk paths always enforce actual observed receipt times.
+    private static bool UsesHistoricalReceiptDelayContract(StrategyDecisionRequest request) =>
+        request.SelectionMode == StrategySelectionMode.Backtest &&
+        request.Strategy.EntryRules.CatalystReceiptDelayMinutes is not null;
+
+    // Resolves the causal availability clock for a catalyst snapshot without mutating or backdating FirstReceivedAtUtc.
+    private static DateTimeOffset EffectiveCatalystAvailableAtUtc(
+        StrategyCatalystSnapshot catalyst,
+        StrategyDecisionRequest request)
+    {
+        if (UsesHistoricalReceiptDelayContract(request))
+        {
+            var delayMinutes = request.Strategy.EntryRules.CatalystReceiptDelayMinutes!.Value;
+            var providerLatest = catalyst.ProviderUpdatedAtUtc is { } updated && updated > catalyst.ProviderPublishedAtUtc
+                ? updated
+                : catalyst.ProviderPublishedAtUtc;
+            return providerLatest.ToUniversalTime().AddMinutes(Math.Max(0, delayMinutes));
+        }
+
+        return catalyst.DecisionKnownAtUtc.ToUniversalTime();
+    }
+
+    // Filters and deterministically orders catalysts available at asOfUtc under the request's causal availability clock.
     private static ImmutableArray<StrategyCatalystSnapshot> AvailableCatalysts(
-        ImmutableArray<StrategyCatalystSnapshot> catalysts,
-        DateTimeOffset asOfUtc) => catalysts
-        .Where(catalyst => catalyst.DecisionKnownAtUtc <= asOfUtc)
-        .OrderBy(catalyst => catalyst.DecisionKnownAtUtc)
+        StrategyDecisionRequest request,
+        DateTimeOffset asOfUtc) => request.Catalysts
+        .Where(catalyst => EffectiveCatalystAvailableAtUtc(catalyst, request) <= asOfUtc)
+        .OrderBy(catalyst => EffectiveCatalystAvailableAtUtc(catalyst, request))
         .ThenBy(catalyst => catalyst.Provider, StringComparer.Ordinal)
         .ThenBy(catalyst => catalyst.ProviderArticleId, StringComparer.Ordinal)
         .ThenBy(catalyst => catalyst.RevisionId, StringComparer.Ordinal)
         .ToImmutableArray();
 
-    private static object ToSemanticCatalyst(StrategyCatalystSnapshot catalyst) => new
+    // Emits canonical catalyst provenance for semantic/audit hashing; preserves actual firstReceivedAtUtc alongside
+    // assumedAvailableAtUtc when the frozen historical receipt-delay research contract is active.
+    private static object ToSemanticCatalyst(StrategyCatalystSnapshot catalyst, StrategyDecisionRequest request)
     {
-        catalyst.Provider,
-        catalyst.ProviderArticleId,
-        catalyst.RevisionId,
-        providerPublishedAtUtc = catalyst.ProviderPublishedAtUtc.ToUniversalTime(),
-        providerUpdatedAtUtc = catalyst.ProviderUpdatedAtUtc?.ToUniversalTime(),
-        firstReceivedAtUtc = catalyst.FirstReceivedAtUtc?.ToUniversalTime(),
-        decisionKnownAtUtc = catalyst.DecisionKnownAtUtc.ToUniversalTime(),
-        catalyst.ClassificationVersion,
-        catalyst.AvailabilityEvidence,
-        catalyst.DeduplicationKey,
-        catalyst.Event.Type,
-        catalyst.Event.SentimentScore
-    };
+        if (UsesHistoricalReceiptDelayContract(request))
+        {
+            return new
+            {
+                catalyst.Provider,
+                catalyst.ProviderArticleId,
+                catalyst.RevisionId,
+                providerPublishedAtUtc = catalyst.ProviderPublishedAtUtc.ToUniversalTime(),
+                providerUpdatedAtUtc = catalyst.ProviderUpdatedAtUtc?.ToUniversalTime(),
+                firstReceivedAtUtc = catalyst.FirstReceivedAtUtc?.ToUniversalTime(),
+                decisionKnownAtUtc = catalyst.DecisionKnownAtUtc.ToUniversalTime(),
+                assumedAvailableAtUtc = EffectiveCatalystAvailableAtUtc(catalyst, request),
+                catalyst.ClassificationVersion,
+                catalyst.AvailabilityEvidence,
+                catalyst.DeduplicationKey,
+                catalyst.Event.Type,
+                catalyst.Event.SentimentScore
+            };
+        }
 
+        return new
+        {
+            catalyst.Provider,
+            catalyst.ProviderArticleId,
+            catalyst.RevisionId,
+            providerPublishedAtUtc = catalyst.ProviderPublishedAtUtc.ToUniversalTime(),
+            providerUpdatedAtUtc = catalyst.ProviderUpdatedAtUtc?.ToUniversalTime(),
+            firstReceivedAtUtc = catalyst.FirstReceivedAtUtc?.ToUniversalTime(),
+            decisionKnownAtUtc = catalyst.DecisionKnownAtUtc.ToUniversalTime(),
+            catalyst.ClassificationVersion,
+            catalyst.AvailabilityEvidence,
+            catalyst.DeduplicationKey,
+            catalyst.Event.Type,
+            catalyst.Event.SentimentScore
+        };
+    }
+
+    // Attaches point-in-time catalysts only to snapshot series consumed by setup, execution, or enabled confluence;
+    // auxiliary 5m confirmation series on a 1d strategy are passed through untouched to avoid O(M) snapshot cloning.
     private static ImmutableDictionary<string, ImmutableArray<IndicatorSnapshot>> AttachPointInTimeCatalysts(
-        ImmutableDictionary<string, ImmutableArray<IndicatorSnapshot>> source,
-        ImmutableArray<StrategyCatalystSnapshot> catalysts,
+        StrategyDecisionRequest request,
         DateTimeOffset asOfUtc)
     {
-        var available = AvailableCatalysts(catalysts, asOfUtc);
-        return source.ToImmutableDictionary(
+        var consumedSnapshotTimeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            request.Strategy.Timeframe,
+            request.Strategy.Execution.Timeframe
+        };
+        if (request.Strategy.Confluence.Enabled)
+        {
+            consumedSnapshotTimeframes.Add(request.Strategy.Confluence.Timeframe);
+        }
+
+        var available = AvailableCatalysts(request, asOfUtc);
+        return request.SnapshotsByTimeframe.ToImmutableDictionary(
             pair => pair.Key,
-            pair => pair.Value.Select(snapshot =>
+            pair =>
             {
-                var barKnownAt = snapshot.Timestamp.Add(TimeframeParser.Parse(pair.Key));
-                var catalyst = available.LastOrDefault(item => item.DecisionKnownAtUtc <= barKnownAt);
-                return snapshot with { Catalyst = catalyst?.Event };
-            }).ToImmutableArray(),
+                if (!consumedSnapshotTimeframes.Contains(pair.Key))
+                {
+                    return pair.Value;
+                }
+
+                var barDuration = TimeframeParser.Parse(pair.Key);
+                return pair.Value.Select(snapshot =>
+                {
+                    var barKnownAt = snapshot.Timestamp.Add(barDuration);
+                    var catalyst = available.LastOrDefault(item => EffectiveCatalystAvailableAtUtc(item, request) <= barKnownAt);
+                    return snapshot with { Catalyst = catalyst?.Event };
+                }).ToImmutableArray();
+            },
             StringComparer.OrdinalIgnoreCase);
     }
 

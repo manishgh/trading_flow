@@ -292,7 +292,19 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequirePullbackLowAboveSma50 = false,
     // Rubber-band reclaim: when true, mean_reversion_reclaim requires a prior stretch bar satisfying BOTH Close < BollingerLower
     // AND Rsi2 < MaxReversionRsi2 (instead of the default OR stretch logic).
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireCombinedBollingerAndRsi2Stretch = false);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireCombinedBollingerAndRsi2Stretch = false,
+    // ATR-normalized opening gap threshold: (Open_D - Close_{D-1}) / ATR(14)_{D-1} >= MinGapUpAtr.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinGapUpAtr = null,
+    // Daily sub-session opening-range confirmation derived from completed regular-session 5-minute bars of session D
+    // (0 = disabled). Shared by long Swing ORB (news_orb_swing) and Checkpoint 8's short mirror (news_orb_breakdown).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int OpeningRangeMinutes = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinOpeningRelativeVolume = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireDailyCloseAboveOpeningRangeHigh = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireDailyCloseAboveSessionVwap = false,
+    // Frozen conservative historical news contract: receipt delay added to max(created, updated, observed) and
+    // comma-separated allowed Tier-1 catalyst categories (earnings, guidance, fda, contract, upgrade, downgrade).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? CatalystReceiptDelayMinutes = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? AllowedCatalystCategories = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,

@@ -9,6 +9,7 @@ using TradingFlow.Domain.Jobs;
 using TradingFlow.Domain.Persistence;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Strategies;
 
@@ -133,7 +134,7 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
             else if (StockStrategyEvidenceLoader.MissingAtDecision(runtime.Definition, stock, batch.Calendar, cutoff) is { } stale)
                 results.Add(Missing(symbol, work.Request.Strategy, runId, stale));
             else
-                results.Add(await EvaluateStockAsync(run, runtime, work.Profile, member, stock, cutoff, decisions, token));
+                results.Add(await EvaluateStockAsync(run, runtime, work.Profile, member, stock, batch.Calendar, cutoff, decisions, token));
             await context.SaveSnapshotAsync(PreparationJson.Write(new StockStrategyAssessmentResponse(
                 ContractVersions.VersionOne, runId, work.Request.Strategy, cutoff, results.ToArray())), token);
         }
@@ -144,7 +145,8 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
 
     /// <summary>Assembles genuine source and provider evidence; only the shared kernel decides conditions, arming and triggering.</summary>
     private async Task<StockStrategyAssessment> EvaluateStockAsync(ProductionRun run, AuthorizedRuntimeStrategy strategy,
-        BacktestRunConfig profile, ActiveDiscoveryAggregate member, StockStrategyEvidence stock, DateTimeOffset cutoff,
+        BacktestRunConfig profile, ActiveDiscoveryAggregate member, StockStrategyEvidence stock,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateTimeOffset cutoff,
         IStrategyCandidateDecisionOrchestrator decisions, CancellationToken token)
     {
         var market = stock.Market!;
@@ -162,7 +164,7 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
                 market.SnapshotsByTimeframe, stock.News, cutoff, source, universe, stock.Regime!, StrategyCandidateState.Discovered,
                 0, StrategyDecisionRequestAssembler.CreateSetupKey(strategy.Identity.StrategyId, strategy.Definition.Timeframe, latest.Timestamp),
                 source.ObservedAtUtc, source.ExpiresAtUtc, profile.Engine.IndicatorWarmupBars, run.RunId,
-                stock.ReferenceBars, stock.ReferenceSessions, stock.DrawdownContext);
+                stock.ReferenceBars, stock.ReferenceSessions, stock.DrawdownContext, sessionSchedules: calendar);
             var evaluation = await decisions.EvaluateAsync(run, request, token);
             var response = await recorded.ReadAsync(run.RunId, ToReference(strategy), [member.Symbol], token);
             var projection = response.Stocks.Single();

@@ -15,12 +15,16 @@ internal static class StrategyCapabilityInspector
             entryRules.VetoFreshNewsHours is not null ||
             entryRules.MinCatalystPriceMovePct is not null ||
             entryRules.MaxCatalystPriceMovePct is not null ||
-            entryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase);
+            entryRules.CatalystReceiptDelayMinutes is not null ||
+            !string.IsNullOrWhiteSpace(entryRules.AllowedCatalystCategories) ||
+            entryRules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
+            entryRules.SetupType.Contains("news_", StringComparison.OrdinalIgnoreCase);
         var shortSideUsesNews =
             entryRules.EnableShort &&
             (entryRules.MaxShortNewsSentiment is not null ||
              entryRules.MinShortCatalystDropPct is not null ||
-             entryRules.ShortSetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase));
+             entryRules.ShortSetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
+             entryRules.ShortSetupType.Contains("news_", StringComparison.OrdinalIgnoreCase));
 
         return longSideUsesNews || shortSideUsesNews;
     }

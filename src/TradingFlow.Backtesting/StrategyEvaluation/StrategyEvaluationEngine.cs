@@ -195,20 +195,9 @@ public sealed class StrategyEvaluationEngine
             .ToArray();
     }
 
-    private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)
-    {
-        var timeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            strategy.Timeframe,
-            strategy.Execution.Timeframe
-        };
-        if (strategy.Confluence.Enabled)
-        {
-            timeframes.Add(strategy.Confluence.Timeframe);
-        }
-
-        return timeframes.ToArray();
-    }
+    // Delegates required timeframe resolution to the shared assembler so evaluation matches backtest and live paths.
+    private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy) =>
+        StrategyDecisionRequestAssembler.ResolveRequiredTimeframes(strategy);
 
     private static TimeSpan ParseTimeframe(string timeframe) => TimeframeParser.Parse(timeframe);
 

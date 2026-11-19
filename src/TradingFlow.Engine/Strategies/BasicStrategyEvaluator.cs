@@ -9,6 +9,8 @@ public sealed class BasicStrategyEvaluator
         return GetLongEntryRejection(strategy, signal, relativeVolume) is null;
     }
 
+    // Evaluates all declared long entry rules for a completed setup bar, returning null when every rule passes
+    // or a concrete diagnostic reason naming the first failing rule.
     public string? GetLongEntryRejection(StrategyDefinition strategy, TradeSignal signal, decimal relativeVolume)
     {
         if (!AllowsLong(strategy))
@@ -285,6 +287,7 @@ public sealed class BasicStrategyEvaluator
             "rsi2_oversold" => signal.IsConnorsRsi2Oversold,
             "bollinger_squeeze_breakout" => IsBollingerSqueezeBreakout(strategy, signal),
             "ema21_pullback_reclaim" => signal.IsEma21PullbackReclaim,
+            "news_orb_swing" => IsNewsOrbSwing(strategy, signal),
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
     }
@@ -296,8 +299,69 @@ public sealed class BasicStrategyEvaluator
         {
             "bollinger_squeeze_breakout" => DescribeSqueezeRejection(strategy, signal),
             "ema21_pullback_reclaim" => DescribeEma21PullbackRejection(strategy, signal),
+            "news_orb_swing" => DescribeNewsOrbSwingRejection(strategy, signal),
             _ => $"setup_{strategy.EntryRules.SetupType}_not_triggered"
         };
+    }
+
+    // Evaluates long Swing ORB on news: requires complete 5-minute opening-range confirmation and (when configured)
+    // a qualifying Tier-1 catalyst inside the receipt-delayed window with no sentiment veto.
+    private static bool IsNewsOrbSwing(StrategyDefinition strategy, TradeSignal signal) =>
+        GetOpeningRangeConfirmationRejection(strategy.EntryRules, signal) is null &&
+        (strategy.EntryRules.AllowedCatalystCategories is null ||
+         (signal.MatchedCatalystCategory is not null && signal.CatalystCategoryRejectionDetail is null));
+
+    // Formats the first failing condition for news_orb_swing (Tier-1 catalyst/veto or 5m opening-range confirmation).
+    private static string DescribeNewsOrbSwingRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        if (strategy.EntryRules.AllowedCatalystCategories is not null &&
+            signal.CatalystCategoryRejectionDetail is { } catalystRejection)
+        {
+            return catalystRejection;
+        }
+
+        if (GetOpeningRangeConfirmationRejection(strategy.EntryRules, signal) is { } openingRejection)
+        {
+            return $"setup_news_orb_swing_not_triggered ({openingRejection})";
+        }
+
+        return "setup_news_orb_swing_not_triggered";
+    }
+
+    // Validates completed daily sub-session 5-minute opening-range rules (RVOL, close > opening high, close > VWAP).
+    // Fails closed whenever any required sub-session measurement is missing.
+    private static string? GetOpeningRangeConfirmationRejection(EntryRules rules, TradeSignal signal)
+    {
+        if (rules.OpeningRangeMinutes <= 0)
+        {
+            return null;
+        }
+
+        if (signal.OpeningRangeRejectionDetail is { } unavailable)
+        {
+            return unavailable;
+        }
+
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        if (rules.MinOpeningRelativeVolume is { } minOpeningRvol &&
+            (signal.OpeningRelativeVolume is null || signal.OpeningRelativeVolume.Value < minOpeningRvol))
+        {
+            return $"opening_relative_volume_below_minimum (Actual: {signal.OpeningRelativeVolume?.ToString("F2", invariant) ?? "n/a"}, Required: {minOpeningRvol.ToString("F2", invariant)})";
+        }
+
+        if (rules.RequireDailyCloseAboveOpeningRangeHigh &&
+            (signal.OpeningRangeHigh is null || signal.CurrentPrice <= signal.OpeningRangeHigh.Value))
+        {
+            return $"daily_close_not_above_opening_range_high (Close: {signal.CurrentPrice.ToString("F2", invariant)}, OpeningHigh: {signal.OpeningRangeHigh?.ToString("F2", invariant) ?? "n/a"})";
+        }
+
+        if (rules.RequireDailyCloseAboveSessionVwap &&
+            (signal.SessionVwap is null || signal.CurrentPrice <= signal.SessionVwap.Value))
+        {
+            return $"daily_close_not_above_session_vwap (Close: {signal.CurrentPrice.ToString("F2", invariant)}, SessionVwap: {signal.SessionVwap?.ToString("F2", invariant) ?? "n/a"})";
+        }
+
+        return null;
     }
 
     // Formats the EMA-21 pullback reclaim rejection with the concrete failing detail and configured thresholds
@@ -351,6 +415,7 @@ public sealed class BasicStrategyEvaluator
         strategy.EntryRules.MaxBollingerWidthPercentile is { } maximum &&
         rank <= maximum;
 
+    // Enforces shared liquidity/volatility floors, gap thresholds, moving-average trend filters, and 52-week bounds.
     private static string? GetResearchRuleRejection(StrategyDefinition strategy, TradeSignal signal)
     {
         var rules = strategy.EntryRules;
@@ -365,6 +430,13 @@ public sealed class BasicStrategyEvaluator
             (signal.GapUpPct is null || signal.GapUpPct.Value < minGapUp))
         {
             return $"gap_up_below_minimum (Actual: {signal.GapUpPct?.ToString("F2") ?? "n/a"}, Required: {minGapUp:F2})";
+        }
+
+        if (rules.MinGapUpAtr is { } minGapUpAtr &&
+            (signal.GapUpAtr is null || signal.GapUpAtr.Value < minGapUpAtr))
+        {
+            var invariant = System.Globalization.CultureInfo.InvariantCulture;
+            return $"gap_up_atr_below_minimum (Actual: {signal.GapUpAtr?.ToString("F2", invariant) ?? "n/a"}, Required: {minGapUpAtr.ToString("F2", invariant)})";
         }
 
         if (rules.RequirePriceAboveEma5_65m && !signal.IsPriceAboveEma5)
@@ -443,6 +515,12 @@ public sealed class BasicStrategyEvaluator
 
     private static string? GetNewsSentimentRejection(StrategyDefinition strategy, TradeSignal signal)
     {
+        if (strategy.EntryRules.AllowedCatalystCategories is not null &&
+            (signal.MatchedCatalystCategory is null || signal.CatalystCategoryRejectionDetail is not null))
+        {
+            return signal.CatalystCategoryRejectionDetail ?? "tier1_catalyst_missing";
+        }
+
         var catalyst = signal.Catalyst;
 
         // Archetype C no-news veto (Chan 2003): a fresh catalyst of ANY sentiment disqualifies a

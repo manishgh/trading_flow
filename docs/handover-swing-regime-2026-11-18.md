@@ -1,4 +1,4 @@
-# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~15:25 UTC)
+# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~16:20 UTC)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
@@ -25,7 +25,7 @@ Market and stock filters
 Long strategies
 - [x] Bollinger squeeze breakout v1 built (registered, disabled until checkpoint 3)
 - [x] Enable the squeeze in `configs/strategy-catalog.json` after checkpoint 3 (`349ab69`)
-- [ ] Swing ORB on news (`technical.news-orb-swing@1.0.0`) — design approved (Option B: decide after close, buy next open; Checkpoint 4)
+- [x] Swing ORB on news (`technical.news-orb-swing@1.0.0`) — Option B (decide after close, buy next open; 30m 5m ORB/RVOL/VWAP, +5m conservative Tier-1 catalyst window, 0.75 ATR gap, SPY/QQQ/VIX gate, Checkpoint 4 — enabled for research backtests)
 - [x] 21-EMA trend pullback Long (`technical.ema21-trend-pullback@1.0.0` ATR-14 control + `1.1.0` V2-01 MTR-14 treatment, Checkpoint 5 — enabled for research backtests)
 - [x] Rubber-band reclaim Long (`technical.rubber-band-reclaim@1.0.0` — Archetype #4: combined lower-Bollinger + RSI(2) < 10 stretch, 48h fresh-news veto, rising SMA-50, SPY/QQQ/VIX gate, 1.0 ATR / 2.5R / 10d exit, Checkpoint 6 — enabled for research backtests)
 - [ ] Run the 6-month diagnostic (May–Oct 2026) with the full `.log` (Checkpoint 10)
@@ -72,7 +72,14 @@ Housekeeping
 
 ## Done (commits)
 
-- Batch 1 — Checkpoints 5 & 6 + Strategy-Owned ADR%/Liquidity Filter (19 Nov): added `Ema21`, `Mtr14`, `MaxTr14`
+- Batch 2 — Checkpoint 4 (`technical.news-orb-swing@1.0.0`, Option B, 19 Nov): added `DailyOpeningRangeSummary`
+  (`O(log M)` backward scan, exact timestamp deduplication, early-close `13:00` NY support, 30m ORB/RVOL/VWAP),
+  `TierOneCatalystEvaluator` (`+5m` conservative receipt delay preserved separately from actual `firstReceivedAtUtc`,
+  multi-story Tier-1 + FinBERT negative veto, day-D regular-close cutoff & `10:00 NY_D - 18h` AMC lookback),
+  `MinGapUpAtr`, `ResearchScreenSources` eligible-list `5m` binding + pre-flight `5m` & strict-news guards, and enabled
+  `technical.news-orb-swing@1.0.0` for research backtests (0 warnings/0 errors build, 148/148 + 22/22 tests green, both
+  independent reviewers ACCEPT). All 4 Long Swing Strategies are now complete.
+- `c75524f` Batch 1 — Checkpoints 5 & 6 + Strategy-Owned ADR%/Liquidity Filter (19 Nov): added `Ema21`, `Mtr14`, `MaxTr14`
   (`swing-daily-v2-as-traded-research-v1`, `derivedIndicatorProfileVersion: "2.5.0"`), strategy-owned 20-session
   `min_average_range_pct` / `min_average_dollar_volume` matching `DailyScreen` across backtest & paper/Desk,
   `sma50_rising_lookback_bars`, `setup_type: ema21_pullback_reclaim`, `exit_rules.volatility_unit` (`atr14` | `mtr14`),

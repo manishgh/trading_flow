@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
+using TradingFlow.Engine.Indicators;
 
 namespace TradingFlow.Engine.Strategies;
 
@@ -87,7 +88,9 @@ public sealed record StrategyDecisionRequest(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] StrategySelectionMode? SelectionMode = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IntradayBreakoutContext? PreviousSessionContext = null,
     // The exchange calendar's next trading session after the setup bar's session; required by a scheduled entry rule.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateOnly? NextExchangeSessionDate = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateOnly? NextExchangeSessionDate = null,
+    // Authoritative exchange session schedules (honoring early closes such as 13:00 NY) for daily sub-session rules.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableDictionary<DateOnly, MarketSessionSchedule>? SessionSchedules = null);
 
 public sealed record StrategyDecisionRule(
     string Stage,

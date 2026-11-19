@@ -25,6 +25,7 @@ public sealed class StrategyArtifactCatalogTests
                 "technical.bollinger-squeeze-breakout@1.0.0",
                 "technical.ema21-trend-pullback@1.0.0",
                 "technical.ema21-trend-pullback@1.1.0",
+                "technical.news-orb-swing@1.0.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
                 "technical.opening-range-breakout@2.1.0",
@@ -54,8 +55,8 @@ public sealed class StrategyArtifactCatalogTests
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
-        // The same-day opening-range versions stay set aside; the four approved swing research artifacts are enabled for
-        // research backtests (still research-only, never authorized for paper/live without explicit promotion).
+        // The same-day opening-range versions stay set aside; the five approved long swing research artifacts are enabled
+        // for research backtests (still research-only, never authorized for paper/live without explicit promotion).
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.opening-range-breakout");
         Assert.Equal(
             new[]
@@ -63,6 +64,7 @@ public sealed class StrategyArtifactCatalogTests
                 "technical.bollinger-squeeze-breakout@1.0.0",
                 "technical.ema21-trend-pullback@1.0.0",
                 "technical.ema21-trend-pullback@1.1.0",
+                "technical.news-orb-swing@1.0.0",
                 "technical.rubber-band-reclaim@1.0.0"
             },
             artifacts

@@ -189,7 +189,14 @@ public sealed class SimpleYamlReader
                 MaxEma21PullbackAtr: OptionalDecimal(map, "entry_rules.max_ema21_pullback_atr"),
                 MaxPullbackRelativeVolume: OptionalDecimal(map, "entry_rules.max_pullback_relative_volume"),
                 RequirePullbackLowAboveSma50: OptionalBool(map, "entry_rules.require_pullback_low_above_sma50", false),
-                RequireCombinedBollingerAndRsi2Stretch: OptionalBool(map, "entry_rules.require_combined_bollinger_and_rsi2_stretch", false)),
+                RequireCombinedBollingerAndRsi2Stretch: OptionalBool(map, "entry_rules.require_combined_bollinger_and_rsi2_stretch", false),
+                MinGapUpAtr: OptionalDecimal(map, "entry_rules.min_gap_up_atr"),
+                OpeningRangeMinutes: OptionalInt(map, "entry_rules.opening_range_minutes", 0),
+                MinOpeningRelativeVolume: OptionalDecimal(map, "entry_rules.min_opening_relative_volume"),
+                RequireDailyCloseAboveOpeningRangeHigh: OptionalBool(map, "entry_rules.require_daily_close_above_opening_range_high", false),
+                RequireDailyCloseAboveSessionVwap: OptionalBool(map, "entry_rules.require_daily_close_above_session_vwap", false),
+                CatalystReceiptDelayMinutes: OptionalNullableInt(map, "entry_rules.catalyst_receipt_delay_minutes"),
+                AllowedCatalystCategories: OptionalNullableString(map, "entry_rules.allowed_catalyst_categories")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -273,6 +280,7 @@ public sealed class SimpleYamlReader
         ValidateNoStopRules(strategy);
         ValidateExitVolatilityUnit(strategy.ExitRules);
         ValidateStretchAndShortThresholds(strategy.EntryRules);
+        ValidateDailyOpeningRangeAndTierOneCatalyst(strategy);
         ValidateShortCoverExit(strategy);
         ValidateScheduledRules(strategy);
         map.ThrowIfUnknownKeys(path);
@@ -919,6 +927,68 @@ public sealed class SimpleYamlReader
         {
             throw new InvalidOperationException(
                 "exit_rules.volatility_unit: mtr14 requires initial_stop_mode: atr or enable_atr_trailing_stop: true.");
+        }
+    }
+
+    // Validates ATR-normalized gap, daily sub-session 5-minute opening-range confirmation, and Tier-1 catalyst fields
+    // so partial, negative, non-5m-aligned, or unsupported category configurations fail closed at load time.
+    private static void ValidateDailyOpeningRangeAndTierOneCatalyst(StrategyDefinition strategy)
+    {
+        var rules = strategy.EntryRules;
+        if (rules.MinGapUpAtr is <= 0m)
+        {
+            throw new InvalidOperationException("entry_rules.min_gap_up_atr must be positive when specified.");
+        }
+
+        if (rules.OpeningRangeMinutes < 0 || (rules.OpeningRangeMinutes > 0 && rules.OpeningRangeMinutes % 5 != 0))
+        {
+            throw new InvalidOperationException(
+                "entry_rules.opening_range_minutes must be 0 or a positive multiple of 5 minutes.");
+        }
+
+        if (rules.MinOpeningRelativeVolume is <= 0m)
+        {
+            throw new InvalidOperationException(
+                "entry_rules.min_opening_relative_volume must be positive when specified.");
+        }
+
+        var usesDailyOpeningConfirmation =
+            rules.OpeningRangeMinutes > 0 ||
+            rules.MinOpeningRelativeVolume is not null ||
+            rules.RequireDailyCloseAboveOpeningRangeHigh ||
+            rules.RequireDailyCloseAboveSessionVwap;
+        var isNewsOrbSwing = rules.SetupType.Equals("news_orb_swing", StringComparison.OrdinalIgnoreCase);
+
+        if (usesDailyOpeningConfirmation)
+        {
+            if (!strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Daily sub-session opening-range confirmation requires timeframe: 1d.");
+            }
+
+            if (rules.OpeningRangeMinutes <= 0)
+            {
+                throw new InvalidOperationException(
+                    "min_opening_relative_volume, require_daily_close_above_opening_range_high, and require_daily_close_above_session_vwap require opening_range_minutes > 0.");
+            }
+        }
+
+        if (isNewsOrbSwing && rules.OpeningRangeMinutes <= 0)
+        {
+            throw new InvalidOperationException(
+                "setup_type news_orb_swing requires entry_rules.opening_range_minutes > 0 (e.g. 30).");
+        }
+
+        if (rules.CatalystReceiptDelayMinutes is < 0)
+        {
+            throw new InvalidOperationException(
+                "entry_rules.catalyst_receipt_delay_minutes must be nonnegative when specified.");
+        }
+
+        if (rules.AllowedCatalystCategories is { } allowedCategories)
+        {
+            _ = TradingFlow.Engine.Catalysts.TierOneCatalystEvaluator.ParseAllowedCategories(allowedCategories);
         }
     }
 

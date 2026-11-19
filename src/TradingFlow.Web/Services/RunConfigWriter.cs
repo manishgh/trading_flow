@@ -965,6 +965,20 @@ public sealed class RunConfigWriter
             yaml.AppendLine("  require_pullback_low_above_sma50: true");
         if (strategy.EntryRules.RequireCombinedBollingerAndRsi2Stretch)
             yaml.AppendLine("  require_combined_bollinger_and_rsi2_stretch: true");
+        if (strategy.EntryRules.MinGapUpAtr is { } minGapUpAtr)
+            yaml.AppendLine($"  min_gap_up_atr: {minGapUpAtr.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.OpeningRangeMinutes != 0)
+            yaml.AppendLine($"  opening_range_minutes: {strategy.EntryRules.OpeningRangeMinutes.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MinOpeningRelativeVolume is { } minOpeningRelativeVolume)
+            yaml.AppendLine($"  min_opening_relative_volume: {minOpeningRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.RequireDailyCloseAboveOpeningRangeHigh)
+            yaml.AppendLine("  require_daily_close_above_opening_range_high: true");
+        if (strategy.EntryRules.RequireDailyCloseAboveSessionVwap)
+            yaml.AppendLine("  require_daily_close_above_session_vwap: true");
+        if (strategy.EntryRules.CatalystReceiptDelayMinutes is { } catalystReceiptDelayMinutes)
+            yaml.AppendLine($"  catalyst_receipt_delay_minutes: {catalystReceiptDelayMinutes.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.AllowedCatalystCategories is { } allowedCatalystCategories)
+            yaml.AppendLine($"  allowed_catalyst_categories: {allowedCatalystCategories}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -1342,7 +1356,8 @@ public sealed class RunConfigWriter
                  {
                      strategy.Timeframe,
                      strategy.Execution.Timeframe,
-                     strategy.Confluence.Enabled ? strategy.Confluence.Timeframe : null
+                     strategy.Confluence.Enabled ? strategy.Confluence.Timeframe : null,
+                     strategy.EntryRules.OpeningRangeMinutes > 0 ? "5m" : null
                  }))
         {
             if (!String.IsNullOrWhiteSpace(timeframe) &&

@@ -145,7 +145,8 @@ public sealed partial class SignalGenerator
 
         var start = Math.Max(0, index - rules.PullbackLookbackBars);
         var sawZoneTouch = false;
-        var sawDryVolume = false;
+        var sawMissingRvolInZone = false;
+        var sawWetVolumeInZone = false;
         var sawSma50Failure = false;
         var sawMissingIndicators = false;
 
@@ -169,16 +170,16 @@ public sealed partial class SignalGenerator
             sawZoneTouch = true;
             if (snapK.RelativeVolume is not { } rvolK)
             {
-                sawMissingIndicators = true;
+                sawMissingRvolInZone = true;
                 continue;
             }
 
             if (rvolK >= maxRvol)
             {
+                sawWetVolumeInZone = true;
                 continue;
             }
 
-            sawDryVolume = true;
             if (rules.RequirePullbackLowAboveSma50 && !AllLowsAtOrAboveSma50(bars, snapshots, k, index))
             {
                 sawSma50Failure = true;
@@ -190,11 +191,9 @@ public sealed partial class SignalGenerator
 
         var detail = sawSma50Failure
             ? "pullback_low_below_sma50_or_sma50_missing"
-            : sawDryVolume
-                ? "pullback_conditions_not_met"
-                : sawZoneTouch
-                    ? (sawMissingIndicators ? "pullback_rvol_unavailable" : "pullback_volume_not_dried_up")
-                    : (sawMissingIndicators ? "pullback_indicators_unavailable" : "no_ema21_zone_pullback_in_lookback");
+            : sawZoneTouch
+                ? (sawWetVolumeInZone ? "pullback_volume_not_dried_up" : sawMissingRvolInZone ? "pullback_rvol_unavailable" : "pullback_volume_not_dried_up")
+                : (sawMissingIndicators ? "pullback_indicators_unavailable" : "no_ema21_zone_pullback_in_lookback");
         return (false, detail);
     }
 

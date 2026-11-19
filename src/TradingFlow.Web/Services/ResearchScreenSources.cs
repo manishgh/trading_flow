@@ -91,7 +91,7 @@ public sealed class ResearchScreenSources(ProjectPaths paths, IEvidenceCatalog? 
         var collected = asTradedBars.Where(dataset => dataset.Attributes.GetValueOrDefault("ranked_list_sha256") == membership).ToArray();
         var fredVixSha = manifest.Outputs.GetValueOrDefault(ResearchScreenManifest.FredVixFileName);
         if (manifest.RankingRules is null)
-            return new(name, sha, membership, inputs.DailyBarsDatasetId, sessions, [], [],
+            return new(name, sha, membership, inputs.DailyBarsDatasetId, sessions, DatasetsOf(collected, "5m"), [],
                 inputs.CorporateActionsDatasetId, DatasetsOf(collected, "1h"), inputs.SecurityMasterDatasetId, fredVixSha);
         string[] Of(string timeframe) => DatasetsOf(collected, timeframe);
         var five = Of("5m");

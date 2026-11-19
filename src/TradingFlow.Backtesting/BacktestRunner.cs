@@ -993,6 +993,15 @@ public sealed partial class BacktestRunner(
             throw new InvalidOperationException("At least one strategy is required.");
         }
 
+        if (strategies.Any(strategy => HistoricalNewsPresenceEvaluation.HasStrictNewsRequirements(strategy.EntryRules)) &&
+            (!run.News.Enabled || string.IsNullOrWhiteSpace(run.News.ProviderName) ||
+             run.News.ProviderName.Equals("none", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                "A selected strategy declares strict news or catalyst rules (for example allowed_catalyst_categories, " +
+                "veto_fresh_news_hours, or require_positive_news), which require news.enabled: true and a configured news.provider.name.");
+        }
+
         if (!run.Engine.Pipeline.Equals("tpl", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Unsupported pipeline: {run.Engine.Pipeline}.");
@@ -1035,16 +1044,15 @@ public sealed partial class BacktestRunner(
         }
     }
 
+    // Collects every timeframe required across the selected strategies via the single shared resolver.
     private static string[] ResolveRequiredTimeframes(IReadOnlyCollection<StrategyDefinition> strategies)
     {
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var strategy in strategies)
         {
-            required.Add(strategy.Timeframe);
-            required.Add(strategy.Execution.Timeframe);
-            if (strategy.Confluence.Enabled)
+            foreach (var timeframe in StrategyDecisionRequestAssembler.ResolveRequiredTimeframes(strategy))
             {
-                required.Add(strategy.Confluence.Timeframe);
+                required.Add(timeframe);
             }
         }
 
@@ -1558,7 +1566,8 @@ public sealed partial class BacktestRunner(
                     await StrategyDecisionRequestAssembler.ResolveDrawdownContextAsync(_decisionContextProvider,
                         snapshot.Ticker, decisionTime, barsByTimeframe, "backtest", cancellationToken),
                     strategy.EntryRules.HistoricalNewsDiagnostic is not null && _historicalNewsProvider is not null
-                        ? await _historicalNewsProvider.ResolveAsync(snapshot.Ticker, decisionTime, cancellationToken) : null);
+                        ? await _historicalNewsProvider.ResolveAsync(snapshot.Ticker, decisionTime, cancellationToken) : null,
+                    sessionSchedules: candidateSessionSchedules);
                 request = WithNextExchangeSession(request, strategy);
                 var persistedDecision = await candidateDecisions.EvaluateAsync(
                     simulationRun,

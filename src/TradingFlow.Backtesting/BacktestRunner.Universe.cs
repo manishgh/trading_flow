@@ -280,17 +280,23 @@ public sealed partial class BacktestRunner
     }
 
     /// <summary>
-    /// The longest number of daily sessions a strategy's entry indicators read: SMA200, rising SMA50,
-    /// Bollinger squeeze width look-back, the confluence EMA, the technical factor's completed bars
-    /// (for example 210 for the ETF trend average), or 20.
+    /// The longest number of daily sessions a strategy's entry indicators read: SMA200, SMA50 (plus rising or pullback
+    /// look-back), EMA21 pullback look-back, Bollinger squeeze/stretch look-back, 20-session opening-range volume
+    /// baseline, confluence EMA, technical factor completed bars (for example 210 for the ETF trend average), or 20.
     /// </summary>
     internal static int LongestIndicatorLookback(StrategyDefinition strategy) => new[]
     {
         strategy.EntryRules.RequirePriceAboveSma200 || strategy.EntryRules.RequirePriceAboveSma200Daily ? 200 : 0,
-        strategy.EntryRules.RequirePriceAboveSma50 || strategy.EntryRules.Sma50RisingLookbackBars > 0
-            ? 50 + Math.Max(0, strategy.EntryRules.Sma50RisingLookbackBars)
+        strategy.EntryRules.RequirePriceAboveSma50 ||
+            strategy.EntryRules.RequirePullbackLowAboveSma50 ||
+            strategy.EntryRules.RequireSma20AboveSma50 ||
+            strategy.EntryRules.Sma50RisingLookbackBars > 0
+            ? 50 + Math.Max(Math.Max(0, strategy.EntryRules.Sma50RisingLookbackBars), Math.Max(0, strategy.EntryRules.PullbackLookbackBars))
             : 0,
+        strategy.EntryRules.PullbackLookbackBars > 0 ? 21 + strategy.EntryRules.PullbackLookbackBars : 0,
         strategy.EntryRules.BollingerSqueezeLookbackBars > 0 ? strategy.EntryRules.BollingerSqueezeLookbackBars + 20 : 0,
+        strategy.EntryRules.EnableLowerBollingerStretch ? 20 + Math.Max(0, strategy.EntryRules.ReversionStretchLookbackBars) : 0,
+        strategy.EntryRules.OpeningRangeMinutes > 0 ? 21 : 0,
         strategy.Confluence.Enabled ? strategy.Confluence.EmaPeriod : 0,
         strategy.EntryRules.TechnicalFactor?.RequiredCompletedBars ?? 0,
         20

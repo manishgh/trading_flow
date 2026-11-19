@@ -73,6 +73,16 @@ public sealed partial class PreparedMarketDataService
                 foreach (var interval in intervals) Add(run.Validation.Benchmark.Ticker, interval, start, end);
             var reader = new SimpleYamlReader();
             var strategies = book.Strategies?.ToArray() ?? run.Strategies.Select(reader.ReadStrategy).ToArray();
+            if (run.Provider.Equals("evidence_catalog", StringComparison.OrdinalIgnoreCase) &&
+                (strategies.Any(strategy => strategy.EntryRules.OpeningRangeMinutes > 0) ||
+                 string.Equals(run.Engine.ExecutionReplayPolicyId, ExecutionReplayPolicy.DailyRthFiveMinuteV1, StringComparison.Ordinal)) &&
+                run.Providers.EvidenceCatalog?.FiveMinuteDatasetIds is not { Count: > 0 })
+            {
+                throw new InvalidOperationException(
+                    "This evidence-catalog run requires collected 5-minute bars (providers.evidence_catalog.five_minute_datasets) " +
+                    "for daily opening-range confirmation or 5-minute causal stop/target replay. Plan and collect them first with " +
+                    "evidence-plan-minute-bars --eligible eligible.csv --timeframe 5Min.");
+            }
             foreach (var regime in strategies.Select(strategy => strategy.Regime).Where(regime => regime is { IsActive: true }))
             {
                 if (regime!.UsesVix)

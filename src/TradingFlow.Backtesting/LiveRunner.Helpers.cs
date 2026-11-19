@@ -73,16 +73,15 @@ public sealed partial class LiveRunner
         return strategies.ToArray();
     }
 
+    // Unions configured run intervals with every timeframe required by the selected strategies.
     private static string[] ResolveRequiredTimeframes(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
     {
         var required = new HashSet<string>(run.Intervals.Where(x => !String.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
         foreach (var strategy in strategies)
         {
-            required.Add(strategy.Timeframe);
-            required.Add(strategy.Execution.Timeframe);
-            if (strategy.Confluence.Enabled)
+            foreach (var timeframe in StrategyDecisionRequestAssembler.ResolveRequiredTimeframes(strategy))
             {
-                required.Add(strategy.Confluence.Timeframe);
+                required.Add(timeframe);
             }
         }
 

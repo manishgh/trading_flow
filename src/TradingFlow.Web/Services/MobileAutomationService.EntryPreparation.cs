@@ -346,9 +346,11 @@ public sealed partial class MobileAutomationService
         }
 
         var latest = executionSnapshots[^1];
-        if (latest.Atr is null or <= 0m)
+        if (strategy.ExitRules.ResolveVolatilityUnit(latest) is null or <= 0m)
         {
-            throw new InvalidOperationException("signal_missing_indicators (atr)");
+            throw new InvalidOperationException(strategy.ExitRules.UsesMtr14
+                ? "signal_missing_indicators (mtr14)"
+                : "signal_missing_indicators (atr)");
         }
 
         return new PreparedEntryExecution(
@@ -475,20 +477,9 @@ public sealed partial class MobileAutomationService
         };
     }
 
-    private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy)
-    {
-        var timeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            strategy.Timeframe,
-            strategy.Execution.Timeframe
-        };
-        if (strategy.Confluence.Enabled)
-        {
-            timeframes.Add(strategy.Confluence.Timeframe);
-        }
-
-        return timeframes.ToArray();
-    }
+    // Delegates required timeframe resolution to the shared assembler so mobile entry preparation matches backtest/live.
+    private static string[] ResolveRequiredTimeframes(StrategyDefinition strategy) =>
+        StrategyDecisionRequestAssembler.ResolveRequiredTimeframes(strategy);
 
     private static ProductionRun CreateProductionRun(ExecutionRunContext context) => new()
     {

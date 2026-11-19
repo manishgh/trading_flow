@@ -77,6 +77,26 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
     }
 
     /// <summary>
+    /// Refuses a research-screen backtest plan before trial registration when selected strategies need 5-minute bars
+    /// (daily opening-range confirmation or 5-minute RTH causal stop/target replay) and the screen has no collected 5m datasets.
+    /// </summary>
+    internal static void RequireFiveMinuteBarsForDailyStrategies(
+        ResearchScreenReference reference,
+        IEnumerable<StrategyDefinition> strategies,
+        string? executionReplayPolicyId)
+    {
+        var needsFiveMinute = strategies.Any(strategy => strategy.EntryRules.OpeningRangeMinutes > 0) ||
+            string.Equals(executionReplayPolicyId, TradingFlow.Domain.Backtesting.ExecutionReplayPolicy.DailyRthFiveMinuteV1, StringComparison.Ordinal);
+        if (needsFiveMinute && reference.FiveMinuteDatasetIds is not { Count: > 0 })
+        {
+            throw new InvalidOperationException(
+                $"Research screen '{reference.ScreenName}' has no five-minute bar dataset collected for its list, " +
+                "which daily opening-range confirmation or 5-minute stop/target replay requires. Plan it with " +
+                "evidence-plan-minute-bars --eligible eligible.csv --timeframe 5Min and collect it first.");
+        }
+    }
+
+    /// <summary>
     /// Refuses a backtest configuration when selected strategies require frozen VIX closes or a Nasdaq security master
     /// that the chosen stock source or research screen does not provide.
     /// </summary>
@@ -273,6 +293,13 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
         }
         RequireRegimeScreenInputs(selected.Select(option => option.Definition), screenReference);
         var run = await ResolveEffectiveProfileAsync(profile, selected, request, token);
+        if (screenReference is not null)
+        {
+            RequireFiveMinuteBarsForDailyStrategies(
+                screenReference,
+                selected.Select(option => option.Definition),
+                run.Engine.ExecutionReplayPolicyId);
+        }
         if (universe.Horizon != StrategyHorizonResolver.Resolve(selected[0].Definition))
             throw new InvalidOperationException("The source preview horizon differs from the selected strategy. Preview the stock source again for this strategy.");
         var scope = RequireScope(evidenceScope);

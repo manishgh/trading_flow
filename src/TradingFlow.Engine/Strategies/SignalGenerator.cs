@@ -4,6 +4,7 @@ using System.Linq;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Catalysts;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Sessions;
 
@@ -12,6 +13,8 @@ namespace TradingFlow.Engine.Strategies;
 public sealed partial class SignalGenerator
 {
 
+    // Computes all technical, liquidity, sub-session opening-range, and Tier-1 catalyst features for bar D from
+    // completed history through index (never reading bars or news after asOfUtc / session close).
     public TradeSignal? CreateTradeSignal(
         StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> bars,
@@ -20,7 +23,12 @@ public sealed partial class SignalGenerator
         IReadOnlyList<OhlcvBar>? referenceBars = null,
         DateTimeOffset? asOfUtc = null,
         IReadOnlyList<DateOnly>? expectedReferenceSessions = null,
-        TechnicalFactorEvidence? validatedFactor = null)
+        TechnicalFactorEvidence? validatedFactor = null,
+        IReadOnlyList<OhlcvBar>? fiveMinuteBars = null,
+        IReadOnlyList<CatalystEvent>? availableCatalysts = null,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? sessionSchedules = null,
+        bool ignoreObservedReceiptForHistoricalResearch = false,
+        bool fiveMinuteBarsSortedAscending = false)
     {
         var snapshot = snapshots[index];
         var previous = snapshots[index - 1];
@@ -120,7 +128,62 @@ public sealed partial class SignalGenerator
             addOne: true);
         var previousRegularClose = GetPreviousRegularClose(strategy, bars, snapshots, index);
         decimal? gapUpPct = previousRegularClose is null ? null : ((bar.Open / previousRegularClose.Value) - 1m) * 100m;
-        var catalystContext = GetCatalystContext(snapshot.Catalyst, bars, snapshots, index);
+        decimal? gapUpAtr = strategy.EntryRules.MinGapUpAtr is not null
+            ? ComputeGapUpAtr(bars, snapshots, index)
+            : null;
+        var barEndUtc = bar.Timestamp.Add(TimeframeParser.Parse(strategy.Timeframe)).ToUniversalTime();
+        var signalEndTimeUtc = asOfUtc is { } cutoff && cutoff.ToUniversalTime() < barEndUtc
+            ? cutoff.ToUniversalTime()
+            : barEndUtc;
+        // For daily bars, cap catalyst and sub-session availability at day D's regular exchange close (e.g., 16:00 NY
+        // or 13:00 NY on early closes) so post-close news on day D cannot leak into day D, and anchor the lookback
+        // window for opening-range news strategies to openingRangeEndUtc - MaxNewsAgeHours (e.g., 10:00 NY - 18h = 16:00 NY_{D-1}).
+        DailySessionBounds? dailySessionBounds = TimeframeParser.IsDailyOrHigher(strategy.Timeframe) &&
+            (strategy.EntryRules.OpeningRangeMinutes > 0 || strategy.EntryRules.AllowedCatalystCategories is not null)
+            ? DailyOpeningRangeSummary.ResolveSessionBounds(
+                bar.Timestamp,
+                strategy.Session.ExchangeTimezone,
+                strategy.EntryRules.OpeningRangeMinutes,
+                sessionSchedules)
+            : null;
+        var dailyDecisionCutoffUtc = dailySessionBounds is { IsTradingDay: true } bounds && bounds.SessionCloseUtc < signalEndTimeUtc
+            ? bounds.SessionCloseUtc
+            : signalEndTimeUtc;
+        DailyOpeningRangeEvidence? openingRangeEvidence = strategy.EntryRules.OpeningRangeMinutes > 0
+            ? DailyOpeningRangeSummary.Compute(
+                bar,
+                fiveMinuteBars,
+                strategy.EntryRules.OpeningRangeMinutes,
+                strategy.Session.ExchangeTimezone,
+                dailyDecisionCutoffUtc,
+                sessionSchedules,
+                fiveMinuteBarsSortedAscending)
+            : null;
+        TierOneCatalystEvaluation? tierOneCatalyst = null;
+        if (strategy.EntryRules.AllowedCatalystCategories is { } allowedCatalystCategories)
+        {
+            var allowed = TierOneCatalystEvaluator.ParseAllowedCategories(allowedCatalystCategories);
+            var windowCatalysts = availableCatalysts
+                ?? (snapshot.Catalyst is not null ? [snapshot.Catalyst] : Array.Empty<CatalystEvent>());
+            DateTimeOffset? catalystWindowStartUtc = dailySessionBounds is { IsTradingDay: true } orbBounds &&
+                strategy.EntryRules.OpeningRangeMinutes > 0
+                ? orbBounds.OpeningRangeEndUtc.AddHours(-(double)strategy.EntryRules.MaxNewsAgeHours)
+                : null;
+            tierOneCatalyst = TierOneCatalystEvaluator.Evaluate(
+                snapshot.Ticker,
+                windowCatalysts,
+                dailyDecisionCutoffUtc,
+                strategy.EntryRules.MaxNewsAgeHours,
+                strategy.EntryRules.CatalystReceiptDelayMinutes ?? 0,
+                allowed,
+                vetoSentimentAtOrBelow: strategy.EntryRules.VetoNewsSentimentBelow,
+                windowStartUtc: catalystWindowStartUtc,
+                ignoreObservedReceiptForHistoricalResearch: ignoreObservedReceiptForHistoricalResearch);
+        }
+
+        var effectiveCatalyst = tierOneCatalyst is not null ? tierOneCatalyst.SelectedCatalyst : snapshot.Catalyst;
+        var catalystContext = GetCatalystContext(effectiveCatalyst, bars, snapshots, index);
+        var effectiveCatalystAgeHours = tierOneCatalyst is not null ? tierOneCatalyst.SelectedAgeHours : catalystContext.AgeHours;
         var reversionContext = UsesLongSetup(strategy, "mean_reversion_reclaim")
             ? GetMeanReversionReclaimContext(strategy, bars, snapshots, index)
             : (IsReclaim: false, StretchLow: (decimal?)null);
@@ -183,8 +246,8 @@ public sealed partial class SignalGenerator
             VolumeLogSlope: volumeLogTrend?.Slope,
             VolumeLogR2: volumeLogTrend?.R2,
             CloseLocationValue: ComputeCloseLocationValue(bar),
-            Catalyst: snapshot.Catalyst,
-            CatalystAgeHours: catalystContext.AgeHours,
+            Catalyst: effectiveCatalyst,
+            CatalystAgeHours: effectiveCatalystAgeHours,
             CatalystPriceMovePct: catalystContext.PriceMovePct,
             SignalBarMidpoint: (bar.High + bar.Low) / 2m,
             BollingerPosition: bollingerContext.Position,
@@ -244,7 +307,39 @@ public sealed partial class SignalGenerator
             IsSma50Rising: isSma50Rising,
             IsEma21PullbackReclaim: ema21PullbackContext.IsReclaim,
             Ema21PullbackRejectionDetail: ema21PullbackContext.RejectionDetail,
-            CurrentMtr14: strategy.ExitRules.UsesMtr14 ? snapshot.Mtr14 : null);
+            CurrentMtr14: strategy.ExitRules.UsesMtr14 ? snapshot.Mtr14 : null,
+            GapUpAtr: gapUpAtr,
+            OpeningRangeHigh: openingRangeEvidence?.OpeningRangeHigh,
+            OpeningRangeLow: openingRangeEvidence?.OpeningRangeLow,
+            OpeningVolume: openingRangeEvidence?.OpeningVolume,
+            OpeningRelativeVolume: openingRangeEvidence?.OpeningRelativeVolume,
+            SessionVwap: openingRangeEvidence?.SessionVwap,
+            OpeningStayedAtOrBelowVwap: openingRangeEvidence?.OpeningStayedAtOrBelowVwap,
+            OpeningRangeRejectionDetail: openingRangeEvidence?.UnavailableReason,
+            MatchedCatalystCategory: tierOneCatalyst?.MatchedCategory,
+            CatalystCategoryRejectionDetail: tierOneCatalyst?.RejectionReason);
+    }
+
+    /// <summary>
+    /// Computes the ATR-normalized opening gap <c>(Open_D - Close_{D-1}) / ATR(14)_{D-1}</c> using strictly the prior
+    /// completed bar's close and ATR(14). Fails closed (returns null) when <paramref name="index"/> &lt; 1 or prior ATR &lt;= 0.
+    /// </summary>
+    public static decimal? ComputeGapUpAtr(
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        if (index < 1 || index >= bars.Count || index >= snapshots.Count)
+        {
+            return null;
+        }
+
+        if (snapshots[index - 1].Atr is not { } priorAtr || priorAtr <= 0m)
+        {
+            return null;
+        }
+
+        return (bars[index].Open - bars[index - 1].Close) / priorAtr;
     }
 
     /// <summary>

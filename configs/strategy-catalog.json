@@ -168,6 +168,15 @@
       "enabled": true,
       "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
       "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoint 6): Rubber-band reclaim. Stock above rising 50-day SMA (higher than 20 sessions earlier), strategy-owned 20-session ADR% >= 2.5% and average daily dollar volume >= $20M, prior stretch bar within 3 sessions closing both below the lower Bollinger Band and with RSI(2) < 10 with a 48-hour fresh-news veto, trigger bar closing above the prior session high, under the SPY/QQQ rising 50-day SMA and FRED VIXCLS sizing gate. Next-open entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/news-orb-swing.bt-v1.yaml",
+      "strategyId": "technical.news-orb-swing",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-18/swing-orb-and-vix-gate-proposal.md Option B and docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoint 4): Swing ORB on Tier-1 news. Requires a Tier-1 catalyst (earnings, guidance, fda, contract, upgrade) within 18 hours under a +5-minute conservative receipt delay with FinBERT negative veto (<= -0.15 across the window), opening gap up >= 0.75 * ATR(14)_{D-1}, first-30m (09:30-10:00 NY) RVOL >= 2.0 vs prior 20-session median opening volume, daily close above both 09:30-10:00 NY high and session VWAP, strategy-owned 20-session ADR% >= 2.5% and average daily dollar volume >= $20M, under the SPY/QQQ rising 50-day SMA and FRED VIXCLS sizing gate. Next-open entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
     }
   ]
 }

@@ -22,16 +22,17 @@ public sealed class ConfigCatalogServiceTests
 
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
 
-        // 19 November 2026: the four approved swing research artifacts (Bollinger squeeze 1.0.0, 21-EMA pullback
-        // 1.0.0 ATR-14 control + 1.1.0 V2-01 MTR-14 treatment, and rubber-band reclaim 1.0.0) are enabled for research
-        // backtests. The same-day opening-range versions stay set aside, the ETF trend core and its control stay
-        // blocked (index and sector funds only judge the trend), and ETF rotation stays parked.
+        // 19 November 2026: the five approved long swing research artifacts (Bollinger squeeze 1.0.0, 21-EMA pullback
+        // 1.0.0 ATR-14 control + 1.1.0 V2-01 MTR-14 treatment, Swing ORB on news 1.0.0, and rubber-band reclaim 1.0.0)
+        // are enabled for research backtests. The same-day opening-range versions stay set aside, the ETF trend core
+        // and its control stay blocked (index and sector funds only judge the trend), and ETF rotation stays parked.
         Assert.Equal(
             new[]
             {
                 "technical.bollinger-squeeze-breakout@1.0.0",
                 "technical.ema21-trend-pullback@1.0.0",
                 "technical.ema21-trend-pullback@1.1.0",
+                "technical.news-orb-swing@1.0.0",
                 "technical.rubber-band-reclaim@1.0.0"
             },
             strategies
