@@ -1,4 +1,4 @@
-# Handover — swing strategies, market regime and VIX (state at 18 November 2026, ~22:20 UTC)
+# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~13:03 UTC)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
@@ -17,13 +17,14 @@ Market and stock filters
 - [x] SPY rising-average regime rule (checkpoint 1, `d252620`)
 - [x] ADR% screen rule, user's definition (checkpoint 1)
 - [x] QQQ for Nasdaq-listed stocks (checkpoint 2, `ef538c9`)
-- [ ] VIX sizing from FRED, previous close: full < 18, half 18–22, no longs > 22 (checkpoint 3 — approved, next)
+- [x] VIX sizing from FRED, previous close: full < 18, half 18–22, no longs > 22 (checkpoint 3, `ede0ce2`)
 - [ ] Reversed regime for shorts (SPY/QQQ below falling 50-day, or VIX high) — needs design
 - [ ] Sector-fund rank labels on trades (report only) — assigned to the first run's report
 
 Long strategies
 - [x] Bollinger squeeze breakout v1 built (registered, disabled until checkpoint 3)
-- [ ] Enable the squeeze after checkpoint 3 and run the 6-month diagnostic (May–Oct 2026) with the full `.log`
+- [x] Enable the squeeze in `configs/strategy-catalog.json` after checkpoint 3 (`349ab69`)
+- [ ] Run the 6-month diagnostic (May–Oct 2026) with the full `.log`
 - [ ] Swing ORB on news — design approved (option B: decide after the close, buy next open); build
 - [ ] 21-EMA trend pullback — needs design (registered experiment V2-01 attaches here)
 
@@ -60,52 +61,60 @@ Housekeeping
 
 | Document | Status |
 |---|---|
-| `docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md` | approved (option A); checkpoints 1–2 done, 3 next |
+| `docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md` | approved (option A); checkpoints 1–3 done, squeeze enabled for research backtests |
 | `docs/design-review/2026-11-18/swing-orb-and-vix-gate-proposal.md` | swing ORB approved with option B ("all approved"); VIX part superseded by the user's choice above |
 | `docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md` | registered experiment, host = 21-EMA pullback (not the squeeze) |
 | `docs/operating-boundaries.md`, `AGENTS.md` | binding rules (design approval, two reviewers, install after review, data deletion rules) |
 
-## Done today (commits)
+## Done (commits)
 
-- `d252620` checkpoint 1: `regime.sma_rising_lookback_bars`, ADR% screen rule (`--min-average-range-pct`,
+- `ede0ce2` checkpoint 3 (19 Nov): config-driven FRED `VIXCLS` previous-session sizing (`vix_series`, `vix_full_risk_below`,
+  `vix_no_new_longs_above`, `vix_reduced_risk_scale`) via one shared `OrderPlanningRiskLimits.EntryRiskScale` multiplier
+  across daily, event, intraday, opportunity shadow-replay, paper, mobile, and Desk paths. Backtests read SHA-256-verified
+  `fred-vixcls.csv` and `fred-vixcls-receipt.json` published with `research-daily-screen --fred-vix`, enforced pre-flight
+  before trial registration and recorded in `ResearchScreenReference`, trial-registry datasets (`fred-vixcls:<sha>`), and
+  `{runName}-daily-eligibility.json`. Authoritative exchange session calendars filter non-trading-day bars and fail closed
+  on stale benchmarks (`market_regime_off_on_entry_day`), backed by $O(\log N)$ pre-indexed lookups; paper/Desk share
+  `RegimeGateService.Evaluate` and `FredVixCloseSource` (15-min cache, non-cached failures with structured warning logs).
+- `349ab69` step 2 (19 Nov): enabled `technical.bollinger-squeeze-breakout@1.0.0` in `configs/strategy-catalog.json` for
+  research backtests only (paper/live remain unauthorized and empty); updated catalog tests (`BollingerSqueezeRecipeTests`,
+  `ConfigCatalogServiceTests`, `StrategyArtifactCatalogTests`, `TestRepository`).
+- 19 Nov 13:02 UTC site installation: Release `349ab69` installed on `C:\project\tradingflow-site` (port 10088, PID 49956)
+  with 0 Alpaca paper positions, 0 open orders, and 0 queued/running jobs; replaced build kept as
+  `bin-before-349ab69-20261119`. `/health` `ok`, `/health/trading-readiness` `ready`, FinBERT sidecar `ready`, 0 errors in
+  `site.log`. `technical.bollinger-squeeze-breakout@1.0.0` is now selectable for research backtests on the Backtests page.
+- `d252620` checkpoint 1 (18 Nov): `regime.sma_rising_lookback_bars`, ADR% screen rule (`--min-average-range-pct`,
   `daily_eligibility.min_average_range_pct`), Bollinger width rank + setup `bollinger_squeeze_breakout`, recipe
   `configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml`, ORB set aside, ETF strategies blocked.
-- `ef538c9` checkpoint 2: `regime.nasdaq_listing_benchmark: QQQ` (option A). Backtests read listings from the frozen
+- `ef538c9` checkpoint 2 (18 Nov): `regime.nasdaq_listing_benchmark: QQQ` (option A). Backtests read listings from the frozen
   security master (dataset `6720a7d927abee37f61685306bb2b7e66e270b85b0133164e83b5feeb22af3ce`, 30 Oct 2026, collected
   with `status=all`), named by `research-daily-screen --security-master <id>` →
   `providers.evidence_catalog.security_master_dataset`. Paper/Desk read the broker's asset record. Reasons:
   `market_regime_off_on_entry_day`, `nasdaq_market_regime_off_on_entry_day`, `listing_exchange_unknown`,
   `listing_exchange_lookup_failed`. Each run logs listing coverage (warning above 5 %).
 - `8732336` installed checkpoints 1+2 on `C:\project\tradingflow-site` (port 10088), previous build kept as
-  `bin-before-ef538c9-20261118`. **No strategy is runnable on the site right now** (by design until checkpoint 3).
+  `bin-before-ef538c9-20261118` (now superseded by `349ab69`).
 - `532d8ac` browser-test hosts read a test-owned catalog (`TRADINGFLOW_UI_STRATEGY_CATALOG`, UI test mode only);
   .NET tests use `TestRepository.SetAsideStrategiesEnabledCatalog`.
 - `bd35d1b` registered experiment V2-01 (median true range).
-- Earlier the same day: FinBERT sidecar live on 127.0.0.1:8088 (started by `update-site.ps1`), Desk "Add stock",
+- Earlier on 18 Nov: FinBERT sidecar live on 127.0.0.1:8088 (started by `update-site.ps1`), Desk "Add stock",
   Audit page fixes, Earnings fixes (see their docs under `docs/verification/` and `docs/design-review/2026-11-18/`).
 
-Verification: full .NET suite 4,259/4,266 on checkpoint 2 (6 skipped, 1 load-timing flake that passes alone);
-121/121 affected browser specs with the test catalog; two independent reviewers accepted every checkpoint.
+Verification: Checkpoint 3 + Step 2 — solution build 0 warnings / 0 errors across 18 projects; 140/140 focused VIX tests;
+272/272 catalog/workflow tests; full .NET suite 4,288/4,295 (6 skipped, 1 5s load-timing flake in
+`LiveRunnerIntegrationTests` that passed 37/37 alone); two independent reviewers accepted every checkpoint and Step 2.
+Earlier (checkpoint 2): 121/121 affected browser specs with the test catalog.
 
 ## Next steps, in order
 
-1. **Checkpoint 3 — VIX sizing** (approved): new recipe block (e.g. `regime.vix_series: VIXCLS`, `vix_full_below: 18`,
-   `vix_off_above: 22`, half risk in between). Data: FRED `https://fred.stlouisfed.org/graph/fredgraph.csv?id=VIXCLS`.
-   Backtests need a **frozen, fingerprinted copy** (recorded in run evidence like other datasets); paper reads FRED's
-   latest published close. FRED lists a value on US market holidays (7 Sep 2026) — match to exchange sessions.
-   Risk scaling goes into the shared order planner: per-trade risk budget is read from `run.Portfolio.AccountRiskBudgetPct`
-   in `BacktestRunner.Diagnostics.cs:~705`, `EventPortfolioExecution.cs:237`, `IntradayPortfolioExecution.cs:287`,
-   `LiveRunner.ProcessTicker.cs:~490` — apply one per-entry multiplier (1.0 / 0.5 / refuse with reason
-   `vix_regime_off_on_entry_day`) so all paths stay identical. Tests, two reviewers, full suite, install.
-2. **Enable the squeeze** in `configs/strategy-catalog.json` (remove `enabled:false` "Not yet runnable"), update the
-   catalog tests (`ConfigCatalogServiceTests`, `StrategyArtifactCatalogTests`, `BollingerSqueezeRecipeTests`).
-3. **6-month diagnostic run:** publish an ADR% screen with `research-daily-screen` (min price 5, average dollar volume
-   20 M, ADR% 2.5, min history 253, `--exclude-symbols` fund list, `--sessions`, `--security-master`), May–Oct 2026; report
-   the five-minute bar count/size to the user **before** collecting (`evidence-plan-minute-bars`); run the three versions
-   through the normal saved-plan workflow; deliver the full `.log`; report monthly per version; show listing coverage
-   and the share of gap-inflated trades (reviewer conditions).
-4. Design (each needs written approval): swing ORB build (option B), 21-EMA pullback long (+ V2-01), short mirrors
-   (reversed regime, borrowing rule, SEC Rule 201).
+1. **6-month diagnostic run:** publish an ADR% screen with `research-daily-screen` (min price 5, average dollar volume
+   20 M, ADR% 2.5, min history 253, `--exclude-symbols` fund list, `--sessions`, `--security-master`, `--fred-vix VIXCLS`),
+   May–Oct 2026; report the five-minute bar count/size to the user **before** collecting (`evidence-plan-minute-bars`); run
+   the three versions through the normal saved-plan workflow; deliver the full `.log`; report monthly per version; show
+   listing coverage and the share of gap-inflated trades (reviewer conditions).
+2. **Build Swing ORB on news (Option B, approved):** decide after close, enter next open (`technical.news-orb-swing@1.0.0`).
+3. **Design (each needs written approval):** 21-EMA pullback long (+ registered experiment V2-01 MTR-14), short mirrors
+   (reversed regime, borrowing rule, SEC Rule 201), and web pages to build research screens / collect five-minute bars.
 
 ## Facts checked today (do not re-derive)
 

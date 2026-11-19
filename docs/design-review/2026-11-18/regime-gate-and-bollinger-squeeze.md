@@ -286,3 +286,13 @@ runnable (opening-range set aside, ETF strategies blocked, squeeze not yet runna
   benchmark/schedule lookups, pre-flight screen checks and trial-registry/run-evidence VIX hashes, receipt hash
   verification, resource disposal, BOM/header checks, DRY gate evaluation and structured failure warnings) and both
   accepted after the fixes.
+
+## Installation on the local site (checkpoint 3 and squeeze enablement), 19 November 2026
+
+Installed at 13:02 UTC outside the Finviz capture windows, with 0 Alpaca paper positions, 0 open orders, and 0 queued or
+running jobs in `Jobs`. Release `349ab69` (including Checkpoint 3 `ede0ce2` and Step 2 squeeze enablement `349ab69`) is
+running on `C:\project\tradingflow-site` (port 10088, PID 49956); the replaced build is kept as
+`bin-before-349ab69-20261119`. `/health` `ok`, `/health/trading-readiness` `ready`, FinBERT sidecar `ready`, 0 errors in
+`site.log` (only the pre-existing EF `EventId:10103` query notice). Effect for the operator:
+`technical.bollinger-squeeze-breakout@1.0.0` is now selectable for research backtests on the Backtests page (still
+research-only, not authorized for paper or live trading).
