@@ -87,4 +87,15 @@ public sealed record TradeSignal(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsConnorsRsi2Overbought = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? CloseAboveSmaPct = null,
     // Rank (0-1) of the previous session's Bollinger band width among the strategy's look-back widths; null when not requested.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? PriorBollingerWidthPercentile = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? PriorBollingerWidthPercentile = null,
+    // Strategy-owned 20-session ADR% and average dollar volume (populated when configured on EntryRules); omitted when null.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? AverageRangePct = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? AverageDollarVolume = null,
+    // True when SMA(50) on bar D exceeds SMA(50) Sma50RisingLookbackBars sessions earlier; omitted when false.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsSma50Rising = false,
+    // True when setup_type ema21_pullback_reclaim triggered on bar D; omitted when false.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsEma21PullbackReclaim = false,
+    // Concrete reason when ema21_pullback_reclaim did not trigger, for audit diagnostics; omitted when null.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Ema21PullbackRejectionDetail = null,
+    // Median of the 14 completed True Ranges ending on bar D (populated when ExitRules uses mtr14); omitted when null.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? CurrentMtr14 = null);

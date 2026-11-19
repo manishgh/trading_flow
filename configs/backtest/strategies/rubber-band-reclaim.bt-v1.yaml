@@ -1,0 +1,80 @@
+# Rubber-band reclaim (combined lower-Bollinger + RSI(2) stretch), swing, long.
+# Design: docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md (approved 19 November 2026, Checkpoint 6).
+# Distinct from the retired 13 Nov unprotected Connors RSI-2 study: requires high-ADR (>= 2.5%) liquid ($20M+) stocks
+# above a rising 50-day SMA, a prior stretch bar within 3 sessions closing BOTH below the lower Bollinger Band AND with
+# RSI(2) < 10, a 48-hour fresh-news veto (Chan 2003 no-news drop hypothesis), a confirmed reclaim closing above the
+# prior session's high, the SPY/QQQ/VIX regime gate, and protective 1.0 ATR stop / 2.5R target / 10-session hold.
+strategy_id: research.rubber-band-reclaim.bt-v1
+strategy_name: RESEARCH Rubber-Band Reclaim V1 (swing, combined BB+RSI2 stretch, 48h no-news veto, SPY/QQQ/VIX gate, as-traded bars)
+source: chan_2003_and_connors_2008_rubber_band_reclaim
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: mean_reversion_reclaim
+  reversion_stretch_lookback_bars: 3
+  enable_lower_bollinger_stretch: true
+  max_reversion_rsi2: 10.0
+  require_combined_bollinger_and_rsi2_stretch: true
+  veto_fresh_news_hours: 48.0
+  require_price_above_sma50: true
+  sma50_rising_lookback_bars: 20
+  min_average_range_pct: 2.5
+  min_average_dollar_volume: 20000000
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  require_positive_news: false
+regime:
+  benchmark: SPY
+  rule: price_above_sma
+  sma_period: 50
+  sma_rising_lookback_bars: 20
+  nasdaq_listing_benchmark: QQQ
+  vix_series: VIXCLS
+  vix_full_risk_below: 18
+  vix_no_new_longs_above: 22
+  vix_reduced_risk_scale: 0.5
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 10
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

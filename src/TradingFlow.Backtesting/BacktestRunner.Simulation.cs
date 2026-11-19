@@ -374,7 +374,7 @@ public sealed partial class BacktestRunner
             var previousEligibleIndex = FindPreviousValidExecutionBarIndex(bars, i - 1, strategy);
             if (strategy.ExitRules.EnableAtrTrailingStop &&
                 previousEligibleIndex >= entryIndex &&
-                snapshots[previousEligibleIndex].Atr is { } priorAtr &&
+                strategy.ExitRules.ResolveVolatilityUnit(snapshots[previousEligibleIndex]) is { } priorAtr &&
                 priorAtr > 0m &&
                 (entryPrice - lowestLowSinceEntry) / stopDistance >= strategy.ExitRules.TrailingActivationR)
             {
@@ -523,7 +523,7 @@ public sealed partial class BacktestRunner
         IndicatorSnapshot? previousSnapshot = null)
     {
         if (strategy.ExitRules.EnableAtrTrailingStop &&
-            snapshot.Atr is { } atr &&
+            strategy.ExitRules.ResolveVolatilityUnit(snapshot) is { } atr &&
             atr > 0)
         {
             var profitR = (entryPrice - lowestLowSinceEntry) / stopDistance;

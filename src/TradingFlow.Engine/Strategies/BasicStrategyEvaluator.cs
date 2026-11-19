@@ -81,9 +81,7 @@ public sealed class BasicStrategyEvaluator
 
         if (!PassesSetupType(strategy, signal))
         {
-            return strategy.EntryRules.SetupType.Equals("bollinger_squeeze_breakout", StringComparison.OrdinalIgnoreCase)
-                ? DescribeSqueezeRejection(strategy, signal)
-                : $"setup_{strategy.EntryRules.SetupType}_not_triggered";
+            return DescribeSetupRejection(strategy, signal);
         }
 
         var newsRejection = GetNewsSentimentRejection(strategy, signal);
@@ -240,6 +238,12 @@ public sealed class BasicStrategyEvaluator
         }
 
         var rules = strategy.EntryRules;
+        var liquidityRejection = GetLiquidityAndVolatilityFilterRejection(rules, signal);
+        if (liquidityRejection is not null)
+        {
+            return liquidityRejection;
+        }
+
         var setupTriggered = rules.ShortSetupType.ToLowerInvariant() switch
         {
             "rsi2_overbought" => signal.IsConnorsRsi2Overbought,
@@ -280,8 +284,51 @@ public sealed class BasicStrategyEvaluator
             "mean_reversion_reclaim" => signal.IsMeanReversionReclaim,
             "rsi2_oversold" => signal.IsConnorsRsi2Oversold,
             "bollinger_squeeze_breakout" => IsBollingerSqueezeBreakout(strategy, signal),
+            "ema21_pullback_reclaim" => signal.IsEma21PullbackReclaim,
             _ => throw new NotSupportedException($"Unsupported setup_type: {setupType}.")
         };
+    }
+
+    // Formats setup-specific rejection diagnostics when the declared setup type did not fire on the signal bar.
+    private static string DescribeSetupRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        return strategy.EntryRules.SetupType.ToLowerInvariant() switch
+        {
+            "bollinger_squeeze_breakout" => DescribeSqueezeRejection(strategy, signal),
+            "ema21_pullback_reclaim" => DescribeEma21PullbackRejection(strategy, signal),
+            _ => $"setup_{strategy.EntryRules.SetupType}_not_triggered"
+        };
+    }
+
+    // Formats the EMA-21 pullback reclaim rejection with the concrete failing detail and configured thresholds
+    // so backtest diagnostics and audit pages explain why a bar did not qualify.
+    private static string DescribeEma21PullbackRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var detail = signal.Ema21PullbackRejectionDetail ?? "no_ema21_zone_pullback_in_lookback";
+        var maxAtr = strategy.EntryRules.MaxEma21PullbackAtr?.ToString("F2", invariant) ?? "n/a";
+        var maxRvol = strategy.EntryRules.MaxPullbackRelativeVolume?.ToString("F2", invariant) ?? "n/a";
+        return $"setup_ema21_pullback_reclaim_not_triggered (Reason: {detail}, LookbackBars: {strategy.EntryRules.PullbackLookbackBars}, MaxAtr: {maxAtr}, MaxPullbackRvol: {maxRvol})";
+    }
+
+    // Enforces strategy-owned 20-session ADR% and average daily dollar-volume floors across backtest and paper/live
+    // evaluation. Missing measurements fail closed when a floor is configured.
+    private static string? GetLiquidityAndVolatilityFilterRejection(EntryRules rules, TradeSignal signal)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        if (rules.MinAverageRangePct is { } minAdr &&
+            (signal.AverageRangePct is null || signal.AverageRangePct.Value < minAdr))
+        {
+            return $"average_range_pct_below_minimum (Actual: {signal.AverageRangePct?.ToString("F2", invariant) ?? "n/a"}, Required: {minAdr.ToString("F2", invariant)})";
+        }
+
+        if (rules.MinAverageDollarVolume is { } minDollarVolume &&
+            (signal.AverageDollarVolume is null || signal.AverageDollarVolume.Value < minDollarVolume))
+        {
+            return $"average_dollar_volume_below_minimum (Actual: {signal.AverageDollarVolume?.ToString("F0", invariant) ?? "n/a"}, Required: {minDollarVolume.ToString("F0", invariant)})";
+        }
+
+        return null;
     }
 
     // Bollinger squeeze breakout: the previous session's band width ranks at or below the strategy's maximum among its
@@ -307,6 +354,12 @@ public sealed class BasicStrategyEvaluator
     private static string? GetResearchRuleRejection(StrategyDefinition strategy, TradeSignal signal)
     {
         var rules = strategy.EntryRules;
+
+        var liquidityRejection = GetLiquidityAndVolatilityFilterRejection(rules, signal);
+        if (liquidityRejection is not null)
+        {
+            return liquidityRejection;
+        }
 
         if (rules.MinGapUpPct is { } minGapUp &&
             (signal.GapUpPct is null || signal.GapUpPct.Value < minGapUp))
@@ -354,6 +407,7 @@ public sealed class BasicStrategyEvaluator
             return "sma50_not_above_sma150";
         }
 
+        if (rules.Sma50RisingLookbackBars > 0 && !signal.IsSma50Rising) return "sma50_not_rising";
         if (rules.Sma200RisingLookbackBars > 0 && !signal.IsSma200Rising) return "sma200_not_rising";
         if (rules.MinBreakoutVolumeVs50DayAverage is { } requiredVolume &&
             (signal.BreakoutVolumeVs50DayAverage is null || signal.BreakoutVolumeVs50DayAverage < requiredVolume))

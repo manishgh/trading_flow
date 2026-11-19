@@ -21,11 +21,14 @@ public sealed class StrategyArtifactCatalogTests
                 "etf.buy-and-hold-control@1.0.0",
                 "etf.rotation-12-1@1.0.0",
                 "etf.trend-10m@1.0.0",
-                // Added 18 November 2026; the opening-range versions below stay registered but disabled.
+                // Added 18-19 November 2026; the opening-range versions below stay registered but disabled.
                 "technical.bollinger-squeeze-breakout@1.0.0",
+                "technical.ema21-trend-pullback@1.0.0",
+                "technical.ema21-trend-pullback@1.1.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
-                "technical.opening-range-breakout@2.1.0"
+                "technical.opening-range-breakout@2.1.0",
+                "technical.rubber-band-reclaim@1.0.0"
             },
             snapshot.ExecutableArtifacts
                 .Select(artifact => $"{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}")
@@ -51,12 +54,20 @@ public sealed class StrategyArtifactCatalogTests
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
-        // The same-day opening-range versions stay set aside; the Bollinger squeeze swing strategy (1.0.0) is enabled for
-        // research backtests following Checkpoint 3 sign-off (still research-only, not authorized for paper/live).
+        // The same-day opening-range versions stay set aside; the four approved swing research artifacts are enabled for
+        // research backtests (still research-only, never authorized for paper/live without explicit promotion).
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.opening-range-breakout");
-        var squeeze = Assert.Single(artifacts);
-        Assert.Equal("technical.bollinger-squeeze-breakout", squeeze.Identity.StrategyId);
-        Assert.Equal("1.0.0", squeeze.Identity.SemanticVersion);
+        Assert.Equal(
+            new[]
+            {
+                "technical.bollinger-squeeze-breakout@1.0.0",
+                "technical.ema21-trend-pullback@1.0.0",
+                "technical.ema21-trend-pullback@1.1.0",
+                "technical.rubber-band-reclaim@1.0.0"
+            },
+            artifacts
+                .Select(item => $"{item.Identity.StrategyId}@{item.Identity.SemanticVersion}")
+                .Order(StringComparer.Ordinal));
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId.StartsWith("swing.", StringComparison.Ordinal));
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.catalyst-drift");

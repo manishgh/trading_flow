@@ -277,7 +277,22 @@ public sealed record EntryRules(
     // Bollinger squeeze breakout setup: sessions whose band widths rank the previous session's width (0 = off) and the
     // highest rank (0-1, share of those widths at or below it) that still counts as a squeeze.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int BollingerSqueezeLookbackBars = 0,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxBollingerWidthPercentile = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxBollingerWidthPercentile = null,
+    // Strategy-owned ADR% (20-session mean(high - low) / latest close * 100) and 20-session average dollar volume floor,
+    // shared across backtests, paper trading and the Desk. Omitted from serialized definitions when unset.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinAverageRangePct = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinAverageDollarVolume = null,
+    // Rising SMA(50) trend filter: SMA(50) on bar D must exceed SMA(50) this many completed sessions earlier (0 = off).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int Sma50RisingLookbackBars = 0,
+    // 21-EMA trend pullback reclaim setup: lookback window (1..N sessions before D), ATR proximity band around EMA(21),
+    // maximum relative volume on the pullback bar (dry-up), and whether bar lows from pullback through trigger stay >= SMA(50).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int PullbackLookbackBars = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxEma21PullbackAtr = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxPullbackRelativeVolume = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequirePullbackLowAboveSma50 = false,
+    // Rubber-band reclaim: when true, mean_reversion_reclaim requires a prior stretch bar satisfying BOTH Close < BollingerLower
+    // AND Rsi2 < MaxReversionRsi2 (instead of the default OR stretch logic).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireCombinedBollingerAndRsi2Stretch = false);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -326,13 +341,22 @@ public sealed record ExitRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? EntryFactorExitSchedule = null,
     // On each session of the entry decision schedule, close the position at the next open when the run's research list does
     // not name it for that next session (a fund that dropped out of a ranked list, such as the rotation's top 3).
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitWhenOffList = false)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool ExitWhenOffList = false,
+    // Volatility unit for initial stop sizing: null or "atr14" uses Wilder ATR(14); "mtr14" uses median of 14 True Ranges
+    // (Experiment V2-01). Omitted from serialized definitions when unset so existing strategies keep their content hashes.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? VolatilityUnit = null)
 {
     /// <summary>Published rules such as Connors RSI-2 place no protective stop; long-only research backtests size by position notional instead.</summary>
     public const string NoStop = "none";
 
     /// <summary>No profit-target order; the position leaves only through its technical, time or session exits.</summary>
     public const string NoProfitTarget = "none";
+
+    /// <summary>Wilder ATR(14) initial stop volatility unit (default when <see cref="VolatilityUnit"/> is null).</summary>
+    public const string Atr14VolatilityUnit = "atr14";
+
+    /// <summary>Median of 14 completed True Ranges initial stop volatility unit (Experiment V2-01).</summary>
+    public const string Mtr14VolatilityUnit = "mtr14";
 
     /// <summary>True when the strategy places a protective stop order.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -341,6 +365,30 @@ public sealed record ExitRules(
     /// <summary>True when the strategy places a profit-target order.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool HasProfitTarget => !ProfitTargetMode.Equals(NoProfitTarget, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when initial stop sizing uses MTR-14 instead of Wilder ATR(14).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsesMtr14 => VolatilityUnit is not null && VolatilityUnit.Equals(Mtr14VolatilityUnit, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Returns the indicator volatility unit configured for this strategy's stops and trailing stops
+    /// (<c>Mtr14</c> when <see cref="UsesMtr14"/> is true, otherwise Wilder <c>Atr</c>).
+    /// </summary>
+    public decimal? ResolveVolatilityUnit(TradingFlow.Domain.Market.IndicatorSnapshot snapshot) =>
+        UsesMtr14 ? snapshot.Mtr14 : snapshot.Atr;
+
+    /// <summary>Validates <see cref="VolatilityUnit"/> when explicitly specified (must be "atr14" or "mtr14").</summary>
+    public void ValidateVolatilityUnit()
+    {
+        if (VolatilityUnit is null) return;
+        var normalized = VolatilityUnit.Trim();
+        if (!normalized.Equals(Atr14VolatilityUnit, StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals(Mtr14VolatilityUnit, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"exit_rules.volatility_unit must be '{Atr14VolatilityUnit}' or '{Mtr14VolatilityUnit}'; got '{VolatilityUnit}'.");
+        }
+    }
 }
 
 public sealed record ConfluenceRules(

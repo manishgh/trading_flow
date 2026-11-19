@@ -417,16 +417,18 @@ public sealed partial class MobileAutomationService
     {
         TechnicalExecutionEngine.RequireSupportedExitPolicy(guardianStrategy);
         TechnicalExecutionEngine.RequireNoBacktestOnlyRules(guardianStrategy);
-        var atr = snapshot.Atr is > 0m
-            ? snapshot.Atr.Value
-            : throw new InvalidOperationException("Operator-direct entry requires a positive ATR.");
+        var volatilityUnit = guardianStrategy.ExitRules.ResolveVolatilityUnit(snapshot) is > 0m and var unit
+            ? unit
+            : throw new InvalidOperationException(guardianStrategy.ExitRules.UsesMtr14
+                ? "Operator-direct entry requires a positive MTR-14."
+                : "Operator-direct entry requires a positive ATR.");
         var riskPlan = new SharedOrderRiskPlanner().Plan(
             new OrderPlanningRequest(
                 ticker,
                 PlannedOrderSide.Long,
                 accountEquity,
                 snapshot.CurrentPrice,
-                PlannedStopRequest.FromAtr(atr, guardianStrategy.ExitRules.StopAtrMultiple),
+                PlannedStopRequest.FromAtr(volatilityUnit, guardianStrategy.ExitRules.StopAtrMultiple),
                 new OrderPlanningRiskLimits(
                     runConfig.Portfolio.AccountRiskBudgetPct,
                     runConfig.Portfolio.MaxPositionNotionalPct),

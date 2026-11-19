@@ -1,4 +1,4 @@
-# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~13:03 UTC)
+# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~15:25 UTC)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
@@ -18,20 +18,23 @@ Market and stock filters
 - [x] ADR% screen rule, user's definition (checkpoint 1)
 - [x] QQQ for Nasdaq-listed stocks (checkpoint 2, `ef538c9`)
 - [x] VIX sizing from FRED, previous close: full < 18, half 18–22, no longs > 22 (checkpoint 3, `ede0ce2`)
-- [ ] Reversed regime for shorts (SPY/QQQ below falling 50-day, or VIX high) — needs design
+- [x] Strategy-owned 20-session ADR% & average daily dollar-volume filter (`min_average_range_pct`, `min_average_dollar_volume`, matching `DailyScreen` across backtests & paper/Desk — Batch 1)
+- [ ] Reversed regime for shorts (SPY/QQQ below falling 50-day, VIX short sizing, borrow fee, SEC Rule 201) — design approved 19 Nov (Checkpoint 7)
 - [ ] Sector-fund rank labels on trades (report only) — assigned to the first run's report
 
 Long strategies
 - [x] Bollinger squeeze breakout v1 built (registered, disabled until checkpoint 3)
 - [x] Enable the squeeze in `configs/strategy-catalog.json` after checkpoint 3 (`349ab69`)
-- [ ] Run the 6-month diagnostic (May–Oct 2026) with the full `.log`
-- [ ] Swing ORB on news — design approved (option B: decide after the close, buy next open); build
-- [ ] 21-EMA trend pullback — needs design (registered experiment V2-01 attaches here)
+- [ ] Swing ORB on news (`technical.news-orb-swing@1.0.0`) — design approved (Option B: decide after close, buy next open; Checkpoint 4)
+- [x] 21-EMA trend pullback Long (`technical.ema21-trend-pullback@1.0.0` ATR-14 control + `1.1.0` V2-01 MTR-14 treatment, Checkpoint 5 — enabled for research backtests)
+- [x] Rubber-band reclaim Long (`technical.rubber-band-reclaim@1.0.0` — Archetype #4: combined lower-Bollinger + RSI(2) < 10 stretch, 48h fresh-news veto, rising SMA-50, SPY/QQQ/VIX gate, 1.0 ATR / 2.5R / 10d exit, Checkpoint 6 — enabled for research backtests)
+- [ ] Run the 6-month diagnostic (May–Oct 2026) with the full `.log` (Checkpoint 10)
 
-Short strategies (each needs the reversed regime and a frozen borrowing rule; respect SEC Rule 201)
-- [ ] Squeeze breakdown — needs design
-- [ ] 21-EMA rejection (dead-cat bounce) — needs design
-- [ ] Swing ORB gap-down on bad news — needs design
+Short strategies (each uses Checkpoint 7 reversed regime, frozen borrow fee, and SEC Rule 201 — design approved 19 Nov, Checkpoint 8)
+- [ ] Squeeze breakdown (`technical.bollinger-squeeze-breakdown@1.0.0`)
+- [ ] Swing ORB gap-down on bad news (`technical.news-orb-breakdown@1.0.0`)
+- [ ] 21-EMA rejection short (`technical.ema21-rejection-short@1.0.0` + V2-01 `1.1.0` MTR-14)
+- [ ] Parabolic exhaustion short (`technical.parabolic-exhaustion-short@1.0.0` — Archetype #4 short mirror)
 - [ ] Engine short setups for these (today only the retired RSI-2 short setups exist)
 
 Running it from the web app
@@ -61,6 +64,7 @@ Housekeeping
 
 | Document | Status |
 |---|---|
+| `docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md` | approved 19 Nov 2026: all 4 long + 4 short archetypes, strategy-owned ADR%/DV filter, Checkpoints 4–10 (Batch 1 Checkpoints 5 & 6 done) |
 | `docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md` | approved (option A); checkpoints 1–3 done, squeeze enabled for research backtests |
 | `docs/design-review/2026-11-18/swing-orb-and-vix-gate-proposal.md` | swing ORB approved with option B ("all approved"); VIX part superseded by the user's choice above |
 | `docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md` | registered experiment, host = 21-EMA pullback (not the squeeze) |
@@ -68,6 +72,14 @@ Housekeeping
 
 ## Done (commits)
 
+- Batch 1 — Checkpoints 5 & 6 + Strategy-Owned ADR%/Liquidity Filter (19 Nov): added `Ema21`, `Mtr14`, `MaxTr14`
+  (`swing-daily-v2-as-traded-research-v1`, `derivedIndicatorProfileVersion: "2.5.0"`), strategy-owned 20-session
+  `min_average_range_pct` / `min_average_dollar_volume` matching `DailyScreen` across backtest & paper/Desk,
+  `sma50_rising_lookback_bars`, `setup_type: ema21_pullback_reclaim`, `exit_rules.volatility_unit` (`atr14` | `mtr14`),
+  `require_combined_bollinger_and_rsi2_stretch`, and enabled `technical.ema21-trend-pullback@1.0.0`,
+  `technical.ema21-trend-pullback@1.1.0` (V2-01 MTR-14, `derivedFromIdentity` bound to `1.0.0`), and
+  `technical.rubber-band-reclaim@1.0.0` in `configs/strategy-catalog.json` for research backtests only (0 warnings/0 errors
+  build, 163/163 focused tests green, both independent reviewers ACCEPT).
 - `ede0ce2` checkpoint 3 (19 Nov): config-driven FRED `VIXCLS` previous-session sizing (`vix_series`, `vix_full_risk_below`,
   `vix_no_new_longs_above`, `vix_reduced_risk_scale`) via one shared `OrderPlanningRiskLimits.EntryRiskScale` multiplier
   across daily, event, intraday, opportunity shadow-replay, paper, mobile, and Desk paths. Backtests read SHA-256-verified

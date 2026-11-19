@@ -835,6 +835,7 @@ public sealed class RunConfigWriter
     public static string SerializeStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
     {
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
+        strategy.ExitRules.ValidateVolatilityUnit();
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
         var yaml = new StringBuilder();
         yaml.AppendLine($"strategy_id: {strategy.StrategyId}");
@@ -948,6 +949,22 @@ public sealed class RunConfigWriter
         if (strategy.EntryRules.BollingerSqueezeLookbackBars != 0)
             yaml.AppendLine($"  bollinger_squeeze_lookback_bars: {strategy.EntryRules.BollingerSqueezeLookbackBars.ToString(CultureInfo.InvariantCulture)}");
         AppendOptionalDecimal(yaml, "  max_bollinger_width_percentile", strategy.EntryRules.MaxBollingerWidthPercentile);
+        if (strategy.EntryRules.MinAverageRangePct is { } minAverageRangePct)
+            yaml.AppendLine($"  min_average_range_pct: {minAverageRangePct.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MinAverageDollarVolume is { } minAverageDollarVolume)
+            yaml.AppendLine($"  min_average_dollar_volume: {minAverageDollarVolume.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.Sma50RisingLookbackBars != 0)
+            yaml.AppendLine($"  sma50_rising_lookback_bars: {strategy.EntryRules.Sma50RisingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.PullbackLookbackBars != 0)
+            yaml.AppendLine($"  pullback_lookback_bars: {strategy.EntryRules.PullbackLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MaxEma21PullbackAtr is { } maxEma21PullbackAtr)
+            yaml.AppendLine($"  max_ema21_pullback_atr: {maxEma21PullbackAtr.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MaxPullbackRelativeVolume is { } maxPullbackRelativeVolume)
+            yaml.AppendLine($"  max_pullback_relative_volume: {maxPullbackRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.RequirePullbackLowAboveSma50)
+            yaml.AppendLine("  require_pullback_low_above_sma50: true");
+        if (strategy.EntryRules.RequireCombinedBollingerAndRsi2Stretch)
+            yaml.AppendLine("  require_combined_bollinger_and_rsi2_stretch: true");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -1097,6 +1114,8 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  exit_on_ema10_cross_below_ema20: {strategy.ExitRules.ExitOnEma10CrossBelowEma20.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  allow_same_bar_stop_target: {strategy.ExitRules.AllowSameBarStopTarget.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  initial_stop_mode: {strategy.ExitRules.InitialStopMode}");
+        if (strategy.ExitRules.VolatilityUnit is { } volatilityUnit)
+            yaml.AppendLine($"  volatility_unit: {volatilityUnit}");
         yaml.AppendLine($"  profit_target_mode: {strategy.ExitRules.ProfitTargetMode}");
         yaml.AppendLine($"  stop_tick_buffer: {strategy.ExitRules.StopTickBuffer.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  require_confirmed_ema20_exit: {strategy.ExitRules.RequireConfirmedEma20Exit.ToString().ToLowerInvariant()}");

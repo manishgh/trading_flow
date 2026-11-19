@@ -121,9 +121,10 @@ public sealed partial class LiveRunner
         }
 
         var latestSnapshot = executionSnapshots[^1];
+        var fallbackVolatility = strategy.ExitRules.ResolveVolatilityUnit(latestSnapshot) ?? 0m;
         var initialStopLossPrice = entryIntent.StopPrice is > 0m
             ? entryIntent.StopPrice.Value
-            : entryPrice - ((latestSnapshot.Atr ?? 0m) * strategy.ExitRules.StopAtrMultiple);
+            : entryPrice - (fallbackVolatility * strategy.ExitRules.StopAtrMultiple);
         var stopDistance = entryPrice - initialStopLossPrice;
         if (stopDistance <= 0)
         {

@@ -119,7 +119,10 @@ public sealed class IndicatorEngine : IIndicatorCalculator
                 RelativeVolumeMinimumSamples: marketEvidenceProfile.MinimumValidSamples,
                 DataFeed: dataFeed,
                 AdjustmentPolicy: adjustmentPolicy,
-                MarketEvidenceReliability: marketEvidenceReliability));
+                MarketEvidenceReliability: marketEvidenceReliability,
+                Ema21: standardIndicators.Ema21[i],
+                Mtr14: standardIndicators.Mtr14[i],
+                MaxTr14: standardIndicators.MaxTr14[i]));
         }
 
         return snapshots;
@@ -146,11 +149,13 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         var ema5 = quotes.GetEma(5).Select(x => ToDecimal(x.Ema)).ToArray();
         var ema10 = quotes.GetEma(10).Select(x => ToDecimal(x.Ema)).ToArray();
         var ema20 = quotes.GetEma(20).Select(x => ToDecimal(x.Ema)).ToArray();
+        var ema21 = quotes.GetEma(21).Select(x => ToDecimal(x.Ema)).ToArray();
         var ema50 = quotes.GetEma(50).Select(x => ToDecimal(x.Ema)).ToArray();
         var ema200 = quotes.GetEma(200).Select(x => ToDecimal(x.Ema)).ToArray();
         var rsi = quotes.GetRsi(RsiPeriod).Select(x => ToDecimal(x.Rsi)).ToArray();
         var rsi2 = quotes.GetRsi(Rsi2Period).Select(x => ToDecimal(x.Rsi)).ToArray();
         var atr = quotes.GetAtr(AtrPeriod).Select(x => ToDecimal(x.Atr)).ToArray();
+        var (mtr14, maxTr14) = ComputeTrueRangeStats(bars, AtrPeriod);
         var adx = quotes.GetAdx(AtrPeriod).Select(x => ToDecimal(x.Adx)).ToArray();
         var obv = quotes.GetObv().Select(x => ToDecimal(x.Obv)).ToArray();
         var macd = quotes.GetMacd(12, 26, 9).ToArray();
@@ -166,11 +171,14 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             ema5,
             ema10,
             ema20,
+            ema21,
             ema50,
             ema200,
             rsi,
             rsi2,
             atr,
+            mtr14,
+            maxTr14,
             adx,
             obv,
             macd.Select(x => ToDecimal(x.Macd)).ToArray(),
@@ -179,6 +187,51 @@ public sealed class IndicatorEngine : IIndicatorCalculator
             bollinger.Select(x => ToDecimal(x.Sma)).ToArray(),
             bollinger.Select(x => ToDecimal(x.UpperBand)).ToArray(),
             bollinger.Select(x => ToDecimal(x.LowerBand)).ToArray());
+    }
+
+    /// <summary>
+    /// Computes rolling median True Range (MTR-N) and maximum True Range over the <paramref name="period"/> completed
+    /// True Ranges ending at each bar i (True Range = max(H - L, |H - prevC|, |L - prevC|) for i &gt;= 1). Both values
+    /// remain null until i &gt;= <paramref name="period"/> so a partial window is never used; for an even period (14),
+    /// the median is the exact average of the two middle sorted values (indices 6 and 7).
+    /// </summary>
+    internal static (decimal?[] MedianTrueRange, decimal?[] MaxTrueRange) ComputeTrueRangeStats(
+        IReadOnlyList<OhlcvBar> bars,
+        int period)
+    {
+        var count = bars.Count;
+        var median = new decimal?[count];
+        var maximum = new decimal?[count];
+        if (count <= period || period <= 0)
+        {
+            return (median, maximum);
+        }
+
+        var trueRanges = new decimal[count];
+        for (var i = 1; i < count; i++)
+        {
+            var bar = bars[i];
+            var prevClose = bars[i - 1].Close;
+            var hl = bar.High - bar.Low;
+            var hc = Math.Abs(bar.High - prevClose);
+            var lc = Math.Abs(bar.Low - prevClose);
+            trueRanges[i] = Math.Max(hl, Math.Max(hc, lc));
+        }
+
+        var window = new decimal[period];
+        var midUpper = period / 2;
+        var midLower = midUpper - 1;
+        for (var i = period; i < count; i++)
+        {
+            Array.Copy(trueRanges, i - period + 1, window, 0, period);
+            Array.Sort(window);
+            median[i] = (period & 1) == 1
+                ? window[midUpper]
+                : (window[midLower] + window[midUpper]) / 2m;
+            maximum[i] = window[period - 1];
+        }
+
+        return (median, maximum);
     }
 
     private VolumeEvidenceSeries ComputeVolumeEvidence(IReadOnlyList<OhlcvBar> bars)
@@ -655,11 +708,14 @@ public sealed class IndicatorEngine : IIndicatorCalculator
         decimal?[] Ema5,
         decimal?[] Ema10,
         decimal?[] Ema20,
+        decimal?[] Ema21,
         decimal?[] Ema50,
         decimal?[] Ema200,
         decimal?[] Rsi,
         decimal?[] Rsi2,
         decimal?[] Atr,
+        decimal?[] Mtr14,
+        decimal?[] MaxTr14,
         decimal?[] Adx,
         decimal?[] Obv,
         decimal?[] MacdLine,

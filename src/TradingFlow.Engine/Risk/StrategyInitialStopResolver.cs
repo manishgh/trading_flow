@@ -101,6 +101,24 @@ public sealed class StrategyInitialStopResolver
                 break;
 
             case "atr":
+                if (request.Strategy.ExitRules.UsesMtr14)
+                {
+                    if (request.Signal.CurrentMtr14 is not > 0m ||
+                        request.Strategy.ExitRules.StopAtrMultiple <= 0m)
+                    {
+                        return StrategyInitialStopResult.Rejected("mtr14_unavailable_for_initial_stop");
+                    }
+
+                    var mtrDistance = request.Signal.CurrentMtr14.Value * request.Strategy.ExitRules.StopAtrMultiple;
+                    stopPrice = isShort
+                        ? request.EntryPrice + mtrDistance
+                        : request.EntryPrice - mtrDistance;
+                    stop = PlannedStopRequest.FromAtr(
+                        request.Signal.CurrentMtr14.Value,
+                        request.Strategy.ExitRules.StopAtrMultiple);
+                    break;
+                }
+
                 if (request.Signal.CurrentAtr <= 0m ||
                     request.Strategy.ExitRules.StopAtrMultiple <= 0m)
                 {

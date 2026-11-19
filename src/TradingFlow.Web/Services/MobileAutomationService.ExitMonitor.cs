@@ -101,7 +101,8 @@ public sealed partial class MobileAutomationService
                 continue;
             }
 
-            var stopLoss = sessionSnapshot.StopLossPrice ?? (entryPrice - ((executionSnapshots[^1].Atr ?? 0m) * strategy.ExitRules.StopAtrMultiple));
+            var fallbackVolatility = strategy.ExitRules.ResolveVolatilityUnit(executionSnapshots[^1]) ?? 0m;
+            var stopLoss = sessionSnapshot.StopLossPrice ?? (entryPrice - (fallbackVolatility * strategy.ExitRules.StopAtrMultiple));
             var stopDistance = entryPrice - stopLoss;
             if (stopDistance <= 0m)
             {

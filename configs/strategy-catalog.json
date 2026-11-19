@@ -44,6 +44,17 @@
       "derivedIndicatorProfileVersion": "2.4.0",
       "riskPolicy": "account-risk-budget-v1",
       "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
+    },
+    {
+      "profileId": "swing-daily-v2-as-traded-research-v1",
+      "profileVersion": "1.0.0",
+      "parserProfile": "simple-yaml-strict-v2",
+      "standardIndicatorLibrary": "Skender.Stock.Indicators",
+      "standardIndicatorLibraryVersion": "2.7.1",
+      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
+      "derivedIndicatorProfileVersion": "2.5.0",
+      "riskPolicy": "account-risk-budget-v1",
+      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
     }
   ],
   "strategies": [
@@ -125,6 +136,38 @@
       "enabled": true,
       "admissionProfileId": "bollinger-squeeze-as-traded-research-v1",
       "reason": "Approved 18 November 2026 (docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md, option A): Bollinger (2001) squeeze. Previous session band width in the lowest 15% of its 60 widths, close above the 10-session high, volume at least 1.5x the 20-session median, close in the top quarter of the range, SPY above its rising 50-day average (higher than 20 sessions earlier), for Nasdaq-listed stocks QQQ under the same rule, and FRED VIXCLS previous-session sizing (full 0.5% risk below 18, half risk 18-22, no new longs above 22). Next-open entry, 1 ATR stop, 2.5R target, 10-session time exit, as-traded bars on a whole-market ADR% >= 2.5 screen. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-trend-pullback.bt-v1.yaml",
+      "strategyId": "technical.ema21-trend-pullback",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoint 5): 21-EMA trend pullback (ATR-14 control). Stock above rising 50-day SMA (higher than 20 sessions earlier), strategy-owned 20-session ADR% >= 2.5% and average daily dollar volume >= $20M, 1-5 bar low-volume pullback (RVOL < 0.85) into within 0.5 * ATR(14) of the 21-day EMA while pullback and trigger lows stay at or above the 50-day SMA, trigger bar closes above EMA(21) and prior session high, under the SPY/QQQ rising 50-day SMA and FRED VIXCLS sizing gate. Next-open entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-trend-pullback-mtr14.bt-v1.yaml",
+      "strategyId": "technical.ema21-trend-pullback",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md and docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoint 5): Experiment V2-01 MTR-14 treatment of technical.ema21-trend-pullback@1.0.0. Identical entry signals, regime/VIX sizing, 10-session time exit, and costs; replaces Wilder ATR(14) with MTR-14 (median of 14 completed True Ranges) for the 1.0-unit initial stop and 2.5R target. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-trend-pullback",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "0a2cac80c7a629eae0a9c1def135ae757a806210545e4d4ca9e5b9884452e72c"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/rubber-band-reclaim.bt-v1.yaml",
+      "strategyId": "technical.rubber-band-reclaim",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoint 6): Rubber-band reclaim. Stock above rising 50-day SMA (higher than 20 sessions earlier), strategy-owned 20-session ADR% >= 2.5% and average daily dollar volume >= $20M, prior stretch bar within 3 sessions closing both below the lower Bollinger Band and with RSI(2) < 10 with a 48-hour fresh-news veto, trigger bar closing above the prior session high, under the SPY/QQQ rising 50-day SMA and FRED VIXCLS sizing gate. Next-open entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
     }
   ]
 }

@@ -82,6 +82,13 @@ public sealed partial class SignalGenerator
         var slopeLookback = strategy.EntryRules.Sma200RisingLookbackBars;
         var isSma200Rising = slopeLookback > 0 && index >= slopeLookback && snapshot.Sma200 is { } currentSma200 &&
             snapshots[index - slopeLookback].Sma200 is { } priorSma200 && currentSma200 > priorSma200;
+        var sma50SlopeLookback = strategy.EntryRules.Sma50RisingLookbackBars;
+        var isSma50Rising = sma50SlopeLookback > 0 && index >= sma50SlopeLookback && snapshot.Sma50 is { } currentSma50 &&
+            snapshots[index - sma50SlopeLookback].Sma50 is { } priorSma50 && currentSma50 > priorSma50;
+        var needsAdrOrAdv = strategy.EntryRules.MinAverageRangePct is not null || strategy.EntryRules.MinAverageDollarVolume is not null;
+        var (averageRangePct, averageDollarVolume) = needsAdrOrAdv
+            ? ComputeAverageRangeAndDollarVolume(bars, index, 20)
+            : (null, null);
         decimal? breakoutVolume50 = index < 50 ? null : bars.Skip(index - 50).Take(50).Average(x => x.Volume);
         breakoutVolume50 = breakoutVolume50 > 0 ? bar.Volume / breakoutVolume50 : null;
         var isPriceAboveEma5 = snapshot.Ema5 is not null && snapshot.CurrentPrice > snapshot.Ema5.Value;
@@ -117,6 +124,9 @@ public sealed partial class SignalGenerator
         var reversionContext = UsesLongSetup(strategy, "mean_reversion_reclaim")
             ? GetMeanReversionReclaimContext(strategy, bars, snapshots, index)
             : (IsReclaim: false, StretchLow: (decimal?)null);
+        var ema21PullbackContext = UsesLongSetup(strategy, "ema21_pullback_reclaim")
+            ? GetEma21PullbackReclaimContext(strategy, bars, snapshots, index)
+            : (IsReclaim: false, RejectionDetail: (string?)null);
         var connorsRsi2Context = UsesLongSetup(strategy, "rsi2_oversold")
             ? new ConnorsRsi2SignalAnalyzer().AnalyzeCompletedDailyBar(
                 bar,
@@ -228,7 +238,47 @@ public sealed partial class SignalGenerator
             TechnicalFactor: strategy.EntryRules.TechnicalFactor is { } factor
                 ? validatedFactor ?? TechnicalFactorCalculator.Analyze(factor, bars, snapshots, index, referenceBars,
                     asOfUtc ?? bar.Timestamp.AddDays(1), expectedReferenceSessions) : null,
-            PriorBollingerWidthPercentile: PriorBollingerWidthPercentile(snapshots, index, strategy.EntryRules.BollingerSqueezeLookbackBars));
+            PriorBollingerWidthPercentile: PriorBollingerWidthPercentile(snapshots, index, strategy.EntryRules.BollingerSqueezeLookbackBars),
+            AverageRangePct: strategy.EntryRules.MinAverageRangePct is not null ? averageRangePct : null,
+            AverageDollarVolume: strategy.EntryRules.MinAverageDollarVolume is not null ? averageDollarVolume : null,
+            IsSma50Rising: isSma50Rising,
+            IsEma21PullbackReclaim: ema21PullbackContext.IsReclaim,
+            Ema21PullbackRejectionDetail: ema21PullbackContext.RejectionDetail,
+            CurrentMtr14: strategy.ExitRules.UsesMtr14 ? snapshot.Mtr14 : null);
+    }
+
+    /// <summary>
+    /// Computes the strategy-owned 20-session ADR% (mean(High - Low) over the <paramref name="lookbackSessions"/>
+    /// completed bars ending at <paramref name="index"/>, divided by Close[index], times 100) and average dollar volume
+    /// (mean(Close * Volume) over the same window), matching <c>DailyScreen.Evaluate</c>. Fails closed (returns nulls)
+    /// when fewer than <paramref name="lookbackSessions"/> completed bars exist.
+    /// </summary>
+    public static (decimal? AverageRangePct, decimal? AverageDollarVolume) ComputeAverageRangeAndDollarVolume(
+        IReadOnlyList<OhlcvBar> bars,
+        int index,
+        int lookbackSessions = 20)
+    {
+        if (lookbackSessions <= 0 || index < lookbackSessions - 1 || index >= bars.Count)
+        {
+            return (null, null);
+        }
+
+        decimal rangeSum = 0m;
+        decimal dollarVolumeSum = 0m;
+        var start = index - lookbackSessions + 1;
+        for (var i = start; i <= index; i++)
+        {
+            var item = bars[i];
+            rangeSum += item.High - item.Low;
+            dollarVolumeSum += item.Close * item.Volume;
+        }
+
+        var latestClose = bars[index].Close;
+        var averageRangePct = latestClose <= 0m
+            ? (decimal?)null
+            : (rangeSum / lookbackSessions) / latestClose * 100m;
+        var averageDollarVolume = dollarVolumeSum / lookbackSessions;
+        return (averageRangePct, averageDollarVolume);
     }
 
     /// <summary>

@@ -80,8 +80,8 @@ public sealed class BollingerSqueezeRecipeTests
 
         var squeeze = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "technical.bollinger-squeeze-breakout");
         Assert.Null(catalog.GetDisabledReason(squeeze));
-        var selectable = Assert.Single(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest));
-        Assert.Equal(squeeze.Identity, selectable.Identity);
+        var selectable = catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
+        Assert.Contains(selectable, item => item.Identity == squeeze.Identity);
         Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperExperiment));
         Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow));
         Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunLive));

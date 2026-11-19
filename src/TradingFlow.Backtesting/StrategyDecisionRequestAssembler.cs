@@ -61,6 +61,13 @@ public static class StrategyDecisionRequestAssembler
         // widths needs 20 completed bars of its own, so look-back + 20 bars must exist before the setup can be judged.
         if (runtimeStrategy.Definition.EntryRules.BollingerSqueezeLookbackBars > 0)
             requiredWarmupBars = Math.Max(requiredWarmupBars, runtimeStrategy.Definition.EntryRules.BollingerSqueezeLookbackBars + 20);
+        // Rising SMA-50 requires both the current SMA-50 and the value N bars earlier (50 + N completed bars).
+        if (runtimeStrategy.Definition.EntryRules.Sma50RisingLookbackBars > 0)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, 50 + runtimeStrategy.Definition.EntryRules.Sma50RisingLookbackBars);
+        // Strategy-owned ADR% and dollar-volume filters measure a 20-session rolling window matching DailyScreen.
+        if (runtimeStrategy.Definition.EntryRules.MinAverageRangePct is not null ||
+            runtimeStrategy.Definition.EntryRules.MinAverageDollarVolume is not null)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, 20);
         // ORB needs its three completed five-minute range bars; its twenty-session volume qualification remains in the shared evaluator.
         if (runtimeStrategy.Definition.EntryRules.OpeningRangeBreakout is not null)
             requiredWarmupBars = Math.Max(requiredWarmupBars, 3);
@@ -365,6 +372,7 @@ public static class StrategyDecisionRequestAssembler
             CurrentVolume = executionSnapshot.CurrentVolume,
             CurrentRsi = executionSnapshot.Rsi ?? signal.CurrentRsi,
             CurrentAtr = executionSnapshot.Atr ?? signal.CurrentAtr,
+            CurrentMtr14 = signal.CurrentMtr14 is not null ? executionSnapshot.Mtr14 ?? signal.CurrentMtr14 : null,
             SetupStructuralStopPrice = orderPlan.InitialStopPrice
         };
     }

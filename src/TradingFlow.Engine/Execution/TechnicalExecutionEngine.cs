@@ -177,9 +177,9 @@ public sealed class TechnicalExecutionEngine
         decimal highestHighSinceEntry)
     {
         RequireSupportedExitPolicy(strategy);
+        var volatilityUnit = strategy.ExitRules.ResolveVolatilityUnit(snapshot);
         if (!strategy.ExitRules.EnableAtrTrailingStop ||
-            snapshot.Atr is null ||
-            snapshot.Atr.Value <= 0)
+            volatilityUnit is not > 0m)
         {
             return currentStopLossPrice;
         }
@@ -190,7 +190,7 @@ public sealed class TechnicalExecutionEngine
             return currentStopLossPrice;
         }
 
-        var trailingStop = highestHighSinceEntry - (strategy.ExitRules.TrailingStopAtrMultiple * snapshot.Atr.Value);
+        var trailingStop = highestHighSinceEntry - (strategy.ExitRules.TrailingStopAtrMultiple * volatilityUnit.Value);
         return Math.Max(initialStopLossPrice, Math.Max(currentStopLossPrice, trailingStop));
     }
 

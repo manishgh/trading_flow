@@ -181,7 +181,15 @@ public sealed class SimpleYamlReader
                 CloseAboveSmaPeriod: OptionalNullableInt(map, "entry_rules.close_above_sma_period"),
                 DecisionSchedule: OptionalNullableString(map, "entry_rules.decision_schedule"),
                 BollingerSqueezeLookbackBars: OptionalInt(map, "entry_rules.bollinger_squeeze_lookback_bars", 0),
-                MaxBollingerWidthPercentile: OptionalDecimal(map, "entry_rules.max_bollinger_width_percentile")),
+                MaxBollingerWidthPercentile: OptionalDecimal(map, "entry_rules.max_bollinger_width_percentile"),
+                MinAverageRangePct: OptionalDecimal(map, "entry_rules.min_average_range_pct"),
+                MinAverageDollarVolume: OptionalDecimal(map, "entry_rules.min_average_dollar_volume"),
+                Sma50RisingLookbackBars: OptionalInt(map, "entry_rules.sma50_rising_lookback_bars", 0),
+                PullbackLookbackBars: OptionalInt(map, "entry_rules.pullback_lookback_bars", 0),
+                MaxEma21PullbackAtr: OptionalDecimal(map, "entry_rules.max_ema21_pullback_atr"),
+                MaxPullbackRelativeVolume: OptionalDecimal(map, "entry_rules.max_pullback_relative_volume"),
+                RequirePullbackLowAboveSma50: OptionalBool(map, "entry_rules.require_pullback_low_above_sma50", false),
+                RequireCombinedBollingerAndRsi2Stretch: OptionalBool(map, "entry_rules.require_combined_bollinger_and_rsi2_stretch", false)),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -227,7 +235,8 @@ public sealed class SimpleYamlReader
                 ReadContinuationProtection(map),
                 OptionalDecimal(map, "exit_rules.exit_on_entry_factor_at_or_below"),
                 OptionalNullableString(map, "exit_rules.entry_factor_exit_schedule"),
-                OptionalBool(map, "exit_rules.exit_when_off_list", false)),
+                OptionalBool(map, "exit_rules.exit_when_off_list", false),
+                OptionalNullableString(map, "exit_rules.volatility_unit")?.Trim().ToLowerInvariant()),
             new ExecutionRules(
                 OptionalString(map, "execution.timeframe", RequireString(map, "timeframe")),
                 RequireDecimal(map, "execution.slippage_bps"),
@@ -262,6 +271,7 @@ public sealed class SimpleYamlReader
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
         RejectRemovedSetupRules(strategy);
         ValidateNoStopRules(strategy);
+        ValidateExitVolatilityUnit(strategy.ExitRules);
         ValidateStretchAndShortThresholds(strategy.EntryRules);
         ValidateShortCoverExit(strategy);
         ValidateScheduledRules(strategy);
@@ -847,6 +857,69 @@ public sealed class SimpleYamlReader
             rules.MinShortReversionRsi2 is not (null or (> 0m and < 100m)))
             throw new InvalidOperationException("min_short_reversion_rsi2 is required for short_setup_type rsi2_overbought and must be above 0 and below 100.");
         ValidateBollingerSqueeze(rules);
+        ValidateSma50AndLiquidityFilters(rules);
+        ValidateEma21PullbackReclaim(rules);
+        ValidateCombinedReversionStretch(rules);
+    }
+
+    // Validates strategy-owned rising-SMA50 and 20-session ADR%/dollar-volume floors so negative or zero floors
+    // fail closed at load time rather than silently passing every symbol.
+    private static void ValidateSma50AndLiquidityFilters(EntryRules rules)
+    {
+        if (rules.Sma50RisingLookbackBars < 0)
+            throw new InvalidOperationException("entry_rules.sma50_rising_lookback_bars must be nonnegative.");
+        if (rules.MinAverageRangePct is <= 0m)
+            throw new InvalidOperationException("entry_rules.min_average_range_pct must be positive when specified.");
+        if (rules.MinAverageDollarVolume is <= 0m)
+            throw new InvalidOperationException("entry_rules.min_average_dollar_volume must be positive when specified.");
+    }
+
+    // Validates the EMA-21 pullback reclaim setup fields and refuses them on other setups where they would be ignored.
+    private static void ValidateEma21PullbackReclaim(EntryRules rules)
+    {
+        var isPullback = rules.SetupType.Equals("ema21_pullback_reclaim", StringComparison.OrdinalIgnoreCase);
+        if (isPullback && (rules.PullbackLookbackBars < 1 ||
+            rules.MaxEma21PullbackAtr is not > 0m ||
+            rules.MaxPullbackRelativeVolume is not > 0m))
+        {
+            throw new InvalidOperationException(
+                "setup_type ema21_pullback_reclaim requires pullback_lookback_bars >= 1, positive max_ema21_pullback_atr, and positive max_pullback_relative_volume.");
+        }
+
+        if (!isPullback && (rules.PullbackLookbackBars != 0 ||
+            rules.MaxEma21PullbackAtr is not null ||
+            rules.MaxPullbackRelativeVolume is not null ||
+            rules.RequirePullbackLowAboveSma50))
+        {
+            throw new InvalidOperationException(
+                "pullback_lookback_bars, max_ema21_pullback_atr, max_pullback_relative_volume, and require_pullback_low_above_sma50 apply only to setup_type ema21_pullback_reclaim.");
+        }
+    }
+
+    // Validates the combined lower-Bollinger + RSI(2) stretch flag so it cannot be turned on without both components.
+    private static void ValidateCombinedReversionStretch(EntryRules rules)
+    {
+        if (!rules.RequireCombinedBollingerAndRsi2Stretch) return;
+        if (!rules.SetupType.Equals("mean_reversion_reclaim", StringComparison.OrdinalIgnoreCase) ||
+            !rules.EnableLowerBollingerStretch ||
+            rules.MaxReversionRsi2 is not (> 0m and < 100m))
+        {
+            throw new InvalidOperationException(
+                "entry_rules.require_combined_bollinger_and_rsi2_stretch requires setup_type mean_reversion_reclaim, enable_lower_bollinger_stretch: true, and max_reversion_rsi2 between 0 and 100.");
+        }
+    }
+
+    // Validates exit_rules.volatility_unit and rejects mtr14 when neither initial stop nor trailing stop uses ATR units.
+    private static void ValidateExitVolatilityUnit(ExitRules exits)
+    {
+        exits.ValidateVolatilityUnit();
+        if (exits.UsesMtr14 &&
+            !exits.InitialStopMode.Equals("atr", StringComparison.OrdinalIgnoreCase) &&
+            !exits.EnableAtrTrailingStop)
+        {
+            throw new InvalidOperationException(
+                "exit_rules.volatility_unit: mtr14 requires initial_stop_mode: atr or enable_atr_trailing_stop: true.");
+        }
     }
 
     // The squeeze setup needs a width look-back, a rank maximum between 0 and 1 and a breakout look-back; the width fields

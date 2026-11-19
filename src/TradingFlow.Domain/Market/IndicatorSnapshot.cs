@@ -42,4 +42,10 @@ public sealed record IndicatorSnapshot(
     string? DataFeed = null,
     string? AdjustmentPolicy = null,
     string? MarketEvidenceReliability = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? Sma5 = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? Sma5 = null,
+    // 21-session EMA (used by 21-EMA trend pullback / rejection and parabolic exhaustion setups); omitted when null.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? Ema21 = null,
+    // Median of the 14 completed True Ranges ending on this bar (Experiment V2-01 volatility unit); null until 14 completed True Ranges exist.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? Mtr14 = null,
+    // Maximum of those 14 completed True Ranges, used to classify gap-inflated setups (MaxTr14 > 3 * Mtr14).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxTr14 = null);
