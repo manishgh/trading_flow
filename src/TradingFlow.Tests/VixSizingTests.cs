@@ -513,6 +513,54 @@ public sealed class VixSizingTests
         Assert.Equal(3, disposedClients);
     }
 
+    // FredSeriesFile.DownloadAsync pins HTTP/1.1 exact, retries once on a transient transport-level HttpRequestException
+    // (StatusCode == null), throws when both HttpClient attempts fail with curl fallback disabled, and fails fast on 4xx.
+    [Fact]
+    public async Task FredSeriesFile_DownloadAsync_UsesHttp11ExactAndRetriesTransientTransportFailure()
+    {
+        const string csv = "observation_date,VIXCLS\n2026-11-17,18.25\n";
+        var requestedAt = new DateTimeOffset(2026, 11, 19, 22, 0, 0, TimeSpan.Zero);
+        var transientHandler = new SequenceHttpHandler([
+            _ => throw new HttpRequestException("TLS connection reset by peer."),
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(csv) }
+        ]);
+        using var transientClient = new HttpClient(transientHandler);
+
+        var download = await FredSeriesFile.DownloadAsync(transientClient, "VIXCLS", requestedAt, default, allowSystemCurlFallback: false);
+
+        Assert.Equal(2, transientHandler.CapturedRequests.Count);
+        Assert.All(transientHandler.CapturedRequests, captured =>
+        {
+            Assert.Equal(HttpVersion.Version11, captured.Version);
+            Assert.Equal(HttpVersionPolicy.RequestVersionExact, captured.VersionPolicy);
+        });
+        Assert.Equal(200, download.HttpStatus);
+        Assert.Equal(requestedAt, download.RequestedAtUtc);
+        Assert.Equal(csv, System.Text.Encoding.UTF8.GetString(download.Bytes));
+
+        var persistentTransportHandler = new SequenceHttpHandler([
+            _ => throw new HttpRequestException("TLS reset 1."),
+            _ => throw new HttpRequestException("TLS reset 2.")
+        ]);
+        using var persistentTransportClient = new HttpClient(persistentTransportHandler);
+        var transportFailure = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            FredSeriesFile.DownloadAsync(persistentTransportClient, "VIXCLS", requestedAt, default, allowSystemCurlFallback: false));
+        Assert.Null(transportFailure.StatusCode);
+        Assert.Equal(2, persistentTransportHandler.CapturedRequests.Count);
+
+        var notFoundHandler = new SequenceHttpHandler([
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("missing") }
+        ]);
+        using var notFoundClient = new HttpClient(notFoundHandler);
+
+        var notFound = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            FredSeriesFile.DownloadAsync(notFoundClient, "VIXCLS", requestedAt, default, allowSystemCurlFallback: false));
+        Assert.Equal(HttpStatusCode.NotFound, notFound.StatusCode);
+        Assert.Single(notFoundHandler.CapturedRequests);
+        Assert.Equal(HttpVersion.Version11, notFoundHandler.CapturedRequests[0].Version);
+        Assert.Equal(HttpVersionPolicy.RequestVersionExact, notFoundHandler.CapturedRequests[0].VersionPolicy);
+    }
+
     // The recipe's frozen VIX values, and the reader's refusals of partial, unknown, unordered or short-side settings.
     [Fact]
     public void Recipe_ParsesTheApprovedVixValues()
@@ -776,6 +824,20 @@ public sealed class VixSizingTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+    }
+
+    // Replays scripted HTTP outcomes while recording each request's HTTP version and policy.
+    private sealed class SequenceHttpHandler(IEnumerable<Func<HttpRequestMessage, HttpResponseMessage>> responses) : HttpMessageHandler
+    {
+        private readonly Queue<Func<HttpRequestMessage, HttpResponseMessage>> queue = new(responses);
+
+        public List<(Version Version, HttpVersionPolicy VersionPolicy)> CapturedRequests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CapturedRequests.Add((request.Version, request.VersionPolicy));
+            return Task.FromResult(queue.Dequeue()(request));
+        }
     }
 
     // Tracks HttpClient disposal in FredVixCloseSource tests.

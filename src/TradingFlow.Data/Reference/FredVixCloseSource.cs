@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using TradingFlow.Domain.Strategies;
@@ -16,21 +18,186 @@ public sealed record FredDownload(byte[] Bytes, Uri Url, DateTimeOffset Requeste
 /// </summary>
 public static class FredSeriesFile
 {
+    private const int MaxHttpClientAttempts = 2;
+    private static readonly TimeSpan HttpClientAttemptTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
+
     /// <summary>The graph CSV address of <paramref name="seriesId"/>, optionally starting at <paramref name="from"/> (cosd).</summary>
     public static Uri Url(string seriesId, DateOnly? from = null) => new(
         "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + Uri.EscapeDataString(seriesId) +
         (from is { } start ? "&cosd=" + start.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : ""));
 
-    /// <summary>Downloads the file once and returns its exact bytes with the request time and HTTP status.</summary>
+    /// <summary>
+    /// Downloads the FRED CSV over HTTP/1.1 exact with a 10-second per-attempt timeout and 1 retry on transient transport,
+    /// gateway (502/503/504), or per-attempt timeout failures. When Windows Schannel TLS is reset or tarpitted by FRED
+    /// (transport failure or per-attempt timeout while caller cancellation was not requested), falls back to Windows'
+    /// built-in <c>curl.exe</c> (OpenSSL TLS) when <paramref name="allowSystemCurlFallback"/> is enabled. 4xx statuses and
+    /// caller cancellations throw immediately.
+    /// </summary>
     public static async Task<FredDownload> DownloadAsync(HttpClient http, string seriesId, DateTimeOffset requestedAtUtc,
-        CancellationToken cancellationToken, DateOnly? from = null)
+        CancellationToken cancellationToken, DateOnly? from = null, bool allowSystemCurlFallback = true)
     {
         var url = Url(seriesId, from);
-        using var response = await http.GetAsync(url, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"FRED returned HTTP {(int)response.StatusCode} for {url}.", null, response.StatusCode);
-        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        return new FredDownload(bytes, url, requestedAtUtc, (int)response.StatusCode);
+        for (var attempt = 1; ; attempt++)
+        {
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attemptCts.CancelAfter(HttpClientAttemptTimeout);
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url)
+                {
+                    Version = HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact
+                };
+                using var response = await http.SendAsync(request, attemptCts.Token);
+                if (!response.IsSuccessStatusCode)
+                    throw new HttpRequestException($"FRED returned HTTP {(int)response.StatusCode} for {url}.", null, response.StatusCode);
+                var bytes = await response.Content.ReadAsByteArrayAsync(attemptCts.Token);
+                return new FredDownload(bytes, url, requestedAtUtc, (int)response.StatusCode);
+            }
+            catch (HttpRequestException ex) when (IsTransientFailure(ex) && !cancellationToken.IsCancellationRequested)
+            {
+                if (attempt < MaxHttpClientAttempts)
+                {
+                    await Task.Delay(RetryDelay, cancellationToken);
+                    continue;
+                }
+
+                if (ex.StatusCode is null && allowSystemCurlFallback && TryGetSystemCurlPath(url, out var curlPath))
+                    return await DownloadWithSystemCurlAsync(curlPath, url, requestedAtUtc, cancellationToken);
+                throw;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                if (attempt < MaxHttpClientAttempts)
+                {
+                    await Task.Delay(RetryDelay, cancellationToken);
+                    continue;
+                }
+
+                if (allowSystemCurlFallback && TryGetSystemCurlPath(url, out var curlPath))
+                    return await DownloadWithSystemCurlAsync(curlPath, url, requestedAtUtc, cancellationToken);
+                throw;
+            }
+        }
+    }
+
+    // Classifies transport errors (null HTTP status) and upstream gateway 502/503/504 failures as retryable; 4xx fails fast.
+    private static bool IsTransientFailure(HttpRequestException ex) => ex.StatusCode is null
+        or HttpStatusCode.BadGateway
+        or HttpStatusCode.ServiceUnavailable
+        or HttpStatusCode.GatewayTimeout;
+
+    // Resolves Windows' built-in System32 curl.exe only for fred.stlouisfed.org so non-FRED or non-Windows calls never shell out.
+    private static bool TryGetSystemCurlPath(Uri url, out string curlPath)
+    {
+        curlPath = string.Empty;
+        if (!OperatingSystem.IsWindows() || !url.Host.Equals("fred.stlouisfed.org", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var candidate = Path.Combine(Environment.SystemDirectory, "curl.exe");
+        if (!File.Exists(candidate))
+            return false;
+        curlPath = candidate;
+        return true;
+    }
+
+    // Downloads the exact FRED CSV bytes using Windows' built-in OpenSSL curl.exe into a run-owned temp file deleted in finally.
+    private static async Task<FredDownload> DownloadWithSystemCurlAsync(
+        string curlPath, Uri url, DateTimeOffset requestedAtUtc, CancellationToken cancellationToken)
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"tf-fred-{Guid.NewGuid():N}.csv");
+        try
+        {
+            var startInfo = new ProcessStartInfo(curlPath)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            foreach (var argument in new[]
+            {
+                "--silent",
+                "--show-error",
+                "--location",
+                "--http1.1",
+                "--max-time", "30",
+                "--output", tempFile,
+                "--write-out", "%{http_code}",
+                url.AbsoluteUri
+            })
+                startInfo.ArgumentList.Add(argument);
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Failed to start {curlPath} for FRED download of {url}.");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                TryKillProcess(process);
+                throw;
+            }
+
+            var stdout = (await stdoutTask).Trim();
+            var stderr = (await stderrTask).Trim();
+            var hasStatus = int.TryParse(stdout, NumberStyles.None, CultureInfo.InvariantCulture, out var statusCode);
+            HttpStatusCode? httpStatus = hasStatus && statusCode >= 100 ? (HttpStatusCode)statusCode : null;
+
+            if (process.ExitCode != 0)
+            {
+                var detail = string.IsNullOrEmpty(stderr) ? $"exit code {process.ExitCode}" : $"exit code {process.ExitCode}: {stderr}";
+                throw new HttpRequestException($"FRED curl fallback failed for {url} ({detail}).", null, httpStatus);
+            }
+
+            if (!hasStatus || statusCode is < 200 or > 299)
+                throw new HttpRequestException($"FRED returned HTTP {(hasStatus ? statusCode.ToString(CultureInfo.InvariantCulture) : stdout)} for {url}.", null, httpStatus);
+
+            if (!File.Exists(tempFile))
+                throw new HttpRequestException($"FRED curl fallback returned HTTP {statusCode} for {url} without writing output bytes.");
+
+            var bytes = await File.ReadAllBytesAsync(tempFile, cancellationToken);
+            return new FredDownload(bytes, url, requestedAtUtc, statusCode);
+        }
+        finally
+        {
+            DeleteTempFileBestEffort(tempFile);
+        }
+    }
+
+    // Terminates an in-flight curl child process when caller cancellation aborts the download.
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+
+    // Removes the run-owned temporary CSV file created for the curl fallback without masking primary errors.
+    private static void DeleteTempFileBestEffort(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
 

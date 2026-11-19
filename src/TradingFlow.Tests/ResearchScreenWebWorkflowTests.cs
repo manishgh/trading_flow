@@ -121,7 +121,7 @@ public sealed class ResearchScreenWebWorkflowTests
         Assert.Contains("Refusing to overwrite", overwriteError.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, fredRequests);
 
-        // Transient FRED failure during a new screen build cleans up its run-owned staging folder so a retry succeeds.
+        // Non-retryable FRED failure during a new screen build cleans up its run-owned staging folder so a later retry succeeds.
         var retryFolder = Path.Combine(fixture.Paths.ResearchScreensRoot, "swing-cp9-retry");
         var retryAttempt = 0;
         var retryPublisher = new ResearchDailyScreenPublisher(
@@ -131,7 +131,7 @@ public sealed class ResearchScreenWebWorkflowTests
             {
                 retryAttempt++;
                 return retryAttempt == 1
-                    ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
                     : new HttpResponseMessage(HttpStatusCode.OK)
                     {
                         Content = new StringContent(SampleFredVixCsv, Encoding.UTF8, "text/csv")
