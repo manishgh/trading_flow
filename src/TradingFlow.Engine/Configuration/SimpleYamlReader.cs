@@ -1060,6 +1060,12 @@ public sealed class SimpleYamlReader
                 throw new InvalidOperationException(
                     "Opening-range confirmation flags require entry_rules.opening_range_minutes > 0.");
             }
+
+            if (!isNewsOrbSwing && !isNewsOrbBreakdown)
+            {
+                throw new InvalidOperationException(
+                    "Daily sub-session opening-range confirmation (entry_rules.opening_range_minutes) requires setup_type: news_orb_swing or short_setup_type: news_orb_breakdown.");
+            }
         }
 
         if ((isNewsOrbSwing || isNewsOrbBreakdown) && rules.OpeningRangeMinutes <= 0)

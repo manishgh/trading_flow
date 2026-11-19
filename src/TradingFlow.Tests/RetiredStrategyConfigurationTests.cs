@@ -6,7 +6,6 @@ public sealed class RetiredStrategyConfigurationTests
 {
     public static TheoryData<string> RetiredKeys => new()
     {
-        "entry_rules.opening_range_minutes",
         "entry_rules.opening_range_break_buffer",
         "entry_rules.vwap_hold_bars",
         "entry_rules.max_entries_per_ticker_per_day",
@@ -81,6 +80,27 @@ public sealed class RetiredStrategyConfigurationTests
                 new SimpleYamlReader().ReadStrategy(path));
             Assert.Contains("Unsupported strategy YAML key(s)", error.Message, StringComparison.Ordinal);
             Assert.Contains(key, error.Message, StringComparison.Ordinal);
+        });
+    }
+
+    // entry_rules.opening_range_minutes is reserved strictly for daily news_orb_swing / news_orb_breakdown strategies.
+    [Fact]
+    public void ReadStrategy_RejectsOpeningRangeMinutesOutsideDailyNewsOrb()
+    {
+        var nonOrbDaily = CanonicalContent().Replace("entry_rules:\n", "entry_rules:\n  opening_range_minutes: 30\n", StringComparison.Ordinal);
+        WithTemporaryStrategy(nonOrbDaily, path =>
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => new SimpleYamlReader().ReadStrategy(path));
+            Assert.Contains("news_orb_swing", error.Message, StringComparison.Ordinal);
+        });
+
+        var intraday = CanonicalContent()
+            .Replace("timeframe: 1d\n", "timeframe: 5m\n", StringComparison.Ordinal)
+            .Replace("entry_rules:\n", "entry_rules:\n  opening_range_minutes: 30\n", StringComparison.Ordinal);
+        WithTemporaryStrategy(intraday, path =>
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => new SimpleYamlReader().ReadStrategy(path));
+            Assert.Contains("timeframe: 1d", error.Message, StringComparison.Ordinal);
         });
     }
 

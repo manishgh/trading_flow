@@ -120,10 +120,12 @@ public sealed record RegimeRules(
     public void Validate(string? direction = null)
     {
         if (!String.IsNullOrWhiteSpace(BenchmarkSymbol) &&
+            !String.IsNullOrWhiteSpace(Rule) &&
             !Rule.Equals(PriceAboveSma, StringComparison.OrdinalIgnoreCase) &&
             !Rule.Equals(PriceBelowFallingSma, StringComparison.OrdinalIgnoreCase) &&
-            !Rule.Equals(Off, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"Unsupported regime.rule '{Rule}'; expected {PriceAboveSma}, {PriceBelowFallingSma}, or {Off}.");
+            !Rule.Equals(Off, StringComparison.OrdinalIgnoreCase) &&
+            !Rule.Equals("none", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Unsupported regime.rule '{Rule}'; expected {PriceAboveSma}, {PriceBelowFallingSma}, {Off}, or none.");
         if (SmaRisingLookbackBars < 0)
             throw new InvalidOperationException("regime.sma_rising_lookback_bars must be zero or positive.");
         if (SmaFallingLookbackBars < 0)
