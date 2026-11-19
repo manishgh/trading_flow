@@ -31,6 +31,10 @@ public static class TierOneCatalystEvaluator
     private static readonly Regex ContractPattern = new(@"\b(?:contract|commercial agreement|supply agreement|licensing agreement|strategic partnership|customer agreement)\b", PatternOptions, RegexTimeout);
     private static readonly Regex UpgradePattern = new(@"\b(?:upgrades?|upgraded|raises?|raised|boosts?|boosted|lifts?|lifted)\b", PatternOptions, RegexTimeout);
     private static readonly Regex DowngradePattern = new(@"\b(?:downgrades?|downgraded|cuts?|cut|lowers?|lowered)\b", PatternOptions, RegexTimeout);
+    private static readonly Regex NegativeCuePattern = new(
+        @"\b(?:misses?|missed|cuts?|cut|lowers?|lowered|withdraws?|withdrew|downgrades?|downgraded|rejects?|rejected|denies|denied|warning|complete response letter|crl|falls?\s+short|below\s+estimates?|below\s+expectations?|weak\s+guidance|lower\s+guidance)\b",
+        PatternOptions,
+        RegexTimeout);
 
     public static readonly IReadOnlySet<string> SupportedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -123,7 +127,8 @@ public static class TierOneCatalystEvaluator
         decimal? vetoSentimentAtOrBelow = null,
         decimal? vetoSentimentAtOrAbove = null,
         DateTimeOffset? windowStartUtc = null,
-        bool ignoreObservedReceiptForHistoricalResearch = false)
+        bool ignoreObservedReceiptForHistoricalResearch = false,
+        bool requireNegativeBias = false)
     {
         var cutoffUtc = signalEndTimeUtc.ToUniversalTime();
         var earliestPublishedUtc = windowStartUtc?.ToUniversalTime()
@@ -196,18 +201,27 @@ public static class TierOneCatalystEvaluator
             }
         }
 
+        var sawCategoryWithoutNegativeBias = false;
         foreach (var candidate in eligible)
         {
-            var matched = MatchAllowedCategory(candidate.Event, allowedCategories, cutoffUtc);
-            if (matched is not null)
+            var (matched, hasNegativeDirectionCue) = MatchAllowedCategoryWithBias(candidate.Event, allowedCategories, cutoffUtc);
+            if (matched is null)
             {
-                return new TierOneCatalystEvaluation(
-                    true,
-                    candidate.Event,
-                    matched,
-                    candidate.AgeHours,
-                    null);
+                continue;
             }
+
+            if (requireNegativeBias && !hasNegativeDirectionCue && candidate.Event.SentimentScore >= 0m)
+            {
+                sawCategoryWithoutNegativeBias = true;
+                continue;
+            }
+
+            return new TierOneCatalystEvaluation(
+                true,
+                candidate.Event,
+                matched,
+                candidate.AgeHours,
+                null);
         }
 
         return new TierOneCatalystEvaluation(
@@ -215,12 +229,22 @@ public static class TierOneCatalystEvaluator
             eligible[0].Event,
             null,
             eligible[0].AgeHours,
-            "tier1_catalyst_category_not_matched");
+            sawCategoryWithoutNegativeBias
+                ? "tier1_negative_catalyst_not_confirmed"
+                : "tier1_catalyst_category_not_matched");
     }
 
     // Classifies one catalyst using the shared EconomicNewsRuleClassifier cues (excluding negated/speculative cues
     // and promotional items) plus explicit CatalystType metadata, returning the first matched allowed category token.
     public static string? MatchAllowedCategory(
+        CatalystEvent catalyst,
+        IReadOnlySet<string> allowedCategories,
+        DateTimeOffset classifiedAtUtc) =>
+        MatchAllowedCategoryWithBias(catalyst, allowedCategories, classifiedAtUtc).Category;
+
+    // Evaluates category membership alongside whether the matched economic cues / headline express a clear negative
+    // catalyst direction (for short news ORB confirmation when FinBERT sentiment is neutral/0).
+    private static (string? Category, bool HasNegativeDirectionCue) MatchAllowedCategoryWithBias(
         CatalystEvent catalyst,
         IReadOnlySet<string> allowedCategories,
         DateTimeOffset classifiedAtUtc)
@@ -239,51 +263,59 @@ public static class TierOneCatalystEvaluator
             .Where(cue => !cue.AssertionUncertain && cue.Category != CatalystNewsCategory.PromotionalLowInformation)
             .ToArray();
 
+        string? matched = null;
         if (allowedCategories.Contains("earnings") &&
             (catalyst.Type == CatalystType.EarningsRelease ||
              activeCues.Any(cue => cue.Category == CatalystNewsCategory.Earnings)))
         {
-            return "earnings";
+            matched = "earnings";
         }
-
-        if (allowedCategories.Contains("guidance") &&
+        else if (allowedCategories.Contains("guidance") &&
             activeCues.Any(cue => cue.Category == CatalystNewsCategory.Guidance))
         {
-            return "guidance";
+            matched = "guidance";
         }
-
-        if (allowedCategories.Contains("fda") &&
+        else if (allowedCategories.Contains("fda") &&
             activeCues.Any(cue => cue.Category == CatalystNewsCategory.Regulatory && FdaPattern.IsMatch(cue.MatchedText)))
         {
-            return "fda";
+            matched = "fda";
         }
-
-        if (allowedCategories.Contains("contract") &&
+        else if (allowedCategories.Contains("contract") &&
             activeCues.Any(cue => cue.Category == CatalystNewsCategory.MajorCommercialEvent && ContractPattern.IsMatch(cue.MatchedText)))
         {
-            return "contract";
+            matched = "contract";
         }
-
-        if (allowedCategories.Contains("upgrade") &&
+        else if (allowedCategories.Contains("upgrade") &&
             (catalyst.Type == CatalystType.AnalystUpgrade ||
              activeCues.Any(cue =>
                  cue.Category == CatalystNewsCategory.AnalystAction &&
                  UpgradePattern.IsMatch(cue.MatchedText) &&
                  !DowngradePattern.IsMatch(cue.MatchedText))))
         {
-            return "upgrade";
+            matched = "upgrade";
         }
-
-        if (allowedCategories.Contains("downgrade") &&
+        else if (allowedCategories.Contains("downgrade") &&
             (catalyst.Type == CatalystType.AnalystDowngrade ||
              activeCues.Any(cue =>
                  cue.Category == CatalystNewsCategory.AnalystAction &&
                  DowngradePattern.IsMatch(cue.MatchedText) &&
                  !UpgradePattern.IsMatch(cue.MatchedText))))
         {
-            return "downgrade";
+            matched = "downgrade";
         }
 
-        return null;
+        if (matched is null)
+        {
+            return (null, false);
+        }
+
+        var hasNegativeBias =
+            matched == "downgrade" ||
+            catalyst.Type == CatalystType.AnalystDowngrade ||
+            ruleResult.Direction == CatalystDirection.Negative ||
+            activeCues.Any(cue => NegativeCuePattern.IsMatch(cue.MatchedText)) ||
+            (!string.IsNullOrWhiteSpace(catalyst.Headline) && NegativeCuePattern.IsMatch(catalyst.Headline));
+
+        return (matched, hasNegativeBias);
     }
 }

@@ -412,7 +412,30 @@ public sealed partial class LiveRunner
 
             if (!canonicalOrderPlan.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
             {
-                const string reason = "live_short_execution_not_authorized";
+                var reason = "live_short_execution_not_authorized";
+                if (_brokerClient is not null)
+                {
+                    AssetTradingEligibility? eligibility = null;
+                    try
+                    {
+                        eligibility = await _brokerClient.GetEligibilityAsync(ticker, cancellationToken);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        logger.LogWarning(
+                            ex,
+                            "Broker short-borrow eligibility lookup failed for {Ticker}; failing closed as {Reason}.",
+                            ticker,
+                            ShortBorrowEligibility.NotEasyToBorrowReason);
+                        eligibility = null;
+                    }
+
+                    if (!ShortBorrowEligibility.IsShortableAndEasyToBorrow(eligibility))
+                    {
+                        reason = ShortBorrowEligibility.NotEasyToBorrowReason;
+                    }
+                }
+
                 if (_auditRepo is not null)
                 {
                     await _auditRepo.SaveAuditAsync(new DecisionAuditRecord

@@ -177,6 +177,56 @@
       "enabled": true,
       "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
       "reason": "Approved 19 November 2026 (docs/design-review/2026-11-18/swing-orb-and-vix-gate-proposal.md Option B and docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoint 4): Swing ORB on Tier-1 news. Requires a Tier-1 catalyst (earnings, guidance, fda, contract, upgrade) within 18 hours under a +5-minute conservative receipt delay with FinBERT negative veto (<= -0.15 across the window), opening gap up >= 0.75 * ATR(14)_{D-1}, first-30m (09:30-10:00 NY) RVOL >= 2.0 vs prior 20-session median opening volume, daily close above both 09:30-10:00 NY high and session VWAP, strategy-owned 20-session ADR% >= 2.5% and average daily dollar volume >= $20M, under the SPY/QQQ rising 50-day SMA and FRED VIXCLS sizing gate. Next-open entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakdown.bt-v1.yaml",
+      "strategyId": "technical.bollinger-squeeze-breakdown",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoints 7 & 8): Short mirror of Bollinger squeeze breakout. Prior session Bollinger band width in lowest 15% of 60 widths, close below 10-session low, RVOL >= 1.5, close in bottom quarter (CLV <= 0.25), strategy-owned ADR% >= 2.5% and dollar volume >= $20M, under bearish SPY/QQQ falling 50-day SMA gate and short FRED VIXCLS sizing (< 18 refused, 18-22 half risk, > 22 full risk). Charges 1.0% annualized short-borrow fee and enforces SEC Rule 201. Next-open short entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/news-orb-breakdown.bt-v1.yaml",
+      "strategyId": "technical.news-orb-breakdown",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoints 7 & 8): Short Swing ORB on negative Tier-1 news (Option B). Requires negative Tier-1 catalyst (earnings, guidance, fda, downgrade) within 18 hours with +5-minute conservative receipt delay, negative cue or FinBERT < 0, and positive FinBERT veto (>= +0.15 across the window), gap down >= 0.75 * ATR(14)_{D-1}, first-30m RVOL >= 2.0, opening range stays <= session VWAP, daily close below both 09:30-10:00 NY low and session VWAP, strategy-owned ADR% >= 2.5% and dollar volume >= $20M, under bearish SPY/QQQ falling 50-day SMA gate and short FRED VIXCLS sizing. Charges 1.0% annualized short-borrow fee and enforces SEC Rule 201. Next-open short entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-rejection-short.bt-v1.yaml",
+      "strategyId": "technical.ema21-rejection-short",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoints 7 & 8): Short 21-EMA trend rejection breakdown (ATR-14 control). Stock below falling 50-day SMA (lower than 20 sessions earlier), strategy-owned ADR% >= 2.5% and dollar volume >= $20M, 1-5 bar weak bounce (RVOL < 0.85) into within 0.5 * ATR(14) of EMA(21) while all highs stay <= SMA(50), trigger closes below EMA(21) and prior session low, under bearish SPY/QQQ falling 50-day SMA gate and short FRED VIXCLS sizing. Charges 1.0% annualized short-borrow fee and enforces SEC Rule 201. Next-open short entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-rejection-short-mtr14.bt-v1.yaml",
+      "strategyId": "technical.ema21-rejection-short",
+      "semanticVersion": "1.1.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md and docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoints 7 & 8): Experiment V2-01 MTR-14 short treatment of technical.ema21-rejection-short@1.0.0. Identical entry signals, bearish SPY/QQQ/VIX short sizing, borrow fee, SEC Rule 201, and 10-session time exit; replaces Wilder ATR(14) with MTR-14 (median of 14 completed True Ranges) for the 1.0-unit initial stop and 2.5R target. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-rejection-short",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "068587fa5c09f965bf991433f106832f7f7f64b5bb0731ecdebbf2dee7913994"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/parabolic-exhaustion-short.bt-v1.yaml",
+      "strategyId": "technical.parabolic-exhaustion-short",
+      "semanticVersion": "1.0.0",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoints 7 & 8): Parabolic exhaustion shooting-star breakdown. Prior bar spikes >= 2.5 * ATR(14)_{D-1} above EMA(21)_{D-1} on a shooting star (upper wick >= 2.0 * max(|Close - Open|, 0.01), CLV <= 0.35), trigger closes below prior bar low, strategy-owned ADR% >= 2.5% and dollar volume >= $20M, under bearish SPY/QQQ falling 50-day SMA gate and short FRED VIXCLS sizing. Charges 1.0% annualized short-borrow fee and enforces SEC Rule 201. Next-open short entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
     }
   ]
 }

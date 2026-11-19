@@ -196,7 +196,19 @@ public sealed class SimpleYamlReader
                 RequireDailyCloseAboveOpeningRangeHigh: OptionalBool(map, "entry_rules.require_daily_close_above_opening_range_high", false),
                 RequireDailyCloseAboveSessionVwap: OptionalBool(map, "entry_rules.require_daily_close_above_session_vwap", false),
                 CatalystReceiptDelayMinutes: OptionalNullableInt(map, "entry_rules.catalyst_receipt_delay_minutes"),
-                AllowedCatalystCategories: OptionalNullableString(map, "entry_rules.allowed_catalyst_categories")),
+                AllowedCatalystCategories: OptionalNullableString(map, "entry_rules.allowed_catalyst_categories"),
+                RecentLowLookbackBars: OptionalInt(map, "entry_rules.recent_low_lookback_bars", 0),
+                MinGapDownAtr: OptionalDecimal(map, "entry_rules.min_gap_down_atr"),
+                RequireOpeningStayedAtOrBelowVwap: OptionalBool(map, "entry_rules.require_opening_stays_at_or_below_vwap", false),
+                RequireDailyCloseBelowOpeningRangeLow: OptionalBool(map, "entry_rules.require_daily_close_below_opening_range_low", false),
+                RequireDailyCloseBelowSessionVwap: OptionalBool(map, "entry_rules.require_daily_close_below_session_vwap", false),
+                VetoShortNewsSentimentAtOrAbove: OptionalDecimal(map, "entry_rules.veto_short_news_sentiment_at_or_above"),
+                RequirePriceBelowSma50ForShort: OptionalBool(map, "entry_rules.require_price_below_sma50_for_short", false),
+                Sma50FallingLookbackBars: OptionalInt(map, "entry_rules.sma50_falling_lookback_bars", 0),
+                RequireBounceHighBelowSma50: OptionalBool(map, "entry_rules.require_bounce_high_below_sma50", false),
+                MinParabolicAtrAboveEma21: OptionalDecimal(map, "entry_rules.min_parabolic_atr_above_ema21"),
+                MinShootingStarWickToBody: OptionalDecimal(map, "entry_rules.min_shooting_star_wick_to_body"),
+                MaxShootingStarCloseLocation: OptionalDecimal(map, "entry_rules.max_shooting_star_close_location")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -256,7 +268,9 @@ public sealed class SimpleYamlReader
                     OptionalDecimal(map, "execution.confirmation.min_close_location_value"),
                     OptionalDecimal(map, "execution.confirmation.max_close_location_value")),
                 OptionalNullableString(map, "execution.opening_gap_policy"),
-                ReadEntryWindow(map)),
+                ReadEntryWindow(map),
+                OptionalDecimal(map, "execution.short_borrow_apr_pct"),
+                OptionalBool(map, "execution.enforce_sec_rule_201", false)),
             new SessionRules(
                 RequireString(map, "session.exchange_timezone"),
                 RequireInt(map, "session.quiet_minutes_after_open"),
@@ -274,6 +288,12 @@ public sealed class SimpleYamlReader
             !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
             !strategy.Execution.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Opening gap policy '{gapPolicy}' requires '{ExecutionRules.KeepAndExitNextOpen}' on a daily strategy.");
+        if (strategy.Execution.ShortBorrowAprPct is < 0m)
+            throw new InvalidOperationException("execution.short_borrow_apr_pct must be zero or positive when specified.");
+        if (!strategy.EntryRules.EnableShort &&
+            (strategy.Execution.ShortBorrowAprPct is > 0m || strategy.Execution.EnforceSecRule201))
+            throw new InvalidOperationException(
+                "execution.short_borrow_apr_pct (> 0) and execution.enforce_sec_rule_201 require entry_rules.enable_short: true.");
         strategy.ExitRules.ContinuationProtection?.Validate(strategy.ExitRules);
         strategy.EntryRules.OpeningRangeBreakout?.Validate(strategy);
         RejectRemovedSetupRules(strategy);
@@ -305,31 +325,44 @@ public sealed class SimpleYamlReader
         }
 
         var rising = OptionalInt(map, "regime.sma_rising_lookback_bars", 0);
+        var falling = OptionalInt(map, "regime.sma_falling_lookback_bars", 0);
         var nasdaq = OptionalNullableString(map, "regime.nasdaq_listing_benchmark")?.Trim().ToUpperInvariant();
         var regime = new RegimeRules(
             benchmark.Trim().ToUpperInvariant(),
             OptionalString(map, "regime.rule", RegimeRules.PriceAboveSma),
             OptionalInt(map, "regime.sma_period", 50),
             rising,
-            nasdaq);
+            nasdaq,
+            SmaFallingLookbackBars: falling);
         regime = ReadVixSizing(map, regime);
         regime.Validate(RequireString(map, "direction"));
         return regime;
     }
 
     /// <summary>
-    /// Reads the optional VIX sizing fields of the regime block (regime.vix_series, vix_full_risk_below,
-    /// vix_no_new_longs_above, vix_reduced_risk_scale) onto <paramref name="regime"/>; completeness, series, threshold
-    /// ordering, scale bounds, and long-only direction are enforced by <see cref="RegimeRules.Validate"/>.
+    /// Reads the optional long or short VIX sizing fields of the regime block onto <paramref name="regime"/>;
+    /// completeness, series, threshold ordering, mutual exclusion, scale bounds, and direction compatibility are
+    /// enforced by <see cref="RegimeRules.Validate"/>.
     /// </summary>
     private static RegimeRules ReadVixSizing(IReadOnlyDictionary<string, List<string>> map, RegimeRules regime)
     {
         var series = OptionalNullableString(map, "regime.vix_series")?.Trim().ToUpperInvariant();
         var fullBelow = OptionalDecimal(map, "regime.vix_full_risk_below");
         var offAbove = OptionalDecimal(map, "regime.vix_no_new_longs_above");
+        var noShortsBelow = OptionalDecimal(map, "regime.vix_no_new_shorts_below");
+        var shortFullAbove = OptionalDecimal(map, "regime.vix_short_full_risk_above");
         var scale = OptionalDecimal(map, "regime.vix_reduced_risk_scale");
-        if (series is null && fullBelow is null && offAbove is null && scale is null) return regime;
-        return regime with { VixSeries = series, VixFullRiskBelow = fullBelow, VixNoLongsAbove = offAbove, VixReducedRiskScale = scale };
+        if (series is null && fullBelow is null && offAbove is null && noShortsBelow is null && shortFullAbove is null && scale is null)
+            return regime;
+        return regime with
+        {
+            VixSeries = series,
+            VixFullRiskBelow = fullBelow,
+            VixNoLongsAbove = offAbove,
+            VixNoShortsBelow = noShortsBelow,
+            VixShortFullRiskAbove = shortFullAbove,
+            VixReducedRiskScale = scale
+        };
     }
 
     private static string ReadInitialStopMode(IReadOnlyDictionary<string, List<string>> map)
@@ -850,8 +883,12 @@ public sealed class SimpleYamlReader
             rules.RequireOrderedReclaimPullback)
             throw new InvalidOperationException(
                 "This strategy sets a threshold of a removed setup (VCP, anchored-VWAP bounce or swing reclaim); no rule enforces it.");
-        if (rules.EnableShort && rules.OpeningRangeBreakout is null && rules.ShortSetupType.ToLowerInvariant() is not ("rsi2_overbought" or "momentum"))
-            throw new InvalidOperationException("enable_short on a daily strategy supports short_setup_type rsi2_overbought or momentum; other short setups were removed.");
+        if (rules.EnableShort && rules.OpeningRangeBreakout is null &&
+            rules.ShortSetupType.ToLowerInvariant() is not (
+                "rsi2_overbought" or "momentum" or "bollinger_squeeze_breakdown" or
+                "news_orb_breakdown" or "ema21_rejection_breakdown" or "parabolic_shooting_star_breakdown"))
+            throw new InvalidOperationException(
+                "enable_short on a daily strategy supports short_setup_type rsi2_overbought, momentum, bollinger_squeeze_breakdown, news_orb_breakdown, ema21_rejection_breakdown, or parabolic_shooting_star_breakdown.");
     }
 
     // Each stretch gate (below or above an SMA) needs both its threshold and an SMA period the indicator snapshot computes;
@@ -867,40 +904,82 @@ public sealed class SimpleYamlReader
         ValidateBollingerSqueeze(rules);
         ValidateSma50AndLiquidityFilters(rules);
         ValidateEma21PullbackReclaim(rules);
+        ValidateParabolicShootingStar(rules);
         ValidateCombinedReversionStretch(rules);
     }
 
-    // Validates strategy-owned rising-SMA50 and 20-session ADR%/dollar-volume floors so negative or zero floors
+    // Validates strategy-owned rising/falling SMA50 and 20-session ADR%/dollar-volume floors so negative or zero floors
     // fail closed at load time rather than silently passing every symbol.
     private static void ValidateSma50AndLiquidityFilters(EntryRules rules)
     {
         if (rules.Sma50RisingLookbackBars < 0)
             throw new InvalidOperationException("entry_rules.sma50_rising_lookback_bars must be nonnegative.");
+        if (rules.Sma50FallingLookbackBars < 0)
+            throw new InvalidOperationException("entry_rules.sma50_falling_lookback_bars must be nonnegative.");
+        if (rules.RecentLowLookbackBars < 0)
+            throw new InvalidOperationException("entry_rules.recent_low_lookback_bars must be nonnegative.");
         if (rules.MinAverageRangePct is <= 0m)
             throw new InvalidOperationException("entry_rules.min_average_range_pct must be positive when specified.");
         if (rules.MinAverageDollarVolume is <= 0m)
             throw new InvalidOperationException("entry_rules.min_average_dollar_volume must be positive when specified.");
     }
 
-    // Validates the EMA-21 pullback reclaim setup fields and refuses them on other setups where they would be ignored.
+    // Validates the EMA-21 pullback reclaim (long) and EMA-21 rejection breakdown (short) setup fields and refuses
+    // them on other setups where they would be ignored.
     private static void ValidateEma21PullbackReclaim(EntryRules rules)
     {
-        var isPullback = rules.SetupType.Equals("ema21_pullback_reclaim", StringComparison.OrdinalIgnoreCase);
-        if (isPullback && (rules.PullbackLookbackBars < 1 ||
+        var isLongPullback = rules.SetupType.Equals("ema21_pullback_reclaim", StringComparison.OrdinalIgnoreCase);
+        var isShortRejection = rules.EnableShort && rules.ShortSetupType.Equals("ema21_rejection_breakdown", StringComparison.OrdinalIgnoreCase);
+        if ((isLongPullback || isShortRejection) && (rules.PullbackLookbackBars < 1 ||
             rules.MaxEma21PullbackAtr is not > 0m ||
             rules.MaxPullbackRelativeVolume is not > 0m))
         {
             throw new InvalidOperationException(
-                "setup_type ema21_pullback_reclaim requires pullback_lookback_bars >= 1, positive max_ema21_pullback_atr, and positive max_pullback_relative_volume.");
+                "ema21_pullback_reclaim and ema21_rejection_breakdown require pullback_lookback_bars >= 1, positive max_ema21_pullback_atr, and positive max_pullback_relative_volume.");
         }
 
-        if (!isPullback && (rules.PullbackLookbackBars != 0 ||
-            rules.MaxEma21PullbackAtr is not null ||
-            rules.MaxPullbackRelativeVolume is not null ||
-            rules.RequirePullbackLowAboveSma50))
+        if (!isLongPullback && rules.RequirePullbackLowAboveSma50)
         {
             throw new InvalidOperationException(
-                "pullback_lookback_bars, max_ema21_pullback_atr, max_pullback_relative_volume, and require_pullback_low_above_sma50 apply only to setup_type ema21_pullback_reclaim.");
+                "require_pullback_low_above_sma50 applies only to setup_type ema21_pullback_reclaim.");
+        }
+
+        if (!isShortRejection && rules.RequireBounceHighBelowSma50)
+        {
+            throw new InvalidOperationException(
+                "require_bounce_high_below_sma50 applies only to short_setup_type ema21_rejection_breakdown.");
+        }
+
+        if (!isLongPullback && !isShortRejection && (rules.PullbackLookbackBars != 0 ||
+            rules.MaxEma21PullbackAtr is not null ||
+            rules.MaxPullbackRelativeVolume is not null))
+        {
+            throw new InvalidOperationException(
+                "pullback_lookback_bars, max_ema21_pullback_atr, and max_pullback_relative_volume apply only to ema21_pullback_reclaim or ema21_rejection_breakdown.");
+        }
+    }
+
+    // Validates the parabolic exhaustion shooting-star breakdown setup fields and refuses them on other setups.
+    private static void ValidateParabolicShootingStar(EntryRules rules)
+    {
+        var isParabolicShort = rules.EnableShort &&
+            rules.ShortSetupType.Equals("parabolic_shooting_star_breakdown", StringComparison.OrdinalIgnoreCase);
+        if (isParabolicShort && (
+            rules.MinParabolicAtrAboveEma21 is not > 0m ||
+            rules.MinShootingStarWickToBody is not > 0m ||
+            rules.MaxShootingStarCloseLocation is not (> 0m and <= 1m)))
+        {
+            throw new InvalidOperationException(
+                "short_setup_type parabolic_shooting_star_breakdown requires positive min_parabolic_atr_above_ema21, positive min_shooting_star_wick_to_body, and max_shooting_star_close_location in (0, 1].");
+        }
+
+        if (!isParabolicShort && (
+            rules.MinParabolicAtrAboveEma21 is not null ||
+            rules.MinShootingStarWickToBody is not null ||
+            rules.MaxShootingStarCloseLocation is not null))
+        {
+            throw new InvalidOperationException(
+                "min_parabolic_atr_above_ema21, min_shooting_star_wick_to_body, and max_shooting_star_close_location apply only to short_setup_type parabolic_shooting_star_breakdown.");
         }
     }
 
@@ -940,6 +1019,11 @@ public sealed class SimpleYamlReader
             throw new InvalidOperationException("entry_rules.min_gap_up_atr must be positive when specified.");
         }
 
+        if (rules.MinGapDownAtr is <= 0m)
+        {
+            throw new InvalidOperationException("entry_rules.min_gap_down_atr must be positive when specified.");
+        }
+
         if (rules.OpeningRangeMinutes < 0 || (rules.OpeningRangeMinutes > 0 && rules.OpeningRangeMinutes % 5 != 0))
         {
             throw new InvalidOperationException(
@@ -956,8 +1040,12 @@ public sealed class SimpleYamlReader
             rules.OpeningRangeMinutes > 0 ||
             rules.MinOpeningRelativeVolume is not null ||
             rules.RequireDailyCloseAboveOpeningRangeHigh ||
-            rules.RequireDailyCloseAboveSessionVwap;
+            rules.RequireDailyCloseAboveSessionVwap ||
+            rules.RequireOpeningStayedAtOrBelowVwap ||
+            rules.RequireDailyCloseBelowOpeningRangeLow ||
+            rules.RequireDailyCloseBelowSessionVwap;
         var isNewsOrbSwing = rules.SetupType.Equals("news_orb_swing", StringComparison.OrdinalIgnoreCase);
+        var isNewsOrbBreakdown = rules.EnableShort && rules.ShortSetupType.Equals("news_orb_breakdown", StringComparison.OrdinalIgnoreCase);
 
         if (usesDailyOpeningConfirmation)
         {
@@ -970,14 +1058,14 @@ public sealed class SimpleYamlReader
             if (rules.OpeningRangeMinutes <= 0)
             {
                 throw new InvalidOperationException(
-                    "min_opening_relative_volume, require_daily_close_above_opening_range_high, and require_daily_close_above_session_vwap require opening_range_minutes > 0.");
+                    "Opening-range confirmation flags require entry_rules.opening_range_minutes > 0.");
             }
         }
 
-        if (isNewsOrbSwing && rules.OpeningRangeMinutes <= 0)
+        if ((isNewsOrbSwing || isNewsOrbBreakdown) && rules.OpeningRangeMinutes <= 0)
         {
             throw new InvalidOperationException(
-                "setup_type news_orb_swing requires entry_rules.opening_range_minutes > 0 (e.g. 30).");
+                "news_orb_swing and news_orb_breakdown require entry_rules.opening_range_minutes > 0 (e.g. 30).");
         }
 
         if (rules.CatalystReceiptDelayMinutes is < 0)
@@ -990,19 +1078,39 @@ public sealed class SimpleYamlReader
         {
             _ = TradingFlow.Engine.Catalysts.TierOneCatalystEvaluator.ParseAllowedCategories(allowedCategories);
         }
+
+        if (rules.VetoShortNewsSentimentAtOrAbove is { } shortVetoThreshold)
+        {
+            if (shortVetoThreshold is < -1m or > 1m)
+            {
+                throw new InvalidOperationException(
+                    "entry_rules.veto_short_news_sentiment_at_or_above must be between -1 and 1 inclusive.");
+            }
+
+            if (!rules.EnableShort || string.IsNullOrWhiteSpace(rules.AllowedCatalystCategories))
+            {
+                throw new InvalidOperationException(
+                    "entry_rules.veto_short_news_sentiment_at_or_above requires entry_rules.enable_short: true and entry_rules.allowed_catalyst_categories.");
+            }
+        }
     }
 
-    // The squeeze setup needs a width look-back, a rank maximum between 0 and 1 and a breakout look-back; the width fields
-    // are refused on other setups, where they would be silently ignored.
+    // The squeeze setup (long breakout or short breakdown) needs a width look-back, a rank maximum between 0 and 1,
+    // and a matching breakout/breakdown look-back; the width fields are refused on other setups.
     private static void ValidateBollingerSqueeze(EntryRules rules)
     {
-        var squeeze = rules.SetupType.Equals("bollinger_squeeze_breakout", StringComparison.OrdinalIgnoreCase);
-        if (squeeze && (rules.BollingerSqueezeLookbackBars < 2 || rules.MaxBollingerWidthPercentile is not (> 0m and <= 1m) ||
+        var longSqueeze = rules.SetupType.Equals("bollinger_squeeze_breakout", StringComparison.OrdinalIgnoreCase);
+        var shortSqueeze = rules.EnableShort && rules.ShortSetupType.Equals("bollinger_squeeze_breakdown", StringComparison.OrdinalIgnoreCase);
+        if (longSqueeze && (rules.BollingerSqueezeLookbackBars < 2 || rules.MaxBollingerWidthPercentile is not (> 0m and <= 1m) ||
                 rules.RecentHighLookbackBars < 1))
             throw new InvalidOperationException("setup_type bollinger_squeeze_breakout needs bollinger_squeeze_lookback_bars of at least 2, " +
                 "max_bollinger_width_percentile above 0 and at most 1, and recent_high_lookback_bars of at least 1.");
-        if (!squeeze && (rules.BollingerSqueezeLookbackBars != 0 || rules.MaxBollingerWidthPercentile is not null))
-            throw new InvalidOperationException("bollinger_squeeze_lookback_bars and max_bollinger_width_percentile apply only to setup_type bollinger_squeeze_breakout.");
+        if (shortSqueeze && (rules.BollingerSqueezeLookbackBars < 2 || rules.MaxBollingerWidthPercentile is not (> 0m and <= 1m) ||
+                Math.Max(rules.RecentLowLookbackBars, rules.RecentHighLookbackBars) < 1))
+            throw new InvalidOperationException("short_setup_type bollinger_squeeze_breakdown needs bollinger_squeeze_lookback_bars of at least 2, " +
+                "max_bollinger_width_percentile above 0 and at most 1, and recent_low_lookback_bars of at least 1.");
+        if (!longSqueeze && !shortSqueeze && (rules.BollingerSqueezeLookbackBars != 0 || rules.MaxBollingerWidthPercentile is not null))
+            throw new InvalidOperationException("bollinger_squeeze_lookback_bars and max_bollinger_width_percentile apply only to bollinger_squeeze_breakout or bollinger_squeeze_breakdown.");
     }
 
     // Decision schedules must be known names on a daily rule. The entry-factor exit recomputes the long entry factor from the

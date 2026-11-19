@@ -111,4 +111,18 @@ public sealed record TradeSignal(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? OpeningRangeRejectionDetail = null,
     // Tier-1 catalyst window evaluation outcome (populated when EntryRules.AllowedCatalystCategories is configured).
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? MatchedCatalystCategory = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? CatalystCategoryRejectionDetail = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? CatalystCategoryRejectionDetail = null,
+    // SEC Rule 201 short-sale circuit breaker: true when bar D's low dropped >= 10% from prior close (active through D+1).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsSecRule201Triggered = false,
+    // ATR-normalized opening gap down (Close_{D-1} - Open_D) / ATR(14)_{D-1}; omitted when null.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? GapDownAtr = null,
+    // True when Close_D < SMA(50)_D (populated when RequirePriceBelowSma50ForShort is true); omitted when false.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsPriceBelowSma50 = false,
+    // True when SMA(50)_D < SMA(50)_{D - Sma50FallingLookbackBars}; omitted when false.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsSma50Falling = false,
+    // True when short_setup_type ema21_rejection_breakdown triggered on bar D; omitted when false.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsEma21RejectionBreakdown = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Ema21RejectionDetail = null,
+    // True when short_setup_type parabolic_shooting_star_breakdown triggered on bar D; omitted when false.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsParabolicShootingStarBreakdown = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ParabolicShootingStarRejectionDetail = null);

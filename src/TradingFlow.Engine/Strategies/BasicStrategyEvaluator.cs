@@ -225,8 +225,9 @@ public sealed class BasicStrategyEvaluator
         return null;
     }
 
-    // Daily short entries: the Connors RSI(2) overbought mirror or a gate-only (momentum) setup, short RSI(14) range and the
-    // close-above-SMA stretch. Returns null when every declared short rule passes, otherwise the first failing rule.
+    // Daily short entries: strategy-owned liquidity/ADR%, SEC Rule 201 circuit breaker, bearish trend/gap/CLV gates,
+    // all supported daily short setups, short RSI(14) range, and close-above-SMA stretch. Returns null when every
+    // declared short rule passes, otherwise the first failing rule with concrete diagnostics.
     public string? GetShortEntryRejection(StrategyDefinition strategy, TradeSignal signal, decimal relativeVolume)
     {
         if (!AllowsShort(strategy))
@@ -240,21 +241,53 @@ public sealed class BasicStrategyEvaluator
         }
 
         var rules = strategy.EntryRules;
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
         var liquidityRejection = GetLiquidityAndVolatilityFilterRejection(rules, signal);
         if (liquidityRejection is not null)
         {
             return liquidityRejection;
         }
 
+        if (strategy.Execution.EnforceSecRule201 && signal.IsSecRule201Triggered)
+        {
+            return "sec_rule_201_short_restriction";
+        }
+
+        if (rules.RequirePriceBelowSma50ForShort && !signal.IsPriceBelowSma50)
+        {
+            return "price_not_below_sma50";
+        }
+
+        if (rules.Sma50FallingLookbackBars > 0 && !signal.IsSma50Falling)
+        {
+            return "sma50_not_falling";
+        }
+
+        if (rules.MinGapDownAtr is { } minGapDownAtr &&
+            (signal.GapDownAtr is null || signal.GapDownAtr.Value < minGapDownAtr))
+        {
+            return $"gap_down_atr_below_minimum (Actual: {signal.GapDownAtr?.ToString("F2", invariant) ?? "n/a"}, Required: {minGapDownAtr.ToString("F2", invariant)})";
+        }
+
+        if (rules.MaxShortCloseLocationValue is { } maxShortClv &&
+            (signal.CloseLocationValue is null || signal.CloseLocationValue.Value > maxShortClv))
+        {
+            return $"short_close_location_above_maximum (Actual: {signal.CloseLocationValue?.ToString("F2", invariant) ?? "n/a"}, RequiredMax: {maxShortClv.ToString("F2", invariant)})";
+        }
+
         var setupTriggered = rules.ShortSetupType.ToLowerInvariant() switch
         {
             "rsi2_overbought" => signal.IsConnorsRsi2Overbought,
             "momentum" => true,
+            "bollinger_squeeze_breakdown" => IsBollingerSqueezeBreakdown(strategy, signal),
+            "news_orb_breakdown" => IsNewsOrbBreakdown(strategy, signal),
+            "ema21_rejection_breakdown" => signal.IsEma21RejectionBreakdown,
+            "parabolic_shooting_star_breakdown" => signal.IsParabolicShootingStarBreakdown,
             _ => throw new NotSupportedException($"Unsupported short_setup_type: {rules.ShortSetupType}.")
         };
         if (!setupTriggered)
         {
-            return $"setup_{rules.ShortSetupType}_not_triggered";
+            return DescribeShortSetupRejection(strategy, signal);
         }
 
         if (rules.MinShortEntryRsi is { } minShortRsi && signal.CurrentRsi < minShortRsi)
@@ -275,6 +308,123 @@ public sealed class BasicStrategyEvaluator
         }
 
         return null;
+    }
+
+    // Formats setup-specific rejection diagnostics when the declared short setup type did not fire on the signal bar.
+    private static string DescribeShortSetupRejection(StrategyDefinition strategy, TradeSignal signal) =>
+        strategy.EntryRules.ShortSetupType.ToLowerInvariant() switch
+        {
+            "bollinger_squeeze_breakdown" => DescribeShortSqueezeRejection(strategy, signal),
+            "news_orb_breakdown" => DescribeNewsOrbBreakdownRejection(strategy, signal),
+            "ema21_rejection_breakdown" => DescribeEma21RejectionBreakdownRejection(strategy, signal),
+            "parabolic_shooting_star_breakdown" => DescribeParabolicShootingStarRejection(strategy, signal),
+            _ => $"setup_{strategy.EntryRules.ShortSetupType}_not_triggered"
+        };
+
+    // Bollinger squeeze breakdown: prior band width ranks at or below MaxBollingerWidthPercentile and close breaks recent low.
+    private static bool IsBollingerSqueezeBreakdown(StrategyDefinition strategy, TradeSignal signal) =>
+        signal.IsRecentLowBreakdown &&
+        signal.PriorBollingerWidthPercentile is { } rank &&
+        strategy.EntryRules.MaxBollingerWidthPercentile is { } maximum &&
+        rank <= maximum;
+
+    // Formats the short squeeze rejection with prior width rank, maximum rank, and recent-low breakdown status.
+    private static string DescribeShortSqueezeRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var rank = signal.PriorBollingerWidthPercentile?.ToString("F3", invariant) ?? "n/a";
+        var maximum = strategy.EntryRules.MaxBollingerWidthPercentile?.ToString("F3", invariant) ?? "n/a";
+        var lookback = strategy.EntryRules.RecentLowLookbackBars > 0
+            ? strategy.EntryRules.RecentLowLookbackBars
+            : strategy.EntryRules.RecentHighLookbackBars;
+        return $"setup_bollinger_squeeze_breakdown_not_triggered (PriorWidthRank: {rank}, MaxRank: {maximum}, " +
+            $"CloseBelowRecentLow{lookback}: {signal.IsRecentLowBreakdown})";
+    }
+
+    // Evaluates short Swing ORB on negative news: requires complete 5m bearish opening-range confirmation and
+    // a qualifying negative Tier-1 catalyst inside the receipt-delayed window with no positive sentiment veto.
+    private static bool IsNewsOrbBreakdown(StrategyDefinition strategy, TradeSignal signal) =>
+        GetShortOpeningRangeConfirmationRejection(strategy.EntryRules, signal) is null &&
+        (strategy.EntryRules.AllowedCatalystCategories is null ||
+         (signal.MatchedCatalystCategory is not null && signal.CatalystCategoryRejectionDetail is null));
+
+    // Formats the first failing condition for news_orb_breakdown (Tier-1 negative catalyst/veto or 5m opening-range confirmation).
+    private static string DescribeNewsOrbBreakdownRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        if (strategy.EntryRules.AllowedCatalystCategories is not null &&
+            signal.CatalystCategoryRejectionDetail is { } catalystRejection)
+        {
+            return catalystRejection;
+        }
+
+        if (GetShortOpeningRangeConfirmationRejection(strategy.EntryRules, signal) is { } openingRejection)
+        {
+            return $"setup_news_orb_breakdown_not_triggered ({openingRejection})";
+        }
+
+        return "setup_news_orb_breakdown_not_triggered";
+    }
+
+    // Validates completed daily sub-session 5-minute opening-range rules for short ORB (RVOL, opening stays <= VWAP,
+    // daily close < opening low, daily close < session VWAP). Fails closed whenever any measurement is missing.
+    private static string? GetShortOpeningRangeConfirmationRejection(EntryRules rules, TradeSignal signal)
+    {
+        if (rules.OpeningRangeMinutes <= 0)
+        {
+            return null;
+        }
+
+        if (signal.OpeningRangeRejectionDetail is { } unavailable)
+        {
+            return unavailable;
+        }
+
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        if (rules.MinOpeningRelativeVolume is { } minOpeningRvol &&
+            (signal.OpeningRelativeVolume is null || signal.OpeningRelativeVolume.Value < minOpeningRvol))
+        {
+            return $"opening_relative_volume_below_minimum (Actual: {signal.OpeningRelativeVolume?.ToString("F2", invariant) ?? "n/a"}, Required: {minOpeningRvol.ToString("F2", invariant)})";
+        }
+
+        if (rules.RequireOpeningStayedAtOrBelowVwap && signal.OpeningStayedAtOrBelowVwap != true)
+        {
+            return "opening_range_reclaimed_session_vwap";
+        }
+
+        if (rules.RequireDailyCloseBelowOpeningRangeLow &&
+            (signal.OpeningRangeLow is null || signal.CurrentPrice >= signal.OpeningRangeLow.Value))
+        {
+            return $"daily_close_not_below_opening_range_low (Close: {signal.CurrentPrice.ToString("F2", invariant)}, OpeningLow: {signal.OpeningRangeLow?.ToString("F2", invariant) ?? "n/a"})";
+        }
+
+        if (rules.RequireDailyCloseBelowSessionVwap &&
+            (signal.SessionVwap is null || signal.CurrentPrice >= signal.SessionVwap.Value))
+        {
+            return $"daily_close_not_below_session_vwap (Close: {signal.CurrentPrice.ToString("F2", invariant)}, SessionVwap: {signal.SessionVwap?.ToString("F2", invariant) ?? "n/a"})";
+        }
+
+        return null;
+    }
+
+    // Formats the short EMA-21 rejection breakdown diagnostic with concrete failing detail and thresholds.
+    private static string DescribeEma21RejectionBreakdownRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var detail = signal.Ema21RejectionDetail ?? "no_ema21_zone_bounce_in_lookback";
+        var maxAtr = strategy.EntryRules.MaxEma21PullbackAtr?.ToString("F2", invariant) ?? "n/a";
+        var maxRvol = strategy.EntryRules.MaxPullbackRelativeVolume?.ToString("F2", invariant) ?? "n/a";
+        return $"setup_ema21_rejection_breakdown_not_triggered (Reason: {detail}, LookbackBars: {strategy.EntryRules.PullbackLookbackBars}, MaxAtr: {maxAtr}, MaxBounceRvol: {maxRvol})";
+    }
+
+    // Formats the parabolic exhaustion shooting-star breakdown diagnostic with concrete failing detail and thresholds.
+    private static string DescribeParabolicShootingStarRejection(StrategyDefinition strategy, TradeSignal signal)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var detail = signal.ParabolicShootingStarRejectionDetail ?? "parabolic_shooting_star_not_triggered";
+        var minAtr = strategy.EntryRules.MinParabolicAtrAboveEma21?.ToString("F2", invariant) ?? "n/a";
+        var minWick = strategy.EntryRules.MinShootingStarWickToBody?.ToString("F2", invariant) ?? "n/a";
+        var maxClv = strategy.EntryRules.MaxShootingStarCloseLocation?.ToString("F2", invariant) ?? "n/a";
+        return $"setup_parabolic_shooting_star_breakdown_not_triggered (Reason: {detail}, MinAtrAboveEma21: {minAtr}, MinWickToBody: {minWick}, MaxClv: {maxClv})";
     }
 
     private static bool PassesSetupType(StrategyDefinition strategy, TradeSignal signal)

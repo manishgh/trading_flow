@@ -33,7 +33,24 @@ public sealed record AssetTradingEligibility(
     string? BorrowStatus = null,
     string? AssetClass = null,
     // Listing exchange (Alpaca code: NASDAQ, NYSE, ARCA, AMEX, BATS, OTC), read by the Nasdaq home-market regime rule.
-    string? Exchange = null);
+    string? Exchange = null,
+    // Broker easy-to-borrow flag (Alpaca "easy_to_borrow"); defaults false (fail closed for short entries).
+    bool EasyToBorrow = false);
+
+/// <summary>
+/// Shared live/paper/Desk short-borrow eligibility rule (Checkpoint 7B): short entries require an active, tradable,
+/// shortable, easy-to-borrow security whose borrow status is not marked unavailable.
+/// </summary>
+public static class ShortBorrowEligibility
+{
+    /// <summary>Rejection code when a security is missing, not shortable, or not easy-to-borrow on the broker.</summary>
+    public const string NotEasyToBorrowReason = "short_not_easy_to_borrow";
+
+    /// <summary>Returns true iff <paramref name="eligibility"/> explicitly confirms shortable and easy-to-borrow status.</summary>
+    public static bool IsShortableAndEasyToBorrow(AssetTradingEligibility? eligibility) =>
+        eligibility is { Active: true, Tradable: true, Shortable: true, EasyToBorrow: true } &&
+        !String.Equals(eligibility.BorrowStatus, "unavailable", StringComparison.OrdinalIgnoreCase);
+}
 
 public interface IAssetTradingEligibilityProvider
 {

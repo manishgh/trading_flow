@@ -3,6 +3,7 @@ using TradingFlow.Domain.Backtesting;
 using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Execution;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Pipeline;
@@ -58,8 +59,11 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                 profile.Execution.AllowExtendedHoursTrading, strategy.Session.ExchangeTimezone,
                 new("strategy_assessment", profile.RunName, profile.Provider), profile.Engine.MaxRetainedReplayBars), provider, deadline.Token);
             var benchmarks = await LoadBenchmarksAsync(strategy, provider, download, start, end, deadline.Token);
-            var listings = strategy.Regime is { IsActive: true, UsesNasdaqHomeMarket: true }
-                ? await LoadListingsAsync(profile, symbols.Where(market.TickerStates.ContainsKey).ToArray(), deadline.Token) : null;
+            var needsBrokerEligibility = strategy.Regime is { IsActive: true, UsesNasdaqHomeMarket: true } ||
+                strategy.Direction.Equals("short", StringComparison.OrdinalIgnoreCase);
+            var eligibilities = needsBrokerEligibility
+                ? await LoadEligibilitiesAsync(profile, symbols.Where(market.TickerStates.ContainsKey).ToArray(), deadline.Token)
+                : null;
             var news = await LoadNewsAsync(strategy, symbols, newsProvider, clock.GetUtcNow(), deadline.Token);
             var vix = strategy.Regime is { IsActive: true, UsesVix: true }
                 ? await VixRegime.TryLoadLatestAsync(vixCloses, deadline.Token)
@@ -71,8 +75,12 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                 market.TickerStates.TryGetValue(symbol, out var state);
                 var missing = state is null ? market.Failures.GetValueOrDefault(symbol) ?? "No candles returned for this stock."
                     : MissingCurrentMarket(state, required, calendar, asOf, strategy.Session.ExchangeTimezone);
-                var listing = listings?.GetValueOrDefault(symbol);
-                var regime = ResolveRegime(strategy, benchmarks, calendar, asOf, listing, vix, out var regimeMissing);
+                var lookup = eligibilities is not null && eligibilities.TryGetValue(symbol, out var found)
+                    ? found
+                    : default;
+                var listing = lookup.LookupFailed ? ListingLookupFailed : lookup.Eligibility?.Exchange;
+                var regime = ResolveRegime(strategy, benchmarks, calendar, asOf, listing, vix, out var regimeMissing,
+                    lookup.Eligibility, lookup.LookupFailed);
                 missing ??= regimeMissing;
                 var query = news.GetValueOrDefault(symbol);
                 var factor = strategy.EntryRules.TechnicalFactor;
@@ -138,37 +146,42 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
     }
 
     /// <summary>
-    /// Each symbol's listing exchange from the broker's asset records, for the Nasdaq home-market rule. A symbol the broker
-    /// cannot describe is left out (its entry is then refused as listing_exchange_unknown); no broker means no listings.
+    /// Each symbol's broker asset eligibility (listing exchange for the Nasdaq home-market rule, plus Shortable &amp;
+    /// EasyToBorrow for short strategies). A symbol the broker cannot describe is left null (failing closed); no broker
+    /// means no eligibility records.
     /// </summary>
-    private async Task<Dictionary<string, string>> LoadListingsAsync(BacktestRunConfig profile, IReadOnlyList<string> symbols, CancellationToken token)
+    private async Task<Dictionary<string, (AssetTradingEligibility? Eligibility, bool LookupFailed)>> LoadEligibilitiesAsync(
+        BacktestRunConfig profile, IReadOnlyList<string> symbols, CancellationToken token)
     {
-        var listings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var results = new Dictionary<string, (AssetTradingEligibility? Eligibility, bool LookupFailed)>(StringComparer.Ordinal);
         var now = clock.GetUtcNow();
         var uncached = new List<string>();
         foreach (var symbol in symbols)
         {
-            if (listingCache.TryGetValue(symbol, out var cached) && now - cached.ReadAtUtc < ListingCacheLifetime) listings[symbol] = cached.Exchange;
-            else uncached.Add(symbol);
+            if (eligibilityCache.TryGetValue(symbol, out var cached) && now - cached.ReadAtUtc < ListingCacheLifetime)
+                results[symbol] = (cached.Eligibility, false);
+            else
+                uncached.Add(symbol);
         }
-        if (uncached.Count == 0) return listings;
+        if (uncached.Count == 0) return results;
         var broker = factory.CreateBrokerClient(profile);
-        if (broker is null) return listings;
+        if (broker is null) return results;
         try
         {
             foreach (var symbol in uncached)
             {
                 try
                 {
-                    if ((await broker.GetEligibilityAsync(symbol, token))?.Exchange is not { Length: > 0 } exchange) continue;
-                    listings[symbol] = exchange;
-                    listingCache[symbol] = (exchange, now);
+                    var eligibility = await broker.GetEligibilityAsync(symbol, token);
+                    if (eligibility is null) continue;
+                    results[symbol] = (eligibility, false);
+                    eligibilityCache[symbol] = (eligibility, now);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // One failed lookup (rate limit, server error) marks only that stock; it is refused as
-                    // listing_exchange_lookup_failed, as on the live path, and the other stocks are still assessed.
-                    listings[symbol] = ListingLookupFailed;
+                    // One failed lookup (rate limit, server error) marks only that stock; it fails closed while the
+                    // remaining stocks are still assessed.
+                    results[symbol] = (null, true);
                 }
             }
         }
@@ -176,45 +189,73 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         {
             (broker as IDisposable)?.Dispose();
         }
-        return listings;
+        return results;
     }
 
-    // Listing exchanges read from the broker, kept for an hour across Desk refreshes so each refresh does not repeat one
-    // asset request per stock. Only successful lookups are kept.
+    // Broker asset records kept for an hour across Desk refreshes so each refresh does not repeat one request per stock.
+    // Only successful lookups are cached.
     private static readonly TimeSpan ListingCacheLifetime = TimeSpan.FromHours(1);
     // Marks a stock whose broker lookup failed in this refresh (never cached, never a real exchange code).
     private const string ListingLookupFailed = "lookup_failed";
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Exchange, DateTimeOffset ReadAtUtc)> listingCache =
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (AssetTradingEligibility Eligibility, DateTimeOffset ReadAtUtc)> eligibilityCache =
         new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the Desk/Paper short-borrow rejection reason for <paramref name="strategy"/>, or null when the strategy
+    /// is not short or the stock is confirmed active, tradable, shortable, and easy-to-borrow.
+    /// </summary>
+    internal static string? GetShortBorrowRejection(
+        StrategyDefinition strategy,
+        AssetTradingEligibility? eligibility,
+        bool lookupFailed)
+    {
+        if (!strategy.Direction.Equals("short", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (lookupFailed || !ShortBorrowEligibility.IsShortableAndEasyToBorrow(eligibility))
+        {
+            return ShortBorrowEligibility.NotEasyToBorrowReason;
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Calls the shared <see cref="RegimeGateService.Evaluate"/> helper only after sufficient observed benchmark bars are
     /// proved. Under the Nasdaq home-market rule a Nasdaq listing with missing home-market bars reports data missing (so
-    /// the Desk surfaces missing data rather than a market-off refusal); otherwise SPY, Nasdaq/QQQ, and VIX sizing use the
-    /// exact same decision order and refusal reasons as backtests and paper trading.
+    /// the Desk surfaces missing data rather than a market-off refusal); otherwise SPY, Nasdaq/QQQ, VIX sizing, and
+    /// live short easy-to-borrow checks use the exact same fail-closed decision rules as backtests and paper trading.
     /// </summary>
     internal static StrategyEligibilityEvidence? ResolveRegime(StrategyDefinition strategy,
         IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> benchmarks,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule> calendar, DateTimeOffset asOf, string? listing, VixCloseSeries? vix,
-        out string? missing)
+        out string? missing, AssetTradingEligibility? brokerEligibility = null, bool eligibilityLookupFailed = false)
     {
         missing = null;
+        var shortBorrowRejection = GetShortBorrowRejection(strategy, brokerEligibility, eligibilityLookupFailed);
         if (strategy.Regime is not { IsActive: true } rule)
-            return new(true, "strategy_regime_not_required", "not-required", asOf, "{\"required\":false}");
+        {
+            return shortBorrowRejection is null
+                ? new(true, "strategy_regime_not_required", "not-required", asOf, "{\"required\":false}")
+                : new(false, "short_borrow_eligibility", $"{ShortBorrowEligibility.NotEasyToBorrowReason}:{asOf:O}", asOf,
+                    System.Text.Json.JsonSerializer.Serialize(new { eligible = false, rejection = shortBorrowRejection }));
+        }
         var bars = benchmarks.GetValueOrDefault(rule.BenchmarkSymbol) ?? [];
         missing = MissingBenchmark(rule.BenchmarkSymbol, bars, rule.RequiredCloses, calendar, asOf, strategy.Session.ExchangeTimezone);
         if (missing is not null) return null;
         var available = bars.Where(bar => bar.Timestamp.AddDays(1) <= asOf && (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOf))
             .Select(bar => bar.Timestamp).Distinct().Count();
 
-        var lookupFailed = listing == ListingLookupFailed;
+        var lookupFailed = listing == ListingLookupFailed || eligibilityLookupFailed;
         var exchange = lookupFailed ? null : listing;
         IReadOnlyList<OhlcvBar>? homeBars = null;
         if (rule.UsesNasdaqHomeMarket &&
             !lookupFailed &&
             !String.IsNullOrWhiteSpace(exchange) &&
             exchange.Equals(RegimeRules.NasdaqExchange, StringComparison.OrdinalIgnoreCase) &&
-            RegimeCalendarBuilder.IsRegimeOnAt(VixRegime.FilterTradingDayBars(bars, calendar), rule.SmaPeriod, asOf, rule.SmaRisingLookbackBars))
+            RegimeCalendarBuilder.IsRegimeOnAt(VixRegime.FilterTradingDayBars(bars, calendar), rule.SmaPeriod, asOf, rule.SlopeLookbackBars, rule.IsBearishRule))
         {
             homeBars = benchmarks.GetValueOrDefault(rule.NasdaqListingBenchmark!) ?? [];
             missing = MissingBenchmark(rule.NasdaqListingBenchmark!, homeBars, rule.RequiredCloses, calendar, asOf, strategy.Session.ExchangeTimezone);
@@ -222,8 +263,8 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
         }
 
         var decision = RegimeGateService.Evaluate(rule, bars, asOf, exchange, lookupFailed, homeBars, vix, calendar);
-        var eligible = decision.Rejection is null;
-        var rejection = decision.Rejection;
+        var rejection = decision.Rejection ?? shortBorrowRejection;
+        var eligible = rejection is null;
         var evidenceJson = decision.Vix is null
             ? System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp), listing, rejection })
             : System.Text.Json.JsonSerializer.Serialize(new { eligible, rule, available, latest = bars.Max(bar => bar.Timestamp), listing, rejection,

@@ -38,13 +38,41 @@ public sealed record RegimeRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? VixSeries = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixFullRiskBelow = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixNoLongsAbove = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixReducedRiskScale = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixReducedRiskScale = null,
+    // Bearish regime (Checkpoint 7 of the 19 Nov 2026 design): 0 = off. Otherwise the average must also be lower than it
+    // was this many sessions earlier (a falling average) alongside Close < SMA. Omitted when off so existing hashes stay exact.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int SmaFallingLookbackBars = 0,
+    // Short VIX sizing (Checkpoint 7, direction: short only): below VixNoShortsBelow no new short entry; between
+    // VixNoShortsBelow and VixShortFullRiskAbove (inclusive) per-trade risk times VixReducedRiskScale; above
+    // VixShortFullRiskAbove full per-trade risk. Omitted when unset so existing strategies keep their content hashes.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixNoShortsBelow = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VixShortFullRiskAbove = null)
 {
     /// <summary>Alpaca's exchange code for a Nasdaq listing, as in its asset records and the security master.</summary>
     public const string NasdaqExchange = "NASDAQ";
 
     /// <summary>The only VIX series supported: FRED's daily CBOE Volatility Index close.</summary>
     public const string FredVixSeries = "VIXCLS";
+
+    public const string PriceAboveSma = "price_above_sma";
+    public const string PriceBelowFallingSma = "price_below_falling_sma";
+    public const string Off = "off";
+
+    /// <summary>True when this regime rule uses the reversed bearish rule (<see cref="PriceBelowFallingSma"/>).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsBearishRule => Rule.Equals(PriceBelowFallingSma, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The active SMA slope lookback sessions (falling lookback for bearish rules, rising lookback for bullish rules).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int SlopeLookbackBars => IsBearishRule ? SmaFallingLookbackBars : SmaRisingLookbackBars;
+
+    /// <summary>True when long VIX sizing thresholds are configured.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsesLongVix => !String.IsNullOrWhiteSpace(VixSeries) && VixFullRiskBelow is not null && VixNoLongsAbove is not null;
+
+    /// <summary>True when short VIX sizing thresholds are configured.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool UsesShortVix => !String.IsNullOrWhiteSpace(VixSeries) && VixNoShortsBelow is not null && VixShortFullRiskAbove is not null;
 
     /// <summary>True when the previous session's VIX close also sizes or refuses new entries.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -56,58 +84,96 @@ public sealed record RegimeRules(
 
     /// <summary>Completed daily closes one decision needs: the average's window plus the earlier average it is compared with.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public int RequiredCloses => SmaPeriod + Math.Max(0, SmaRisingLookbackBars);
+    public int RequiredCloses => SmaPeriod + Math.Max(0, SlopeLookbackBars);
 
     /// <summary>
-    /// The rule part of a regime evidence key ("SPY:50", or "SPY:50:rising20" with a rising average), so two strategies with
-    /// different rules on the same fund never share a recorded result. Keys of rules without the rising average are unchanged.
+    /// The rule part of a regime evidence key ("SPY:50", or "SPY:50:rising20" with a rising average, or
+    /// "SPY:50:below:falling20" for a bearish falling average), so two strategies with different rules on the same fund
+    /// never share a recorded result. Keys of existing bullish rules are unchanged.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public string EvidenceRule =>
-        (SmaRisingLookbackBars > 0
-            ? $"{BenchmarkSymbol}:{SmaPeriod}:rising{SmaRisingLookbackBars}"
-            : $"{BenchmarkSymbol}:{SmaPeriod}") +
+        (IsBearishRule
+            ? (SmaFallingLookbackBars > 0
+                ? $"{BenchmarkSymbol}:{SmaPeriod}:below:falling{SmaFallingLookbackBars}"
+                : $"{BenchmarkSymbol}:{SmaPeriod}:below")
+            : (SmaRisingLookbackBars > 0
+                ? $"{BenchmarkSymbol}:{SmaPeriod}:rising{SmaRisingLookbackBars}"
+                : $"{BenchmarkSymbol}:{SmaPeriod}")) +
         (UsesNasdaqHomeMarket ? $":nasdaq{NasdaqListingBenchmark}" : "") +
-        (UsesVix ? FormattableString.Invariant($":vix{VixSeries}:{VixFullRiskBelow}:{VixNoLongsAbove}:{VixReducedRiskScale}") : "");
-
-    public const string PriceAboveSma = "price_above_sma";
-    public const string Off = "off";
+        (UsesShortVix
+            ? FormattableString.Invariant($":vixshort{VixSeries}:{VixNoShortsBelow}:{VixShortFullRiskAbove}:{VixReducedRiskScale}")
+            : UsesVix
+                ? FormattableString.Invariant($":vix{VixSeries}:{VixFullRiskBelow}:{VixNoLongsAbove}:{VixReducedRiskScale}")
+                : "");
 
     public bool IsActive =>
         !string.IsNullOrWhiteSpace(BenchmarkSymbol) &&
-        Rule.Equals(PriceAboveSma, StringComparison.OrdinalIgnoreCase) &&
+        (Rule.Equals(PriceAboveSma, StringComparison.OrdinalIgnoreCase) || IsBearishRule) &&
         SmaPeriod > 0;
 
     /// <summary>
-    /// Checks all regime invariants (rising-average look-back, home-market symbol, and VIX sizing completeness/bounds).
-    /// When <paramref name="direction"/> is provided, also enforces that VIX sizing is configured on long strategies only.
-    /// Throws <see cref="InvalidOperationException"/> with a concrete explanation when any setting is inconsistent.
+    /// Checks all regime invariants (rule name, rising/falling SMA look-back, home-market symbol, and long/short VIX
+    /// sizing completeness, bounds, mutual exclusion, and direction compatibility). Throws
+    /// <see cref="InvalidOperationException"/> with a concrete explanation when any setting is inconsistent.
     /// </summary>
     public void Validate(string? direction = null)
     {
+        if (!String.IsNullOrWhiteSpace(BenchmarkSymbol) &&
+            !Rule.Equals(PriceAboveSma, StringComparison.OrdinalIgnoreCase) &&
+            !Rule.Equals(PriceBelowFallingSma, StringComparison.OrdinalIgnoreCase) &&
+            !Rule.Equals(Off, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Unsupported regime.rule '{Rule}'; expected {PriceAboveSma}, {PriceBelowFallingSma}, or {Off}.");
         if (SmaRisingLookbackBars < 0)
             throw new InvalidOperationException("regime.sma_rising_lookback_bars must be zero or positive.");
+        if (SmaFallingLookbackBars < 0)
+            throw new InvalidOperationException("regime.sma_falling_lookback_bars must be zero or positive.");
+        if (IsBearishRule && SmaRisingLookbackBars > 0)
+            throw new InvalidOperationException("regime.sma_rising_lookback_bars cannot be used with regime.rule price_below_falling_sma; use regime.sma_falling_lookback_bars.");
+        if (!IsBearishRule && SmaFallingLookbackBars > 0)
+            throw new InvalidOperationException("regime.sma_falling_lookback_bars requires regime.rule price_below_falling_sma.");
         if (NasdaqListingBenchmark is not null &&
             (String.IsNullOrWhiteSpace(NasdaqListingBenchmark) ||
              NasdaqListingBenchmark.Trim().Equals(BenchmarkSymbol?.Trim(), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("regime.nasdaq_listing_benchmark must name a fund other than regime.benchmark, for example QQQ.");
 
         var hasSeries = !String.IsNullOrWhiteSpace(VixSeries);
-        var hasAnyVix = hasSeries || VixFullRiskBelow is not null || VixNoLongsAbove is not null || VixReducedRiskScale is not null;
+        var hasLongVix = VixFullRiskBelow is not null || VixNoLongsAbove is not null;
+        var hasShortVix = VixNoShortsBelow is not null || VixShortFullRiskAbove is not null;
+        var hasAnyVix = hasSeries || hasLongVix || hasShortVix || VixReducedRiskScale is not null;
         if (!hasAnyVix) return;
 
-        if (!hasSeries || VixFullRiskBelow is null || VixNoLongsAbove is null || VixReducedRiskScale is null)
-            throw new InvalidOperationException("VIX sizing needs all of regime.vix_series, regime.vix_full_risk_below, " +
-                "regime.vix_no_new_longs_above and regime.vix_reduced_risk_scale.");
+        if (hasLongVix && hasShortVix)
+            throw new InvalidOperationException("Cannot mix long VIX sizing (vix_full_risk_below, vix_no_new_longs_above) with short VIX sizing (vix_no_new_shorts_below, vix_short_full_risk_above).");
+
+        if (!hasSeries || VixReducedRiskScale is null)
+            throw new InvalidOperationException("VIX sizing requires regime.vix_series and regime.vix_reduced_risk_scale alongside either long or short VIX thresholds.");
+
         var normalizedSeries = VixSeries!.Trim().ToUpperInvariant();
         if (normalizedSeries != FredVixSeries)
             throw new InvalidOperationException($"regime.vix_series must be {FredVixSeries} (FRED's daily VIX close); got '{VixSeries}'.");
-        if (VixFullRiskBelow <= 0m || VixNoLongsAbove < VixFullRiskBelow)
-            throw new InvalidOperationException("regime.vix_full_risk_below must be positive and no higher than regime.vix_no_new_longs_above.");
         if (VixReducedRiskScale <= 0m || VixReducedRiskScale >= 1m)
             throw new InvalidOperationException("regime.vix_reduced_risk_scale must be above 0 and below 1 (for example 0.5 for half risk).");
+
+        if (hasShortVix)
+        {
+            if (VixNoShortsBelow is null || VixShortFullRiskAbove is null)
+                throw new InvalidOperationException("Short VIX sizing needs all of regime.vix_series, regime.vix_no_new_shorts_below, " +
+                    "regime.vix_short_full_risk_above and regime.vix_reduced_risk_scale.");
+            if (VixNoShortsBelow <= 0m || VixShortFullRiskAbove < VixNoShortsBelow)
+                throw new InvalidOperationException("regime.vix_no_new_shorts_below must be positive and no higher than regime.vix_short_full_risk_above.");
+            if (direction is not null && !direction.Equals("short", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Short VIX sizing (vix_no_new_shorts_below / vix_short_full_risk_above) requires direction: short.");
+            return;
+        }
+
+        if (VixFullRiskBelow is null || VixNoLongsAbove is null)
+            throw new InvalidOperationException("VIX sizing needs all of regime.vix_series, regime.vix_full_risk_below, " +
+                "regime.vix_no_new_longs_above and regime.vix_reduced_risk_scale.");
+        if (VixFullRiskBelow <= 0m || VixNoLongsAbove < VixFullRiskBelow)
+            throw new InvalidOperationException("regime.vix_full_risk_below must be positive and no higher than regime.vix_no_new_longs_above.");
         if (direction is not null && !direction.Equals("long", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("VIX sizing is defined for long strategies only (direction: long).");
+            throw new InvalidOperationException("Long VIX sizing (vix_full_risk_below / vix_no_new_longs_above) requires direction: long.");
     }
 }
 
@@ -304,7 +370,20 @@ public sealed record EntryRules(
     // Frozen conservative historical news contract: receipt delay added to max(created, updated, observed) and
     // comma-separated allowed Tier-1 catalyst categories (earnings, guidance, fda, contract, upgrade, downgrade).
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] int? CatalystReceiptDelayMinutes = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? AllowedCatalystCategories = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? AllowedCatalystCategories = null,
+    // Short mirror setup fields (Checkpoint 8 of the 19 Nov 2026 design). All default/null so existing hashes are unchanged.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int RecentLowLookbackBars = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinGapDownAtr = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireOpeningStayedAtOrBelowVwap = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireDailyCloseBelowOpeningRangeLow = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireDailyCloseBelowSessionVwap = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? VetoShortNewsSentimentAtOrAbove = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequirePriceBelowSma50ForShort = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int Sma50FallingLookbackBars = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool RequireBounceHighBelowSma50 = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinParabolicAtrAboveEma21 = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinShootingStarWickToBody = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxShootingStarCloseLocation = null);
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,
@@ -417,7 +496,11 @@ public sealed record ExecutionRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     string? OpeningGapPolicy = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    EntryWindowRules? EntryWindow = null)
+    EntryWindowRules? EntryWindow = null,
+    // Annualized short-borrow cost charged in backtest portfolio accounting (entryNotional * aprPct / 100 * max(1, daysHeld) / 365).
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? ShortBorrowAprPct = null,
+    // SEC Rule 201 short-sale circuit breaker: refuses next-open short entry when bar D's low or D+1 open drops >= 10% from prior close.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool EnforceSecRule201 = false)
 {
     /// <summary>Plan from the prior close, keep a trade that opens beyond its stop, and exit it at the next eligible open.</summary>
     public const string KeepAndExitNextOpen = "keep_and_exit_next_open";

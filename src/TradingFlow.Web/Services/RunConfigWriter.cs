@@ -979,6 +979,30 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  catalyst_receipt_delay_minutes: {catalystReceiptDelayMinutes.ToString(CultureInfo.InvariantCulture)}");
         if (strategy.EntryRules.AllowedCatalystCategories is { } allowedCatalystCategories)
             yaml.AppendLine($"  allowed_catalyst_categories: {allowedCatalystCategories}");
+        if (strategy.EntryRules.RecentLowLookbackBars != 0)
+            yaml.AppendLine($"  recent_low_lookback_bars: {strategy.EntryRules.RecentLowLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MinGapDownAtr is { } minGapDownAtr)
+            yaml.AppendLine($"  min_gap_down_atr: {minGapDownAtr.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.RequireOpeningStayedAtOrBelowVwap)
+            yaml.AppendLine("  require_opening_stays_at_or_below_vwap: true");
+        if (strategy.EntryRules.RequireDailyCloseBelowOpeningRangeLow)
+            yaml.AppendLine("  require_daily_close_below_opening_range_low: true");
+        if (strategy.EntryRules.RequireDailyCloseBelowSessionVwap)
+            yaml.AppendLine("  require_daily_close_below_session_vwap: true");
+        if (strategy.EntryRules.VetoShortNewsSentimentAtOrAbove is { } vetoShortNewsSentimentAtOrAbove)
+            yaml.AppendLine($"  veto_short_news_sentiment_at_or_above: {vetoShortNewsSentimentAtOrAbove.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.RequirePriceBelowSma50ForShort)
+            yaml.AppendLine("  require_price_below_sma50_for_short: true");
+        if (strategy.EntryRules.Sma50FallingLookbackBars != 0)
+            yaml.AppendLine($"  sma50_falling_lookback_bars: {strategy.EntryRules.Sma50FallingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.RequireBounceHighBelowSma50)
+            yaml.AppendLine("  require_bounce_high_below_sma50: true");
+        if (strategy.EntryRules.MinParabolicAtrAboveEma21 is { } minParabolicAtrAboveEma21)
+            yaml.AppendLine($"  min_parabolic_atr_above_ema21: {minParabolicAtrAboveEma21.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MinShootingStarWickToBody is { } minShootingStarWickToBody)
+            yaml.AppendLine($"  min_shooting_star_wick_to_body: {minShootingStarWickToBody.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.MaxShootingStarCloseLocation is { } maxShootingStarCloseLocation)
+            yaml.AppendLine($"  max_shooting_star_close_location: {maxShootingStarCloseLocation.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  reject_weak_close_on_high_relative_volume: {strategy.EntryRules.RejectWeakCloseOnHighRelativeVolume.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  weak_close_max_location_value: {strategy.EntryRules.WeakCloseMaxLocationValue.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine($"  weak_close_min_relative_volume: {strategy.EntryRules.WeakCloseMinRelativeVolume.ToString(CultureInfo.InvariantCulture)}");
@@ -1071,11 +1095,21 @@ public sealed class RunConfigWriter
             yaml.AppendLine($"  sma_period: {regime.SmaPeriod}");
             if (regime.SmaRisingLookbackBars != 0)
                 yaml.AppendLine($"  sma_rising_lookback_bars: {regime.SmaRisingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
+            if (regime.SmaFallingLookbackBars != 0)
+                yaml.AppendLine($"  sma_falling_lookback_bars: {regime.SmaFallingLookbackBars.ToString(CultureInfo.InvariantCulture)}");
             if (regime.NasdaqListingBenchmark is { } nasdaqBenchmark)
                 yaml.AppendLine($"  nasdaq_listing_benchmark: {nasdaqBenchmark}");
-            if (regime.UsesVix)
+            if (regime.UsesShortVix)
             {
-                // The four VIX sizing values are written together, exactly as the reader requires them.
+                // The four short VIX sizing values are written together, matching the reader's invariants.
+                yaml.AppendLine($"  vix_series: {regime.VixSeries}");
+                yaml.AppendLine($"  vix_no_new_shorts_below: {regime.VixNoShortsBelow!.Value.ToString(CultureInfo.InvariantCulture)}");
+                yaml.AppendLine($"  vix_short_full_risk_above: {regime.VixShortFullRiskAbove!.Value.ToString(CultureInfo.InvariantCulture)}");
+                yaml.AppendLine($"  vix_reduced_risk_scale: {regime.VixReducedRiskScale!.Value.ToString(CultureInfo.InvariantCulture)}");
+            }
+            else if (regime.UsesVix)
+            {
+                // The four long VIX sizing values are written together, exactly as the reader requires them.
                 yaml.AppendLine($"  vix_series: {regime.VixSeries}");
                 yaml.AppendLine($"  vix_full_risk_below: {regime.VixFullRiskBelow!.Value.ToString(CultureInfo.InvariantCulture)}");
                 yaml.AppendLine($"  vix_no_new_longs_above: {regime.VixNoLongsAbove!.Value.ToString(CultureInfo.InvariantCulture)}");
@@ -1137,6 +1171,10 @@ public sealed class RunConfigWriter
         yaml.AppendLine($"  timeframe: {strategy.Execution.Timeframe}");
         yaml.AppendLine($"  slippage_bps: {strategy.Execution.SlippageBps.ToString(CultureInfo.InvariantCulture)}");
         if (strategy.Execution.OpeningGapPolicy is { } openingGapPolicy) yaml.AppendLine($"  opening_gap_policy: {openingGapPolicy}");
+        if (strategy.Execution.ShortBorrowAprPct is { } shortBorrowAprPct)
+            yaml.AppendLine($"  short_borrow_apr_pct: {shortBorrowAprPct.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.Execution.EnforceSecRule201)
+            yaml.AppendLine("  enforce_sec_rule_201: true");
         if (strategy.Execution.EntryWindow is { } entryWindow)
         {
             yaml.AppendLine("  entry_window:");

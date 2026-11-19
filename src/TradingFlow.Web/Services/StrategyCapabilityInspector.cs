@@ -22,6 +22,7 @@ internal static class StrategyCapabilityInspector
         var shortSideUsesNews =
             entryRules.EnableShort &&
             (entryRules.MaxShortNewsSentiment is not null ||
+             entryRules.VetoShortNewsSentimentAtOrAbove is not null ||
              entryRules.MinShortCatalystDropPct is not null ||
              entryRules.ShortSetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
              entryRules.ShortSetupType.Contains("news_", StringComparison.OrdinalIgnoreCase));

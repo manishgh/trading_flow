@@ -49,13 +49,15 @@ public static class HistoricalNewsPresenceEvaluation
     // Disabling the optional strict provider must never silently weaken a selected recipe's declared news conditions.
     public static bool HasStrictNewsRequirements(EntryRules rules) =>
         rules.RequirePositiveNews || rules.MinNewsSentiment is not null || rules.VetoNewsSentimentBelow is not null ||
-        rules.MaxShortNewsSentiment is not null || rules.MinCatalystPriceMovePct is not null ||
+        rules.MaxShortNewsSentiment is not null || rules.VetoShortNewsSentimentAtOrAbove is not null ||
+        rules.MinCatalystPriceMovePct is not null ||
         rules.MaxCatalystPriceMovePct is not null || rules.MinShortCatalystDropPct is not null ||
         rules.MaxCatalystConfirmationBars is not null || rules.DrawdownQualification?.UsesEventContext == true ||
         rules.VetoFreshNewsHours is not null || rules.AllowedCatalystCategories is not null ||
         rules.CatalystReceiptDelayMinutes is not null ||
         rules.SetupType.Equals("catalyst_drift", StringComparison.OrdinalIgnoreCase) ||
         rules.SetupType.Equals("news_orb_swing", StringComparison.OrdinalIgnoreCase) ||
+        (rules.EnableShort && rules.ShortSetupType.Equals("news_orb_breakdown", StringComparison.OrdinalIgnoreCase)) ||
         rules.AnchoredVwapMode.Equals("catalyst", StringComparison.OrdinalIgnoreCase) ||
         rules.ShortAnchoredVwapMode.Equals("catalyst", StringComparison.OrdinalIgnoreCase) ||
         String.Equals(rules.AnchorType, "catalyst", StringComparison.OrdinalIgnoreCase);

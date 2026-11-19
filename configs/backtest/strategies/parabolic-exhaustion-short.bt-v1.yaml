@@ -1,0 +1,83 @@
+# Parabolic exhaustion shooting-star breakdown, swing, short.
+# Design: docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md (approved 19 November 2026, Checkpoints 7 & 8).
+# Rules: prior bar D-1 spikes >= 2.5 * ATR(14)_{D-1} above EMA(21)_{D-1} on a shooting-star candle (upper wick >=
+# 2.0 * max(|Close - Open|, 0.01) and CLV <= 0.35), and trigger bar D closes strictly below Low_{D-1}. Strategy-owned
+# 20-session ADR% >= 2.5% and dollar volume >= $20M, under the bearish SPY/QQQ falling 50-day SMA gate and short FRED
+# VIXCLS sizing (< 18 refused, 18-22 half risk, > 22 full risk). Charges 1.0% annualized short-borrow cost and enforces
+# SEC Rule 201. Exits: 1.0 * ATR(14) initial stop, 2.5R target, 10-session time exit, next-open fill on as-traded bars.
+strategy_id: research.parabolic-exhaustion-short.bt-v1
+strategy_name: RESEARCH Parabolic Exhaustion Short V1 (swing, short, shooting-star breakdown, SPY/QQQ falling-average gate, short VIX sizing, as-traded bars)
+source: parabolic_exhaustion_shooting_star_breakdown_2026_11_19
+version: 1
+timeframe: 1d
+direction: short
+entry_rules:
+  setup_type: momentum
+  enable_short: true
+  short_setup_type: parabolic_shooting_star_breakdown
+  min_parabolic_atr_above_ema21: 2.5
+  min_shooting_star_wick_to_body: 2.0
+  max_shooting_star_close_location: 0.35
+  min_average_range_pct: 2.5
+  min_average_dollar_volume: 20000000
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  require_positive_news: false
+regime:
+  benchmark: SPY
+  rule: price_below_falling_sma
+  sma_period: 50
+  sma_falling_lookback_bars: 20
+  nasdaq_listing_benchmark: QQQ
+  vix_series: VIXCLS
+  vix_no_new_shorts_below: 18
+  vix_short_full_risk_above: 22
+  vix_reduced_risk_scale: 0.5
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 10
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+  short_borrow_apr_pct: 1.0
+  enforce_sec_rule_201: true
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

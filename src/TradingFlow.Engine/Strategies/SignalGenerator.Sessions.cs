@@ -153,21 +153,32 @@ public sealed partial class SignalGenerator
         return bars[index].Close > priorHigh;
     }
 
+    /// <summary>
+    /// Returns true when bar <paramref name="index"/> closes strictly below the lowest low of the preceding
+    /// <c>RecentLowLookbackBars</c> (or fallback <c>RecentHighLookbackBars</c>) completed bars.
+    /// </summary>
     private static bool IsRecentLowBreakdown(
         StrategyDefinition strategy,
         IReadOnlyList<OhlcvBar> bars,
         int index)
     {
-        var lookback = strategy.EntryRules.RecentHighLookbackBars;
-        if (lookback <= 0 || index <= lookback)
+        var lookback = strategy.EntryRules.RecentLowLookbackBars > 0
+            ? strategy.EntryRules.RecentLowLookbackBars
+            : strategy.EntryRules.RecentHighLookbackBars;
+        if (lookback <= 0 || index < lookback)
         {
             return false;
         }
 
-        var priorLow = bars
-            .Skip(index - lookback)
-            .Take(lookback)
-            .Min(x => x.Low);
+        var priorLow = bars[index - lookback].Low;
+        for (var i = index - lookback + 1; i < index; i++)
+        {
+            if (bars[i].Low < priorLow)
+            {
+                priorLow = bars[i].Low;
+            }
+        }
+
         return bars[index].Close < priorLow;
     }
 

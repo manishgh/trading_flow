@@ -215,6 +215,185 @@ public sealed partial class SignalGenerator
         return true;
     }
 
+    /// <summary>
+    /// Evaluates the 21-EMA trend rejection breakdown setup on completed bar D (<paramref name="index"/>):
+    /// bar D must close below EMA(21)_D and below Low_{D-1}; within the prior <c>PullbackLookbackBars</c> completed
+    /// bars at least one bar k must bounce into within <c>MaxEma21PullbackAtr * ATR_k</c> of EMA(21)_k on weak
+    /// relative volume (<c>RelativeVolume_k &lt; MaxPullbackRelativeVolume</c>); and when
+    /// <c>RequireBounceHighBelowSma50</c> is true, every bar from k through D must keep <c>High &lt;= SMA(50)</c>.
+    /// Missing indicators or RVOL fail closed with a concrete diagnostic reason.
+    /// </summary>
+    internal static (bool IsBreakdown, string? RejectionDetail) GetEma21RejectionBreakdownContext(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        var rules = strategy.EntryRules;
+        if (index < 1 ||
+            rules.PullbackLookbackBars < 1 ||
+            rules.MaxEma21PullbackAtr is not { } maxAtr || maxAtr <= 0m ||
+            rules.MaxPullbackRelativeVolume is not { } maxRvol || maxRvol <= 0m)
+        {
+            return (false, "invalid_bounce_configuration");
+        }
+
+        if (snapshots[index].Ema21 is not { } triggerEma21)
+        {
+            return (false, "ema21_unavailable_on_trigger_bar");
+        }
+
+        if (bars[index].Close >= triggerEma21)
+        {
+            return (false, "trigger_close_not_below_ema21");
+        }
+
+        if (bars[index].Close >= bars[index - 1].Low)
+        {
+            return (false, "trigger_close_not_below_prior_low");
+        }
+
+        if (rules.RequireBounceHighBelowSma50)
+        {
+            if (snapshots[index].Sma50 is not { } triggerSma50)
+            {
+                return (false, "sma50_unavailable_on_trigger_bar");
+            }
+
+            if (bars[index].High > triggerSma50)
+            {
+                return (false, "trigger_high_above_sma50");
+            }
+        }
+
+        var start = Math.Max(0, index - rules.PullbackLookbackBars);
+        var sawZoneTouch = false;
+        var sawMissingRvolInZone = false;
+        var sawWetVolumeInZone = false;
+        var sawSma50Failure = false;
+        var sawMissingIndicators = false;
+
+        for (var k = start; k <= index - 1; k++)
+        {
+            var snapK = snapshots[k];
+            var barK = bars[k];
+            if (snapK.Ema21 is not { } ema21K || snapK.Atr is not { } atrK || atrK <= 0m)
+            {
+                sawMissingIndicators = true;
+                continue;
+            }
+
+            var band = maxAtr * atrK;
+            var inZone = barK.High >= ema21K - band && barK.Close <= ema21K + band;
+            if (!inZone)
+            {
+                continue;
+            }
+
+            sawZoneTouch = true;
+            if (snapK.RelativeVolume is not { } rvolK)
+            {
+                sawMissingRvolInZone = true;
+                continue;
+            }
+
+            if (rvolK >= maxRvol)
+            {
+                sawWetVolumeInZone = true;
+                continue;
+            }
+
+            if (rules.RequireBounceHighBelowSma50 && !AllHighsAtOrBelowSma50(bars, snapshots, k, index))
+            {
+                sawSma50Failure = true;
+                continue;
+            }
+
+            return (true, null);
+        }
+
+        var detail = sawSma50Failure
+            ? "bounce_high_above_sma50_or_sma50_missing"
+            : sawZoneTouch
+                ? (sawWetVolumeInZone ? "bounce_volume_not_dried_up" : sawMissingRvolInZone ? "bounce_rvol_unavailable" : "bounce_volume_not_dried_up")
+                : (sawMissingIndicators ? "bounce_indicators_unavailable" : "no_ema21_zone_bounce_in_lookback");
+        return (false, detail);
+    }
+
+    /// <summary>Verifies that every bar in [<paramref name="fromIndex"/>, <paramref name="toIndex"/>] has a known SMA(50) and High &lt;= SMA(50).</summary>
+    private static bool AllHighsAtOrBelowSma50(
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int fromIndex,
+        int toIndex)
+    {
+        for (var m = fromIndex; m <= toIndex; m++)
+        {
+            if (snapshots[m].Sma50 is not { } sma50 || bars[m].High > sma50)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Evaluates the parabolic exhaustion shooting-star breakdown setup on completed bar D (<paramref name="index"/>):
+    /// prior bar D-1 must spike to at least <c>EMA(21)_{D-1} + MinParabolicAtrAboveEma21 * ATR(14)_{D-1}</c>, print a
+    /// shooting star (<c>upper_wick &gt;= MinShootingStarWickToBody * max(|Close - Open|, 0.01)</c> and
+    /// <c>CLV_{D-1} &lt;= MaxShootingStarCloseLocation</c>), and trigger bar D must close strictly below <c>Low_{D-1}</c>.
+    /// Missing indicators or zero range fail closed with a concrete diagnostic reason.
+    /// </summary>
+    internal static (bool IsBreakdown, string? RejectionDetail) GetParabolicShootingStarBreakdownContext(
+        StrategyDefinition strategy,
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index)
+    {
+        var rules = strategy.EntryRules;
+        if (index < 1 ||
+            rules.MinParabolicAtrAboveEma21 is not { } minAtrAbove || minAtrAbove <= 0m ||
+            rules.MinShootingStarWickToBody is not { } minWickRatio || minWickRatio <= 0m ||
+            rules.MaxShootingStarCloseLocation is not { } maxClv || maxClv <= 0m || maxClv > 1m)
+        {
+            return (false, "invalid_parabolic_shooting_star_configuration");
+        }
+
+        var prev = bars[index - 1];
+        var prevSnap = snapshots[index - 1];
+        if (prevSnap.Ema21 is not { } prevEma21 || prevSnap.Atr is not { } prevAtr || prevAtr <= 0m)
+        {
+            return (false, "prior_bar_indicators_unavailable");
+        }
+
+        var requiredHigh = prevEma21 + (minAtrAbove * prevAtr);
+        if (prev.High < requiredHigh)
+        {
+            return (false, "prior_high_not_parabolic_above_ema21");
+        }
+
+        var body = Math.Max(Math.Abs(prev.Close - prev.Open), 0.01m);
+        var upperWick = prev.High - Math.Max(prev.Open, prev.Close);
+        if (upperWick < minWickRatio * body)
+        {
+            return (false, "prior_bar_upper_wick_too_small");
+        }
+
+        var prevClv = ComputeCloseLocationValue(prev);
+        if (prevClv is null || prevClv.Value > maxClv)
+        {
+            return (false, "prior_bar_close_location_too_high");
+        }
+
+        if (bars[index].Close >= prev.Low)
+        {
+            return (false, "trigger_close_not_below_prior_low");
+        }
+
+        return (true, null);
+    }
+
     private static int CountConsecutiveDownCloses(IReadOnlyList<OhlcvBar> bars, int index)
     {
         var count = 0;

@@ -173,7 +173,15 @@ public sealed class RegimeGateService(IVixCloseSource? vixCloses = null)
                 var homeRule = regime with { BenchmarkSymbol = regime.NasdaqListingBenchmark!, NasdaqListingBenchmark = null };
                 homeBars = await LoadRegimeBarsAsync(homeRule, provider, availableIntervals, now, cancellationToken);
             }
-            var preVix = Evaluate(regime with { VixSeries = null, VixFullRiskBelow = null, VixNoLongsAbove = null, VixReducedRiskScale = null },
+            var preVix = Evaluate(regime with
+                {
+                    VixSeries = null,
+                    VixFullRiskBelow = null,
+                    VixNoLongsAbove = null,
+                    VixNoShortsBelow = null,
+                    VixShortFullRiskAbove = null,
+                    VixReducedRiskScale = null
+                },
                 validDaily, now, exchange, lookupFailed, homeBars, null, schedules);
             if (preVix.Rejection is not null)
                 return preVix;
@@ -188,7 +196,7 @@ public sealed class RegimeGateService(IVixCloseSource? vixCloses = null)
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules) =>
         IsFilteredBenchmarkOn(VixRegime.FilterTradingDayBars(bars, schedules), regime, decisionTime, schedules);
 
-    /// <summary>Checks already-filtered trading-day bars for schedule freshness and the SMA/rising-SMA rule.</summary>
+    /// <summary>Checks already-filtered trading-day bars for schedule freshness and the bullish/bearish SMA rule.</summary>
     private static bool IsFilteredBenchmarkOn(IReadOnlyList<OhlcvBar> validBars, RegimeRules regime, DateTimeOffset decisionTime,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules)
     {
@@ -196,7 +204,7 @@ public sealed class RegimeGateService(IVixCloseSource? vixCloses = null)
         if (schedules is { Count: > 0 } &&
             !VixRegime.HasFreshBenchmarkSession(VixRegime.PreviousSession(validBars, decisionTime), schedules, decisionTime))
             return false;
-        return RegimeCalendarBuilder.IsRegimeOnAt(validBars, regime.SmaPeriod, decisionTime, regime.SmaRisingLookbackBars);
+        return RegimeCalendarBuilder.IsRegimeOnAt(validBars, regime.SmaPeriod, decisionTime, regime.SlopeLookbackBars, regime.IsBearishRule);
     }
 
     /// <summary>

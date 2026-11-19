@@ -63,9 +63,15 @@ public static class StrategyDecisionRequestAssembler
         // widths needs 20 completed bars of its own, so look-back + 20 bars must exist before the setup can be judged.
         if (runtimeStrategy.Definition.EntryRules.BollingerSqueezeLookbackBars > 0)
             requiredWarmupBars = Math.Max(requiredWarmupBars, runtimeStrategy.Definition.EntryRules.BollingerSqueezeLookbackBars + 20);
-        // Rising SMA-50 requires both the current SMA-50 and the value N bars earlier (50 + N completed bars).
+        // Rising/falling SMA-50 requires both the current SMA-50 and the value N bars earlier (50 + N completed bars).
         if (runtimeStrategy.Definition.EntryRules.Sma50RisingLookbackBars > 0)
             requiredWarmupBars = Math.Max(requiredWarmupBars, 50 + runtimeStrategy.Definition.EntryRules.Sma50RisingLookbackBars);
+        if (runtimeStrategy.Definition.EntryRules.Sma50FallingLookbackBars > 0)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, 50 + runtimeStrategy.Definition.EntryRules.Sma50FallingLookbackBars);
+        if (runtimeStrategy.Definition.EntryRules.RequirePriceBelowSma50ForShort || runtimeStrategy.Definition.EntryRules.RequireBounceHighBelowSma50)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, 50 + Math.Max(0, runtimeStrategy.Definition.EntryRules.PullbackLookbackBars));
+        if (runtimeStrategy.Definition.EntryRules.MinParabolicAtrAboveEma21 is not null)
+            requiredWarmupBars = Math.Max(requiredWarmupBars, 22);
         // Strategy-owned ADR% and dollar-volume filters measure a 20-session rolling window matching DailyScreen.
         if (runtimeStrategy.Definition.EntryRules.MinAverageRangePct is not null ||
             runtimeStrategy.Definition.EntryRules.MinAverageDollarVolume is not null)

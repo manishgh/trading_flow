@@ -43,7 +43,14 @@ public static class BacktestExecutionProfileResolver
             !day && policy is not (null or ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1))
             throw new InvalidOperationException("The selected execution replay policy does not support the strategy horizon.");
         var engine = profile.Engine with { ExecutionReplayPolicyId = policy };
-        if (!day) return profile with { Engine = engine };
+        if (!day)
+        {
+            var intervals = policy == ExecutionReplayPolicy.DailyRthFiveMinuteV1 &&
+                !profile.Intervals.Contains(ExecutionReplayPolicy.Timeframe, StringComparer.OrdinalIgnoreCase)
+                ? profile.Intervals.Append(ExecutionReplayPolicy.Timeframe).ToArray()
+                : profile.Intervals;
+            return profile with { Engine = engine, Intervals = intervals };
+        }
         if (!ExecutionReplayPolicy.IsEventPortfolio(policy) && (engine.ExecutionSourceManifestPath is not null || engine.ExecutionSourceManifestSha256 is not null))
             throw new InvalidOperationException("A SIP execution-source manifest cannot be reused for five-minute day diagnostic execution.");
         if (engine.PrecommittedLiquidationSourceUtc is not null)

@@ -21,14 +21,19 @@ public sealed class StrategyArtifactCatalogTests
                 "etf.buy-and-hold-control@1.0.0",
                 "etf.rotation-12-1@1.0.0",
                 "etf.trend-10m@1.0.0",
-                // Added 18-19 November 2026; the opening-range versions below stay registered but disabled.
+                // Added 18-19 November 2026 (5 long + 5 short swing research artifacts); the opening-range versions stay registered but disabled.
+                "technical.bollinger-squeeze-breakdown@1.0.0",
                 "technical.bollinger-squeeze-breakout@1.0.0",
+                "technical.ema21-rejection-short@1.0.0",
+                "technical.ema21-rejection-short@1.1.0",
                 "technical.ema21-trend-pullback@1.0.0",
                 "technical.ema21-trend-pullback@1.1.0",
+                "technical.news-orb-breakdown@1.0.0",
                 "technical.news-orb-swing@1.0.0",
                 "technical.opening-range-breakout@1.2.0",
                 "technical.opening-range-breakout@2.0.0",
                 "technical.opening-range-breakout@2.1.0",
+                "technical.parabolic-exhaustion-short@1.0.0",
                 "technical.rubber-band-reclaim@1.0.0"
             },
             snapshot.ExecutableArtifacts
@@ -55,16 +60,21 @@ public sealed class StrategyArtifactCatalogTests
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
-        // The same-day opening-range versions stay set aside; the five approved long swing research artifacts are enabled
-        // for research backtests (still research-only, never authorized for paper/live without explicit promotion).
+        // The same-day opening-range versions stay set aside; all ten approved swing research artifacts (5 long + 5 short)
+        // are enabled for research backtests (still research-only, never authorized for paper/live without explicit promotion).
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.opening-range-breakout");
         Assert.Equal(
             new[]
             {
+                "technical.bollinger-squeeze-breakdown@1.0.0",
                 "technical.bollinger-squeeze-breakout@1.0.0",
+                "technical.ema21-rejection-short@1.0.0",
+                "technical.ema21-rejection-short@1.1.0",
                 "technical.ema21-trend-pullback@1.0.0",
                 "technical.ema21-trend-pullback@1.1.0",
+                "technical.news-orb-breakdown@1.0.0",
                 "technical.news-orb-swing@1.0.0",
+                "technical.parabolic-exhaustion-short@1.0.0",
                 "technical.rubber-band-reclaim@1.0.0"
             },
             artifacts

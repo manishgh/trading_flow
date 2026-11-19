@@ -68,8 +68,8 @@ public sealed partial class BacktestRunner
                 }
 
                 if (bars.Count < regime.RequiredCloses + 1)
-                    throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod} (rising over {regime.SmaRisingLookbackBars} sessions); active market filter cannot be evaluated.");
-                var calendar = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod, regime.SmaRisingLookbackBars, candidateSessionSchedules);
+                    throw new InvalidOperationException($"Benchmark {regime.BenchmarkSymbol} history is unavailable or insufficient for SMA{regime.SmaPeriod} ({(regime.IsBearishRule ? "falling" : "rising")} over {regime.SlopeLookbackBars} sessions); active market filter cannot be evaluated.");
+                var calendar = RegimeCalendarBuilder.Build(bars, regime.SmaPeriod, regime.SlopeLookbackBars, candidateSessionSchedules, regime.IsBearishRule);
                 if (regime.UsesNasdaqHomeMarket)
                     calendar = await WithNasdaqHomeMarketAsync(run, provider!, regime, calendar, dataStart, windowEnd, cancellationToken);
                 if (regime.UsesVix)
@@ -156,13 +156,13 @@ public sealed partial class BacktestRunner
         var nasdaqBars = await _regimeGate.LoadBenchmarkDailyBarsAsync(provider, regime.NasdaqListingBenchmark!, run.Intervals,
             dataStart.AddDays(-((regime.RequiredCloses * 2) + 15)), windowEnd, cancellationToken);
         if (nasdaqBars.Count < regime.RequiredCloses + 1)
-            throw new InvalidOperationException($"Home-market fund {regime.NasdaqListingBenchmark} history is unavailable or insufficient for SMA{regime.SmaPeriod} (rising over {regime.SmaRisingLookbackBars} sessions).");
+            throw new InvalidOperationException($"Home-market fund {regime.NasdaqListingBenchmark} history is unavailable or insufficient for SMA{regime.SmaPeriod} ({(regime.IsBearishRule ? "falling" : "rising")} over {regime.SlopeLookbackBars} sessions).");
         var exchanges = await LoadListingExchangesAsync(run, provider, regime, cancellationToken);
         if (exchanges.Count == 0)
             throw new InvalidOperationException("The listing-exchange source returned no listings; the Nasdaq home-market rule cannot be evaluated.");
         RecordListingCoverage(run, exchanges);
         return calendar.WithNasdaqHomeMarket(
-            RegimeCalendarBuilder.Build(nasdaqBars, regime.SmaPeriod, regime.SmaRisingLookbackBars, candidateSessionSchedules), exchanges);
+            RegimeCalendarBuilder.Build(nasdaqBars, regime.SmaPeriod, regime.SlopeLookbackBars, candidateSessionSchedules, regime.IsBearishRule), exchanges);
     }
 
     // Listings come from the run's own data source. Prepared and cached runs wrap that source, so when the wrapper cannot

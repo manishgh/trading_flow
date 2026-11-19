@@ -91,8 +91,10 @@ public sealed record VixEntryDecision(string? Rejection, decimal RiskScale, Date
 /// </summary>
 public static class VixRegime
 {
-    /// <summary>Rejection when the previous session's VIX close is above the no-entry threshold (22).</summary>
+    /// <summary>Rejection when the previous session's VIX close is above the long no-entry threshold (22).</summary>
     public const string OffReason = "vix_regime_off_on_entry_day";
+    /// <summary>Rejection when the previous session's VIX close is below the short no-entry threshold (18).</summary>
+    public const string ShortOffReason = "vix_short_regime_off_on_entry_day";
     /// <summary>Rejection when FRED lists no VIX close for the previous session (not yet published, or missing), or the session is unknown.</summary>
     public const string CloseUnknownReason = "vix_close_unknown_for_previous_session";
     /// <summary>Rejection when the VIX source could not be read (request failed, or no source is configured).</summary>
@@ -102,8 +104,12 @@ public static class VixRegime
     public static TimeZoneInfo NewYorkTimeZone { get; } = ResolveNewYorkTimeZone();
 
     /// <summary>
-    /// Applies the thresholds of <paramref name="rules"/> to the close of <paramref name="previousSession"/> in
-    /// <paramref name="series"/>. A strategy without VIX sizing is always allowed at full risk; every missing piece refuses.
+    /// Applies the long or short VIX sizing thresholds of <paramref name="rules"/> to the close of
+    /// <paramref name="previousSession"/> in <paramref name="series"/>. Long rules take full risk below
+    /// <c>VixFullRiskBelow</c>, reduced risk in <c>[VixFullRiskBelow, VixNoLongsAbove]</c>, and refuse above
+    /// <c>VixNoLongsAbove</c>; short rules refuse below <c>VixNoShortsBelow</c>, take reduced risk in
+    /// <c>[VixNoShortsBelow, VixShortFullRiskAbove]</c>, and take full risk above <c>VixShortFullRiskAbove</c>.
+    /// A strategy without VIX sizing is always allowed at full risk; every missing piece fails closed.
     /// </summary>
     public static VixEntryDecision Decide(RegimeRules rules, VixCloseSeries? series, DateOnly? previousSession)
     {
@@ -112,6 +118,12 @@ public static class VixRegime
         if (series is null) return new(LookupFailedReason, 0m, previousSession, null);
         if (previousSession is not { } session || !series.TryGetClose(session, out var close))
             return new(CloseUnknownReason, 0m, previousSession, null);
+        if (rules.UsesShortVix)
+        {
+            if (close < rules.VixNoShortsBelow!.Value) return new(ShortOffReason, 0m, session, close);
+            var shortScale = close > rules.VixShortFullRiskAbove!.Value ? 1m : rules.VixReducedRiskScale!.Value;
+            return new(null, shortScale, session, close);
+        }
         if (close > rules.VixNoLongsAbove!.Value) return new(OffReason, 0m, session, close);
         var scale = close < rules.VixFullRiskBelow!.Value ? 1m : rules.VixReducedRiskScale!.Value;
         return new(null, scale, session, close);

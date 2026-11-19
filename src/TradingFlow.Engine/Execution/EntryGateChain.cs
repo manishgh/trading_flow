@@ -333,11 +333,7 @@ public sealed class EntryGateChain(
             !account.AccountBlocked && !account.TradingBlocked && !account.TradeSuspendedByUser;
         var assetAllowed = eligibility is { Active: true, Tradable: true } &&
             (submission.Side.Equals("buy", StringComparison.OrdinalIgnoreCase) ||
-             account?.ShortingEnabled == true && eligibility.Shortable &&
-             !String.Equals(
-                 eligibility.BorrowStatus,
-                 "unavailable",
-                 StringComparison.OrdinalIgnoreCase));
+             (account?.ShortingEnabled == true && ShortBorrowEligibility.IsShortableAndEasyToBorrow(eligibility)));
         var buyingPowerSufficient = availableBuyingPower >= notional;
         var accountAllowed = accountError is null && accountSnapshotFresh &&
             accountOperational && assetAllowed && buyingPowerSufficient;

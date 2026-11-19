@@ -1,0 +1,86 @@
+# 21-EMA trend rejection breakdown (Experiment V2-01 MTR-14 short treatment), swing, short.
+# Design: docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md and
+# docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md (approved 19 November 2026, Checkpoints 7 & 8).
+# Identical to technical.ema21-rejection-short@1.0.0 except exit_rules.volatility_unit: mtr14 replaces Wilder ATR(14)
+# with the median of the 14 completed True Ranges ending on the signal day for initial stop (1.0 * MTR-14) and target
+# (2.5 * MTR-14). Same entry signals, 10-session time exit, bearish SPY/QQQ/VIX short sizing, borrow fee, and Rule 201.
+strategy_id: research.ema21-rejection-short-mtr14.bt-v1
+strategy_name: RESEARCH 21-EMA Trend Rejection Short V1.1 (swing, short, V2-01 MTR-14 treatment, SPY/QQQ falling-average gate, short VIX sizing, as-traded bars)
+source: minervini_2013_and_oneil_ema21_trend_pullback_short_mirror_v2_01_mtr14
+version: 2
+timeframe: 1d
+direction: short
+entry_rules:
+  setup_type: momentum
+  enable_short: true
+  short_setup_type: ema21_rejection_breakdown
+  pullback_lookback_bars: 5
+  max_ema21_pullback_atr: 0.5
+  max_pullback_relative_volume: 0.85
+  require_bounce_high_below_sma50: true
+  require_price_below_sma50_for_short: true
+  sma50_falling_lookback_bars: 20
+  min_average_range_pct: 2.5
+  min_average_dollar_volume: 20000000
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  require_positive_news: false
+regime:
+  benchmark: SPY
+  rule: price_below_falling_sma
+  sma_period: 50
+  sma_falling_lookback_bars: 20
+  nasdaq_listing_benchmark: QQQ
+  vix_series: VIXCLS
+  vix_no_new_shorts_below: 18
+  vix_short_full_risk_above: 22
+  vix_reduced_risk_scale: 0.5
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 10
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  volatility_unit: mtr14
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+  short_borrow_apr_pct: 1.0
+  enforce_sec_rule_201: true
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

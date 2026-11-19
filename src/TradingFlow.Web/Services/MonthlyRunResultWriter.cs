@@ -98,7 +98,13 @@ public sealed class MonthlyRunResultWriter(StrategyRunArtifactValidator strategi
                 return Unavailable(references, cohortName, start, end, EventMonthlyRunResults.ValuationBasis, error.Message);
             }
         }
-        if (config.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(config.Engine.ExecutionReplayPolicyId))
+        var hasVerifiedDailyFiveMinutePortfolioState =
+            config.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthFiveMinuteV1 &&
+            result.StrategyResults.Count > 0 &&
+            result.StrategyResults.All(strategy => strategy.PortfolioState is not null);
+        if (config.Engine.ExecutionReplayPolicyId is not null &&
+            !ExecutionReplayPolicy.IsIntradayCandle(config.Engine.ExecutionReplayPolicyId) &&
+            !hasVerifiedDailyFiveMinutePortfolioState)
         {
             var reason = "This replay policy does not supply verified native-daily exit timestamps or monthly event valuations.";
             return Unavailable(references, cohortName, start, end, "unavailable", reason);

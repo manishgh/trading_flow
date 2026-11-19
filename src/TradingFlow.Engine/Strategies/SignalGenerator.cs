@@ -93,6 +93,17 @@ public sealed partial class SignalGenerator
         var sma50SlopeLookback = strategy.EntryRules.Sma50RisingLookbackBars;
         var isSma50Rising = sma50SlopeLookback > 0 && index >= sma50SlopeLookback && snapshot.Sma50 is { } currentSma50 &&
             snapshots[index - sma50SlopeLookback].Sma50 is { } priorSma50 && currentSma50 > priorSma50;
+        var isPriceBelowSma50 = strategy.EntryRules.RequirePriceBelowSma50ForShort &&
+            snapshot.Sma50 is { } shortSma50 &&
+            snapshot.CurrentPrice < shortSma50;
+        var sma50FallingLookback = strategy.EntryRules.Sma50FallingLookbackBars;
+        var isSma50Falling = sma50FallingLookback > 0 && index >= sma50FallingLookback && snapshot.Sma50 is { } currentShortSma50 &&
+            snapshots[index - sma50FallingLookback].Sma50 is { } priorShortSma50 && currentShortSma50 < priorShortSma50;
+        // SEC Rule 201: a >= 10% intraday drop from prior regular close on bar D triggers Rule 201 through session D+1.
+        var isSecRule201Triggered = strategy.Execution.EnforceSecRule201 &&
+            index >= 1 &&
+            bars[index - 1].Close > 0m &&
+            bar.Low <= bars[index - 1].Close * 0.90m;
         var needsAdrOrAdv = strategy.EntryRules.MinAverageRangePct is not null || strategy.EntryRules.MinAverageDollarVolume is not null;
         var (averageRangePct, averageDollarVolume) = needsAdrOrAdv
             ? ComputeAverageRangeAndDollarVolume(bars, index, 20)
@@ -130,6 +141,9 @@ public sealed partial class SignalGenerator
         decimal? gapUpPct = previousRegularClose is null ? null : ((bar.Open / previousRegularClose.Value) - 1m) * 100m;
         decimal? gapUpAtr = strategy.EntryRules.MinGapUpAtr is not null
             ? ComputeGapUpAtr(bars, snapshots, index)
+            : null;
+        decimal? gapDownAtr = strategy.EntryRules.MinGapDownAtr is not null
+            ? ComputeGapDownAtr(bars, snapshots, index)
             : null;
         var barEndUtc = bar.Timestamp.Add(TimeframeParser.Parse(strategy.Timeframe)).ToUniversalTime();
         var signalEndTimeUtc = asOfUtc is { } cutoff && cutoff.ToUniversalTime() < barEndUtc
@@ -177,8 +191,10 @@ public sealed partial class SignalGenerator
                 strategy.EntryRules.CatalystReceiptDelayMinutes ?? 0,
                 allowed,
                 vetoSentimentAtOrBelow: strategy.EntryRules.VetoNewsSentimentBelow,
+                vetoSentimentAtOrAbove: strategy.EntryRules.VetoShortNewsSentimentAtOrAbove,
                 windowStartUtc: catalystWindowStartUtc,
-                ignoreObservedReceiptForHistoricalResearch: ignoreObservedReceiptForHistoricalResearch);
+                ignoreObservedReceiptForHistoricalResearch: ignoreObservedReceiptForHistoricalResearch,
+                requireNegativeBias: UsesShortSetup(strategy, "news_orb_breakdown"));
         }
 
         var effectiveCatalyst = tierOneCatalyst is not null ? tierOneCatalyst.SelectedCatalyst : snapshot.Catalyst;
@@ -190,6 +206,12 @@ public sealed partial class SignalGenerator
         var ema21PullbackContext = UsesLongSetup(strategy, "ema21_pullback_reclaim")
             ? GetEma21PullbackReclaimContext(strategy, bars, snapshots, index)
             : (IsReclaim: false, RejectionDetail: (string?)null);
+        var ema21RejectionContext = UsesShortSetup(strategy, "ema21_rejection_breakdown")
+            ? GetEma21RejectionBreakdownContext(strategy, bars, snapshots, index)
+            : (IsBreakdown: false, RejectionDetail: (string?)null);
+        var parabolicContext = UsesShortSetup(strategy, "parabolic_shooting_star_breakdown")
+            ? GetParabolicShootingStarBreakdownContext(strategy, bars, snapshots, index)
+            : (IsBreakdown: false, RejectionDetail: (string?)null);
         var connorsRsi2Context = UsesLongSetup(strategy, "rsi2_oversold")
             ? new ConnorsRsi2SignalAnalyzer().AnalyzeCompletedDailyBar(
                 bar,
@@ -317,7 +339,15 @@ public sealed partial class SignalGenerator
             OpeningStayedAtOrBelowVwap: openingRangeEvidence?.OpeningStayedAtOrBelowVwap,
             OpeningRangeRejectionDetail: openingRangeEvidence?.UnavailableReason,
             MatchedCatalystCategory: tierOneCatalyst?.MatchedCategory,
-            CatalystCategoryRejectionDetail: tierOneCatalyst?.RejectionReason);
+            CatalystCategoryRejectionDetail: tierOneCatalyst?.RejectionReason,
+            IsSecRule201Triggered: isSecRule201Triggered,
+            GapDownAtr: gapDownAtr,
+            IsPriceBelowSma50: isPriceBelowSma50,
+            IsSma50Falling: isSma50Falling,
+            IsEma21RejectionBreakdown: ema21RejectionContext.IsBreakdown,
+            Ema21RejectionDetail: ema21RejectionContext.RejectionDetail,
+            IsParabolicShootingStarBreakdown: parabolicContext.IsBreakdown,
+            ParabolicShootingStarRejectionDetail: parabolicContext.RejectionDetail);
     }
 
     /// <summary>
@@ -341,6 +371,16 @@ public sealed partial class SignalGenerator
 
         return (bars[index].Open - bars[index - 1].Close) / priorAtr;
     }
+
+    /// <summary>
+    /// Computes the ATR-normalized opening gap down <c>(Close_{D-1} - Open_D) / ATR(14)_{D-1}</c> using strictly the prior
+    /// completed bar's close and ATR(14). Fails closed (returns null) when <paramref name="index"/> &lt; 1 or prior ATR &lt;= 0.
+    /// </summary>
+    public static decimal? ComputeGapDownAtr(
+        IReadOnlyList<OhlcvBar> bars,
+        IReadOnlyList<IndicatorSnapshot> snapshots,
+        int index) =>
+        ComputeGapUpAtr(bars, snapshots, index) is { } gapUp ? -gapUp : null;
 
     /// <summary>
     /// Computes the strategy-owned 20-session ADR% (mean(High - Low) over the <paramref name="lookbackSessions"/>
@@ -508,6 +548,11 @@ public sealed partial class SignalGenerator
     {
         return strategy.EntryRules.SetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>Returns true when <paramref name="strategy"/> enables short entries with <paramref name="setupType"/>.</summary>
+    private static bool UsesShortSetup(StrategyDefinition strategy, string setupType) =>
+        strategy.EntryRules.EnableShort &&
+        strategy.EntryRules.ShortSetupType.Equals(setupType, StringComparison.OrdinalIgnoreCase);
 
     // Connors short mirror on the completed bar: RSI(2) strictly above the threshold and, when required, the close below SMA200.
     // Only evaluated for a strategy whose short setup is rsi2_overbought; missing indicators never qualify.

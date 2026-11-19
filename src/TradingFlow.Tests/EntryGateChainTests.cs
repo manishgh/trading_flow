@@ -187,6 +187,26 @@ public sealed class EntryGateChainTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShortOrderNotEasyToBorrow_RejectsWithNoShortAvailability()
+    {
+        var shortOrder = new FinalizedOrder("MSFT", "test", 10, 100m, 102m, 96m, Now, String.Empty);
+        var fixture = new Fixture();
+        fixture.Submission = fixture.Submission with { Side = "sell", Order = shortOrder };
+        fixture.Broker.EasyToBorrow = false;
+
+        var rejected = await Assert.ThrowsAsync<EntryGateRejectedException>(() =>
+            fixture.Chain.ExecuteAsync(fixture.Submission, fixture.Broker, (_, _) => Task.FromResult("must-not-submit")));
+        Assert.Equal(EntryGateSlot.Account, rejected.Slot);
+        Assert.Equal(RejectCode.REJECT_NO_SHORT_AVAILABILITY, rejected.RejectCode);
+
+        var fixtureEtb = new Fixture();
+        fixtureEtb.Submission = fixtureEtb.Submission with { Side = "sell", Order = shortOrder };
+        fixtureEtb.Broker.EasyToBorrow = true;
+        var ok = await fixtureEtb.Chain.ExecuteAsync(fixtureEtb.Submission, fixtureEtb.Broker, (_, _) => Task.FromResult("submitted"));
+        Assert.Equal("submitted", ok);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CancelledMarketObservation_ReleasesStatusObservation()
     {
         var statuses = new TrackingTradingStatusProvider();
@@ -577,11 +597,13 @@ public sealed class EntryGateChainTests
                 timestampUtc, timestampUtc.AddHours(-1), timestampUtc.AddHours(5)));
         }
 
+        public bool EasyToBorrow { get; set; } = true;
+
         public Task<AssetTradingEligibility?> GetEligibilityAsync(
             string symbol,
             CancellationToken cancellationToken) =>
             Task.FromResult<AssetTradingEligibility?>(new AssetTradingEligibility(
-                symbol, true, true, true, Now, Shortable: true, BorrowStatus: "easy_to_borrow"));
+                symbol, true, true, true, Now, Shortable: true, BorrowStatus: EasyToBorrow ? "easy_to_borrow" : "hard_to_borrow", EasyToBorrow: EasyToBorrow));
 
         public Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken)
         {

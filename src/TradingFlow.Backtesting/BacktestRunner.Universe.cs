@@ -286,14 +286,20 @@ public sealed partial class BacktestRunner
     /// </summary>
     internal static int LongestIndicatorLookback(StrategyDefinition strategy) => new[]
     {
-        strategy.EntryRules.RequirePriceAboveSma200 || strategy.EntryRules.RequirePriceAboveSma200Daily ? 200 : 0,
+        strategy.EntryRules.RequirePriceAboveSma200 || strategy.EntryRules.RequirePriceAboveSma200Daily || strategy.EntryRules.RequirePriceBelowSma200ForShort ? 200 : 0,
         strategy.EntryRules.RequirePriceAboveSma50 ||
             strategy.EntryRules.RequirePullbackLowAboveSma50 ||
             strategy.EntryRules.RequireSma20AboveSma50 ||
-            strategy.EntryRules.Sma50RisingLookbackBars > 0
-            ? 50 + Math.Max(Math.Max(0, strategy.EntryRules.Sma50RisingLookbackBars), Math.Max(0, strategy.EntryRules.PullbackLookbackBars))
+            strategy.EntryRules.Sma50RisingLookbackBars > 0 ||
+            strategy.EntryRules.RequirePriceBelowSma50ForShort ||
+            strategy.EntryRules.RequireBounceHighBelowSma50 ||
+            strategy.EntryRules.Sma50FallingLookbackBars > 0
+            ? 50 + Math.Max(
+                Math.Max(Math.Max(0, strategy.EntryRules.Sma50RisingLookbackBars), Math.Max(0, strategy.EntryRules.Sma50FallingLookbackBars)),
+                Math.Max(0, strategy.EntryRules.PullbackLookbackBars))
             : 0,
         strategy.EntryRules.PullbackLookbackBars > 0 ? 21 + strategy.EntryRules.PullbackLookbackBars : 0,
+        strategy.EntryRules.MinParabolicAtrAboveEma21 is not null ? 22 : 0,
         strategy.EntryRules.BollingerSqueezeLookbackBars > 0 ? strategy.EntryRules.BollingerSqueezeLookbackBars + 20 : 0,
         strategy.EntryRules.EnableLowerBollingerStretch ? 20 + Math.Max(0, strategy.EntryRules.ReversionStretchLookbackBars) : 0,
         strategy.EntryRules.OpeningRangeMinutes > 0 ? 21 : 0,

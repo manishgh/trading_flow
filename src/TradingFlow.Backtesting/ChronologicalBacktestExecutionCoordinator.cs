@@ -294,6 +294,15 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         foreach (var tracker in _active.Where(item => !item.IsTerminal).ToArray())
         {
             if (cutoffUtc is not null && tracker.Plan.Candidate.ExecutionReplay is null) continue;
+            // Kept-gap as-traded 5m studies without a precommitted terminal open retain still-open positions at study cutoff.
+            if (cutoffUtc is not null &&
+                tracker.Plan.Candidate.ExecutionReplay is { TerminalOpenUtc: var terminal } &&
+                terminal == DateTimeOffset.MaxValue &&
+                tracker.EntryFilledQuantity > 0 &&
+                tracker.Plan.Candidate.ExitReason.Equals("open_at_study_end", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             Fail(tracker, tracker.EntryFilledQuantity == 0
                 ? "entry_not_filled_before_end_of_data"
                 : "exit_not_filled_before_end_of_data");
@@ -1083,12 +1092,14 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         exitReason.StartsWith("stop_loss", StringComparison.OrdinalIgnoreCase);
 
     // Journal in simulator order, retaining the source intervals for fills whose intrabar time is unavailable.
-    // Apply simulator fills and fees to the trade tracker and the isolated replay cash account.
+    // Apply simulator fills and fees (including closing-fill short borrow fees) to the trade tracker, evidence sink,
+    // sampled account-loss book, and native fill ledger so every consumer observes identical closing fees.
     private void ApplyEvents(IReadOnlyCollection<SimulatedExecutionEvent> events, OhlcvBar bar,
         DateTimeOffset availableAtUtc, bool priceAtClose = false)
     {
-        foreach (var executionEvent in events)
+        foreach (var rawExecutionEvent in events)
         {
+            var executionEvent = rawExecutionEvent;
             if (_executionEvidence is null && executionEvent.LastFillQuantity <= 0)
                 continue;
             var tracker = _active.FirstOrDefault(item => item.OwnsOrder(executionEvent.ClientOrderId));
@@ -1102,11 +1113,11 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
             var timing = executionEvent.LastFillQuantity > 0
                 ? DescribeFill(tracker, executionEvent, bar, availableAtUtc, priceAtClose)
                 : null;
-            AppendExecutionEvidence(executionEvent, tracker, timing);
             if (timing is null)
+            {
+                AppendExecutionEvidence(executionEvent, tracker, timing: null);
                 continue;
-
-            _accountLoss?.RecordFill(executionEvent);
+            }
 
             if (executionEvent.ClientOrderId.Equals(tracker.EntryClientOrderId, StringComparison.Ordinal))
             {
@@ -1126,11 +1137,41 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
                 tracker.LastExitFillUtc = executionEvent.OccurredAtUtc;
                 tracker.ExitTiming = timing;
                 tracker.ExitSourceTimestampUtc = bar.Timestamp;
+
+                // Accrue strategy-configured annualized short-borrow fees once on the final closing fill before
+                // publishing execution evidence, updating sampled account-loss cash, and recording the native fill.
+                if (tracker.IsShort &&
+                    !tracker.BorrowFeeCharged &&
+                    tracker.EntryFilledQuantity > 0 &&
+                    tracker.ExitFilledQuantity == tracker.EntryFilledQuantity &&
+                    tracker.Plan.Strategy.Execution.ShortBorrowAprPct is > 0m)
+                {
+                    var candidate = tracker.Plan.Candidate;
+                    var entryDate = tracker.EntryTiming?.SourceSessionDate
+                        ?? SessionOf(tracker.EntrySourceTimestampUtc ?? tracker.FirstEntryFillUtc ?? candidate.EntryTimestamp);
+                    var exitDate = tracker.ExitTiming?.SourceSessionDate
+                        ?? SessionOf(tracker.ExitSourceTimestampUtc ?? tracker.LastExitFillUtc ?? candidate.ExitTimestamp ?? candidate.EntryTimestamp);
+                    var borrowFee = ShortBorrowCostCalculator.Calculate(
+                        tracker.EntryFilledNotional,
+                        tracker.Plan.Strategy.Execution.ShortBorrowAprPct,
+                        entryDate,
+                        exitDate);
+                    tracker.BorrowFeeCharged = true;
+                    if (borrowFee > 0m)
+                    {
+                        executionEvent = executionEvent with { Fees = executionEvent.Fees + borrowFee };
+                    }
+                }
             }
 
+            AppendExecutionEvidence(executionEvent, tracker, timing);
+            _accountLoss?.RecordFill(executionEvent);
+
             tracker.ExecutionFees += executionEvent.Fees;
-            // A sub-daily fill (decision-hour timing) is booked to its own session; a daily one keeps the daily convention.
-            var fillTimeframe = tracker.Plan.Candidate.FillTimeframe;
+            // Fine-replay (5m) and decision-hour (sub-daily) fills belong to their own New York session; daily fills keep the daily convention.
+            var fillTimeframe = tracker.Plan.Candidate.ExecutionReplay is not null
+                ? ExecutionReplayPolicy.Timeframe
+                : tracker.Plan.Candidate.FillTimeframe;
             _fills.Add(new(tracker.Identity, tracker.Plan.Candidate.StrategyId, tracker.Plan.Candidate.Ticker,
                 executionEvent.Side == SimulatedOrderSide.Buy,
                 executionEvent.ClientOrderId == tracker.EntryClientOrderId, executionEvent.LastFillQuantity,
@@ -1455,6 +1496,7 @@ internal sealed class ChronologicalBacktestExecutionCoordinator
         public int ExitFilledQuantity { get; set; }
         public decimal ExitFilledNotional { get; set; }
         public decimal ExecutionFees { get; set; }
+        public bool BorrowFeeCharged { get; set; }
         public DateTimeOffset? FirstEntryFillUtc { get; set; }
         public BacktestFillTiming? EntryTiming { get; set; }
         public BacktestFillTiming? ExitTiming { get; set; }

@@ -151,10 +151,10 @@ public sealed class RegimeCalendar
     public bool IsOn(DateTimeOffset decisionTime) => !IsActive ||
         (evaluateAt?.Invoke(decisionTime) ?? onDates.Contains(DateOnly.FromDateTime(decisionTime.UtcDateTime)));
 
-    internal static RegimeCalendar FromBenchmark(IReadOnlySet<DateOnly> dates, IReadOnlyList<OhlcvBar> bars, int period, int risingLookback,
-        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null)
+    internal static RegimeCalendar FromBenchmark(IReadOnlySet<DateOnly> dates, IReadOnlyList<OhlcvBar> bars, int period, int slopeLookback,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null, bool bearish = false)
     {
-        var index = new BenchmarkSessionIndex(bars, period, risingLookback, schedules);
+        var index = new BenchmarkSessionIndex(bars, period, slopeLookback, schedules, bearish);
         return new(dates, true, index.IsOnAt, benchmarkIndex: index);
     }
 
@@ -171,16 +171,19 @@ public sealed class RegimeCalendar
         private readonly bool[]? prefixIsOn;
         private readonly ScheduleIndex? scheduleIndex;
         private readonly int smaPeriod;
-        private readonly int risingLookback;
+        private readonly int slopeLookback;
+        private readonly bool bearish;
 
         public BenchmarkSessionIndex(
             IReadOnlyList<OhlcvBar> benchmarkDailyBars,
             int smaPeriod,
-            int risingLookback,
-            IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules)
+            int slopeLookback,
+            IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
+            bool bearish = false)
         {
             this.smaPeriod = smaPeriod;
-            this.risingLookback = risingLookback;
+            this.slopeLookback = slopeLookback;
+            this.bearish = bearish;
             scheduleIndex = schedules is { Count: > 0 } ? new ScheduleIndex(schedules) : null;
             validBars = VixRegime.FilterTradingDayBars(benchmarkDailyBars, schedules);
 
@@ -216,24 +219,25 @@ public sealed class RegimeCalendar
 
             if (strictlyIncreasingDays && smaPeriod > 0)
             {
-                var rising = Math.Max(0, risingLookback);
+                var slope = Math.Max(0, slopeLookback);
                 prefixIsOn = new bool[entries.Length];
                 var prefixSums = new decimal[entries.Length + 1];
                 for (var i = 0; i < entries.Length; i++)
                     prefixSums[i + 1] = prefixSums[i] + closes[i];
-                var minCount = smaPeriod + rising;
+                var minCount = smaPeriod + slope;
                 for (var i = minCount - 1; i < entries.Length; i++)
                 {
                     var currentAvg = (prefixSums[i + 1] - prefixSums[i + 1 - smaPeriod]) / smaPeriod;
-                    if (closes[i] <= currentAvg) continue;
-                    if (rising == 0)
+                    var pricePasses = bearish ? closes[i] < currentAvg : closes[i] > currentAvg;
+                    if (!pricePasses) continue;
+                    if (slope == 0)
                     {
                         prefixIsOn[i] = true;
                         continue;
                     }
-                    var priorEnd = i + 1 - rising;
+                    var priorEnd = i + 1 - slope;
                     var priorAvg = (prefixSums[priorEnd] - prefixSums[priorEnd - smaPeriod]) / smaPeriod;
-                    prefixIsOn[i] = currentAvg > priorAvg;
+                    prefixIsOn[i] = bearish ? currentAvg < priorAvg : currentAvg > priorAvg;
                 }
             }
         }
@@ -258,12 +262,12 @@ public sealed class RegimeCalendar
                 return false;
             return prefixIsOn is not null
                 ? prefixIsOn[index]
-                : RegimeCalendarBuilder.IsRegimeOnAt(validBars, smaPeriod, decisionTime, risingLookback);
+                : RegimeCalendarBuilder.IsRegimeOnAt(validBars, smaPeriod, decisionTime, slopeLookback, bearish);
         }
 
         /// <summary>Rebuilds the index over the same bars bound to <paramref name="schedules"/>.</summary>
         public BenchmarkSessionIndex WithSchedules(IReadOnlyDictionary<DateOnly, MarketSessionSchedule> schedules) =>
-            new(validBars, smaPeriod, risingLookback, schedules);
+            new(validBars, smaPeriod, slopeLookback, schedules, bearish);
 
         private static int UpperBound(DateTimeOffset[] sorted, DateTimeOffset target)
         {
@@ -354,16 +358,15 @@ public sealed class RegimeCalendar
 public static class RegimeCalendarBuilder
 {
     /// <summary>
-    /// Builds the regime calendar for a "benchmark price above its N-day SMA" rule. For each
-    /// trading day D, the regime is on iff the most recent benchmark close strictly before D
-    /// exceeds the average of the N closes ending on that prior day. Using only pre-D bars is
-    /// the no-lookahead guarantee (a day never sees its own or any future close). When
-    /// <paramref name="schedules"/> is provided, non-trading-day bars are ignored and stale
-    /// benchmark histories fail closed instead of reusing an earlier session.
+    /// Builds the regime calendar for either a bullish ("benchmark price above its N-day SMA", <paramref name="bearish"/> = false)
+    /// or bearish ("benchmark price below its falling N-day SMA", <paramref name="bearish"/> = true) rule. For each
+    /// trading day D, the regime is on iff the most recent benchmark close strictly before D passes the comparison against
+    /// the N-session average ending on that prior day. Using only pre-D bars is the no-lookahead guarantee. When
+    /// <paramref name="schedules"/> is provided, non-trading-day bars are ignored and stale benchmark histories fail closed.
     /// </summary>
-    /// <param name="risingLookback">0 = off; otherwise the average must also exceed the average ending that many sessions earlier.</param>
+    /// <param name="risingLookback">0 = off; otherwise the average must also rise (bullish) or fall (bearish) relative to that many sessions earlier.</param>
     public static RegimeCalendar Build(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod, int risingLookback = 0,
-        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null)
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null, bool bearish = false)
     {
         if (smaPeriod <= 0) return RegimeCalendar.Inactive;
         var filtered = VixRegime.FilterTradingDayBars(benchmarkDailyBars, schedules);
@@ -381,28 +384,29 @@ public static class RegimeCalendarBuilder
         for (var index = 1; index < ordered.Length; index++)
         {
             // Day D is decided from the closes ending on the day before D (indices up to index-1).
-            if (IsOn(closes.AsSpan(0, index), smaPeriod, risingLookback))
+            if (IsOn(closes.AsSpan(0, index), smaPeriod, risingLookback, bearish))
             {
                 onDates.Add(ordered[index].Day);
             }
         }
 
-        return RegimeCalendar.FromBenchmark(onDates, filtered, smaPeriod, risingLookback, schedules);
+        return RegimeCalendar.FromBenchmark(onDates, filtered, smaPeriod, risingLookback, schedules, bearish);
     }
 
     /// <summary>
     /// The one regime rule, applied to completed daily closes in date order ending with the latest close known before the
-    /// decision: ON when that close is above the average of the last <paramref name="period"/> closes and, when
-    /// <paramref name="risingLookback"/> is positive, that average is above the average ending <paramref name="risingLookback"/>
-    /// sessions earlier. Too few closes for either average is OFF (fail closed).
+    /// decision: bullish ON when close &gt; SMA and (when slopeLookback &gt; 0) SMA &gt; earlier SMA; bearish ON when
+    /// close &lt; SMA and (when slopeLookback &gt; 0) SMA &lt; earlier SMA. Too few closes for either average is OFF (fail closed).
     /// </summary>
-    internal static bool IsOn(ReadOnlySpan<decimal> priorCloses, int period, int risingLookback)
+    internal static bool IsOn(ReadOnlySpan<decimal> priorCloses, int period, int slopeLookback, bool bearish = false)
     {
-        var rising = Math.Max(0, risingLookback);
-        if (period <= 0 || priorCloses.Length < period + rising) return false;
+        var slope = Math.Max(0, slopeLookback);
+        if (period <= 0 || priorCloses.Length < period + slope) return false;
         var current = Average(priorCloses.Slice(priorCloses.Length - period, period));
-        if (priorCloses[^1] <= current) return false;
-        return rising == 0 || current > Average(priorCloses.Slice(priorCloses.Length - period - rising, period));
+        if (bearish ? priorCloses[^1] >= current : priorCloses[^1] <= current) return false;
+        if (slope == 0) return true;
+        var prior = Average(priorCloses.Slice(priorCloses.Length - period - slope, period));
+        return bearish ? current < prior : current > prior;
     }
 
     // Arithmetic mean of a non-empty window of closes.
@@ -414,12 +418,10 @@ public static class RegimeCalendarBuilder
     }
 
     /// <summary>
-    /// No-lookahead point query: is the regime on for entering on <paramref name="asOfDay"/>? Uses only
-    /// benchmark closes dated strictly before that day, so it is robust to a still-forming daily bar for
-    /// today (used by the live/paper path). Insufficient history returns false, matching <see cref="Build"/>.
-    /// This is the single-day equivalent of an on-date produced by <see cref="Build"/>.
+    /// No-lookahead point query: is the regime on for entering at <paramref name="decisionTime"/>? Uses only
+    /// benchmark closes completed before that time. Insufficient history returns false, matching <see cref="Build"/>.
     /// </summary>
-    public static bool IsRegimeOnAt(IReadOnlyList<OhlcvBar> bars, int period, DateTimeOffset decisionTime, int risingLookback = 0)
+    public static bool IsRegimeOnAt(IReadOnlyList<OhlcvBar> bars, int period, DateTimeOffset decisionTime, int risingLookback = 0, bool bearish = false)
     {
         if (period <= 0 || bars.Count == 0) return false;
         var known = bars.Where(bar => bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe)) <= decisionTime &&
@@ -427,11 +429,11 @@ public static class RegimeCalendarBuilder
             .GroupBy(bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime))
             .Select(group => group.OrderBy(bar => bar.KnownAtUtc ?? bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe))).Last())
             .OrderBy(bar => bar.Timestamp).TakeLast(period + Math.Max(0, risingLookback)).Select(bar => bar.Close).ToArray();
-        return IsOn(known, period, risingLookback);
+        return IsOn(known, period, risingLookback, bearish);
     }
 
     /// <summary>Date-level query: the regime for entering on <paramref name="asOfDay"/> from closes dated strictly before it.</summary>
-    public static bool IsRegimeOnAsOf(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod, DateOnly asOfDay, int risingLookback = 0)
+    public static bool IsRegimeOnAsOf(IReadOnlyList<OhlcvBar> benchmarkDailyBars, int smaPeriod, DateOnly asOfDay, int risingLookback = 0, bool bearish = false)
     {
         if (smaPeriod <= 0 || benchmarkDailyBars.Count == 0)
         {
@@ -445,6 +447,6 @@ public static class RegimeCalendarBuilder
             .OrderBy(item => item.Day)
             .Select(item => item.Close)
             .ToArray();
-        return IsOn(priorCloses, smaPeriod, risingLookback);
+        return IsOn(priorCloses, smaPeriod, risingLookback, bearish);
     }
 }

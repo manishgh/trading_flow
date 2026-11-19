@@ -1,4 +1,4 @@
-# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~16:20 UTC)
+# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~20:20 UTC)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
@@ -19,7 +19,7 @@ Market and stock filters
 - [x] QQQ for Nasdaq-listed stocks (checkpoint 2, `ef538c9`)
 - [x] VIX sizing from FRED, previous close: full < 18, half 18–22, no longs > 22 (checkpoint 3, `ede0ce2`)
 - [x] Strategy-owned 20-session ADR% & average daily dollar-volume filter (`min_average_range_pct`, `min_average_dollar_volume`, matching `DailyScreen` across backtests & paper/Desk — Batch 1)
-- [ ] Reversed regime for shorts (SPY/QQQ below falling 50-day, VIX short sizing, borrow fee, SEC Rule 201) — design approved 19 Nov (Checkpoint 7)
+- [x] Reversed regime for shorts (SPY/QQQ below falling 50-day, VIX short sizing, borrow fee, SEC Rule 201 — Checkpoint 7, Batch 3)
 - [ ] Sector-fund rank labels on trades (report only) — assigned to the first run's report
 
 Long strategies
@@ -30,12 +30,12 @@ Long strategies
 - [x] Rubber-band reclaim Long (`technical.rubber-band-reclaim@1.0.0` — Archetype #4: combined lower-Bollinger + RSI(2) < 10 stretch, 48h fresh-news veto, rising SMA-50, SPY/QQQ/VIX gate, 1.0 ATR / 2.5R / 10d exit, Checkpoint 6 — enabled for research backtests)
 - [ ] Run the 6-month diagnostic (May–Oct 2026) with the full `.log` (Checkpoint 10)
 
-Short strategies (each uses Checkpoint 7 reversed regime, frozen borrow fee, and SEC Rule 201 — design approved 19 Nov, Checkpoint 8)
-- [ ] Squeeze breakdown (`technical.bollinger-squeeze-breakdown@1.0.0`)
-- [ ] Swing ORB gap-down on bad news (`technical.news-orb-breakdown@1.0.0`)
-- [ ] 21-EMA rejection short (`technical.ema21-rejection-short@1.0.0` + V2-01 `1.1.0` MTR-14)
-- [ ] Parabolic exhaustion short (`technical.parabolic-exhaustion-short@1.0.0` — Archetype #4 short mirror)
-- [ ] Engine short setups for these (today only the retired RSI-2 short setups exist)
+Short strategies (each uses Checkpoint 7 reversed regime, frozen borrow fee, and SEC Rule 201 — Checkpoint 8, Batch 3)
+- [x] Squeeze breakdown (`technical.bollinger-squeeze-breakdown@1.0.0` — enabled for research backtests)
+- [x] Swing ORB gap-down on bad news (`technical.news-orb-breakdown@1.0.0` — enabled for research backtests)
+- [x] 21-EMA rejection short (`technical.ema21-rejection-short@1.0.0` + V2-01 `1.1.0` MTR-14 — enabled for research backtests)
+- [x] Parabolic exhaustion short (`technical.parabolic-exhaustion-short@1.0.0` — Archetype #4 short mirror, enabled for research backtests)
+- [x] Engine short setups for these (`bollinger_squeeze_breakdown`, `news_orb_breakdown`, `ema21_rejection_breakdown`, `parabolic_shooting_star_breakdown`)
 
 Running it from the web app
 - [x] Backtests page can select published research screens, strategies, dates, capital and risk (existing)
@@ -64,7 +64,7 @@ Housekeeping
 
 | Document | Status |
 |---|---|
-| `docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md` | approved 19 Nov 2026: all 4 long + 4 short archetypes, strategy-owned ADR%/DV filter, Checkpoints 4–10 (Batch 1 Checkpoints 5 & 6 done) |
+| `docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md` | approved 19 Nov 2026: all 4 long + 4 short archetypes, strategy-owned ADR%/DV filter, Checkpoints 4–10 (Batches 1–3 / Checkpoints 4–8 done) |
 | `docs/design-review/2026-11-18/regime-gate-and-bollinger-squeeze.md` | approved (option A); checkpoints 1–3 done, squeeze enabled for research backtests |
 | `docs/design-review/2026-11-18/swing-orb-and-vix-gate-proposal.md` | swing ORB approved with option B ("all approved"); VIX part superseded by the user's choice above |
 | `docs/design-review/2026-11-18/experiment-v2-01-median-true-range.md` | registered experiment, host = 21-EMA pullback (not the squeeze) |
@@ -72,7 +72,19 @@ Housekeeping
 
 ## Done (commits)
 
-- Batch 2 — Checkpoint 4 (`technical.news-orb-swing@1.0.0`, Option B, 19 Nov): added `DailyOpeningRangeSummary`
+- Batch 3 — Checkpoints 7 & 8 (Shared Short Foundation + All 4 Short Mirror Strategies + V2-01 Short, 19 Nov): added
+  reversed SPY/QQQ falling-SMA regime (`price_below_falling_sma`), short VIX sizing (`vix_no_new_shorts_below: 18` /
+  `vix_short_full_risk_above: 22`), annualized closing-fill short borrow fee (`ShortBorrowCostCalculator`,
+  `short_borrow_apr_pct`) reconciled across `BacktestTrade`, `NativeDailySessionLedger`, `BacktestOpportunityShadowReplay`,
+  and sampled account loss, live/paper/Desk `EasyToBorrow` enforcement, SEC Rule 201 on bar D and D+1 open, short
+  `DailyRthFiveMinuteV1` + `KeptGapAsTradedTimingPolicy` accounting & verified `MonthlyRunResultWriter` output, all 4 short
+  engine setups (`bollinger_squeeze_breakdown`, `news_orb_breakdown`, `ema21_rejection_breakdown`,
+  `parabolic_shooting_star_breakdown`), and enabled all 5 short recipes (`technical.bollinger-squeeze-breakdown@1.0.0`,
+  `technical.news-orb-breakdown@1.0.0`, `technical.ema21-rejection-short@1.0.0`, `technical.ema21-rejection-short@1.1.0`,
+  `technical.parabolic-exhaustion-short@1.0.0`) in `configs/strategy-catalog.json` for research backtests only
+  (0 warnings/0 errors build, 185/185 Round 1 + 116/116 Round 2 focused tests green, both independent reviewers ACCEPT).
+  All 8 Swing Strategies (4 Long + 4 Short + V2-01 Long & Short) are now complete.
+- `a058bb5` Batch 2 — Checkpoint 4 (`technical.news-orb-swing@1.0.0`, Option B, 19 Nov): added `DailyOpeningRangeSummary`
   (`O(log M)` backward scan, exact timestamp deduplication, early-close `13:00` NY support, 30m ORB/RVOL/VWAP),
   `TierOneCatalystEvaluator` (`+5m` conservative receipt delay preserved separately from actual `firstReceivedAtUtc`,
   multi-story Tier-1 + FinBERT negative veto, day-D regular-close cutoff & `10:00 NY_D - 18h` AMC lookback),

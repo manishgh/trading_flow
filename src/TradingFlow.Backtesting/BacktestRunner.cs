@@ -721,8 +721,13 @@ public sealed partial class BacktestRunner(
             .ToArray();
         var candidateDiagnostics = batches.Select(batch => batch.Diagnostics).ToArray();
         var stoppingBatches = StoppingBatches(run, batches);
-        // Native daily books retain actual cutoff exposure; explicitly configured terminal exits remain required.
-        var accounting = run.Engine.ExecutionReplayPolicyId is null && strategies.All(s => s.Execution.Timeframe == "1d" &&
+        // Native daily books and kept-gap 5m as-traded books without a precommitted terminal open retain actual cutoff
+        // exposure and produce verified source-session marked-to-market accounting; account-loss and terminal-open runs keep their own paths.
+        var usesNativeDailyAccounting = run.Engine.ExecutionReplayPolicyId is null ||
+            (run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthFiveMinuteV1 &&
+             run.Engine.PrecommittedLiquidationSourceUtc is null &&
+             run.Engine.AccountLossReplay is not { Enabled: true });
+        var accounting = usesNativeDailyAccounting && strategies.All(s => s.Execution.Timeframe == "1d" &&
             s.Session.ExchangeTimezone == "America/New_York" && !s.Session.IsContinuousMarket)
             ? new NativeDailyAccountingContext(preparedMarket.WindowStart.ToUniversalTime(), preparedMarket.WindowEnd.ToUniversalTime(),
                 candidateSessionSchedules ?? throw new InvalidDataException("Native daily accounting requires authoritative sessions."),
@@ -960,7 +965,9 @@ public sealed partial class BacktestRunner(
     }
 
     /// <summary>Rejects incompatible run modes and exit policies before collecting or replaying market data.</summary>
-    private static void ValidateRun(BacktestRunConfig run, IReadOnlyCollection<StrategyDefinition> strategies)
+    private void ValidateRun(
+        BacktestRunConfig run,
+        IReadOnlyCollection<StrategyDefinition> strategies)
     {
         foreach (var strategy in strategies) strategy.Execution.EntryWindow?.Validate(strategy);
         if (strategies.Any(strategy => strategy.Execution.EntryWindow is not null) &&
@@ -980,7 +987,8 @@ public sealed partial class BacktestRunner(
             throw new InvalidOperationException("portfolio.commission_per_share must be non-negative and portfolio.max_gross_exposure_pct positive.");
         RequireRotationSettingsSupported(run, strategies);
         if (run.Engine.ExecutionReplayPolicyId is not null && !ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
-            foreach (var strategy in strategies) ValidateFineExecutionPolicy(run, strategy);
+            foreach (var strategy in strategies)
+                ValidateFineExecutionPolicy(run, ResolveRuntimeStrategy(strategy), strategy);
         if (!run.Mode.Equals("backtest", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Expected mode backtest, got {run.Mode}.");
@@ -1619,11 +1627,22 @@ public sealed partial class BacktestRunner(
                     break;
                 }
 
+                // SEC Rule 201: if the D+1 opening print itself gaps down >= 10% from session D's close, Rule 201 is
+                // immediately active at the open so a next-open market short entry is refused.
+                if (strategy.Execution.EnforceSecRule201 &&
+                    canonicalOrderPlan.Direction.Equals("short", StringComparison.OrdinalIgnoreCase) &&
+                    plannedEntryIndex > 0 &&
+                    IsSecRule201OpeningGapTriggered(run, strategy, executionBars, barsByTimeframe, plannedEntryIndex))
+                {
+                    lastReason = "sec_rule_201_short_restriction";
+                    break;
+                }
+
                 var candidate = run.Engine.ExecutionReplayPolicyId == ExecutionReplayPolicy.DailyRthSipPortfolioV1
-                    ? CreateEventExecutionCandidate(persistedDecision.Candidate.CandidateId.ToString("D"), run, strategy,
+                    ? CreateEventExecutionCandidate(persistedDecision.Candidate.CandidateId.ToString("D"), run, runtimeStrategy, strategy,
                         signal, canonicalOrderPlan, executionBars, executionSnapshots, plannedEntryIndex, executionAuditor)
                     : run.Engine.ExecutionReplayPolicyId is not null
-                    ? CreateFineExecutionCandidate(persistedDecision.Candidate.CandidateId.ToString("D"), run, strategy,
+                    ? CreateFineExecutionCandidate(persistedDecision.Candidate.CandidateId.ToString("D"), run, runtimeStrategy, strategy,
                         signal, canonicalOrderPlan, executionBars, executionSnapshots,
                         barsByTimeframe[ExecutionReplayPolicy.Timeframe], plannedEntryIndex, executionAuditor)
                     : CreateCandidate(

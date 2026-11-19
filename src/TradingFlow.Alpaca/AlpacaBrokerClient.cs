@@ -265,7 +265,8 @@ public sealed partial class AlpacaBrokerClient :
                 : null,
             root.TryGetProperty("exchange", out var exchange) && exchange.ValueKind == JsonValueKind.String
                 ? exchange.GetString()
-                : null);
+                : null,
+            root.TryGetProperty("easy_to_borrow", out var easyToBorrow) && easyToBorrow.ValueKind == JsonValueKind.True);
         assetEligibilityCache[normalized] = new CachedAssetEligibility(eligibility, now);
         return eligibility;
     }
