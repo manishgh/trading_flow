@@ -22,18 +22,19 @@ public sealed class ConfigCatalogServiceTests
 
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
 
-        // 18 November 2026: every registered strategy is switched off. The same-day opening-range versions were set aside, the
-        // ETF trend core and its control blocked (index and sector funds only judge the trend), ETF rotation stays parked,
-        // and the Bollinger squeeze is registered but not yet runnable until its remaining approved rules are built.
-        Assert.Empty(strategies);
+        // 19 November 2026: technical.bollinger-squeeze-breakout@1.0.0 is enabled for research backtests after Checkpoint 3
+        // (VIX sizing) sign-off. The same-day opening-range versions stay set aside, the ETF trend core and its control stay
+        // blocked (index and sector funds only judge the trend), and ETF rotation stays parked.
+        var enabled = Assert.Single(strategies);
+        Assert.Equal("technical.bollinger-squeeze-breakout", enabled.Identity.StrategyId);
+        Assert.Equal("1.0.0", enabled.Identity.SemanticVersion);
         var disabled = catalog.GetDisabledResearchStrategies()
             .ToDictionary(item => $"{item.Artifact.Identity.StrategyId}@{item.Artifact.Identity.SemanticVersion}", item => item.Reason);
         Assert.Equal(new[] { "etf.buy-and-hold-control@1.0.0", "etf.rotation-12-1@1.0.0", "etf.trend-10m@1.0.0",
-            "technical.bollinger-squeeze-breakout@1.0.0", "technical.opening-range-breakout@1.2.0",
+            "technical.opening-range-breakout@1.2.0",
             "technical.opening-range-breakout@2.0.0", "technical.opening-range-breakout@2.1.0" }, disabled.Keys.Order(StringComparer.Ordinal));
         Assert.Contains("parked for later standalone research", disabled["etf.rotation-12-1@1.0.0"], StringComparison.Ordinal);
         Assert.Contains("Set aside 18 November 2026", disabled["technical.opening-range-breakout@2.1.0"], StringComparison.Ordinal);
-        Assert.Contains("Not yet runnable", disabled["technical.bollinger-squeeze-breakout@1.0.0"], StringComparison.Ordinal);
         Assert.Contains("only to judge the market and sector trend", disabled["etf.trend-10m@1.0.0"], StringComparison.Ordinal);
         Assert.Contains("only to judge the market and sector trend", disabled["etf.buy-and-hold-control@1.0.0"], StringComparison.Ordinal);
     }

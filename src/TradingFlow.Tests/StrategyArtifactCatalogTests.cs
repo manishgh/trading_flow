@@ -51,10 +51,12 @@ public sealed class StrategyArtifactCatalogTests
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.minervini-vcp" &&
             item.Identity.SemanticVersion == "10.0.0");
-        // The same-day opening-range versions were set aside on 18 November 2026; the squeeze swing strategy is registered but
-        // not selectable until its remaining approved rules (Nasdaq QQQ check, VIX sizing) are built.
+        // The same-day opening-range versions stay set aside; the Bollinger squeeze swing strategy (1.0.0) is enabled for
+        // research backtests following Checkpoint 3 sign-off (still research-only, not authorized for paper/live).
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.opening-range-breakout");
-        Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId == "technical.bollinger-squeeze-breakout");
+        var squeeze = Assert.Single(artifacts);
+        Assert.Equal("technical.bollinger-squeeze-breakout", squeeze.Identity.StrategyId);
+        Assert.Equal("1.0.0", squeeze.Identity.SemanticVersion);
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId.StartsWith("swing.", StringComparison.Ordinal));
         Assert.DoesNotContain(artifacts, item =>
             item.Identity.StrategyId == "swing.catalyst-drift");

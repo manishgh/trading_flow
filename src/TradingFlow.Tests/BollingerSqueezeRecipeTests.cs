@@ -70,16 +70,22 @@ public sealed class BollingerSqueezeRecipeTests
         finally { File.Delete(path); }
     }
 
-    // The catalog registers the squeeze but refuses runs until its remaining approved rules exist, and switches the three
-    // same-day opening-range versions off (kept).
+    // The catalog enables the squeeze for research backtests only (never paper/live without authorization), and keeps the
+    // three same-day opening-range versions switched off (set aside).
     [Fact]
-    public void Catalog_RegistersTheSqueezeNotYetRunnableAndSetsAsideSameDayOpeningRange()
+    public void Catalog_EnablesTheSqueezeForResearchBacktestsAndSetsAsideSameDayOpeningRange()
     {
         var catalog = new StrategyArtifactCatalog(Root, Path.Combine(Root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
         var artifacts = catalog.GetSnapshot().ExecutableArtifacts;
 
         var squeeze = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "technical.bollinger-squeeze-breakout");
-        Assert.Contains("Not yet runnable", catalog.GetDisabledReason(squeeze));
+        Assert.Null(catalog.GetDisabledReason(squeeze));
+        var selectable = Assert.Single(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest));
+        Assert.Equal(squeeze.Identity, selectable.Identity);
+        Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperExperiment));
+        Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow));
+        Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunLive));
+
         var openingRange = artifacts.Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
         Assert.Equal(3, openingRange.Length);
         Assert.All(openingRange, artifact => Assert.Contains("Set aside 18 November 2026", catalog.GetDisabledReason(artifact)));

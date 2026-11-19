@@ -4,7 +4,8 @@ Status: **approved by the user on 18 November 2026 with option A ("Approve with 
 
 - **Checkpoint 1 (done):** rising-average regime rule, ADR% screen rule, Bollinger width rank and the
   `bollinger_squeeze_breakout` setup, recipe and catalog registration, same-day opening-range versions set aside. The
-  squeeze is registered **disabled ("not yet runnable")**: no economic run until checkpoints 2 and 3 exist.
+  squeeze was registered disabled until checkpoints 2 and 3 were built and reviewed, and is now enabled for research
+  backtests in `configs/strategy-catalog.json` (19 November 2026, still research-only and not authorized for paper/live).
 - **Checkpoint 2:** the per-stock rule of option A (Nasdaq-listed stocks also need QQQ ON), from the listing exchange in
   the security master of 30 Oct 2026 (Alpaca asset records).
 - **Checkpoint 3 (user decision, 18 Nov):** VIX from FRED `VIXCLS`, always the previous trading day's close: full risk
@@ -17,7 +18,8 @@ User decisions recorded 18 November 2026:
 
 - **ETF strategies blocked.** `etf.trend-10m` and `etf.buy-and-hold-control` are disabled ("index and sector funds are
   used only to judge the market and sector trend"); ETF rotation stays parked; the same-day opening-range versions are set
-  aside. Until the squeeze is enabled, no strategy is runnable.
+  aside. Following Checkpoint 3 sign-off (19 November 2026), `technical.bollinger-squeeze-breakout@1.0.0` is enabled for
+  research backtests (not authorized for paper or live trading).
 - **First run is a 6-month diagnostic, holdout spent.** Once checkpoints 2 and 3 are reviewed and the squeeze is enabled,
   it runs on the last six months of the frozen whole-market data (about 1 May – 30 October 2026) in three versions (no
   gate; SPY + QQQ; SPY + QQQ + VIX sizing), with a full `.log` file of the run. The user chose this knowing those months are
@@ -270,8 +272,10 @@ runnable (opening-range set aside, ETF strategies blocked, squeeze not yet runna
   automation and the Desk (`StockStrategyEvidenceLoader`) records the VIX decision and `RiskScale` only for strategies with
   VIX sizing, so other strategies' evidence bytes are unchanged.
 - **Not changed:** the Desk's manual order ticket plan (operator-entered orders, not strategy entries) and operator-direct
-  entries keep the profile's full risk budget. `technical.bollinger-squeeze-breakout@1.0.0` stays `enabled: false` in
-  `configs/strategy-catalog.json` until Step 2 explicitly enables it after Checkpoint 3 sign-off.
+  entries keep the profile's full risk budget.
+- **Catalog enablement (19 November 2026, Step 2):** following Checkpoint 3 sign-off and explicit user approval,
+  `technical.bollinger-squeeze-breakout@1.0.0` is enabled (`enabled: true`, `disabledReason` removed) in
+  `configs/strategy-catalog.json` for research backtests only (still not authorized for paper or live trading).
 - **Verification:** Solution build (`TradingFlow.sln`) succeeded with 0 warnings and 0 errors across all 18 projects.
   Focused suites passed 140/140. Full .NET suite passed 4,288/4,295 (1 failed, 6 skipped) — the single failure
   (`LiveRunnerIntegrationTests.RunAsync_BatchedCandlePipeline_WritesMetricsAndAuditsEndToEnd`, a strategy without a regime

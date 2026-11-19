@@ -30,7 +30,8 @@ internal static class TestRepository
     /// <summary>
     /// The strategies the operator switched off on 18 November 2026 that tests still use as vehicles for shared machinery:
     /// the same-day opening-range versions (set aside) and the ETF trend core with its buy-and-hold control (blocked: index
-    /// and sector funds now only judge the trend). ETF rotation and the not-yet-runnable squeeze stay disabled.
+    /// and sector funds now only judge the trend). ETF rotation stays disabled; technical.bollinger-squeeze-breakout@1.0.0
+    /// is enabled in the operator catalog for research backtests.
     /// </summary>
     private static readonly HashSet<string> SetAsideStrategyIds =
         ["technical.opening-range-breakout", "etf.trend-10m", "etf.buy-and-hold-control"];
