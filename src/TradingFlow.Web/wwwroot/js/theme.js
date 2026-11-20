@@ -9,9 +9,9 @@
     function stored() {
         try {
             const value = window.localStorage.getItem(STORAGE_KEY);
-            return SCHEMES.includes(value) ? value : "system";
+            return SCHEMES.includes(value) ? value : "dark";
         } catch {
-            return "system";
+            return "dark";
         }
     }
 
@@ -46,6 +46,23 @@
     };
 
     document.addEventListener("DOMContentLoaded", () => {
+        // One-click header toggle: cycles dark -> light -> colour-blind -> dark.
+        const toggle = document.getElementById("ThemeToggle");
+        if (toggle) {
+            const order = ["dark", "light", "cvd"];
+            const labels = { dark: "Dark", light: "Light", cvd: "Colour-blind", system: "System" };
+            const refresh = () => {
+                const current = stored();
+                toggle.textContent = labels[current] || current;
+                toggle.setAttribute("aria-label", "Theme: " + (labels[current] || current) + ". Activate to change.");
+            };
+            toggle.addEventListener("click", () => {
+                const next = order[(order.indexOf(stored()) + 1) % order.length];
+                window.TradingFlowTheme.set(next);
+                refresh();
+            });
+            refresh();
+        }
         const select = document.getElementById("ThemeSelect");
         if (!select) return;
         select.value = stored();

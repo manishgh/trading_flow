@@ -158,3 +158,6 @@ Because the running operator site on `http://127.0.0.1:10088` (`C:\project\tradi
 
 1. **Default Theme Preference:** Prefer **Slate Dark** (Mockup 1) or **Calm Daylight Light** (Mockup 2) as the default appearance on first load (keeping the 1-click `Light / Dark / Colour-Blind / System` switcher in the top bar)?
 2. **4-Workspace Navigation Grouping:** Happy collapsing the 7 current sidebar items into **`Desk` · `Strategy Lab` · `Catalysts & Options` · `Portfolio & Audit`** (keeping all existing URLs working)?
+
+## Checkpoint UI-1 status (2026-11-20)
+Implemented: ui2-foundation.css (Slate Dark default, Calm Light, colour-blind), 4-workspace nav with sub-tabs, regime strip + GET /api/v1/workspace/regime-pulse, Ask/Jump button, theme toggle. Verification: 7 focused tests (WorkspacePulseTests) pass; Razor and C# compile clean. **Independent plan and code reviews NOT yet done** (model quota exhausted) - required before this checkpoint counts as complete or is published to :10089.
