@@ -327,6 +327,15 @@ public sealed class WorkflowRunConfiguration(ConfigCatalogService catalog, RunCo
     private async Task<BacktestRunConfig> ResolveEffectiveProfileAsync(BacktestRunConfig profile,
         IReadOnlyList<StrategyOption> selected, StartBacktestRequest request, CancellationToken token)
     {
+        if (selected.Any(item => item.Definition.EntryRules.MaxLongPutSkew is not null ||
+                                 item.Definition.EntryRules.MinShortPutCallSkew is not null))
+        {
+            throw new InvalidOperationException(
+                "A selected strategy declares OPRA options skew vetoes (max_long_put_skew or min_short_put_call_skew). " +
+                "Live OPRA options snapshots are available only for current paper trading and Desk checks; " +
+                "historical backtesting requires a point-in-time historical OPRA options evidence dataset, which is not yet supplied to backtest runs.");
+        }
+
         var run = BacktestExecutionProfileResolver.Resolve(profile, selected.Select(item => item.Definition).ToArray(), request.ExecutionReplayPolicyId);
         if (StrategyHorizonResolver.Resolve(selected[0].Definition) != "day") return run;
         run = writer.ResolveBacktestDataRoots(run);

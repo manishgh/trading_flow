@@ -314,6 +314,31 @@ builder.Services.AddSingleton<IVixCloseSource>(serviceProvider =>
         serviceProvider.GetRequiredService<TimeProvider>(),
         serviceProvider.GetRequiredService<ILogger<FredVixCloseSource>>());
 });
+// Read-only Alpaca paid OPRA options sentiment context for Desk display and optional strategy skew gates.
+builder.Services.AddHttpClient(TradingFlow.Alpaca.AlpacaOptionsSnapshotClient.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "TradingFlow/1.0");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AutomaticDecompression = DecompressionMethods.All
+});
+builder.Services.AddSingleton<IOptionsSentimentSource>(serviceProvider =>
+{
+    var credentials = serviceProvider.GetRequiredService<AlpacaCredentialProvider>();
+    var options = TradingFlow.Alpaca.AlpacaOptions.Create(ProductionProfile.Paper) with
+    {
+        KeyId = credentials.IsConfigured ? credentials.KeyId : string.Empty,
+        SecretKey = credentials.IsConfigured ? credentials.SecretKey : string.Empty
+    };
+    var clients = serviceProvider.GetRequiredService<IHttpClientFactory>();
+    return new TradingFlow.Alpaca.AlpacaOptionsSnapshotClient(
+        () => clients.CreateClient(TradingFlow.Alpaca.AlpacaOptionsSnapshotClient.HttpClientName),
+        options,
+        serviceProvider.GetRequiredService<TimeProvider>(),
+        serviceProvider.GetService<IRawArchiveWriter>(),
+        serviceProvider.GetRequiredService<ILogger<TradingFlow.Alpaca.AlpacaOptionsSnapshotClient>>());
+});
 builder.Services.AddSingleton<PaperJobService>();
 builder.Services.AddScoped<PaperRunViewService>();
 builder.Services.AddScoped<PaperExecutionComparisonService>();

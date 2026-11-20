@@ -673,6 +673,7 @@
             if (root) deskChart = window.TradingFlowStockChart?.mount(root, { summaryHost: el('chart-summary') });
         }
         deskChart?.setSymbol(symbol);
+        window.dispatchEvent(new CustomEvent('tradingflow:desk-symbol-selected', { detail: { symbol: symbol || null } }));
     }
     // Keep quote/account rendering separate from the selected strategy's recorded evidence.
     function renderFocus(){

@@ -1010,6 +1010,14 @@ public sealed partial class BacktestRunner(
                 "veto_fresh_news_hours, or require_positive_news), which require news.enabled: true and a configured news.provider.name.");
         }
 
+        if (strategies.Any(strategy => strategy.EntryRules.MaxLongPutSkew is not null || strategy.EntryRules.MinShortPutCallSkew is not null))
+        {
+            throw new InvalidOperationException(
+                "A selected strategy declares OPRA options skew vetoes (max_long_put_skew or min_short_put_call_skew). " +
+                "Live OPRA options snapshots are available only for current paper trading and Desk checks; " +
+                "historical backtesting requires a point-in-time historical OPRA options evidence dataset, which is not yet supplied to backtest runs.");
+        }
+
         if (!run.Engine.Pipeline.Equals("tpl", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Unsupported pipeline: {run.Engine.Pipeline}.");

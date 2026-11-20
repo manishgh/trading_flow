@@ -1,0 +1,51 @@
+@* Read-only OPRA options sentiment strip (SPY & QQQ pulse + selected Desk stock context). *@
+<section class="watch-options-pulse" id="desk-options-pulse" aria-label="OPRA options sentiment pulse">
+  <div class="watch-options-head">
+    <div>
+      <span class="watch-kicker">OPRA OPTIONS PULSE</span>
+      <span id="desk-options-status" class="watch-fine" role="status">Loading SPY &amp; QQQ options context…</span>
+    </div>
+    <button type="button" id="desk-options-refresh" class="btn btn-secondary">Refresh options</button>
+  </div>
+  <div class="watch-options-grid">
+    <article class="watch-options-card" data-options-slot="spy">
+      <div class="watch-options-card-head">
+        <strong>SPY</strong>
+        <span class="watch-options-badge" data-options-field="badge">—</span>
+      </div>
+      <dl class="watch-options-metrics">
+        <div><dt>Implied move</dt><dd data-options-field="move">—</dd></div>
+        <div><dt>25Δ skew</dt><dd data-options-field="skew">—</dd></div>
+        <div><dt>Term spread</dt><dd data-options-field="term">—</dd></div>
+        <div><dt>C/P vol</dt><dd data-options-field="cpvol">—</dd></div>
+      </dl>
+      <p class="watch-fine" data-options-field="note"></p>
+    </article>
+    <article class="watch-options-card" data-options-slot="qqq">
+      <div class="watch-options-card-head">
+        <strong>QQQ</strong>
+        <span class="watch-options-badge" data-options-field="badge">—</span>
+      </div>
+      <dl class="watch-options-metrics">
+        <div><dt>Implied move</dt><dd data-options-field="move">—</dd></div>
+        <div><dt>25Δ skew</dt><dd data-options-field="skew">—</dd></div>
+        <div><dt>Term spread</dt><dd data-options-field="term">—</dd></div>
+        <div><dt>C/P vol</dt><dd data-options-field="cpvol">—</dd></div>
+      </dl>
+      <p class="watch-fine" data-options-field="note"></p>
+    </article>
+    <article class="watch-options-card" id="desk-options-selected" data-options-slot="selected" hidden>
+      <div class="watch-options-card-head">
+        <strong data-options-field="symbol">—</strong>
+        <span class="watch-options-badge" data-options-field="badge">—</span>
+      </div>
+      <dl class="watch-options-metrics">
+        <div><dt>Implied move</dt><dd data-options-field="move">—</dd></div>
+        <div><dt>25Δ skew</dt><dd data-options-field="skew">—</dd></div>
+        <div><dt>Term spread</dt><dd data-options-field="term">—</dd></div>
+        <div><dt>C/P vol</dt><dd data-options-field="cpvol">—</dd></div>
+      </dl>
+      <p class="watch-fine" data-options-field="note"></p>
+    </article>
+  </div>
+</section>

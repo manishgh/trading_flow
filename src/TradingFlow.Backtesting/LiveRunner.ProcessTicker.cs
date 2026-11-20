@@ -334,6 +334,12 @@ public sealed partial class LiveRunner
                     DateOnly.FromDateTime(now.AddDays(-400).UtcDateTime), DateOnly.FromDateTime(now.UtcDateTime).AddDays(1), cancellationToken);
                 factorSessions = TechnicalFactorCalculator.ExpectedCompletedSessions(calendar, now, factor.LookbackBars + 1);
             }
+            decimal? optionsSkew25Delta = null;
+            if (strategy.EntryRules.MaxLongPutSkew is not null || strategy.EntryRules.MinShortPutCallSkew is not null)
+            {
+                optionsSkew25Delta = await TryLoadOptionsSkew25DeltaAsync(ticker, lastSnapshot.CurrentPrice, cancellationToken);
+            }
+
             var decisionRequest = StrategyDecisionRequestAssembler.Create(
                 runtimeStrategy,
                 ticker,
@@ -357,7 +363,8 @@ public sealed partial class LiveRunner
                 await StrategyDecisionRequestAssembler.ResolveDrawdownContextAsync(_decisionContextProvider,
                     ticker, now, completedBarsByTimeframe.ToDictionary(pair => pair.Key,
                         pair => (IReadOnlyList<OhlcvBar>)pair.Value, StringComparer.OrdinalIgnoreCase), run.Mode,
-                    cancellationToken));
+                    cancellationToken),
+                optionsSkew25Delta: optionsSkew25Delta);
             // Source membership may expire while loading regime or decision context.
             var evaluationTime = _timeProvider.GetUtcNow();
             if (entryWindow is not null && evaluationTime < entryWindow.OpenUtc) continue;
@@ -703,6 +710,26 @@ public sealed partial class LiveRunner
             ? run.Tickers.Contains(ticker, StringComparer.OrdinalIgnoreCase)
             : aggregate is not null && aggregate.Sources.Any(source =>
                 !source.IsDiagnostic && source.ObservedAtUtc <= asOfUtc && source.ExpiresAtUtc > asOfUtc);
+
+    // Loads 25-delta put-call IV skew for strategies with skew vetoes; failures return null so the evaluator fails closed.
+    private async Task<decimal?> TryLoadOptionsSkew25DeltaAsync(string ticker, decimal spotPriceHint, CancellationToken cancellationToken)
+    {
+        if (_optionsSentiment is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var snapshot = await _optionsSentiment.GetSnapshotAsync(ticker, spotPriceHint, cancellationToken: cancellationToken);
+            return snapshot.Skew25Delta;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "OPRA options skew lookup failed for {Ticker}; strategy skew gate will fail closed.", ticker);
+            return null;
+        }
+    }
 
     private readonly record struct EntryMembershipObservation(
         ActiveDiscoveryAggregate? Current,

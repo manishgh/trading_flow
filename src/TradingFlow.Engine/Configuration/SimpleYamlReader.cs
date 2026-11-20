@@ -208,7 +208,9 @@ public sealed class SimpleYamlReader
                 RequireBounceHighBelowSma50: OptionalBool(map, "entry_rules.require_bounce_high_below_sma50", false),
                 MinParabolicAtrAboveEma21: OptionalDecimal(map, "entry_rules.min_parabolic_atr_above_ema21"),
                 MinShootingStarWickToBody: OptionalDecimal(map, "entry_rules.min_shooting_star_wick_to_body"),
-                MaxShootingStarCloseLocation: OptionalDecimal(map, "entry_rules.max_shooting_star_close_location")),
+                MaxShootingStarCloseLocation: OptionalDecimal(map, "entry_rules.max_shooting_star_close_location"),
+                MaxLongPutSkew: OptionalDecimal(map, "entry_rules.max_long_put_skew"),
+                MinShortPutCallSkew: OptionalDecimal(map, "entry_rules.min_short_put_call_skew")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -300,6 +302,7 @@ public sealed class SimpleYamlReader
         ValidateNoStopRules(strategy);
         ValidateExitVolatilityUnit(strategy.ExitRules);
         ValidateStretchAndShortThresholds(strategy.EntryRules);
+        ValidateOptionsSkewVetoes(strategy);
         ValidateDailyOpeningRangeAndTierOneCatalyst(strategy);
         ValidateShortCoverExit(strategy);
         ValidateScheduledRules(strategy);
@@ -906,6 +909,21 @@ public sealed class SimpleYamlReader
         ValidateEma21PullbackReclaim(rules);
         ValidateParabolicShootingStar(rules);
         ValidateCombinedReversionStretch(rules);
+    }
+
+    // Validates optional OPRA 25-delta put-call skew bounds (decimal vol points in [-2.0, 2.0]) and direction compatibility.
+    private static void ValidateOptionsSkewVetoes(StrategyDefinition strategy)
+    {
+        var rules = strategy.EntryRules;
+        if (rules.MaxLongPutSkew is < -2.0m or > 2.0m)
+            throw new InvalidOperationException("entry_rules.max_long_put_skew must be between -2.0 and 2.0 (decimal implied-volatility points, e.g. 0.06 for +6 vol pts).");
+        if (rules.MinShortPutCallSkew is < -2.0m or > 2.0m)
+            throw new InvalidOperationException("entry_rules.min_short_put_call_skew must be between -2.0 and 2.0 (decimal implied-volatility points, e.g. -0.04 for -4 vol pts).");
+        if (rules.MaxLongPutSkew is not null && strategy.Direction.Equals("short", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("entry_rules.max_long_put_skew cannot be used on a direction: short strategy.");
+        if (rules.MinShortPutCallSkew is not null &&
+            (strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase) || !rules.EnableShort))
+            throw new InvalidOperationException("entry_rules.min_short_put_call_skew requires a short-capable strategy (direction: short or both, and entry_rules.enable_short: true).");
     }
 
     // Validates strategy-owned rising/falling SMA50 and 20-session ADR%/dollar-volume floors so negative or zero floors

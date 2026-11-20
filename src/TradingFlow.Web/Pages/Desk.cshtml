@@ -19,6 +19,7 @@
     <div class="watch-session"><strong id="watch-session">Reading market session…</strong><span id="watch-connection" role="status">Connecting · live quotes</span><a asp-page="/Orders">Open trading ↗</a><button type="button" id="watch-retry" class="btn btn-secondary" hidden>Retry connection</button></div>
   </header>
   <partial name="_PreparationSummary" />
+  <partial name="_OptionsSentimentPanel" />
   <p id="watch-prepared-source" class="watch-fine" role="status" hidden></p>
   <div class="watch-toolbar">
     <label class="watch-source-label">Stock group<select id="watch-source"><option value="all">All followed stocks</option></select></label>
@@ -88,6 +89,7 @@
     <script src="~/js/order-popup.js" asp-append-version="true"></script>
     <partial name="_StockChartScripts" />
     <script src="~/js/watch-desk.js" asp-append-version="true"></script>
+    <script src="~/js/desk-options.js" asp-append-version="true"></script>
     <script src="~/js/preparation-summary.js" asp-append-version="true" defer></script>
     <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
 }

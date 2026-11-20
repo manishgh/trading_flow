@@ -115,3 +115,18 @@
   .watch-news-head{align-items:start;flex-wrap:wrap}
   .watch-desk .btn,.watch-desk button,.watch-desk select,.watch-desk input:not([type=checkbox]){min-height:44px}
 }
+/* Read-only OPRA options sentiment strip (SPY, QQQ, and selected Desk stock). */
+.watch-options-pulse{border:1px solid var(--watch-line);border-radius:8px;background:var(--watch-panel);padding:10px 14px;margin-bottom:10px}
+.watch-options-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.watch-options-head>div{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.watch-options-head .btn{min-height:32px;padding:4px 10px;font-size:12px}
+.watch-options-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.watch-options-card{border:1px solid var(--watch-line);border-radius:6px;padding:8px 10px;background:color-mix(in srgb,var(--color-text) 2%,transparent)}
+.watch-options-card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.watch-options-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;border:1px solid var(--watch-line);color:var(--watch-muted)}
+.watch-options-badge[data-tone="gain"]{color:var(--color-gain,#24785a);border-color:color-mix(in srgb,var(--color-gain,#24785a) 40%,transparent)}
+.watch-options-badge[data-tone="loss"]{color:var(--color-loss,#ba4938);border-color:color-mix(in srgb,var(--color-loss,#ba4938) 40%,transparent)}
+.watch-options-badge[data-tone="warn"]{color:#aa6d19;border-color:color-mix(in srgb,#aa6d19 45%,transparent)}
+.watch-options-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:0 0 6px;font-variant-numeric:tabular-nums}
+.watch-options-metrics dt{font-size:10px;color:var(--watch-muted)}
+.watch-options-metrics dd{margin:2px 0 0;font-size:12px;font-weight:600}

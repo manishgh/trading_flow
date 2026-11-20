@@ -74,6 +74,8 @@ public static class SignalStudyOutcomes
             (entry.OpeningRangeBreakout is not null, "an opening range"),
             (entry.DecisionSchedule is not null || exits.ExitOnEntryFactorAtOrBelow is not null || exits.ExitWhenOffList,
                 "a decision schedule, entry-factor exit or off-list exit"),
+            (entry.MaxLongPutSkew is not null || entry.MinShortPutCallSkew is not null,
+                "live OPRA options skew vetoes"),
             (exits.HasProtectiveStop || exits.HasProfitTarget || exits.EnableAtrTrailingStop, "intrabar stop or target orders"),
             (exits.EnableConfirmedVwapExit || exits.ExitOnLogPriceFade, "VWAP-confirmation or log-price-fade exits")
         }.Where(item => item.Present).Select(item => item.Name).ToArray();

@@ -74,6 +74,7 @@ public sealed class PaperJobService : IDurableJobHandler
     private readonly PaperJobServiceOptions jobOptions;
     private readonly IPaperRunLifecycleRepository? runLifecycle;
     private readonly IVixCloseSource? vixCloses;
+    private readonly IOptionsSentimentSource? optionsSentiment;
 
     // Compose the paper worker and its lease-fenced journal without starting runtime work.
     public PaperJobService(
@@ -104,7 +105,9 @@ public sealed class PaperJobService : IDurableJobHandler
         PaperJobServiceOptions? jobOptions = null,
         IPaperRunLifecycleRepository? runLifecycle = null,
         // FRED's latest VIX closes, passed to each paper runner for strategies with VIX sizing.
-        IVixCloseSource? vixCloses = null)
+        IVixCloseSource? vixCloses = null,
+        // Live OPRA options sentiment source, queried only for strategies that declare skew vetoes.
+        IOptionsSentimentSource? optionsSentiment = null)
     {
         this.yamlReader = yamlReader;
         _ = alpacaCredentials;
@@ -133,6 +136,7 @@ public sealed class PaperJobService : IDurableJobHandler
         this.runLifecycle = runLifecycle ?? this.durableJobs as IPaperRunLifecycleRepository;
         this.jobOptions = (jobOptions ?? PaperJobServiceOptions.Default).Validate();
         this.vixCloses = vixCloses;
+        this.optionsSentiment = optionsSentiment;
     }
 
     public string JobType => "paper";
@@ -719,7 +723,8 @@ public sealed class PaperJobService : IDurableJobHandler
                 initialPipelineHealth: job.ToSnapshot().PaperPipelineHealth,
                 publishPipelineHealth: (health, token) => SaveSnapshotAsync(token, health),
                 exitOnly: continuation is not null,
-                vixCloses: vixCloses);
+                vixCloses: vixCloses,
+                optionsSentiment: optionsSentiment);
 
             var progress = new Progress<string>(msg =>
             {

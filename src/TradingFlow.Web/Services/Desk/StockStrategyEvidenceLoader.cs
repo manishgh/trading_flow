@@ -17,7 +17,9 @@ public sealed record StockStrategyEvidence(TickerMarketState? Market, IReadOnlyL
     IReadOnlyList<DateOnly>? ReferenceSessions, DrawdownDecisionContext? DrawdownContext, string? Missing,
     CatalystQueryResult? NewsCoverage = null, IReadOnlyList<OhlcvBar>? RegimeBars = null,
     // Nasdaq home-market rule: the stock's listing exchange (broker asset record) and the home-market fund's bars (QQQ).
-    IReadOnlyList<OhlcvBar>? HomeMarketBars = null, string? ListingExchange = null);
+    IReadOnlyList<OhlcvBar>? HomeMarketBars = null, string? ListingExchange = null,
+    // Live OPRA 25-delta put-call IV skew; populated only for strategies that declare skew vetoes.
+    decimal? OptionsSkew25Delta = null);
 public sealed record StockStrategyEvidenceBatch(DateTimeOffset AsOfUtc,
     IReadOnlyDictionary<string, StockStrategyEvidence> Stocks,
     IReadOnlyDictionary<DateOnly, MarketSessionSchedule> Calendar);
@@ -30,7 +32,8 @@ public interface IStockStrategyEvidenceLoader
 
 /// <summary>Collects existing provider/pipeline evidence; strategy conditions remain entirely in the shared kernel.</summary>
 public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICandleStore candles, TimeProvider clock,
-    IVixCloseSource? vixCloses = null)
+    IVixCloseSource? vixCloses = null, IOptionsSentimentSource? optionsSentiment = null,
+    ILogger<StockStrategyEvidenceLoader>? logger = null)
     : IStockStrategyEvidenceLoader
 {
     /// <summary>Uses the profile's bounded pipeline and collection timeout; classification receipts precede the decision cutoff.</summary>
@@ -68,6 +71,11 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
             var vix = strategy.Regime is { IsActive: true, UsesVix: true }
                 ? await VixRegime.TryLoadLatestAsync(vixCloses, deadline.Token)
                 : null;
+            var needsOptionsSkew = strategy.EntryRules.MaxLongPutSkew is not null ||
+                strategy.EntryRules.MinShortPutCallSkew is not null;
+            var optionsSkewBySymbol = needsOptionsSkew
+                ? await LoadOptionsSkewAsync(symbols, market.TickerStates, strategy.Timeframe, deadline.Token)
+                : null;
             var asOf = clock.GetUtcNow();
             var result = new Dictionary<string, StockStrategyEvidence>(StringComparer.Ordinal);
             foreach (var symbol in symbols)
@@ -91,9 +99,13 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
                 var context = state is null ? null : await StrategyDecisionRequestAssembler.ResolveDrawdownContextAsync(
                     FrozenManifestDecisionContextProvider.FromConfig(profile.Engine), symbol, asOf,
                     state.BarsByTimeframe, "diagnostic_replay", deadline.Token);
+                decimal? optionsSkew = optionsSkewBySymbol is not null && optionsSkewBySymbol.TryGetValue(symbol, out var skew)
+                    ? skew
+                    : null;
                 result[symbol] = new(state, query?.Events ?? [], regime, reference, sessions, context, missing,
                     query, strategy.Regime is { IsActive: true } rule ? benchmarks.GetValueOrDefault(rule.BenchmarkSymbol) : null,
-                    strategy.Regime is { UsesNasdaqHomeMarket: true } home ? benchmarks.GetValueOrDefault(home.NasdaqListingBenchmark!) : null, listing);
+                    strategy.Regime is { UsesNasdaqHomeMarket: true } home ? benchmarks.GetValueOrDefault(home.NasdaqListingBenchmark!) : null, listing,
+                    optionsSkew);
             }
             return new(asOf, result, calendar);
         }
@@ -106,6 +118,47 @@ public sealed class StockStrategyEvidenceLoader(PaperRuntimeFactory factory, ICa
             (newsProvider as IDisposable)?.Dispose();
             (provider as IDisposable)?.Dispose();
         }
+    }
+
+    // Loads live OPRA 25-delta put-call IV skew with bounded concurrency only when skew vetoes are configured; failures fail closed.
+    private async Task<IReadOnlyDictionary<string, decimal?>> LoadOptionsSkewAsync(
+        IReadOnlyList<string> symbols,
+        IReadOnlyDictionary<string, TickerMarketState> tickerStates,
+        string strategyTimeframe,
+        CancellationToken token)
+    {
+        var results = new System.Collections.Concurrent.ConcurrentDictionary<string, decimal?>(StringComparer.Ordinal);
+        if (optionsSentiment is null || symbols.Count == 0)
+        {
+            return results;
+        }
+
+        await Parallel.ForEachAsync(
+            symbols,
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token },
+            async (symbol, ct) =>
+            {
+                decimal? spotHint = null;
+                if (tickerStates.TryGetValue(symbol, out var state) &&
+                    state.BarsByTimeframe.TryGetValue(strategyTimeframe, out var bars) &&
+                    bars.Count > 0)
+                {
+                    spotHint = bars[^1].Close;
+                }
+
+                try
+                {
+                    var snapshot = await optionsSentiment.GetSnapshotAsync(symbol, spotHint, cancellationToken: ct);
+                    results[symbol] = snapshot.Skew25Delta;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger?.LogWarning(ex, "OPRA options skew lookup failed for {Symbol}; strategy skew gate will fail closed.", symbol);
+                    results[symbol] = null;
+                }
+            });
+
+        return results;
     }
 
     /// <summary>Loads each actual regime/relative-strength benchmark once, preserving absent history as absent.</summary>

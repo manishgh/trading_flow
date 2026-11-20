@@ -44,7 +44,9 @@ public sealed partial class LiveRunner(
     Func<LivePipelineHealth, CancellationToken, Task>? publishPipelineHealth = null,
     bool exitOnly = false,
     // FRED's latest VIX closes for strategies with VIX sizing; without it their entries are refused as vix_lookup_failed.
-    IVixCloseSource? vixCloses = null)
+    IVixCloseSource? vixCloses = null,
+    // Read-only live OPRA options sentiment source for strategies with skew vetoes; queried only when configured.
+    IOptionsSentimentSource? optionsSentiment = null)
 {
     private readonly IStrategyDecisionContextProvider? _configuredDecisionContextProvider = decisionContextProvider;
     private IStrategyDecisionContextProvider? _decisionContextProvider;
@@ -69,6 +71,7 @@ public sealed partial class LiveRunner(
         : new StrategyCandidateDecisionOrchestrator(new StrategyDecisionKernel(), candidateRepository);
     private readonly TimeSpan _iterationInterval = ResolveIterationInterval(iterationInterval);
     private readonly RegimeGateService _regimeGate = new(vixCloses);
+    private readonly IOptionsSentimentSource? _optionsSentiment = optionsSentiment;
     private IReadOnlyDictionary<StrategyDefinition, AuthorizedRuntimeStrategy> runtimeStrategies =
         new Dictionary<StrategyDefinition, AuthorizedRuntimeStrategy>(StrategyReferenceComparer.Instance);
 

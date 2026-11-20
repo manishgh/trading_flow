@@ -72,7 +72,19 @@ Housekeeping
 
 ## Done (commits)
 
-- Checkpoint 9 (Web UI Research Screen Builder, Two-Step 5-Minute Bar Collector & `Minimum ADR%` Daily Eligibility, 19 Nov):
+- Alpaca Paid OPRA Options Sentiment Context (20 Nov, `docs/design-review/2026-11-20/alpaca-opra-options-sentiment-design.md`):
+  added read-only equity options volatility/skew context (`OptionContractQuote`, `OptionsSentimentSnapshot`,
+  `OptionsSentimentCalculator` with OCC share-class parsing, `<= 35%` spread / `2–60` DTE / `[0.80, 1.20]` liquidity
+  filter, ATM straddle implied move, 25-delta put-call skew, IV term structure, C/P volume ratio, and implied/ADR ratio),
+  `AlpacaOptionsSnapshotClient` (OPRA pagination with dense-chain `20–45` DTE skew & `30–60` DTE tight ATM follow-ups,
+  64-stripe locks, 5-minute bounded cache, raw-before-parse archiving), authenticated `GET /api/v1/desk/options-sentiment`
+  + Desk OPRA Options Pulse & selected-stock readout (`_OptionsSentimentPanel.cshtml`, `desk-options.js`), and optional
+  fail-closed `max_long_put_skew` / `min_short_put_call_skew` Paper/Desk/Mobile vetoes rejected upfront in historical
+  backtests and signal studies (`0 warnings / 0 errors` Debug build, `78/78` Round 2 tests green, all 10 `v1` swing
+  strategy hashes unchanged, both independent reviewers ACCEPT in Round 2).
+- `982feda` FRED `VIXCLS` Windows Schannel TLS fix (19 Nov): HTTP/1.1 exact + scoped System32 OpenSSL `curl.exe` fallback
+  for `fred.stlouisfed.org` (`33/33` tests green, both reviewers ACCEPT).
+- `6297fc3` Checkpoint 9 (Web UI Research Screen Builder, Two-Step 5-Minute Bar Collector & `Minimum ADR%` Daily Eligibility, 19 Nov):
   extracted shared `ResearchDailyScreenPublisher` (atomic staging-folder promotion + cleanup, async progress, core-data
   non-overwrite guard), `DailyRankingOutput`, `IntradayBarsCollectionPlanner` (`PriorSessions = 21`, held non-eligible
   sessions, $O(\text{partitions})$ session-sharded `09:30-16:00` `5m` catalog subtraction), and
