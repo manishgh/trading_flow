@@ -26,7 +26,8 @@ public sealed record CandlePipelineRequest(
     CandleStoreContext? StoreContext = null,
     int MaxRetainedBars = 1_000_000,
     MarketEvidenceOperationalRules? OperationalRules = null,
-    DateOnly? CalendarEndDateInclusive = null);
+    DateOnly? CalendarEndDateInclusive = null,
+    IReadOnlyCollection<string>? IndicatorTimeframes = null);
 
 public sealed record CandleEvent(MarketBarEvent MarketEvent)
 {
@@ -146,6 +147,9 @@ public sealed class CandlePipelineEngine
             TickerTimeframeKey,
             ConcurrentDictionary<DateTimeOffset, OhlcvBar>>();
         var retainedBarBudget = new RetainedBarBudget(request.MaxRetainedBars);
+        ReplayBarBudgetExceededException? budgetExceeded = null;
+        using var pipelineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var pipelineToken = pipelineCts.Token;
         var failures = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var metrics = new MutablePipelineMetrics();
         var normalizedProgress = new ThrottledCounterProgress(
@@ -163,7 +167,7 @@ public sealed class CandlePipelineEngine
         var readBuffer = new BufferBlock<CandleEvent>(new DataflowBlockOptions
         {
             BoundedCapacity = capacity,
-            CancellationToken = cancellationToken
+            CancellationToken = pipelineToken
         });
 
         // Normalize is intentionally separate from grouping. Bad bars should
@@ -192,11 +196,12 @@ public sealed class CandlePipelineEngine
                 BoundedCapacity = capacity,
                 MaxDegreeOfParallelism = workerCount,
                 EnsureOrdered = false,
-                CancellationToken = cancellationToken
+                CancellationToken = pipelineToken
             });
 
-        // Grouped bars are the in-memory market state seed. Later architecture
-        // can replace this batch grouping with per-ticker rolling aggregators.
+        // Grouped bars are the in-memory market state seed. Unique-bar budget
+        // reservation happens right after deduplication here, avoiding a second
+        // multi-million-entry identity dictionary.
         var groupBlock = new ActionBlock<NormalizedCandleEvent?>(
             normalized =>
             {
@@ -224,6 +229,17 @@ public sealed class CandlePipelineEngine
                     return;
                 }
 
+                try
+                {
+                    retainedBarBudget.ReserveUniqueBar();
+                }
+                catch (ReplayBarBudgetExceededException exceeded)
+                {
+                    Interlocked.CompareExchange(ref budgetExceeded, exceeded, null);
+                    pipelineCts.Cancel();
+                    throw;
+                }
+
                 metrics.IncrementGrouped();
             },
             new ExecutionDataflowBlockOptions
@@ -231,7 +247,7 @@ public sealed class CandlePipelineEngine
                 BoundedCapacity = capacity,
                 MaxDegreeOfParallelism = workerCount,
                 EnsureOrdered = false,
-                CancellationToken = cancellationToken
+                CancellationToken = pipelineToken
             });
 
         readBuffer.LinkTo(normalizeBlock, linkOptions);
@@ -250,6 +266,10 @@ public sealed class CandlePipelineEngine
             // of taking down the whole run.
             await ReadProviderBarsAsync(request.Tickers);
         }
+        catch (OperationCanceledException) when (Volatile.Read(ref budgetExceeded) is { } exceeded)
+        {
+            throw exceeded;
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
@@ -260,6 +280,11 @@ public sealed class CandlePipelineEngine
         }
         catch (Exception exception)
         {
+            if (Volatile.Read(ref budgetExceeded) is { } exceeded)
+            {
+                throw exceeded;
+            }
+
             progress?.Report($"Batch market data read failed: {exception.Message}. Retrying unresolved ticker(s) one at a time.");
 
             // A paginated batch can fail after yielding a prefix. Retry every
@@ -273,12 +298,25 @@ public sealed class CandlePipelineEngine
                 {
                     await ReadProviderBarsAsync([ticker]);
                 }
+                catch (OperationCanceledException) when (Volatile.Read(ref budgetExceeded) is { } exceededDuringRetry)
+                {
+                    throw exceededDuringRetry;
+                }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (ReplayBarBudgetExceededException)
                 {
                     throw;
                 }
                 catch (Exception tickerException)
                 {
+                    if (Volatile.Read(ref budgetExceeded) is { } exceededDuringRetry)
+                    {
+                        throw exceededDuringRetry;
+                    }
+
                     failures[NormalizeTickerForFailure(ticker)] = tickerException.Message;
                     if (providerFailure is not null && ClassifySharedProviderFailure(tickerException) == providerFailure)
                     {
@@ -297,7 +335,20 @@ public sealed class CandlePipelineEngine
             readBuffer.Complete();
         }
 
-        await groupBlock.Completion;
+        try
+        {
+            await groupBlock.Completion;
+        }
+        catch when (Volatile.Read(ref budgetExceeded) is { } exceeded)
+        {
+            throw exceeded;
+        }
+
+        if (Volatile.Read(ref budgetExceeded) is { } deferredExceeded)
+        {
+            throw deferredExceeded;
+        }
+
         normalizedProgress.Flush(metrics.NormalizedCount);
 
         // Any malformed or conflicting bar invalidates the ticker's prepared
@@ -313,6 +364,8 @@ public sealed class CandlePipelineEngine
                     item => (IReadOnlyList<OhlcvBar>)item.Value.Values.OrderBy(x => x.Timestamp).ToArray(),
                     StringComparer.OrdinalIgnoreCase),
                 StringComparer.OrdinalIgnoreCase);
+        // Release temporary per-ticker grouping dictionaries before indicator computation to lower peak heap commit.
+        barsByKey.Clear();
 
         foreach (var ticker in request.Tickers)
         {
@@ -343,6 +396,7 @@ public sealed class CandlePipelineEngine
         var snapshotsByTicker = new ConcurrentDictionary<string, ConcurrentDictionary<string, IReadOnlyList<IndicatorSnapshot>>>(StringComparer.OrdinalIgnoreCase);
         await ComputeIndicatorsAsync(
             grouped,
+            request.IndicatorTimeframes,
             snapshotsByTicker,
             workerCount,
             capacity,
@@ -371,7 +425,7 @@ public sealed class CandlePipelineEngine
         // Let the caller classify batch and independent read outcomes using the original exception.
         async Task ReadProviderBarsAsync(IReadOnlyCollection<string> tickers)
         {
-            await foreach (var providerBar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, cancellationToken))
+            await foreach (var providerBar in provider.GetBarsAsync(tickers, downloadedTimeframes, request.Start, request.End, pipelineToken))
             {
                 var bar = providerConfirmsSparseNoTradeIntervals &&
                     providerBar.CoverageVerifiedThroughUtc is null
@@ -390,17 +444,17 @@ public sealed class CandlePipelineEngine
                     continue;
                 }
 
-                if (isStructurallyValid)
-                {
-                    retainedBarBudget.Reserve(normalizedBar);
-                }
-
                 var replayEvent = replayAdapter.Create(
                     normalizedBar,
                     request.StoreContext?.ProviderName ?? provider.GetType().Name,
                     "historical");
                 metrics.IncrementRead();
-                await readBuffer.SendAsync(new CandleEvent(replayEvent), cancellationToken);
+                var accepted = await readBuffer.SendAsync(new CandleEvent(replayEvent), pipelineToken);
+                if (!accepted && Volatile.Read(ref budgetExceeded) is { } exceeded)
+                {
+                    throw exceeded;
+                }
+
                 metrics.ObserveReadBufferDepth(readBuffer.Count);
             }
         }
@@ -458,8 +512,10 @@ public sealed class CandlePipelineEngine
             cancellationToken);
     }
 
+    // Computes IndicatorSnapshots across grouped ticker/timeframe series, restricting to indicatorTimeframes when specified.
     private async Task ComputeIndicatorsAsync(
         IReadOnlyDictionary<string, Dictionary<string, IReadOnlyList<OhlcvBar>>> grouped,
+        IReadOnlyCollection<string>? indicatorTimeframes,
         ConcurrentDictionary<string, ConcurrentDictionary<string, IReadOnlyList<IndicatorSnapshot>>> snapshotsByTicker,
         int workerCount,
         int capacity,
@@ -467,6 +523,9 @@ public sealed class CandlePipelineEngine
         IndicatorEngine indicatorEngine,
         CancellationToken cancellationToken)
     {
+        var allowedIndicatorTimeframes = indicatorTimeframes is null
+            ? null
+            : new HashSet<string>(indicatorTimeframes, StringComparer.OrdinalIgnoreCase);
         var linkOptions = new DataflowLinkOptions
         {
             PropagateCompletion = true
@@ -509,10 +568,12 @@ public sealed class CandlePipelineEngine
             });
 
         indicatorComputeBlock.LinkTo(indicatorMaterializeBlock, linkOptions);
-        foreach (var item in grouped.SelectMany(tickerGroup => tickerGroup.Value.Select(timeframeGroup => new TickerTimeframeBars(
-                     tickerGroup.Key,
-                     timeframeGroup.Key,
-                     timeframeGroup.Value))))
+        foreach (var item in grouped.SelectMany(tickerGroup => tickerGroup.Value
+                     .Where(timeframeGroup => allowedIndicatorTimeframes is null || allowedIndicatorTimeframes.Contains(timeframeGroup.Key))
+                     .Select(timeframeGroup => new TickerTimeframeBars(
+                         tickerGroup.Key,
+                         timeframeGroup.Key,
+                         timeframeGroup.Value))))
         {
             await indicatorComputeBlock.SendAsync(item, cancellationToken);
             metrics.ObserveIndicatorInputDepth(indicatorComputeBlock.InputCount);
@@ -561,7 +622,7 @@ public sealed class CandlePipelineEngine
                 var resampled = providerConfirmsSparseNoTradeIntervals
                     ? barResampler.ResampleAuthoritativeSparseHistory(sourceBars, target, request.End)
                     : barResampler.ResampleComplete(sourceBars, target);
-                foreach (var bar in resampled) retainedBarBudget.Reserve(bar);
+                for (var i = 0; i < resampled.Count; i++) retainedBarBudget.ReserveUniqueBar();
                 barsByTimeframe[target] = resampled;
                 derivedBars.AddRange(resampled);
                 metrics.IncrementDerivedTimeframe();
@@ -681,22 +742,14 @@ public sealed class CandlePipelineEngine
 
     private readonly record struct TickerTimeframeKey(string Ticker, string Timeframe);
 
-    private readonly record struct RetainedBarIdentity(
-        string Ticker,
-        string Timeframe,
-        DateTimeOffset TimestampUtc);
-
+    // Enforces MaxRetainedBars with a single atomic counter reserved only when a unique bar enters grouped storage.
     private sealed class RetainedBarBudget(int maximumBars)
     {
-        private readonly ConcurrentDictionary<RetainedBarIdentity, byte> identities = new();
+        private int reservedCount;
 
-        public void Reserve(OhlcvBar bar)
+        public void ReserveUniqueBar()
         {
-            var identity = new RetainedBarIdentity(
-                bar.Ticker.Trim().ToUpperInvariant(),
-                bar.Timeframe.Trim().ToLowerInvariant(),
-                bar.Timestamp.ToUniversalTime());
-            if (identities.TryAdd(identity, 0) && identities.Count > maximumBars)
+            if (Interlocked.Increment(ref reservedCount) > maximumBars)
             {
                 throw new ReplayBarBudgetExceededException(maximumBars);
             }

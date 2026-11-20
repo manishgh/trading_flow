@@ -17,10 +17,15 @@ public static class BacktestCalendarBounds
         return priorWeek < first ? priorWeek : first;
     }
 
-    /// <summary>Returns the final exchange date for an intraday replay; other consumers retain their existing calendar buffers.</summary>
+    /// <summary>
+    /// Returns the final exchange date before <paramref name="exclusiveEndUtc"/> for intraday replays and
+    /// <c>evidence_catalog</c> runs (avoiding calendar requests past frozen exchange-session datasets); other consumers
+    /// retain their existing calendar buffers.
+    /// </summary>
     public static DateOnly? IntradayLastRequiredDate(BacktestRunConfig run, DateTimeOffset exclusiveEndUtc, string exchangeTimezone)
     {
-        if (!ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId))
+        if (!ExecutionReplayPolicy.IsIntradayCandle(run.Engine.ExecutionReplayPolicyId) &&
+            !run.Provider.Equals("evidence_catalog", StringComparison.OrdinalIgnoreCase))
             return null;
         var zone = TimeZoneInfo.FindSystemTimeZoneById(exchangeTimezone);
         return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(exclusiveEndUtc.AddTicks(-1), zone).DateTime);

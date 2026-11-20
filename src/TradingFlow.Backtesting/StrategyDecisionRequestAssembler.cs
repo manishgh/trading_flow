@@ -99,27 +99,32 @@ public static class StrategyDecisionRequestAssembler
 
         foreach (var timeframe in requiredTimeframes)
         {
-            // Auxiliary 5m bars on a daily strategy supply sub-session opening-range confirmation; when absent on early
-            // backtest days (e.g. a later-eligible screen stock), treat as empty so counts["5m"] = 0 < warmups["5m"]
-            // fails closed cleanly via market_state_not_warm instead of aborting the stock's backtest work item.
+            // Auxiliary 5m bars on a daily strategy supply sub-session opening-range confirmation without allocating
+            // 5m IndicatorSnapshots; when absent on early backtest days, treat as empty so counts["5m"] = 0 fails closed.
             var isDailyAuxiliaryFiveMinute =
                 runtimeStrategy.Definition.EntryRules.OpeningRangeMinutes > 0 &&
                 runtimeStrategy.Definition.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) &&
                 timeframe.Equals("5m", StringComparison.OrdinalIgnoreCase);
             var hasBars = barsByTimeframe.TryGetValue(timeframe, out var sourceBars);
+            var duration = TimeframeParser.Parse(timeframe);
+            if (isDailyAuxiliaryFiveMinute)
+            {
+                var completedFiveMinuteBars = hasBars
+                    ? SliceCompletedBarsFastOrFallback(sourceBars!, duration, asOfUtc)
+                    : ImmutableArray<OhlcvBar>.Empty;
+                bars[timeframe] = completedFiveMinuteBars;
+                snapshots[timeframe] = ImmutableArray<IndicatorSnapshot>.Empty;
+                counts[timeframe] = completedFiveMinuteBars.Length;
+                warmups[timeframe] = Math.Max(2, runtimeStrategy.Definition.EntryRules.OpeningRangeMinutes / 5);
+                continue;
+            }
+
             var hasSnapshots = snapshotsByTimeframe.TryGetValue(timeframe, out var sourceSnapshots);
             if (!hasBars || !hasSnapshots)
             {
-                if (!isDailyAuxiliaryFiveMinute)
-                {
-                    throw new InvalidOperationException($"Required timeframe {timeframe} is unavailable for {symbol}.");
-                }
-
-                sourceBars = Array.Empty<OhlcvBar>();
-                sourceSnapshots = Array.Empty<IndicatorSnapshot>();
+                throw new InvalidOperationException($"Required timeframe {timeframe} is unavailable for {symbol}.");
             }
 
-            var duration = TimeframeParser.Parse(timeframe);
             var (completedBars, completedSnapshots) = SliceCompletedSeriesFastOrFallback(
                 symbol,
                 timeframe,
@@ -132,9 +137,7 @@ public static class StrategyDecisionRequestAssembler
             bars[timeframe] = completedBars;
             snapshots[timeframe] = completedSnapshots;
             counts[timeframe] = Math.Min(completedBars.Length, completedSnapshots.Length);
-            warmups[timeframe] = isDailyAuxiliaryFiveMinute
-                ? Math.Max(2, runtimeStrategy.Definition.EntryRules.OpeningRangeMinutes / 5)
-                : requiredWarmupBars;
+            warmups[timeframe] = requiredWarmupBars;
         }
 
         var setupBars = bars[runtimeStrategy.Definition.Timeframe];
@@ -208,6 +211,95 @@ public static class StrategyDecisionRequestAssembler
                                 runtimeStrategy.Definition.EntryRules.MinShortPutCallSkew is not null
                 ? optionsSkew25Delta
                 : null);
+    }
+
+    // Fast path for already-ordered bar-only auxiliary series (e.g. 5m bars on daily ORB strategies without 5m snapshots),
+    // falling back to full causal LINQ filtering and sorting when bars are unordered or contain delayed KnownAtUtc receipts.
+    private static ImmutableArray<OhlcvBar> SliceCompletedBarsFastOrFallback(
+        IReadOnlyList<OhlcvBar> sourceBars,
+        TimeSpan duration,
+        DateTimeOffset asOfUtc)
+    {
+        if (TrySliceCompletedBarsPrefixFast(sourceBars, duration, asOfUtc, out var fastBars))
+        {
+            return fastBars;
+        }
+
+        return sourceBars
+            .Where(bar => bar.Timestamp.Add(duration) <= asOfUtc &&
+                (bar.KnownAtUtc is null || bar.KnownAtUtc <= asOfUtc))
+            .OrderBy(bar => bar.Timestamp)
+            .ToImmutableArray();
+    }
+
+    // Binary-searches the completed prefix in O(log N) and verifies monotonic timestamps and causal KnownAtUtc receipts.
+    private static bool TrySliceCompletedBarsPrefixFast(
+        IReadOnlyList<OhlcvBar> sourceBars,
+        TimeSpan duration,
+        DateTimeOffset asOfUtc,
+        out ImmutableArray<OhlcvBar> completedBars)
+    {
+        completedBars = default;
+        var count = sourceBars.Count;
+        if (count == 0)
+        {
+            completedBars = ImmutableArray<OhlcvBar>.Empty;
+            return true;
+        }
+
+        var lo = 0;
+        var hi = count - 1;
+        var prefixLength = 0;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            if (sourceBars[mid].Timestamp.Add(duration) <= asOfUtc)
+            {
+                prefixLength = mid + 1;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        var suffixPrev = prefixLength > 0 ? sourceBars[prefixLength - 1].Timestamp : DateTimeOffset.MinValue;
+        for (var i = prefixLength; i < count; i++)
+        {
+            var barTs = sourceBars[i].Timestamp;
+            if (barTs <= suffixPrev || barTs.Add(duration) <= asOfUtc)
+            {
+                return false;
+            }
+
+            suffixPrev = barTs;
+        }
+
+        if (prefixLength == 0)
+        {
+            completedBars = ImmutableArray<OhlcvBar>.Empty;
+            return true;
+        }
+
+        var barBuilder = ImmutableArray.CreateBuilder<OhlcvBar>(prefixLength);
+        var previousTimestamp = DateTimeOffset.MinValue;
+        for (var i = 0; i < prefixLength; i++)
+        {
+            var bar = sourceBars[i];
+            if (bar.Timestamp <= previousTimestamp ||
+                bar.Timestamp.Add(duration) > asOfUtc ||
+                (bar.KnownAtUtc is { } knownAt && knownAt > asOfUtc))
+            {
+                return false;
+            }
+
+            barBuilder.Add(bar);
+            previousTimestamp = bar.Timestamp;
+        }
+
+        completedBars = barBuilder.MoveToImmutable();
+        return true;
     }
 
     // Fast path for already-ordered, timestamp-aligned bar/snapshot series (avoiding O(M log M) LINQ sorting and
@@ -598,6 +690,25 @@ public static class StrategyDecisionRequestAssembler
         if (strategy.EntryRules.OpeningRangeMinutes > 0)
         {
             timeframes.Add("5m");
+        }
+
+        return timeframes.OrderBy(TimeframeParser.Parse).ToArray();
+    }
+
+    /// <summary>
+    /// Returns only the timeframes whose <see cref="IndicatorSnapshot"/> series are required by <paramref name="strategy"/>
+    /// (setup, execution, and enabled confluence), excluding bar-only auxiliary timeframes such as daily 5-minute ORB bars.
+    /// </summary>
+    public static string[] ResolveIndicatorTimeframes(StrategyDefinition strategy)
+    {
+        var timeframes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            strategy.Timeframe,
+            strategy.Execution.Timeframe
+        };
+        if (strategy.Confluence.Enabled)
+        {
+            timeframes.Add(strategy.Confluence.Timeframe);
         }
 
         return timeframes.OrderBy(TimeframeParser.Parse).ToArray();

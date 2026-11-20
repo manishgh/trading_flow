@@ -62,6 +62,23 @@ public static class HistoricalNewsPresenceEvaluation
         rules.ShortAnchoredVwapMode.Equals("catalyst", StringComparison.OrdinalIgnoreCase) ||
         String.Equals(rules.AnchorType, "catalyst", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// True when <paramref name="strategy"/> reads strict catalysts, news sentiment/vetoes, catalyst setups, or
+    /// historical news diagnostics. Pure price/volume strategies return <see langword="false"/> so backtests skip
+    /// unnecessary live news and sentiment queries.
+    /// </summary>
+    public static bool StrategyUsesNews(StrategyDefinition strategy)
+    {
+        var rules = strategy.EntryRules;
+        return HasStrictNewsRequirements(rules) ||
+               rules.HistoricalNewsDiagnostic is not null ||
+               rules.SetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
+               rules.SetupType.Contains("news_", StringComparison.OrdinalIgnoreCase) ||
+               (rules.EnableShort &&
+                (rules.ShortSetupType.Contains("catalyst", StringComparison.OrdinalIgnoreCase) ||
+                 rules.ShortSetupType.Contains("news_", StringComparison.OrdinalIgnoreCase)));
+    }
+
     // Return an identical unknown reason for both news arms; a malformed selected revision cannot prove absence.
     public static string? EvidenceUnknownReason(StrategyDecisionRequest request)
     {

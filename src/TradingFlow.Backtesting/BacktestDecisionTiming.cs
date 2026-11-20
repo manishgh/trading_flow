@@ -65,7 +65,7 @@ internal static class BacktestDecisionTiming
             throw new InvalidOperationException("Terminal-open research requires UTC, native daily slices and an authoritative calendar.");
         var zone=TimeZoneInfo.FindSystemTimeZoneById(session.ExchangeTimezone);
         var first=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start,zone).DateTime);
-        var last=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(end,zone).DateTime);
+        var last=DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(end>start?end.AddTicks(-1):end,zone).DateTime);
         DateTimeOffset? latest=null;
         for(var day=first;day<=last;day=day.AddDays(1))
         {

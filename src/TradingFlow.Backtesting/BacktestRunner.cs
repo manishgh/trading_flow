@@ -432,12 +432,20 @@ public sealed partial class BacktestRunner(
         var completedTickerCount = 0;
         var totalTickerCount = run.Tickers.Count;
         var requiredTimeframes = ResolveRequiredTimeframes(strategies);
+        var indicatorTimeframes = strategies
+            .SelectMany(StrategyDecisionRequestAssembler.ResolveIndicatorTimeframes)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(TimeframeParser.Parse)
+            .ToArray();
         // Decision-hour strategies decide on and fill on hourly bars beside their daily series.
         if (strategies.Any(IsDecisionHour))
+        {
             requiredTimeframes = requiredTimeframes.Append(ExecutionRules.DecisionHourFillTimeframe).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            indicatorTimeframes = indicatorTimeframes.Append(ExecutionRules.DecisionHourFillTimeframe).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
         // SIP fills use physical events; observed five-minute bars are also needed for separately verified close valuation.
         if (run.Engine.ExecutionReplayPolicyId is ExecutionReplayPolicy.DailyRthFiveMinuteV1 or ExecutionReplayPolicy.DailyRthSipPortfolioV1)
-            requiredTimeframes = requiredTimeframes.Append(ExecutionReplayPolicy.Timeframe).Distinct().ToArray();
+            requiredTimeframes = requiredTimeframes.Append(ExecutionReplayPolicy.Timeframe).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         progress?.Report(new BacktestProgress(
             "market_pipeline",
             $"Preparing reusable market state for {totalTickerCount} ticker(s), {requiredTimeframes.Length} required timeframe(s).",
@@ -459,7 +467,8 @@ public sealed partial class BacktestRunner(
                 ResolveExchangeTimezone(strategies),
                 CreateCandleStoreContext(run),
                 run.Engine.MaxRetainedReplayBars, evidenceRules[0],
-                BacktestCalendarBounds.IntradayLastRequiredDate(run, windowEnd, ResolveExchangeTimezone(strategies))),
+                BacktestCalendarBounds.IntradayLastRequiredDate(run, windowEnd, ResolveExchangeTimezone(strategies)),
+                IndicatorTimeframes: indicatorTimeframes),
             provider,
             cancellationToken,
             new Progress<string>(message => progress?.Report(new BacktestProgress(
@@ -567,7 +576,11 @@ public sealed partial class BacktestRunner(
             capacity: 1,
             sink: candidateHypothesisJournal,
             evidenceScope: "candidate_hypothesis");
-        var catalystStreamer = new CatalystStreamer(CreateNewsProvider(run));
+        // Only query live/cached news providers when at least one strategy in this run actually consumes news or catalysts.
+        var catalystProvider = strategies.Any(HistoricalNewsPresenceEvaluation.StrategyUsesNews)
+            ? CreateNewsProvider(run)
+            : null;
+        var catalystStreamer = new CatalystStreamer(catalystProvider);
         decisionHourIndicators = preparedMarket.MarketState.Indicators;
         decisionHourEvidence = new DecisionHourEvidenceCache();
         decisionHourDroppedHourlyBars = 0;
@@ -1198,25 +1211,37 @@ public sealed partial class BacktestRunner(
                 return PreparedTickerEvaluationContext.Failed(ticker, failure);
             }
 
-            var snapshotsByTimeframe = tickerState.SnapshotsByTimeframe
-                .ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
             var catalysts = (await catalystStreamer.LoadTickerCatalystsAsync(ticker, dataStart, windowEnd, cancellationToken))
                 .OrderBy(catalyst => catalyst.Timestamp)
                 .ToArray();
 
-            foreach (var timeframe in snapshotsByTimeframe.Keys)
+            IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe;
+            if (catalysts.Length == 0)
             {
-                CatalystSnapshotAttacher.AttachToSnapshots(snapshotsByTimeframe[timeframe], catalysts, cancellationToken);
+                // Avoid cloning every IndicatorSnapshot list when no catalysts need attachment.
+                snapshotsByTimeframe = tickerState.SnapshotsByTimeframe;
+            }
+            else
+            {
+                var mutableSnapshots = tickerState.SnapshotsByTimeframe
+                    .ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
+                foreach (var timeframe in mutableSnapshots.Keys)
+                {
+                    CatalystSnapshotAttacher.AttachToSnapshots(mutableSnapshots[timeframe], catalysts, cancellationToken);
+                }
+
+                snapshotsByTimeframe = mutableSnapshots.ToDictionary(
+                    x => x.Key,
+                    x => (IReadOnlyList<IndicatorSnapshot>)x.Value,
+                    StringComparer.OrdinalIgnoreCase);
             }
 
             return new PreparedTickerEvaluationContext(
                 ticker,
                 tickerState.BarsByTimeframe,
-                snapshotsByTimeframe.ToDictionary(
-                    x => x.Key,
-                    x => (IReadOnlyList<IndicatorSnapshot>)x.Value,
-                    StringComparer.OrdinalIgnoreCase),
-                tickerState.AllBars
+                snapshotsByTimeframe,
+                tickerState.BarsByTimeframe.Values
+                    .SelectMany(bars => bars)
                     .Where(bar => bar.Timestamp >= windowStart && bar.Timestamp <= windowEnd)
                     .ToArray(),
                 tickerState.BarsByTimeframe.Values.Sum(x => x.Count),
@@ -1420,6 +1445,40 @@ public sealed partial class BacktestRunner(
         return index;
     }
 
+    // Returns true when an evidence_catalog run's capped calendar ends on closed weekend/holiday dates with no open
+    // trading session in [signalAvailableTimestamp, evaluationEnd), leaving uncapped calendars (lastDate+1 present) untouched.
+    private bool HasNoRemainingTradingSessionInCappedCalendar(
+        StrategyDefinition strategy,
+        DateTimeOffset signalAvailableTimestamp,
+        DateTimeOffset evaluationEnd)
+    {
+        if (candidateSessionSchedules is not { } schedules ||
+            !strategy.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) ||
+            strategy.Session.IsContinuousMarket ||
+            evaluationEnd <= signalAvailableTimestamp)
+        {
+            return false;
+        }
+
+        var zone = TimeZoneInfo.FindSystemTimeZoneById(strategy.Session.ExchangeTimezone);
+        var firstDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(signalAvailableTimestamp, zone).DateTime);
+        var lastDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(evaluationEnd.AddTicks(-1), zone).DateTime);
+        if (firstDate > lastDate || schedules.ContainsKey(lastDate.AddDays(1)))
+        {
+            return false;
+        }
+
+        for (var date = firstDate; date <= lastDate; date = date.AddDays(1))
+        {
+            if (!schedules.TryGetValue(date, out var known) || known.TradeDate != date || known.IsTradingDay)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>Evaluates completed evidence through the shared kernel and retains stable candidate identities for the chosen execution policy.</summary>
     private async Task<StrategyCandidateEvaluation> CreateStrategyCandidatesAsync(
         BacktestRunConfig run,
@@ -1491,6 +1550,41 @@ public sealed partial class BacktestRunner(
             var signalAvailableTimestamp = snapshot.Timestamp.Add(ParseTimeframe(strategy.Timeframe));
             // Source order is monotonic; provider receipt times are not.
             if (signalAvailableTimestamp > evaluationEnd) break;
+            if (signalAvailableTimestamp == evaluationEnd ||
+                HasNoRemainingTradingSessionInCappedCalendar(strategy, signalAvailableTimestamp, evaluationEnd))
+            {
+                // At the exclusive evaluation cutoff (or when a capped evidence_catalog calendar ends on closed
+                // weekend/holiday dates) no executable entry window can open before evaluationEnd; avoid querying
+                // candidateSessionSchedules past the frozen cutoff while preserving diagnostics.
+                if (strategy.Execution.EntryWindow is not null)
+                {
+                    var received = setupReceipts!.GetValueOrDefault(snapshot.Timestamp);
+                    if (received > signalAvailableTimestamp)
+                    {
+                        diagnostics.IncrementRejection("entry_window_missed");
+                        continue;
+                    }
+                }
+
+                if (signalAvailableTimestamp < evaluationStart)
+                {
+                    continue;
+                }
+
+                if (strategy.EntryRules.DecisionSchedule is not null &&
+                    NextExitSession(snapshot.Timestamp, requireCalendar: false) is not null &&
+                    IsOffDecisionSchedule(strategy, snapshot))
+                {
+                    diagnostics.IncrementRejection("not_on_decision_schedule");
+                    continue;
+                }
+
+                diagnostics.EvaluatedBarCount++;
+                diagnostics.IncrementRejection(strategy.Execution.EntryWindow is not null
+                    ? "entry_window_missed"
+                    : "candidate_window_not_available");
+                continue;
+            }
             var entryWindow = NextRegularOpenEntryWindow.Resolve(strategy, snapshot.Timestamp, candidateSessionSchedules);
             if (entryWindow is not null)
             {
