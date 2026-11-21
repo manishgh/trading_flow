@@ -97,11 +97,8 @@ flowchart TD
 - **Financial Typography & Table Ergonomics:**
   - `Inter` (UI labels & plain-English explanations) + `JetBrains Mono` / `font-variant-numeric: tabular-nums` on every price, percentage, clock, and table cell so digits never jitter.
   - Right-aligned numeric columns, sticky header + sticky left Ticker/Strategy column, comfortable `40px` minimum click/touch targets (WCAG 2.5.8), and `2px` high-contrast keyboard focus rings.
-- **Stylesheet Consolidation:**
-  - Replace the 12 overlapping CSS files with **3 clean, maintainable files**:
-    1. `wwwroot/css/tokens.css` (palette, spacing, type scale, radii, shadows, theme variables)
-    2. `wwwroot/css/components.css` (buttons, badges, cards, tables, drawers, command palette, tooltips)
-    3. `wwwroot/css/workspaces.css` (Desk 3-pane grid, Lab stepper & matrix, Catalysts hub, Portfolio tabs)
+- **Stylesheet Consolidation (Staged Reversible Rollout):**
+  - During the phased UI-1 through UI-4 rollout, new tokens, components, and workspace overrides are staged additively in `wwwroot/css/ui2-foundation.css` (loaded last in `_Layout.cshtml`) so existing screens stay safely reversible until all workspaces are verified; full consolidation into 3 standalone files (`tokens.css`, `components.css`, `workspaces.css`) follows after all checkpoints are accepted.
 
 ---
 
@@ -135,7 +132,7 @@ Each checkpoint stays small, independently testable (Playwright UI specs + focus
 
 | Checkpoint | Scope | Affected Files | Est. Effort |
 |---|---|---|---|
-| **UI-1: Design System, Shell & Global Regime Pulse** | Consolidate 12 CSS files into `tokens.css`, `components.css`, `workspaces.css` (`Calm Light`, `Slate Dark`, `CVD`); 4-workspace nav rail; read-only `GET /api/v1/workspace/regime-pulse` header strip; `Ctrl+K` palette. | `_Layout.cshtml`, `wwwroot/css/*`, `wwwroot/js/theme.js`, `WorkspacePulseEndpoints.cs` | 1 checkpoint |
+| **UI-1: Design System, Shell & Global Regime Pulse** | Additive `ui2-foundation.css` staging (`Calm Light`, `Slate Dark`, `CVD`) ahead of final 3-file consolidation; 4-workspace nav rail; read-only `GET /api/v1/workspace/regime-pulse` header strip; `Ctrl+K` palette. | `_Layout.cshtml`, `wwwroot/css/ui2-foundation.css`, `wwwroot/js/theme.js`, `wwwroot/js/regime-pulse.js`, `WorkspacePulseEndpoints.cs` | 1 checkpoint |
 | **UI-2: Desk 3-Pane "Answers at Fingertips"** | 5-column compact scanner + `↑`/`↓` keyboard nav; always-visible right-hand Plain-English Strategy Readiness Card & Risk-First Ticket; Chart `Entry`/`Stop`/`2.5R` lines + pinned OPRA strip. | `Desk.cshtml`, `_OptionsSentimentPanel.cshtml`, `_StockChart.cshtml`, `watch-desk.js` | 1 checkpoint |
 | **UI-3: Strategy Lab Guided Stepper & Saved-Plan Monthly Matrix** | 3-Step Guided Bar, auto-`GroupSize` on research screens, 1-click Long/Short V1 pills, `GET /api/v1/backtests/plans/{id}/monthly-matrix`, side-by-side `Strategy × Month` matrix + Rejection Funnel drawer. | `Backtests.cshtml`, `_LabResults.cshtml`, `BacktestPlanEndpoints.cs`, `run-workflow.js` | 1 checkpoint |
 | **UI-4: Unified Catalysts & Options Hub + Portfolio Polish** | Unified `Catalysts & Options` triage view (`News` + `Earnings` + `OPRA Implied vs ADR%` cards) and unified `Portfolio & Audit` tab bar across `/RunningTrades`, `/Paper`, `/Orders`, `/Audit`, plus mobile responsive cards. | `News.cshtml`, `Earnings.cshtml`, `RunningTrades.cshtml`, `Audit.cshtml` | 1 checkpoint |
@@ -159,5 +156,5 @@ Because the running operator site on `http://127.0.0.1:10088` (`C:\project\tradi
 1. **Default Theme Preference:** Prefer **Slate Dark** (Mockup 1) or **Calm Daylight Light** (Mockup 2) as the default appearance on first load (keeping the 1-click `Light / Dark / Colour-Blind / System` switcher in the top bar)?
 2. **4-Workspace Navigation Grouping:** Happy collapsing the 7 current sidebar items into **`Desk` · `Strategy Lab` · `Catalysts & Options` · `Portfolio & Audit`** (keeping all existing URLs working)?
 
-## Checkpoint UI-1 status (2026-11-20)
-Implemented: ui2-foundation.css (Slate Dark default, Calm Light, colour-blind), 4-workspace nav with sub-tabs, regime strip + GET /api/v1/workspace/regime-pulse, Ask/Jump button, theme toggle. Verification: 7 focused tests (WorkspacePulseTests) pass; Razor and C# compile clean. **Independent plan and code reviews NOT yet done** (model quota exhausted) - required before this checkpoint counts as complete or is published to :10089.
+## Checkpoint UI-1 status (2026-11-21)
+Implemented: additive `ui2-foundation.css` (Slate Dark default, Calm Light, colour-blind), 4-workspace nav with sub-tabs (`/AccountLossReview` mapped to System), fail-closed regime strip + `GET /api/v1/workspace/regime-pulse` (volatile cache record, UTC-midnight daily bar match, completed/fresh/70-bar fail-closed checks, schedule-provider fail-closed contract, exact previous-session VIX lookup without walkback, VIX deadline timeout guard), Ask/Jump button, theme toggle, clean UTF-8 `&hellip;`. Verification: focused `WorkspacePulseTests` passing and `node --check` clean; ready for UI-1 independent re-review sign-off.

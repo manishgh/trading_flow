@@ -3,6 +3,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
+using TradingFlow.Engine.Market;
 using TradingFlow.Engine.Regime;
 using TradingFlow.Web.Services;
 
@@ -50,8 +51,10 @@ public sealed record WorkspaceRegimePulseResponse(
 /// </summary>
 public static class WorkspacePulseEndpoints
 {
+    private sealed record CachedPulseEntry(WorkspaceRegimePulseResponse Payload, DateTimeOffset ExpiresAtUtc);
+
     private static readonly SemaphoreSlim CacheGate = new(1, 1);
-    private static (WorkspaceRegimePulseResponse Payload, DateTimeOffset ExpiresAtUtc)? cachedPulse;
+    private static volatile CachedPulseEntry? cachedPulse;
 
     private static readonly RegimeRules CanonicalLongSpyRule = new(
         BenchmarkSymbol: "SPY",
@@ -100,7 +103,7 @@ public static class WorkspacePulseEndpoints
                 }
 
                 var computed = await BuildPulseAsync(catalog, runtimeFactory, paths, vixSource, now, cancellationToken);
-                cachedPulse = (computed, now.AddSeconds(60));
+                cachedPulse = new CachedPulseEntry(computed, now.AddSeconds(60));
                 return Results.Ok(computed);
             }
             finally
@@ -125,6 +128,8 @@ public static class WorkspacePulseEndpoints
         var spyPulse = UnavailableBenchmark("SPY");
         var qqqPulse = UnavailableBenchmark("QQQ");
         DateOnly? previousSession = null;
+        var scheduleSucceeded = true;
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null;
 
         var defaultProfile = catalog.DefaultPaperConfig()?.Config;
         if (defaultProfile is not null)
@@ -134,25 +139,46 @@ public static class WorkspacePulseEndpoints
                 var provider = runtimeFactory.CreateProvider(defaultProfile);
                 var gate = new RegimeGateService(vixSource);
                 var start = now.AddDays(-170);
-                var schedules = await TryLoadSchedulesAsync(provider, now, deadline.Token);
-                var spyTask = gate.LoadBenchmarkDailyBarsAsync(provider, "SPY", ["1d", "1h"], start, now, deadline.Token);
-                var qqqTask = gate.LoadBenchmarkDailyBarsAsync(provider, "QQQ", ["1d", "1h"], start, now, deadline.Token);
-                await Task.WhenAll(spyTask, qqqTask);
+                (scheduleSucceeded, schedules) = await TryLoadSchedulesAsync(provider, now, deadline.Token, cancellationToken);
+                if (scheduleSucceeded)
+                {
+                    var spyTask = gate.LoadBenchmarkDailyBarsAsync(provider, "SPY", ["1d", "1h"], start, now, deadline.Token);
+                    var qqqTask = gate.LoadBenchmarkDailyBarsAsync(provider, "QQQ", ["1d", "1h"], start, now, deadline.Token);
+                    await Task.WhenAll(spyTask, qqqTask);
 
-                var spyBars = VixRegime.FilterTradingDayBars(await spyTask, schedules);
-                var qqqBars = VixRegime.FilterTradingDayBars(await qqqTask, schedules);
-                previousSession = VixRegime.PreviousSession(spyBars, now);
-                spyPulse = EvaluateBenchmark("SPY", spyBars, schedules, now);
-                qqqPulse = EvaluateBenchmark("QQQ", qqqBars, schedules, now);
+                    var spyBars = VixRegime.FilterTradingDayBars(await spyTask, schedules);
+                    var qqqBars = VixRegime.FilterTradingDayBars(await qqqTask, schedules);
+                    spyPulse = EvaluateBenchmark("SPY", spyBars, schedules, now);
+                    qqqPulse = EvaluateBenchmark("QQQ", qqqBars, schedules, now);
+                    previousSession = spyPulse.Available ? spyPulse.LastSessionDate : null;
+                }
+                else
+                {
+                    spyPulse = UnavailableBenchmark("SPY", "Exchange schedule unavailable");
+                    qqqPulse = UnavailableBenchmark("QQQ", "Exchange schedule unavailable");
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
                 // Preserve fail-closed unavailable badges when market data is offline or unconfigured.
+                scheduleSucceeded = false;
+                schedules = null;
+                previousSession = null;
             }
         }
 
-        var vixSeries = await VixRegime.TryLoadLatestAsync(vixSource, deadline.Token);
-        var vixPulse = BuildVixPulse(vixSeries, previousSession, now);
+        VixCloseSeries? vixSeries = null;
+        try
+        {
+            vixSeries = await VixRegime.TryLoadLatestAsync(vixSource, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Degrade to an unavailable VIX badge on deadline timeout instead of failing the request with HTTP 500.
+            vixSeries = null;
+        }
+
+        var vixPulse = BuildVixPulse(vixSeries, previousSession, now, scheduleSucceeded, schedules);
         var (topSectors, sectorsDate) = TryReadLatestTopSectors(paths.ResearchScreensRoot);
 
         return new WorkspaceRegimePulseResponse(
@@ -165,26 +191,42 @@ public static class WorkspacePulseEndpoints
             sectorsDate);
     }
 
-    // Evaluates both bullish (rising 50-SMA) and bearish (falling 50-SMA) gates on one benchmark's trading-day bars.
-    private static BenchmarkRegimePulse EvaluateBenchmark(
+    // Evaluates both bullish (rising 50-SMA) and bearish (falling 50-SMA) gates on completed trading-day bars, failing closed on missing, stale, or insufficient history.
+    internal static BenchmarkRegimePulse EvaluateBenchmark(
         string symbol,
         IReadOnlyList<OhlcvBar> bars,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
         DateTimeOffset now)
     {
-        if (bars.Count == 0)
+        var tradingBars = VixRegime.FilterTradingDayBars(bars, schedules);
+        var completedBars = tradingBars.Where(bar => IsCompletedBar(bar, now)).ToArray();
+        var latestSession = VixRegime.PreviousSession(completedBars, now);
+        if (latestSession is not { } session)
         {
-            return UnavailableBenchmark(symbol);
+            return UnavailableBenchmark(symbol, "No completed daily bar");
+        }
+
+        if (!VixRegime.HasFreshBenchmarkSession(session, schedules, now))
+        {
+            return UnavailableBenchmark(symbol, "Benchmark session is stale");
+        }
+
+        if (completedBars.Length < CanonicalLongSpyRule.RequiredCloses)
+        {
+            return UnavailableBenchmark(symbol, "Insufficient completed daily bars");
+        }
+
+        // Daily bars are keyed at UTC midnight; match UTC date directly instead of shifting to New York time.
+        var latestBar = completedBars.LastOrDefault(b => DateOnly.FromDateTime(b.Timestamp.UtcDateTime) == session);
+        if (latestBar is null)
+        {
+            return UnavailableBenchmark(symbol, "Latest session close missing");
         }
 
         var longRule = new RegimeRules(symbol, RegimeRules.PriceAboveSma, 50, SmaRisingLookbackBars: 20);
         var shortRule = new RegimeRules(symbol, RegimeRules.PriceBelowFallingSma, 50, SmaFallingLookbackBars: 20);
-        var longOn = RegimeGateService.Evaluate(longRule, bars, now, schedules: schedules).Rejection is null;
-        var shortOn = RegimeGateService.Evaluate(shortRule, bars, now, schedules: schedules).Rejection is null;
-        var latestSession = VixRegime.PreviousSession(bars, now);
-        var latestBar = latestSession is { } session
-            ? bars.LastOrDefault(b => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(b.Timestamp, VixRegime.NewYorkTimeZone).DateTime) == session)
-            : bars[^1];
+        var longOn = RegimeGateService.Evaluate(longRule, completedBars, now, schedules: schedules).Rejection is null;
+        var shortOn = RegimeGateService.Evaluate(shortRule, completedBars, now, schedules: schedules).Rejection is null;
         var label = longOn ? "Rising 50-SMA (Longs ON)"
             : shortOn ? "Falling 50-SMA (Shorts ON)"
             : "Neutral / Gate OFF";
@@ -194,20 +236,65 @@ public static class WorkspacePulseEndpoints
             Available: true,
             LongGateOn: longOn,
             ShortGateOn: shortOn,
-            LastClose: latestBar?.Close is { } close ? Math.Round(close, 2) : null,
-            LastSessionDate: latestSession,
+            LastClose: Math.Round(latestBar.Close, 2),
+            LastSessionDate: session,
             SummaryLabel: label);
     }
 
-    // Computes long and short VIX risk scales from the previous trading session's FRED VIXCLS close.
-    internal static VixRegimePulse BuildVixPulse(VixCloseSeries? series, DateOnly? benchmarkPreviousSession, DateTimeOffset now)
+    // Returns true only when a bar has both finished its timeframe window and become known by the observation instant.
+    private static bool IsCompletedBar(OhlcvBar bar, DateTimeOffset now) =>
+        bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe)) <= now &&
+        (bar.KnownAtUtc is null || bar.KnownAtUtc <= now);
+
+    // Resolves the exact previous completed exchange session for VIX lookup without walking back across arbitrary days.
+    internal static DateOnly? ResolveVixSession(
+        DateOnly? benchmarkPreviousSession,
+        bool scheduleSucceeded,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
+        DateTimeOffset now)
     {
+        if (!scheduleSucceeded)
+        {
+            return null;
+        }
+
+        if (benchmarkPreviousSession is { } session)
+        {
+            if (schedules is { Count: > 0 } && !VixRegime.HasFreshBenchmarkSession(session, schedules, now))
+            {
+                return null;
+            }
+
+            return session;
+        }
+
+        if (schedules is { Count: > 0 } && VixRegime.TryExpectedPreviousSession(schedules, now, out var expected))
+        {
+            return expected;
+        }
+
+        return null;
+    }
+
+    // Computes long and short VIX risk scales strictly from the verified previous exchange session's FRED VIXCLS close.
+    internal static VixRegimePulse BuildVixPulse(
+        VixCloseSeries? series,
+        DateOnly? benchmarkPreviousSession,
+        DateTimeOffset now,
+        bool scheduleSucceeded = true,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules = null)
+    {
+        if (!scheduleSucceeded)
+        {
+            return new VixRegimePulse(false, null, null, 0m, "VIX schedule unavailable", 0m, "VIX schedule unavailable");
+        }
+
         if (series is null)
         {
             return new VixRegimePulse(false, benchmarkPreviousSession, null, 0m, "VIX unavailable", 0m, "VIX unavailable");
         }
 
-        var targetSession = benchmarkPreviousSession ?? FindLatestVixSessionBeforeToday(series, now);
+        var targetSession = ResolveVixSession(benchmarkPreviousSession, scheduleSucceeded, schedules, now);
         if (targetSession is null)
         {
             return new VixRegimePulse(false, null, null, 0m, "VIX session unknown", 0m, "VIX session unknown");
@@ -237,36 +324,29 @@ public static class WorkspacePulseEndpoints
             shortLabel);
     }
 
-    // Falls back to the most recent published FRED VIXCLS observation strictly before today in New York when benchmark bars are cold.
-    private static DateOnly? FindLatestVixSessionBeforeToday(VixCloseSeries series, DateTimeOffset now)
-    {
-        var nyToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, VixRegime.NewYorkTimeZone).DateTime);
-        for (var offset = 1; offset <= 10; offset++)
-        {
-            var candidate = nyToday.AddDays(-offset);
-            if (series.TryGetClose(candidate, out _))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
-    }
-
-    // Loads recent authoritative exchange schedules when supported by the provider so benchmark staleness is enforced.
-    private static async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?> TryLoadSchedulesAsync(
+    // Loads recent authoritative exchange schedules when supported by the provider, failing closed on empty results or errors.
+    internal static async Task<(bool Succeeded, IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? Schedules)> TryLoadSchedulesAsync(
         IMarketDataProvider provider,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken deadlineToken,
+        CancellationToken callerToken = default)
     {
         if (provider is not IMarketSessionScheduleProvider scheduleProvider)
         {
-            return null;
+            return (true, null);
         }
 
         var nyToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, VixRegime.NewYorkTimeZone).DateTime);
-        var schedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(nyToday.AddDays(-15), nyToday.AddDays(1), cancellationToken);
-        return schedules.Count > 0 ? schedules : null;
+        try
+        {
+            var schedules = await scheduleProvider.LoadMarketSessionSchedulesAsync(
+                nyToday.AddDays(-15), nyToday.AddDays(1), deadlineToken);
+            return schedules.Count > 0 ? (true, schedules) : (false, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !callerToken.IsCancellationRequested)
+        {
+            return (false, null);
+        }
     }
 
     // Reads the final session's Top-3 ranked sector ETFs from any published sector-funds-top3 research screen on disk.
@@ -361,6 +441,7 @@ public static class WorkspacePulseEndpoints
         return lines;
     }
 
-    private static BenchmarkRegimePulse UnavailableBenchmark(string symbol) =>
-        new(symbol, Available: false, LongGateOn: false, ShortGateOn: false, null, null, "Unavailable");
+    // Builds a fail-closed unavailable benchmark pulse with an explicit diagnostic label.
+    private static BenchmarkRegimePulse UnavailableBenchmark(string symbol, string reason = "Unavailable") =>
+        new(symbol, Available: false, LongGateOn: false, ShortGateOn: false, null, null, reason);
 }

@@ -48,6 +48,7 @@
             "Previous session close " + v.sessionDate + " from FRED VIXCLS.");
     }
 
+    // Renders the server-evaluated regime chips and observation timestamp using text nodes only.
     function render(p) {
         strip.textContent = "";
         strip.append(benchmarkChip(p.spy), benchmarkChip(p.qqq), vixChip(p.vix));
@@ -60,8 +61,10 @@
         strip.append(stamp);
     }
 
+    // Fetches the cached server pulse while aborting any superseded in-flight request.
     async function refresh() {
         if (document.hidden) return;
+        if (controller) controller.abort();
         controller = new AbortController();
         try {
             const response = await window.tradingFlowFetch("/api/v1/workspace/regime-pulse", {

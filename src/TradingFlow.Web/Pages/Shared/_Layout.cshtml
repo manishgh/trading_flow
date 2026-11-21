@@ -17,7 +17,7 @@
         : IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/ResearchLedger") ? "Strategy Lab"
         : IsCurrent("/News", "/Earnings") ? "Catalysts & Options"
         : IsCurrent("/RunningTrades", "/Orders", "/OrderTicket", "/Paper", "/PaperJob", "/Audit", "/CandidateAudit") ? "Portfolio & Audit"
-        : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
+        : IsCurrent("/Operations", "/Warmup", "/Users", "/AccountLossReview") ? "System" : "Desk";
     var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Strategy Lab", "/Backtests", "layers"),
         ("Catalysts & Options", "/News", "newspaper"), ("Portfolio & Audit", "/RunningTrades", "briefcase") };
     // Local sub-tabs per workspace: (label, page, pages that mark the tab current).
@@ -185,7 +185,7 @@
     @if (signedIn)
     {
         <div class="regime-pulse-strip" data-regime-pulse role="status" aria-label="Market regime">
-            <span class="regime-chip" data-tone="muted"><span class="regime-chip__label">Market regime</span><strong class="regime-chip__value">loading…</strong></span>
+            <span class="regime-chip" data-tone="muted"><span class="regime-chip__label">Market regime</span><strong class="regime-chip__value">loading&hellip;</strong></span>
         </div>
     }
     <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
