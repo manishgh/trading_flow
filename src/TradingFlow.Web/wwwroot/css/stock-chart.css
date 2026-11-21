@@ -21,9 +21,9 @@
     --stock-chart-level-a: var(--color-accent-600);
     --stock-chart-level-b: var(--warn);
     --stock-chart-level-c: var(--muted);
-    --stock-chart-study-0: var(--color-accent-600);
-    --stock-chart-study-1: var(--warn-ink);
-    --stock-chart-study-2: var(--color-gain);
+    --stock-chart-study-0: #3b82f6;
+    --stock-chart-study-1: #f59e0b;
+    --stock-chart-study-2: #a855f7;
     --stock-chart-study-3: var(--color-loss);
     --stock-chart-study-4: var(--muted);
 }

@@ -142,9 +142,9 @@ public sealed class OpeningRangeRecipeEvaluatorTests
         return new OpeningRangeBreakoutEvaluator().Evaluate(strategy, current, [], context, asOf);
     }
 
-    // The kept ORB 2.0.0 strategy file, read through the production reader.
-    private static StrategyDefinition KeptStrategy() => new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(),
-        "configs", "backtest", "strategies", "opening-range-breakout.bt-v4.yaml"));
+    // The kept ORB 2.0.0 strategy fixture, read through the production reader.
+    private static StrategyDefinition KeptStrategy() => new SimpleYamlReader().ReadStrategy(
+        RetiredStrategyFixtures.Strategy("opening-range-breakout.bt-v4.yaml"));
 
     // Five-minute SIP bar known at its own close.
     private static OhlcvBar Bar(DateTimeOffset start, decimal open, decimal high, decimal low, decimal close, decimal volume) =>

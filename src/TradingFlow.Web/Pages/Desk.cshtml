@@ -22,7 +22,7 @@
   <div class="watch-toolbar">
     <label class="watch-source-label"><span>Group</span><select id="watch-source"><option value="all">All followed stocks</option></select></label>
     <div class="watch-strategy-group">
-      <label class="watch-source-label"><span>Strategy</span><select id="watch-strategy"><option value="">Select a strategy</option></select></label>
+      <label class="watch-strategy-label"><span>Strategy</span><select id="watch-strategy"><option value="">Select a strategy</option></select></label>
       <button type="button" id="watch-strategy-refresh" class="btn btn-secondary btn-sm watch-inline-btn" title="Refresh strategy checks" hidden>↻ Refresh</button>
       <button type="button" id="watch-strategy-cancel" class="btn btn-secondary btn-sm watch-inline-btn" title="Cancel strategy checks" hidden>Cancel</button>
     </div>
@@ -52,8 +52,8 @@
   <div class="watch-grid" data-active-pane="chart">
     <section class="watch-stocks" aria-label="Followed stocks">
       <div class="watch-table-scroll" role="region" aria-label="Stock table" tabindex="0"><table class="watch-table" data-scanner-density="compact" data-has-strategy="false"><caption class="sr-only">Stock prices, order actions, news, and completed daily indicators</caption>
-        <colgroup><col class="watch-stock-col" /><col class="watch-price-col" /><col class="watch-trade-col" /><col class="watch-strategy-col" /><col class="watch-position-col" /><col class="watch-news-col" /><col class="watch-technical-col" /><col class="watch-rvol-col" /><col class="watch-volume-col" /><col class="watch-action-col" /></colgroup>
-        <thead><tr><th scope="col">Stock</th><th scope="col" title="Bid/ask midpoint and daily percent change vs previous close (full bid/ask, spread, and quote age in row tooltip)">Mid · Day %</th><th scope="col">Trade</th><th scope="col">Strategy</th><th scope="col">Position</th><th scope="col" title="Stored stories in the last hour (partial coverage)">News</th><th scope="col">Daily technicals</th><th scope="col" title="Completed 1d relative volume and 1d ATR">RVOL · ATR</th><th scope="col">Volume</th><th scope="col">Next action</th></tr></thead>
+        <colgroup><col class="watch-stock-col" /><col class="watch-price-col" /><col class="watch-trade-col" /><col class="watch-strategy-col" /><col class="watch-position-col" /><col class="watch-news-col" /><col class="watch-technical-col" /><col class="watch-rvol-col" /><col class="watch-volume-col" /></colgroup>
+        <thead><tr><th scope="col">Stock</th><th scope="col" title="Bid/ask midpoint and daily percent change vs previous close (full bid/ask, spread, and quote age in row tooltip)">Mid · Day %</th><th scope="col">Trade</th><th scope="col">Strategy</th><th scope="col">Position</th><th scope="col" title="Stored stories in the last hour (partial coverage)">News</th><th scope="col">Daily technicals</th><th scope="col" title="Completed 1d relative volume and 1d ATR">RVOL · ATR</th><th scope="col">Volume</th></tr></thead>
         <tbody id="watch-rows"></tbody>
       </table></div>
       <div id="watch-empty" class="watch-empty"><strong>Loading your stocks…</strong><p>Your stock groups, screeners and holdings come together here.</p></div>
@@ -62,7 +62,7 @@
     </section>
     <div class="watch-mid-tabs" role="tablist" aria-label="Desk detail view">
       <button type="button" role="tab" data-desk-pane="chart" aria-selected="true">Chart</button>
-      <button type="button" role="tab" data-desk-pane="inspector" aria-selected="false">Why, News &amp; Ticket</button>
+      <button type="button" role="tab" data-desk-pane="inspector" aria-selected="false">Why &amp; News</button>
     </div>
     <aside class="watch-detail" aria-label="Selected stock chart" id="watch-detail">
       <header class="watch-focus-head">
@@ -71,6 +71,10 @@
           <strong id="watch-mid" class="num">—</strong>
           <span id="watch-prev-close" class="watch-focus-change"></span>
           <button type="button" id="watch-focus-info" class="watch-info-badge" aria-label="Quote and chart series details" title="" hidden>ⓘ</button>
+          <div class="watch-focus-trade" id="watch-focus-trade" hidden>
+            <a id="watch-buy" class="btn btn-primary btn-sm" title="Buy shows the ask.">Buy</a>
+            <a id="watch-sell" class="btn btn-secondary btn-sm" title="Sell shows the bid.">Sell</a>
+          </div>
           <span id="watch-name" class="sr-only">Select a row to see its price, holding and news.</span>
           <span id="watch-quote-detail" class="sr-only"></span>
         </div>
@@ -89,12 +93,12 @@
           <partial name="_StockChart" model="String.Empty" />
           <div class="watch-chart-indicators" id="watch-technicals-block" aria-label="Key moving averages, today support, ATR and volatility">
             <div class="watch-chart-indicators-strip">
-              <span class="watch-ind-pill" id="watch-sma20">SMA20 —</span>
-              <span class="watch-ind-pill" id="watch-sma50">SMA50 —</span>
-              <span class="watch-ind-pill" id="watch-sma200">SMA200 —</span>
-              <span class="watch-ind-pill" id="watch-today-support">Today support —</span>
-              <span class="watch-ind-pill" id="watch-atr">ATR —</span>
-              <span class="watch-ind-pill" id="watch-volatility">Vol 1D — · 1W — · 1M —</span>
+              <span class="watch-ind-pill" id="watch-sma20" role="button" tabindex="0" aria-pressed="false" data-highlight-key="sma20" data-tooltip="">SMA20 —</span>
+              <span class="watch-ind-pill" id="watch-sma50" role="button" tabindex="0" aria-pressed="false" data-highlight-key="sma50" data-tooltip="">SMA50 —</span>
+              <span class="watch-ind-pill" id="watch-sma200" role="button" tabindex="0" aria-pressed="false" data-highlight-key="sma200" data-tooltip="">SMA200 —</span>
+              <span class="watch-ind-pill" id="watch-today-support" role="button" tabindex="0" aria-pressed="false" data-highlight-key="support" data-tooltip="">Today support —</span>
+              <span class="watch-ind-pill" id="watch-atr" tabindex="0" data-tooltip="">ATR —</span>
+              <span class="watch-ind-pill" id="watch-volatility" tabindex="0" data-tooltip="Stock price swing range (High − Low ÷ Close): 1D = last completed session, 1W = 5 sessions, 1M = 21 sessions">Vol 1D — · 1W — · 1M —</span>
             </div>
           </div>
         </div>
@@ -102,24 +106,27 @@
           <div class="watch-options-card-head">
             <span class="watch-options-prefix">Options</span>
             <strong data-options-field="symbol" class="sr-only">—</strong>
-            <span class="watch-options-badge" data-options-field="badge">—</span>
+            <span class="watch-options-badge" data-options-field="badge" tabindex="0" data-tooltip="">—</span>
           </div>
           <dl class="watch-options-metrics">
-            <div><dt title="Expected ±% stock swing by the nearest options expiration, priced from the at-the-money Call + Put straddle. Compare against your stop-loss distance.">Expected move</dt><dd data-options-field="move">—</dd></div>
-            <div><dt title="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair.">Put vs Call fear</dt><dd data-options-field="skew">—</dd></div>
-            <div><dt title="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market.">Near vs 30d IV</dt><dd data-options-field="term">—</dd></div>
-            <div><dt title="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls).">Call/Put vol</dt><dd data-options-field="cpvol">—</dd></div>
+            <div tabindex="0" title="Expected ±% stock swing by the nearest options expiration, priced from the at-the-money Call + Put straddle. Compare against your stop-loss distance." data-tooltip="Expected ±% stock swing by the nearest options expiration, priced from the at-the-money Call + Put straddle. Compare against your stop-loss distance."><dt title="Expected ±% stock swing by the nearest options expiration, priced from the at-the-money Call + Put straddle. Compare against your stop-loss distance.">Expected move</dt><dd data-options-field="move">—</dd></div>
+            <div tabindex="0" title="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair." data-tooltip="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair."><dt title="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair.">Put vs Call fear</dt><dd data-options-field="skew">—</dd></div>
+            <div tabindex="0" title="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market." data-tooltip="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market."><dt title="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market.">Near vs 30d IV</dt><dd data-options-field="term">—</dd></div>
+            <div tabindex="0" title="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls)." data-tooltip="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls)."><dt title="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls).">Call/Put vol</dt><dd data-options-field="cpvol">—</dd></div>
           </dl>
           <p class="watch-fine" data-options-field="note" hidden></p>
         </article>
       </div>
     </aside>
-    <aside class="watch-inspector" aria-label="Why or why not checklist, news, and order ticket" id="watch-inspector">
-      <div id="watch-inspector-empty" class="watch-inspector-empty">Select a stock to inspect strategy checks, holding, and order ticket.</div>
+    <aside class="watch-inspector" aria-label="Why or why not checklist and news" id="watch-inspector">
+      <div id="watch-inspector-empty" class="watch-inspector-empty">Select a stock to inspect strategy checks, holding, and news.</div>
       <div id="watch-inspector-body" hidden>
         <div class="watch-detail-block" id="watch-strategy-block">
           <h3>Why / why not · <span id="watch-observation"></span></h3>
           <div id="watch-strategy-checks"></div>
+          <p id="watch-ticket-plan-summary" class="watch-fine watch-ticket-plan-summary" hidden></p>
+          <p id="watch-order-help" class="watch-fine" hidden></p>
+          <p id="watch-exit-help" class="watch-fine" hidden></p>
         </div>
         <div class="watch-detail-block" id="watch-holding-block" hidden>
           <h3>Holding</h3>
@@ -141,16 +148,6 @@
         <p id="watch-news-coverage" class="watch-fine"></p>
         <div id="watch-news-list"></div>
       </section>
-      <div class="watch-ticket-dock" id="watch-ticket-dock" hidden>
-        <p id="watch-ticket-plan-summary" class="watch-fine watch-ticket-plan-summary" hidden></p>
-        <div class="watch-focus-trade">
-          <a id="watch-buy" class="btn btn-primary" title="Buy shows the ask.">Buy</a>
-          <a id="watch-sell" class="btn btn-secondary" title="Sell shows the bid.">Sell</a>
-          <button type="button" id="watch-preview-bracket" class="btn btn-primary watch-preview-bracket-btn" title="Buy shows the ask. Open the server-reviewed bracket order ticket.">Preview bracket order</button>
-        </div>
-        <p id="watch-order-help" class="watch-fine" hidden></p>
-        <p id="watch-exit-help" class="watch-fine" hidden></p>
-      </div>
     </aside>
   </div>
   <div class="watch-workflow-tools">

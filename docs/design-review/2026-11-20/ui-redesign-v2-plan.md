@@ -1,20 +1,20 @@
 # TradingFlow UI 2.0 Redesign Plan — Simple, Accessible, Answers at Your Fingertips
 
 > [!IMPORTANT]
-> **Design Proposal Only (Awaiting Your Approval):** No UI source files have been modified yet. Under [AGENTS.md](file:///c:/project/trading_flow/AGENTS.md), all Razor/CSS/JS presentation changes remain strictly separated from C# engine, risk, and execution logic, preserve existing routes and safety locks, and keep monthly NY-session non-pooled reporting intact.
+> **Approved UI 2.0 Redesign Plan (Implemented on `ui/redesign-v2`):** Under [AGENTS.md](../../../AGENTS.md), all Razor/CSS/JS presentation changes remain strictly separated from C# engine, risk, and execution logic, preserve existing routes and safety locks, and keep monthly NY-session non-pooled reporting intact.
 
 ---
 
 ## 1. Visual Concept Mockups
 
 ````carousel
-![TradingFlow Desk 2.0 — Persistent Market Regime Bar, Compact Scanner, Chart Stop/Target Overlays + OPRA Strip, and Always-Visible Plain-English Readiness Checklist](C:/Users/manis/.gemini/antigravity/brain/ab16eba7-0e29-4682-80d5-3abc6a5ef915/ui_mockup_1_desk_workspace_v3_1795179211829.jpg)
+![TradingFlow Desk 2.0 — Persistent Market Regime Bar, Compact Scanner, Chart Stop/Target Overlays + OPRA Strip, and Always-Visible Plain-English Readiness Checklist](ui_mockup_1_desk_workspace_v3_1795179211829.jpg)
 <!-- slide -->
-![Strategy Lab 2.0 — Calm Daylight Accessible Theme, 3-Step Guided Bar, Side-by-Side Monthly NY-Session Matrix, and Plain-English Rejection Inspector](C:/Users/manis/.gemini/antigravity/brain/ab16eba7-0e29-4682-80d5-3abc6a5ef915/ui_mockup_2_strategy_lab_v3_1795179220754.jpg)
+![Strategy Lab 2.0 — Calm Daylight Accessible Theme, 3-Step Guided Bar, Side-by-Side Monthly NY-Session Matrix, and Plain-English Rejection Inspector](ui_mockup_2_strategy_lab_v3_1795179220754.jpg)
 <!-- slide -->
-![Catalysts, Earnings & OPRA Sentiment Hub — 10-Second Pre-Market Triage with FinBERT Badges and OPRA Implied Move vs 20d ADR% Bars](C:/Users/manis/.gemini/antigravity/brain/ab16eba7-0e29-4682-80d5-3abc6a5ef915/ui_mockup_3_catalysts_options_hub_v2_1795179177276.jpg)
+![Catalysts, Earnings & OPRA Sentiment Hub — 10-Second Pre-Market Triage with FinBERT Badges and OPRA Implied Move vs 20d ADR% Bars](ui_mockup_3_catalysts_options_hub_v2_1795179177276.jpg)
 <!-- slide -->
-![Instant-Answer Command Palette (Ctrl+K) & Mobile Companion View — Colour-Blind-Safe WCAG 2.2 AA System](C:/Users/manis/.gemini/antigravity/brain/ab16eba7-0e29-4682-80d5-3abc6a5ef915/ui_mockup_4_accessibility_command_mobile_v2_1795179187896.jpg)
+![Instant-Answer Command Palette (Ctrl+K) & Mobile Companion View — Colour-Blind-Safe WCAG 2.2 AA System](ui_mockup_4_accessibility_command_mobile_v2_1795179187896.jpg)
 ````
 
 ---
@@ -239,3 +239,7 @@ All five previously deferred UI 2.0 items were implemented in Checkpoint UI-5 on
   - Round 1 Plan & UX Review (`#257` — REJECT) and Senior Code & Architecture Review (`#258` — REJECT) caught missing `.sr-only` CSS rule, `720px–1439px` pane specificity/padding, `Program.cs` `ASPNETCORE_WEBROOT` override, hidden `#watch-focus-controls` when unselected, `--stock-chart-*` tokens on `.watch-detail`, top-strip popover/stamp polish, and dead helpers `rowQuoteAge`/`signalLabel`; all resolved in `#260`.
   - Round 2 Plan & UX Review (`#262` — **ACCEPT**) and Senior Code & Architecture Review (`#263` — **ACCEPT**).
   - `node --check` passed on all 7 modified JS files; `git diff --check` clean; single-process `dotnet test` (`Ui2RedesignTests|WorkspacePulseTests|DeskTicketPlanTests|OptionsSentimentTests|DeskStrategyAssessment|StockStrategyAssessment|StockChart`) passed **55/55** (0 warnings, 0 errors).
+
+
+## Checkpoint UI-9 status (2026-11-21)
+- Completed Claude UI 2.0 handoff items D9 and G10�G13, removed 6 disabled strategy YAMLs from active configs/ (isolated in RetiredStrategyFixtures), added on-chart indicator color swatches + two-way setHighlightedOverlay highlighting, enlarged Options chips with instant [data-tooltip] hover explanations, tuned .watch-toolbar widths, removed buttons below #watch-news and the Next action / Inspect column, and consolidated UI 2.0 CSS into 	okens.css, components.css, and workspaces.css. Audited and accepted by two independent Carbon reviewers (#274 ui9-code-rev ACCEPT, #278 ui9-plan-rev ACCEPT; 400/400 tests green).

@@ -130,6 +130,7 @@
             badgeEl.textContent = regime.text;
             badgeEl.dataset.tone = regime.tone;
             badgeEl.title = regime.title;
+            badgeEl.dataset.tooltip = regime.title;
         }
 
         const tips = formatMetricTooltips(snapshot);
@@ -137,24 +138,32 @@
         if (moveEl) {
             moveEl.textContent = formatMove(snapshot);
             moveEl.title = tips.move;
+            const moveBox = moveEl.closest('div');
+            if (moveBox) { moveBox.title = tips.move; moveBox.dataset.tooltip = tips.move; }
         }
 
         const skewEl = card.querySelector('[data-options-field="skew"]');
         if (skewEl) {
             skewEl.textContent = formatVolPts(snapshot.skew25Delta);
             skewEl.title = tips.skew;
+            const skewBox = skewEl.closest('div');
+            if (skewBox) { skewBox.title = tips.skew; skewBox.dataset.tooltip = tips.skew; }
         }
 
         const termEl = card.querySelector('[data-options-field="term"]');
         if (termEl) {
             termEl.textContent = formatVolPts(snapshot.termStructureSpread);
             termEl.title = tips.term;
+            const termBox = termEl.closest('div');
+            if (termBox) { termBox.title = tips.term; termBox.dataset.tooltip = tips.term; }
         }
 
         const cpEl = card.querySelector('[data-options-field="cpvol"]');
         if (cpEl) {
             cpEl.textContent = formatRatio(snapshot.callPutVolumeRatio);
             cpEl.title = tips.cpvol;
+            const cpBox = cpEl.closest('div');
+            if (cpBox) { cpBox.title = tips.cpvol; cpBox.dataset.tooltip = tips.cpvol; }
         }
 
         const noteEl = card.querySelector('[data-options-field="note"]');

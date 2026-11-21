@@ -2,39 +2,6 @@
   "schemaVersion": 1,
   "admissionProfiles": [
     {
-      "profileId": "opening-range-breakout-next-open-research-v1",
-      "profileVersion": "1.0.0",
-      "parserProfile": "simple-yaml-strict-v2",
-      "standardIndicatorLibrary": "Skender.Stock.Indicators",
-      "standardIndicatorLibraryVersion": "2.7.1",
-      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
-      "derivedIndicatorProfileVersion": "2.3.0",
-      "riskPolicy": "account-risk-budget-v1",
-      "executionTimingPolicy": "completed-bar-next-open-market-session-deadline-v1"
-    },
-    {
-      "profileId": "opening-range-breakout-recipe-research-v1",
-      "profileVersion": "1.0.0",
-      "parserProfile": "simple-yaml-strict-v2",
-      "standardIndicatorLibrary": "Skender.Stock.Indicators",
-      "standardIndicatorLibraryVersion": "2.7.1",
-      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
-      "derivedIndicatorProfileVersion": "2.3.0",
-      "riskPolicy": "account-risk-budget-v1",
-      "executionTimingPolicy": "completed-bar-pending-stop-market-session-deadline-v1"
-    },
-    {
-      "profileId": "month-end-no-stop-kept-gaps-as-traded-v1",
-      "profileVersion": "1.0.0",
-      "parserProfile": "simple-yaml-strict-v2",
-      "standardIndicatorLibrary": "Skender.Stock.Indicators",
-      "standardIndicatorLibraryVersion": "2.7.1",
-      "derivedIndicatorProfile": "TradingFlow.DerivedIndicators",
-      "derivedIndicatorProfileVersion": "2.2.0",
-      "riskPolicy": "position-notional-no-stop-v1",
-      "executionTimingPolicy": "prior-close-plan-next-open-fill-kept-gap-exits-as-traded-v1"
-    },
-    {
       "profileId": "bollinger-squeeze-as-traded-research-v1",
       "profileVersion": "1.0.0",
       "parserProfile": "simple-yaml-strict-v2",
@@ -58,76 +25,6 @@
     }
   ],
   "strategies": [
-    {
-      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v3.yaml",
-      "strategyId": "technical.opening-range-breakout",
-      "semanticVersion": "1.2.0",
-      "lifecycle": "research",
-      "enabled": false,
-      "disabledReason": "Set aside 18 November 2026: same-day strategy; the user moved research to swing strategies.",
-      "admissionProfileId": "opening-range-breakout-next-open-research-v1",
-      "reason": "Approved stage 2: fifteen-minute range, frozen body direction and twenty-session median opening RVOL > 1. Completed post-range five-minute close strictly beyond outward-valid trigger commits next-opening market entry (earliest 09:50 New York). Stop is completed breakout candle low/high rounded outward without added buffer. Known-close sizing, actual gap fills and 3R, lagged opening liquidity, existing protection/costs/caps/deadline and two filled parents with fresh post-resolution inside rearm. Diagnostic backtest research only."
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v4.yaml",
-      "strategyId": "technical.opening-range-breakout",
-      "semanticVersion": "2.0.0",
-      "lifecycle": "research",
-      "enabled": false,
-      "disabledReason": "Set aside 18 November 2026: same-day strategy; the user moved research to swing strategies.",
-      "admissionProfileId": "opening-range-breakout-recipe-research-v1",
-      "reason": "Approved 8 November 2026: Zarattini, Barbon and Aziz (SSRN 4729284) trade rules as a rules check on the run's own stock list: 5-minute range and direction, opening volume at least its 14-session mean, stop order at the range, stop 10% of the 14-day ATR from the trigger, no target, one entry per stock per day. The paper's daily top-20 stock selection is not applied. Diagnostic backtest research only.",
-      "derivedFromIdentity": {
-        "strategyId": "technical.opening-range-breakout",
-        "semanticVersion": "1.2.0",
-        "contentSha256": "bc73189a1c26ae2741402c2ad84a3a3e88aec709d43253590f7c7fb3c6fdbcc4"
-      }
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/opening-range-breakout.bt-v5.yaml",
-      "strategyId": "technical.opening-range-breakout",
-      "semanticVersion": "2.1.0",
-      "lifecycle": "research",
-      "enabled": false,
-      "disabledReason": "Set aside 18 November 2026: same-day strategy; the user moved research to swing strategies.",
-      "admissionProfileId": "opening-range-breakout-recipe-research-v1",
-      "reason": "Approved 10 November 2026: 2.0.0 trade rules plus two published rules it lacked: stop measured from the actual entry fill (10% of the 14-day ATR) and exit at the session's official close with the order live until 16:00. Run with orb-published-recipe-profile.yaml for the paper's $0.0035/share commission and 4x gross exposure cap. The paper's daily top-20 stock selection is not applied. Diagnostic backtest research only.",
-      "derivedFromIdentity": {
-        "strategyId": "technical.opening-range-breakout",
-        "semanticVersion": "2.0.0",
-        "contentSha256": "83b58ddd3b6b2017c717066e98ce92b513537b9aa467283b32f72375ded14429"
-      }
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/etf-trend-10m.bt-v1.yaml",
-      "strategyId": "etf.trend-10m",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "enabled": false,
-      "disabledReason": "Blocked 18 November 2026 by the user: index and sector funds are used only to judge the market and sector trend (regime gate, sector ranking), not traded as a strategy.",
-      "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
-      "reason": "Approved 13 November 2026 (docs/design-review/2026-11-13/etf-trend-core-design.md, option B): Faber (2007) timing rule on the 15 index and sector funds. At each month's last close hold a fund whose close is above its 210-session average, otherwise cash; fill at the next open; fixed equal slots without monthly rebalancing; 5 bps per side; as-traded bars without dividends. Research only."
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/etf-buy-and-hold-control.bt-v1.yaml",
-      "strategyId": "etf.buy-and-hold-control",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "enabled": false,
-      "disabledReason": "Blocked 18 November 2026 by the user: index and sector funds are used only to judge the market and sector trend (regime gate, sector ranking), not traded as a strategy.",
-      "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
-      "reason": "Comparison control for etf.trend-10m@1.0.0, required by its pass rules: buys each fund at its first eligible month-end and never sells, with the same slots, timing, costs and bars. A measurement benchmark, never a strategy to trade."
-    },
-    {
-      "sourcePath": "configs/backtest/strategies/etf-rotation-12-1.bt-v1.yaml",
-      "strategyId": "etf.rotation-12-1",
-      "semanticVersion": "1.0.0",
-      "lifecycle": "research",
-      "enabled": false,
-      "disabledReason": "Sector rotation is parked for later standalone research.",
-      "admissionProfileId": "month-end-no-stop-kept-gaps-as-traded-v1",
-      "reason": "Approved 13 November 2026 (docs/design-review/2026-11-13/etf-rotation-design.md): Faber (2010) relative strength with the Antonacci (2014) absolute filter on the 11 sector funds. Run on a list keeping the top 3 by 12-1 month return; at each month's last close buy a listed fund above its 210-session average, sell a held fund that left the list or fell to or below its average; fills at the next open; 3 slots with same-open swaps and marked-equity sizing (etf-rotation-profile.yaml); 5 bps per side; as-traded bars. Research only."
-    },
     {
       "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml",
       "strategyId": "technical.bollinger-squeeze-breakout",

@@ -31,7 +31,7 @@
     const savedDesk = explicit ? null : readDeskReturn();
     const reviewKey = savedDesk?.preparationKey || incoming.get('preparationKey');
     let started = false, restoredView = false;
-    let deskChart, chartSymbol, deskChartZones = [], deskChartZonesSymbol = null, deskChartSeriesInfo = '';
+    let deskChart, chartSymbol, deskChartZones = [], deskChartZonesSymbol = null, deskChartSeriesInfo = '', deskHighlightedOverlay = null;
     let scannerDensity = 'compact';
     let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '';
     const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];
@@ -146,22 +146,21 @@
         if (!response.ok) { let message; try { message=(await response.json()).message; } catch {} throw new Error(message || 'Unable to complete this request. Sign in again or retry.'); }
         return response.json();
     }
-    // Load normal sources; expose a separate prepared source only after the owner-scoped read succeeds.
+    // Load normal sources with an explicit optgroup for every item, including any owner-verified prepared list.
     async function sources(chosen, strictPrepared = true) {
         catalog = await api('sources');
         el('source').replaceChildren();el('follow-list').replaceChildren();el('add-list').replaceChildren();
-        for (const group of [...new Set(catalog.map(x=>x.group))]) {
-            const optgroup=group ? document.createElement('optgroup') : document.createDocumentFragment();if(group)optgroup.label=group;
-            for (const item of catalog.filter(x=>x.group===group)) {
+        const prepared=await readPreparedOption();
+        if(prepared) catalog.push(prepared);
+        const groups=[...new Set(catalog.map(x=>x.group||'Overview'))];
+        for (const group of groups) {
+            const optgroup=document.createElement('optgroup');
+            optgroup.label=group;
+            for (const item of catalog.filter(x=>(x.group||'Overview')===group)) {
                 optgroup.append(new Option(item.name,item.key));
                 if(item.key.startsWith('wishlist:')){el('follow-list').add(new Option(item.name,item.key.slice(9)));el('add-list').add(new Option(item.name,item.key.slice(9)));}
             }
             el('source').append(optgroup);
-        }
-        const prepared=await readPreparedOption();
-        if(prepared){
-            catalog.push(prepared);
-            el('source').add(new Option(prepared.name,prepared.key));
         }
         if(chosen==='prepared'&&!prepared&&strictPrepared){
             el('source').selectedIndex=-1;
@@ -177,10 +176,14 @@
                 {signal:AbortSignal.timeout(5000)});
             if(!response.ok)return null;
             const review=await response.json();
-            return {key:'prepared',name:'Reviewed preparation',description:'Saved revision '+review.parentRevisionId,expiresAtUtc:review.expiresAtUtc};
+            return {key:'prepared',name:'Reviewed preparation',group:'Prepared',description:'Saved revision '+review.parentRevisionId,expiresAtUtc:review.expiresAtUtc};
         }catch{return null;}
     }
-    // Load exact current strategies and separately labelled recorded runs.
+    // Trims verbose "RESEARCH " prefixes and parenthetical gate prose for compact strategy picker labels.
+    function shortStrategyName(name) {
+        return String(name || '').replace(/^\s*RESEARCH\s+/i, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || String(name || '');
+    }
+    // Load exact current strategies and recorded runs grouped by trade direction (Long / Short) with full provenance in option titles.
     async function loadStrategies(requested) {
         const response = await window.tradingFlowFetch('/api/v1/desk/strategy-choices');
         if (!response.ok) throw new Error('Strategy list unavailable. Retry to load recorded evaluations.');
@@ -188,13 +191,32 @@
         strategyLoadError = '';
         const picker = el('strategy');
         picker.replaceChildren(new Option('Select a strategy', ''));
+        const buckets = new Map([['Long', []], ['Short', []], ['Other', []]]);
+        let matchedValue = '';
         strategyChoices.forEach((choice, index) => {
-            const context = choice.candidateRunId ? ' · recorded · ' + choice.mode + ' · ' + when(choice.runStartedAtUtc) : ' · current data';
-            const option = new Option(choice.name + ' · ' + choice.strategy.semanticVersion + context, String(index));
-            picker.add(option);
+            const direction = String(choice.direction || '').toLowerCase();
+            const bucketName = direction === 'long' ? 'Long' : direction === 'short' ? 'Short' : 'Other';
+            const shortDisplayName = shortStrategyName(choice.name);
+            const label = `${shortDisplayName} · v${choice.strategy.semanticVersion}${choice.candidateRunId ? ' · recorded' : ''}`;
+            const option = new Option(label, String(index));
+            const runDetail = choice.candidateRunId
+                ? `Run ${choice.candidateRunId} (${choice.mode}, ${when(choice.runStartedAtUtc)})`
+                : 'Current data';
+            option.title = `${choice.name} · ${choice.strategy.strategyId} · v${choice.strategy.semanticVersion} · SHA-256 ${choice.strategy.contentSha256} · ${runDetail}`;
+            buckets.get(bucketName).push(option);
             if (requested.get('strategyId') === choice.strategy.strategyId && requested.get('semanticVersion') === choice.strategy.semanticVersion &&
-                requested.get('contentSha256') === choice.strategy.contentSha256 && (requested.get('runId') || '') === (choice.candidateRunId || '')) picker.value = String(index);
+                requested.get('contentSha256') === choice.strategy.contentSha256 && (requested.get('runId') || '') === (choice.candidateRunId || '')) {
+                matchedValue = String(index);
+            }
         });
+        for (const [label, options] of buckets) {
+            if (!options.length) continue;
+            const group = document.createElement('optgroup');
+            group.label = label;
+            group.append(...options);
+            picker.append(group);
+        }
+        if (matchedValue) picker.value = matchedValue;
     }
     // Preserve the exact selected strategy/run in links and streamed requests.
     function strategyQuery(query) {
@@ -224,7 +246,7 @@
         stream?.close();stopQuoteSocket();quoteSocket.view=null;quoteSocket.items.clear();quoteSocket.reason='';const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
         clearChartTradePlan();
         syncChart(null);
-        el('focus-content').hidden=true;if(el('focus-info'))el('focus-info').hidden=true;if(el('focus-controls'))el('focus-controls').hidden=true;if(el('inspector-body'))el('inspector-body').hidden=true;if(el('ticket-dock'))el('ticket-dock').hidden=true;if(el('inspector-empty'))el('inspector-empty').hidden=false;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
+        el('focus-content').hidden=true;if(el('focus-info'))el('focus-info').hidden=true;if(el('focus-trade'))el('focus-trade').hidden=true;if(el('focus-controls'))el('focus-controls').hidden=true;if(el('inspector-body'))el('inspector-body').hidden=true;if(el('inspector-empty'))el('inspector-empty').hidden=false;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
         el('retry').hidden=true;text('connection','Connecting · live quotes');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
         text('count','— stocks');el('news-list').replaceChildren();
         const source=catalog.find(x=>x.key===el('source').value);text('title',source?.name||'All followed stocks');text('description',source?.description||'');
@@ -629,15 +651,9 @@
                 <div>RSI <span data-technical="rsi"></span></div>
             </td>
             <td class="watch-rvol"><strong></strong><small>Daily</small></td>
-            <td class="watch-volume"><strong></strong><small></small></td>
-            <td><button type="button" class="watch-row-action"></button></td>`;
-        const stock=row.querySelector('.watch-symbol-button'), action=row.querySelector('.watch-row-action');
+            <td class="watch-volume"><strong></strong><small></small></td>`;
+        const stock=row.querySelector('.watch-symbol-button');
         stock.textContent=symbol;
-        action.addEventListener('click',event=>{
-            event.stopPropagation();
-            selectStock(symbol,!action.dataset.side);
-            if(action.dataset.side)openOrder(action.dataset.side,action);
-        });
         for(const button of row.querySelectorAll('[data-order-side]')){
             button.addEventListener('click',event=>{
                 event.stopPropagation();
@@ -676,9 +692,9 @@
         strategy.title=signalReason(row);
         renderDailyCells(node,row);
     }
-    // Keep both review actions available and refresh the shorthand recommendation from current observations.
+    // Keep both review actions updated in all-columns mode using server bid/ask prices and restriction hints.
     function updateRowAction(node,row){
-        const action=node.querySelector('.watch-row-action'), symbol=row.membership.symbol;
+        const symbol=row.membership.symbol;
         const reasons={buy:orderRestrictionHint(row,'buy'),sell:orderRestrictionHint(row,'sell')};
         for(const button of node.querySelectorAll('[data-order-side]')){
             const buy=button.dataset.orderSide==='buy', side=button.dataset.orderSide;
@@ -687,11 +703,6 @@
             button.setAttribute('aria-label',(buy?'Buy ':'Sell ')+symbol);
             button.querySelector('.watch-order-price').textContent=price>0?money(price):'—';
         }
-        const side=row.holding&&!reasons.sell?'sell':isSignal(row)&&!reasons.buy?'buy':'';
-        action.dataset.side=side;
-        action.textContent=side==='sell'?'Review exit':side==='buy'?'Review entry':'Inspect';
-        action.setAttribute('aria-label',action.textContent+' '+symbol);
-        action.title=side?'Open the server-reviewed ticket':(row.holding?reasons.sell:reasons.buy)||'Open stock detail';
     }
     // Maps canonical engine gate/rejection codes to plain-English labels while preserving exact audit codes for disclosure.
     const checkLabels = {
@@ -792,16 +803,18 @@
         const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;if(price>0)query.set('limitPrice',price);
         return '/OrderTicket?'+query;
     }
-    // Label the same review URL in the selected stock panel and attach bid/ask and restriction hints in its tooltip.
+    // Keep compact Buy/Sell labels in the chart header and place ask/bid price, override context, and restriction hints in title.
     function reviewLink(side,reason,row,help){
         const link=el(side);
+        if(!link)return;
         const a=row.strategyAssessment;
         const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
-        const buyLabel=isSignal(row)&&a.candidateId&&a.candidateRunId?'Buy signal':isAdministrator?'Override buy':'Buy';
-        link.textContent=(side==='buy'?buyLabel:'Sell')+(price>0?' '+money(price):'');
+        const buyAction=isSignal(row)&&a.candidateId&&a.candidateRunId?'Buy signal':isAdministrator?'Override buy':'Buy';
+        link.textContent=side==='buy'?'Buy':'Sell';
         link.href=orderReviewUrl(row,side);
+        const priceText=price>0?(side==='buy'?'Ask '+money(price):'Bid '+money(price)):'';
         const sideNote=side==='buy'?'Buy shows the ask.':'Sell shows the bid.';
-        link.title=[sideNote,reason].filter(Boolean).join(' ');
+        link.title=[side==='buy'?buyAction:'Sell',priceText,sideNote,reason].filter(Boolean).join(' · ');
         if(reason)link.setAttribute('aria-describedby',help);else link.removeAttribute('aria-describedby');
     }
     // Returns the current server-observed reference price (quote midpoint or previous close) for support/resistance labeling.
@@ -811,20 +824,25 @@
         const prev = row?.previousClose?.close;
         return typeof prev === 'number' && Number.isFinite(prev) && prev > 0 ? prev : null;
     }
-    // Formats one completed daily SMA pill with ↑/↓ directional arrows and neutral resistance semantics using server values only.
+    // Formats one completed daily SMA pill with ↑/↓ directional arrows, neutral resistance semantics, and instant hover tooltip.
     function renderSmaPill(id, label, value, refPrice, detail) {
         const node = el(id);
         if (!node) return;
-        node.title = detail || '';
         if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
             node.textContent = label + ' —';
             delete node.dataset.role;
+            const emptyTip = [detail || `${label} unavailable`, 'Click to highlight on chart'].filter(Boolean).join(' · ');
+            node.title = emptyTip;
+            node.dataset.tooltip = emptyTip;
             return;
         }
         const formatted = fixedMoney(value);
         if (refPrice == null) {
             node.textContent = label + ' ' + formatted;
             delete node.dataset.role;
+            const plainTip = [label + ' ' + formatted, detail, 'Click to highlight on chart'].filter(Boolean).join(' · ');
+            node.title = plainTip;
+            node.dataset.tooltip = plainTip;
             return;
         }
         const role = refPrice >= value ? 'support' : 'resistance';
@@ -832,7 +850,9 @@
         const roleDetail = role === 'resistance' ? 'resistance (above price)' : 'support (below price)';
         node.dataset.role = role;
         node.textContent = label + ' ' + arrow + ' ' + formatted;
-        node.title = [label + ' ' + formatted + ' · ' + roleDetail, detail].filter(Boolean).join(' · ');
+        const tip = [label + ' ' + formatted + ' · ' + roleDetail, detail, 'Click to highlight on chart'].filter(Boolean).join(' · ');
+        node.title = tip;
+        node.dataset.tooltip = tip;
     }
     // Selects the nearest confirmed server support zone (preferring currentOnly and zones at or below the reference price).
     function selectTodaySupportZone(zones, refPrice) {
@@ -849,7 +869,7 @@
         return pool.reduce((best, zone) =>
             Math.abs(zone.lower - refPrice) < Math.abs(best.lower - refPrice) ? zone : best, pool[0]);
     }
-    // Renders the minimal-word Today support pill from confirmed server chart zones, clearing immediately when absent.
+    // Renders the minimal-word Today support pill from confirmed server chart zones with instant hover tooltip.
     function renderTodaySupportPill(row) {
         const node = el('today-support');
         if (!node) return;
@@ -860,7 +880,9 @@
         if (!zone) {
             node.textContent = 'Today support —';
             delete node.dataset.role;
-            node.title = 'No confirmed support zone for this view';
+            const emptyTip = 'No confirmed support zone for this view · Click to highlight support bands on chart';
+            node.title = emptyTip;
+            node.dataset.tooltip = emptyTip;
             return;
         }
         const band = zone.upper - zone.lower >= 0.05
@@ -868,20 +890,25 @@
             : fixedMoney(zone.upper);
         node.dataset.role = 'support';
         node.textContent = 'Today support ' + band;
-        node.title = [zone.currentOnly ? 'Current zone' : 'Historical zone',
+        const tip = [zone.currentOnly ? 'Current zone' : 'Historical zone',
             zone.sourceTimeframe ? zone.sourceTimeframe + ' pivots' : '',
-            zone.effectiveAtUtc ? 'Inputs available ' + when(zone.effectiveAtUtc) : ''].filter(Boolean).join(' · ');
+            zone.effectiveAtUtc ? 'Inputs available ' + when(zone.effectiveAtUtc) : '',
+            'Click to highlight on chart'].filter(Boolean).join(' · ');
+        node.title = tip;
+        node.dataset.tooltip = tip;
     }
-    // Formats the completed daily ATR pill to 2 decimals using server values only.
+    // Formats the completed daily ATR pill to 2 decimals using server values only with instant hover tooltip.
     function renderAtrPill(value, detail) {
         const node = el('atr');
         if (!node) return;
-        node.title = detail || '';
+        const tip = ['14-session daily Average True Range (completed sessions)', detail].filter(Boolean).join(' · ');
+        node.title = tip;
+        node.dataset.tooltip = tip;
         node.textContent = typeof value === 'number' && Number.isFinite(value) && value >= 0
             ? 'ATR ' + fixedMoney(value)
             : 'ATR —';
     }
-    // Formats completed daily 1D/1W/1M high-low volatility percentages from server observation without inventing values.
+    // Formats completed daily 1D/1W/1M high-low volatility percentages from server observation with plain-English tooltip.
     function renderVolatilityPill(row) {
         const node = el('volatility');
         if (!node) return;
@@ -891,7 +918,27 @@
             ? value.toFixed(1) + '%'
             : '—';
         node.textContent = 'Vol 1D ' + pct(vol?.dailyRangePct) + ' · 1W ' + pct(vol?.weekRangePct) + ' · 1M ' + pct(vol?.monthRangePct);
-        node.title = 'Completed daily high-low range vs latest close (1D = 1 session, 1W = 5 sessions, 1M = 21 sessions)';
+        const volTip = 'Stock price swing range (High − Low ÷ Close): 1D = last completed session, 1W = 5 sessions, 1M = 21 sessions';
+        node.title = volTip;
+        node.dataset.tooltip = volTip;
+    }
+    // Syncs active indicator highlight state across the Desk indicator pills without triggering redundant chart redraws.
+    function syncDeskHighlightUi(key) {
+        deskHighlightedOverlay = key ? String(key).toLowerCase() : null;
+        const container = el('technicals-block');
+        if (!container) return;
+        for (const pill of container.querySelectorAll('[data-highlight-key]')) {
+            const active = pill.dataset.highlightKey === deskHighlightedOverlay;
+            pill.dataset.highlighted = String(active);
+            pill.setAttribute('aria-pressed', String(active));
+        }
+    }
+    // Toggles interactive chart highlighting for a clicked SMA or support pill and forwards it to the mounted chart.
+    function toggleDeskHighlight(key) {
+        const normalized = key ? String(key).toLowerCase() : null;
+        const next = deskHighlightedOverlay === normalized ? null : normalized;
+        syncDeskHighlightUi(next);
+        deskChart?.setHighlightedOverlay?.(next);
     }
     // Receives visible server-computed zones from the mounted chart and updates Today support only for the active symbol.
     function handleDeskChartZones(zones, symbol) {
@@ -926,6 +973,7 @@
         deskChartZones = [];
         deskChartZonesSymbol = null;
         deskChartSeriesInfo = '';
+        syncDeskHighlightUi(null);
         renderTodaySupportPill(null);
         if (symbol && !deskChart) {
             const root = el('focus-content').querySelector('[data-stock-chart]');
@@ -937,7 +985,8 @@
                 compactDesk: true,
                 controlsHost: el('chart-controls-slot'),
                 quickIntervalHost: el('interval-quick'),
-                onSeriesInfo: handleDeskChartSeriesInfo
+                onSeriesInfo: handleDeskChartSeriesInfo,
+                onHighlightChange: syncDeskHighlightUi
             });
         }
         deskChart?.setSymbol(symbol);
@@ -1036,9 +1085,9 @@
         const row=snapshot?.rows.find(x=>x.membership.symbol===selected);
         el('focus-content').hidden=!row;
         if(el('focus-info'))el('focus-info').hidden=!row;
+        if(el('focus-trade'))el('focus-trade').hidden=!row;
         if(el('focus-controls'))el('focus-controls').hidden=!row;
         if(el('inspector-body'))el('inspector-body').hidden=!row;
-        if(el('ticket-dock'))el('ticket-dock').hidden=!row;
         if(el('inspector-empty'))el('inspector-empty').hidden=Boolean(row);
         syncChart(row?.membership.symbol ?? null);
         void syncChartTradePlan(row ?? null);
@@ -1057,11 +1106,6 @@
         const buyReason=orderRestrictionHint(row,'buy'),sellReason=orderRestrictionHint(row,'sell');
         reviewLink('buy',buyReason,row,'watch-order-help');
         reviewLink('sell',sellReason,row,sellReason===buyReason?'watch-order-help':'watch-exit-help');
-        const previewBtn=el('preview-bracket');
-        if(previewBtn){
-            previewBtn.title=['Buy shows the ask. Open the server-reviewed bracket order ticket.',buyReason].filter(Boolean).join(' ');
-            if(buyReason)previewBtn.setAttribute('aria-describedby','watch-order-help');else previewBtn.removeAttribute('aria-describedby');
-        }
         text('order-help',buyReason);el('order-help').hidden=!buyReason;
         text('exit-help',sellReason);el('exit-help').hidden=!sellReason||sellReason===buyReason;
         const symbol=encodeURIComponent(row.membership.symbol);
@@ -1236,7 +1280,17 @@
     setScannerDensity(savedDesk?.scannerDensityV2 || 'compact');
     syncTableStrategyState();
     el('density-toggle')?.addEventListener('click', () => setScannerDensity(scannerDensity === 'compact' ? 'full' : 'compact'));
-    el('preview-bracket')?.addEventListener('click', event => openOrder('buy', event.currentTarget));
+    el('technicals-block')?.addEventListener('click', event => {
+        const pill = event.target.closest('[data-highlight-key]');
+        if (pill) toggleDeskHighlight(pill.dataset.highlightKey);
+    });
+    el('technicals-block')?.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const pill = event.target.closest('[data-highlight-key]');
+        if (!pill) return;
+        event.preventDefault();
+        toggleDeskHighlight(pill.dataset.highlightKey);
+    });
     for (const tab of desk.querySelectorAll('[data-desk-pane]')) {
         tab.addEventListener('click', () => setActiveDeskPane(tab.dataset.deskPane));
     }

@@ -25,4 +25,8 @@ internal static class RetiredStrategyFixtures
     /// <summary>The fixture catalog, which validates and identifies the retired files exactly as the real catalog did.</summary>
     public static StrategyArtifactCatalog Catalog(SimpleYamlReader? reader = null) =>
         new(Root, CatalogPath, reader ?? new SimpleYamlReader());
+
+    /// <summary>Returns a fixture catalog backed by <see cref="Root"/> with the set-aside ORB and ETF strategies enabled inside <paramref name="folder"/>.</summary>
+    public static StrategyArtifactCatalog SetAsideEnabledCatalog(string folder, SimpleYamlReader? reader = null) =>
+        new(Root, TestRepository.SetAsideStrategiesEnabledCatalog(folder), reader ?? new SimpleYamlReader());
 }

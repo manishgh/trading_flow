@@ -321,7 +321,7 @@ public sealed class OpeningRangeBreakoutTests
     public void CompletedBreakout_UsesCompletedPostRangeCloseAndOutwardCandleStop(bool shortSide)
     {
         var fixture = Fixture(shortSide, fractional: true);
-        var strategy = new SimpleYamlReader().ReadStrategy(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "opening-range-breakout.bt-v3.yaml"));
+        var strategy = new SimpleYamlReader().ReadStrategy(RetiredStrategyFixtures.Strategy("opening-range-breakout.bt-v3.yaml"));
         Assert.Null(new OpeningRangeBreakoutEvaluator().Evaluate(strategy, fixture.Bars, fixture.Snapshots, fixture.Context, fixture.AsOf).Signal);
         var candle = Bar(fixture.AsOf, shortSide ? 95m : 100m, shortSide ? 95.1234m : 102m,
             shortSide ? 93m : 99.8765m, shortSide ? 94m : 101m, 1000);

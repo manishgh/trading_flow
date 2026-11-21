@@ -103,8 +103,8 @@ public sealed class EvidenceCatalogMarketDataProviderTests
             () => throw new InvalidOperationException("no Finviz"), () => null, () => { created++; return new HttpClient(); });
         var config = new EvidenceCatalogProviderConfig(Path.Combine(Path.GetTempPath(), "absent-" + Guid.NewGuid().ToString("N"), "catalog.db"),
             Path.Combine(Path.GetTempPath(), "absent-objects"), new string('a', 64), "daily", "sessions", ["five"], ["one"]);
-        var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(Path.Combine(TestRepository.FindRoot(), "configs", "backtest",
-            "orb-published-recipe-whole-market-profile.yaml")) with
+        var run = new TradingFlow.Engine.Configuration.SimpleYamlReader().ReadBacktestRun(
+            RetiredStrategyFixtures.Profile("orb-published-recipe-whole-market-profile.yaml")) with
         { Provider = EvidenceCatalogMarketDataProvider.ProviderName, Providers = new(new("sip"), config) };
 
         var provider = providers.CreateMarket(run, new Moq.Mock<IRawArchiveWriter>(Moq.MockBehavior.Strict).Object);

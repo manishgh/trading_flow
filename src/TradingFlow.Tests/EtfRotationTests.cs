@@ -141,8 +141,7 @@ public sealed class EtfRotationTests
     [Fact]
     public void OffListExit_IsBacktestOnlyAndNeedsADecisionSchedule()
     {
-        var repo = TestRepository.FindRoot();
-        var file = Path.Combine(repo, "configs", "backtest", "strategies", "etf-rotation-12-1.bt-v1.yaml");
+        var file = RetiredStrategyFixtures.Strategy("etf-rotation-12-1.bt-v1.yaml");
         var rotation = new SimpleYamlReader().ReadStrategy(file);
         var withoutOtherRules = rotation with
         {
@@ -196,20 +195,19 @@ public sealed class EtfRotationTests
         Func<OhlcvBar, OhlcvBar>? transform = null, int closeHour = 16)
     {
         using var root = new TemporaryFolder();
-        var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        // Enable the recipe only in this synthetic test's separate manifest; leave the operator catalog parked.
+        // Enable the retired fixture recipe only in this synthetic test's separate manifest.
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(
-            File.ReadAllText(Path.Combine(repo, "configs", "strategy-catalog.json")))!;
+            File.ReadAllText(RetiredStrategyFixtures.CatalogPath))!;
         var rotation = manifest["strategies"]!.AsArray()
             .Single(item => item!["strategyId"]!.GetValue<string>() == "etf.rotation-12-1")!;
         rotation["enabled"] = true;
         var manifestPath = Path.Combine(root.Path, "strategy-catalog.json");
         File.WriteAllText(manifestPath, manifest.ToJsonString());
-        var catalog = new StrategyArtifactCatalog(repo, manifestPath, reader);
+        var catalog = new StrategyArtifactCatalog(RetiredStrategyFixtures.Root, manifestPath, reader);
         var runtime = new StrategyRunArtifactValidator(reader, catalog).ReadAndAuthorizeRuntimeArtifact(
-            Path.Combine(repo, "configs", "backtest", "strategies", "etf-rotation-12-1.bt-v1.yaml"), StrategySelectionMode.Backtest);
-        var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "etf-rotation-profile.yaml"));
+            RetiredStrategyFixtures.Strategy("etf-rotation-12-1.bt-v1.yaml"), StrategySelectionMode.Backtest);
+        var profile = reader.ReadBacktestRun(RetiredStrategyFixtures.Profile("etf-rotation-profile.yaml"));
         var screen = await PublishListAsync(Path.Combine(root.Path, "screen"));
         var start = Midnight(new(2026, 7, 1));
         var run = profile with

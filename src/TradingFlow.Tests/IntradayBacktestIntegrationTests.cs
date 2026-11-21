@@ -29,8 +29,8 @@ public sealed partial class IntradayBacktestIntegrationTests
         {
             var repo = TestRepository.FindRoot();
             var reader = new SimpleYamlReader();
-            var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root), reader);
-            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v3.yaml");
+            var artifacts = RetiredStrategyFixtures.SetAsideEnabledCatalog(root, reader);
+            var strategyPath = RetiredStrategyFixtures.Strategy("opening-range-breakout.bt-v3.yaml");
             if (!completedBreakout) strategyPath = Path.Combine(repo, "src", "TradingFlow.Tests", "Fixtures", "Strategies",
                 outwardRounding ? "opening-range-breakout-stop-market.v2.fixture.yaml" : "opening-range-breakout-stop-market.v1.fixture.yaml");
             var runtime = !completedBreakout
@@ -221,10 +221,13 @@ public sealed partial class IntradayBacktestIntegrationTests
         {
             var repo = TestRepository.FindRoot();
             var reader = new SimpleYamlReader();
-            var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root), reader);
-            var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", strategyFile);
+            var artifacts = RetiredStrategyFixtures.SetAsideEnabledCatalog(root, reader);
+            var strategyPath = RetiredStrategyFixtures.Strategy(strategyFile);
             var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
-            var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", profileFile));
+            var profilePath = File.Exists(RetiredStrategyFixtures.Profile(profileFile))
+                ? RetiredStrategyFixtures.Profile(profileFile)
+                : Path.Combine(repo, "configs", "backtest", profileFile);
+            var profile = reader.ReadBacktestRun(profilePath);
             var start = DateTimeOffset.Parse("2026-10-01T13:30:00Z");
             var end = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
             var run = BacktestExecutionProfileResolver.Resolve(profile, [runtime.Definition]) with

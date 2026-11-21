@@ -77,7 +77,7 @@ public sealed class OpeningRangeWorkflowIntegrationTests
         Assert.DoesNotContain(new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader())
             .GetSelectable(StrategySelectionMode.Backtest), artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout");
         using var folder = new TemporaryFolder();
-        var catalog = new StrategyArtifactCatalog(root, TestRepository.SetAsideStrategiesEnabledCatalog(folder.Path), new SimpleYamlReader());
+        var catalog = RetiredStrategyFixtures.SetAsideEnabledCatalog(folder.Path);
         var artifacts = catalog.GetSelectable(StrategySelectionMode.Backtest)
             .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
         Assert.Equal(new[] { "1.2.0", "2.0.0", "2.1.0" }, artifacts.Select(artifact => artifact.Identity.SemanticVersion));
@@ -156,10 +156,10 @@ public sealed class OpeningRangeWorkflowIntegrationTests
         return result;
     }
 
-    /// <summary>Uses immutable ordinary recipes, so the tests exercise the same supported selections as Web and Android.</summary>
+    /// <summary>Uses immutable test fixture recipes so ORB workflow checks stay independent of the active swing catalog.</summary>
     private static StrategyDefinition ReadStrategy(string name) => new SimpleYamlReader().ReadStrategy(name.EndsWith(".fixture.yaml", StringComparison.Ordinal)
         ? Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Tests", "Fixtures", "Strategies", name)
-        : Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", name));
+        : RetiredStrategyFixtures.Strategy(name));
 
     /// <summary>Loads the shared profile without generating a run or requesting market records.</summary>
     private static BacktestRunConfig ReadProfile() => new SimpleYamlReader().ReadBacktestRun(

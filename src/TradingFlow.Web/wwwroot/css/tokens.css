@@ -1,0 +1,86 @@
+/* UI 2.0 Design Tokens & Base Accessibility Utilities (1 of 3 consolidated UI 2.0 stylesheets).
+   Loaded after legacy and page-scoped Styles sections so palette tokens, contrast-safe themes,
+   tabular numerals, focus rings, and scoped control heights win cleanly. Red/rose is reserved
+   strictly for losses, vetoes, and live-money warnings, never for ordinary actions. */
+
+/* ---- Slate Dark (default) ------------------------------------------------ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #0b111b; --color-surface: #131c2b; --color-text: #f1f5f9;
+  --color-accent: #3b82f6; --color-divider: #5a6b85;
+  --color-neutral-100: #101827; --color-neutral-200: #131c2b; --color-neutral-300: #243247;
+  --color-neutral-400: #39495f; --color-neutral-500: #566882; --color-neutral-600: #7b8ba3;
+  --color-neutral-700: #a3b1c4; --color-neutral-800: #cbd5e1; --color-neutral-900: #f1f5f9;
+  --color-accent-100: #14233d; --color-accent-200: #1a3560; --color-accent-300: #214a85;
+  --color-accent-400: #2b62b8; --color-accent-500: #3b82f6; --color-accent-600: #5b9bf8;
+  --color-accent-700: #8bb8fa; --color-accent-800: #b8d4fc; --color-accent-900: #dbe9fe;
+  --color-gain: #2dd4bf; --color-gain-surface: #0f2a2a; --color-loss: #fb7185; --color-loss-surface: #2e1620;
+  --panel: #131c2b; --panel-raised: #0f1725; --panel-subtle: #182335; --panel-inset: #1d2a40;
+  --line: #243247; --line-control: #5a6b85; --on-accent: #ffffff;
+  --good-border: #1f7a72; --good-fill: #14b8a6; --on-good: #04201d;
+  --bad-border: #8a3a4d; --bad-fill: #e11d48; --on-bad: #ffffff;
+  --warn: #fbbf24; --warn-ink: #fbbf24; --warn-surface: #2c2310; --warn-border: #7a5d12; --warn-fill: #f59e0b;
+  --focus-ring: #8bb8fa; --desk-canvas: #0b111b; --desk-panel: #131c2b;
+}
+
+/* ---- Calm Daylight (light) ----------------------------------------------- */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: #f8fafc; --color-surface: #ffffff; --color-text: #0f172a;
+  --color-accent: #2563eb; --color-divider: #94a3b8;
+  --color-neutral-100: #f8fafc; --color-neutral-200: #f1f5f9; --color-neutral-300: #e2e8f0;
+  --color-neutral-400: #cbd5e1; --color-neutral-500: #94a3b8; --color-neutral-600: #64748b;
+  --color-neutral-700: #475569; --color-neutral-800: #334155; --color-neutral-900: #0f172a;
+  --color-accent-100: #eff6ff; --color-accent-200: #dbeafe; --color-accent-300: #bfdbfe;
+  --color-accent-400: #93c5fd; --color-accent-500: #3b82f6; --color-accent-600: #2563eb;
+  --color-accent-700: #1d4ed8; --color-accent-800: #1e40af; --color-accent-900: #1e3a8a;
+  --color-gain: #0f766e; --color-gain-surface: #ecfdf5; --color-loss: #be123c; --color-loss-surface: #fff1f2;
+  --panel: #ffffff; --panel-raised: #ffffff; --panel-subtle: #f8fafc; --panel-inset: #f1f5f9;
+  --line: #e2e8f0; --line-control: #94a3b8; --on-accent: #ffffff;
+  --good-border: #5eaaa2; --good-fill: #0f766e; --on-good: #ffffff;
+  --bad-border: #e58aa2; --bad-fill: #be123c; --on-bad: #ffffff;
+  --warn: #b45309; --warn-ink: #92400e; --warn-surface: #fffbeb; --warn-border: #f1c36b; --warn-fill: #f59e0b;
+  --focus-ring: #1d4ed8; --desk-canvas: #f8fafc; --desk-panel: #ffffff;
+}
+
+/* ---- Colour-blind safe: blue (up) / orange (down) on the dark ground ------ */
+:root[data-theme="cvd"] {
+  color-scheme: dark;
+  --color-bg: #0b111b; --color-surface: #131c2b; --color-text: #f8fafc;
+  --color-gain: #56b4e9; --color-gain-surface: #0d2233; --color-loss: #e69f00; --color-loss-surface: #2c2008;
+  --good-fill: #0072b2; --good-border: #2a7fb0; --on-good: #ffffff;
+  --bad-fill: #d55e00; --bad-border: #a8651a; --on-bad: #ffffff;
+  --focus-ring: #f0e442;
+}
+
+/* Operators with no stored choice follow the OS when theme.js applies "system". */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --color-bg: #0b111b; --color-surface: #131c2b; --color-text: #f1f5f9;
+    --color-accent: #3b82f6; --color-gain: #2dd4bf; --color-loss: #fb7185;
+    --panel: #131c2b; --panel-raised: #0f1725; --panel-subtle: #182335; --panel-inset: #1d2a40;
+    --line: #243247; --line-control: #5a6b85; --on-accent: #ffffff; --focus-ring: #8bb8fa;
+  }
+}
+
+/* ---- Numbers never jitter; targets are comfortable; focus is unmistakable -- */
+.num, td.num, th.num, time, [data-clock] time, .account-figures strong,
+.regime-chip strong, .regime-chip__value, .metric, .price, .pct {
+  font-variant-numeric: tabular-nums;
+}
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+/* Scoped 40px touch/click height (WCAG 2.5.8): never bare `button`, so compact pills/tabs stay compact. */
+.btn:not(.btn-sm), .btn-md, select.input, input.input { min-height: 40px; }
+.environment-rail { z-index: 40; }
+
+/* Distinct chart overlay study palette (Blue SMA20, Amber SMA50, Violet SMA200 — never blending into teal/rose candles). */
+:root {
+  --stock-chart-study-0: #3b82f6;
+  --stock-chart-study-1: #f59e0b;
+  --stock-chart-study-2: #a855f7;
+}

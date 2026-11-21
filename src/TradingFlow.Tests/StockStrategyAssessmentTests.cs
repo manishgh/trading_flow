@@ -98,7 +98,7 @@ public sealed class StockStrategyAssessmentTests
         Assert.Null(missing.CandidateId);
     }
 
-    /// <summary>Hides retired strategies without catalog YAML and disabled catalog strategies from the Desk picker without deleting SQLite audit rows.</summary>
+    /// <summary>Hides retired strategies without catalog YAML and disabled catalog strategies from the Desk picker without deleting SQLite audit rows, and tags active choices with direction.</summary>
     [Fact]
     public async Task ChoicesAsync_ExcludesRetiredAndDisabledRecordedStrategiesWithoutDeletingRows()
     {
@@ -106,15 +106,33 @@ public sealed class StockStrategyAssessmentTests
         await database.InitializeAsync();
         var enabled = await SeedDecisionAsync(database, "technical.bollinger-squeeze-breakout", Guid.NewGuid());
         var retired = await SeedDecisionAsync(database, "swing.connors-rsi2", Guid.NewGuid());
-        var disabled = await SeedDecisionAsync(database, "technical.opening-range-breakout", Guid.NewGuid());
+        var disabled = await SeedDecisionAsync(database, "technical.parabolic-exhaustion-short", Guid.NewGuid());
         var clock = new CandidateWorkflowTestClock(enabled.Request.AsOfUtc.AddMinutes(1));
         using var cache = new MemoryCache(new MemoryCacheOptions());
-        var service = Service(database, clock, cache);
+        using var temp = new TemporaryFolder();
+        var root = TestRepository.FindRoot();
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root, "configs", "strategy-catalog.json")))!;
+        var parked = manifest["strategies"]!.AsArray()
+            .Single(item => item!["strategyId"]!.GetValue<string>() == "technical.parabolic-exhaustion-short")!;
+        parked["enabled"] = false;
+        parked["disabledReason"] = "Disabled in test fixture.";
+        var manifestPath = Path.Combine(temp.Path, "strategy-catalog.json");
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var service = new DeskStrategyAssessmentService(
+            database,
+            database.Queries(clock),
+            database.Queries(clock),
+            new StrategyArtifactCatalog(root, manifestPath, new SimpleYamlReader()),
+            cache,
+            clock);
 
         var choices = await service.ChoicesAsync(default);
-        Assert.Contains(choices, choice => choice.CandidateRunId == enabled.RunId && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakout");
+        var enabledRecorded = Assert.Single(choices, choice => choice.CandidateRunId == enabled.RunId && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakout");
+        Assert.Equal("long", enabledRecorded.Direction);
+        Assert.Contains(choices, choice => choice.CandidateRunId is null && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakout" && choice.Direction == "long");
+        Assert.Contains(choices, choice => choice.CandidateRunId is null && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakdown" && choice.Direction == "short");
         Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "swing.connors-rsi2");
-        Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "technical.opening-range-breakout");
+        Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "technical.parabolic-exhaustion-short");
 
         // Persisted SQLite rows remain intact and directly readable by exact run/strategy identity.
         await using var after = database.CreateDbContext();

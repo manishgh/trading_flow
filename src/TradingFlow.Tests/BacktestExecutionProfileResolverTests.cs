@@ -73,7 +73,7 @@ public sealed class BacktestExecutionProfileResolverTests
     private static BacktestRunConfig Profile() => new SimpleYamlReader().ReadBacktestRun(
         Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "swing-backtest-profile.yaml"));
 
-    /// <summary>Uses the same registered day recipe the normal catalog presents to both clients.</summary>
+    /// <summary>Uses the retired day recipe fixture so profile resolution keeps exercising intraday behavior.</summary>
     private static StrategyDefinition DayStrategy() => new SimpleYamlReader().ReadStrategy(
-        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "opening-range-breakout.bt-v3.yaml"));
+        RetiredStrategyFixtures.Strategy("opening-range-breakout.bt-v3.yaml"));
 }

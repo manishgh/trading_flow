@@ -111,13 +111,12 @@ public sealed class ResearchScreenRunTests
         Action<BacktestResult, string> verify, string? folderName = null)
     {
         using var root = new TemporaryFolder(folderName);
-        var repo = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        // ORB 2.1.0 is the vehicle for the shared research-screen run; it was set aside on 18 Nov, so a test-owned catalog copy enables it.
-        var artifacts = new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root.Path), reader);
-        var strategyPath = Path.Combine(repo, "configs", "backtest", "strategies", "opening-range-breakout.bt-v5.yaml");
+        // ORB 2.1.0 is the vehicle for the shared research-screen run; load it from the test-owned retired fixture catalog.
+        var artifacts = RetiredStrategyFixtures.SetAsideEnabledCatalog(root.Path, reader);
+        var strategyPath = RetiredStrategyFixtures.Strategy("opening-range-breakout.bt-v5.yaml");
         var runtime = new StrategyRunArtifactValidator(reader, artifacts).ReadAndValidateRuntimeArtifact(strategyPath, StrategySelectionMode.Backtest);
-        var profile = reader.ReadBacktestRun(Path.Combine(repo, "configs", "backtest", "orb-published-recipe-whole-market-profile.yaml"));
+        var profile = reader.ReadBacktestRun(RetiredStrategyFixtures.Profile("orb-published-recipe-whole-market-profile.yaml"));
         var screen = PublishedResearchScreen.Read(await SyntheticScreen.PublishAsync(Path.Combine(root.Path, "screens", "screen-a"), [("2026-10-01", "ABC", "sec-abc")]));
         var end = DateTimeOffset.Parse("2026-10-01T20:00:00Z");
         var run = BacktestExecutionProfileResolver.Resolve(profile, [runtime.Definition]) with

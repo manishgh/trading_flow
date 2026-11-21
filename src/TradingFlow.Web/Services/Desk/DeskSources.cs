@@ -41,11 +41,11 @@ public sealed partial class DeskSources(IDbContextFactory<TradingFlowDbContext> 
     private readonly SemaphoreSlim screenReadGate = new(1, 1);
     public const int DisplayLimit = 50;
     public static readonly IReadOnlyList<DeskSource> BuiltIns = [
-        new("swing:trend", "Established trends", "Finviz lists", "Above the 50- and 200-day averages; price above $10; average volume above 500K.",
+        new("swing:trend", "Established trends", "Finviz signals", "Above the 50- and 200-day averages; price above $10; average volume above 500K.",
             "ind_stocksonly,sh_avgvol_o500,sh_price_o10,ta_sma50_pa,ta_sma200_pa"),
-        new("swing:highs", "New annual highs", "Finviz lists", "New 52-week highs in liquid stocks. Discovery only.",
+        new("swing:highs", "New annual highs", "Finviz signals", "New 52-week highs in liquid stocks. Discovery only.",
             "ind_stocksonly,sh_avgvol_o500,sh_price_o10,ta_highlow52w_nh"),
-        new("swing:pullback", "Trend pullbacks", "Finviz lists", "Below the 20-day average, above the 50- and 200-day averages. Discovery only.",
+        new("swing:pullback", "Trend pullbacks", "Finviz signals", "Below the 20-day average, above the 50- and 200-day averages. Discovery only.",
             "ind_stocksonly,sh_avgvol_o500,sh_price_o10,ta_sma20_pb,ta_sma50_pa,ta_sma200_pa")
     ];
 
@@ -56,17 +56,17 @@ public sealed partial class DeskSources(IDbContextFactory<TradingFlowDbContext> 
         return (await wishlists.ListAsync(ct)).Where(x => !revisions.Contains(x.Id)).ToArray();
     }
 
-    // Publish operator labels while retaining persisted wishlist source keys and identities.
+    // Publish operator labels with an explicit optgroup label on every source while retaining persisted source keys and identities.
     public async Task<IReadOnlyList<DeskSource>> CatalogAsync(CancellationToken ct)
     {
         var lists = await FollowedListsAsync(ct);
         var saved = await presets.ListAsync(ScreenerScope.Swing, ct);
-        return new[] { new DeskSource("all", "All followed stocks", "", "All active stocks across your stock groups, without duplicates.") }
-            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My stock groups", "Stock group stocks. Select a strategy to collect and evaluate its conditions.")))
+        return new[] { new DeskSource("all", "All followed stocks", "Overview", "All active stocks across your stock groups, without duplicates.") }
+            .Concat(lists.Select(x => new DeskSource("wishlist:" + x.Id, x.Name, "My groups", "Stock group stocks. Select a strategy to collect and evaluate its conditions.")))
             .Concat(earnings is null ? [] : EarningsSources)
+            .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Saved screens", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
             .Concat(BuiltIns)
-            .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz lists", "Finviz discovery only; normal strategy admission is still required.", x.Query)))
-            .Concat(saved.Select(x => new DeskSource("saved:" + x.Id, x.Name, "Finviz lists", "Locally saved/imported filters; not automatically synced with Finviz.", x.FilterQuery)))
+            .Concat(TradingFlow.Finviz.FinvizSignalCatalog.All.Select(x => new DeskSource("signal:" + x.Code, x.Label, "Finviz signals", "Finviz discovery only; normal strategy admission is still required.", x.Query)))
             .ToArray();
     }
 
@@ -122,7 +122,7 @@ public sealed partial class DeskSources(IDbContextFactory<TradingFlowDbContext> 
     public async Task<DeskSelection> ResolvePreparedAsync(TradingFlow.Contracts.Preparation.PreparationHandoff review,
         CancellationToken token, int page, string search)
     {
-        var source = new DeskSource("prepared", "Reviewed preparation", "Preparation",
+        var source = new DeskSource("prepared", "Reviewed preparation", "Prepared",
             $"Saved revision {review.ParentRevisionId:D} · evidence valid until {review.ExpiresAtUtc:yyyy-MM-dd HH:mm:ss} UTC · advisory stock list.");
         var followed = Merge(await FollowedListsAsync(token)).ToDictionary(member => member.Symbol, StringComparer.Ordinal);
         var members = review.Symbols.Select(symbol => followed.GetValueOrDefault(symbol) ??

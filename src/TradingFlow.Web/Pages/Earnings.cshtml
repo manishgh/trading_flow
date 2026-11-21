@@ -233,7 +233,9 @@
    Body - timeline and evidence rail
    =========================================================================== *@
 <div class="earnings-body">
-    <section id="earnings-feed" class="earnings-timeline" aria-label="Chronological earnings calendar"></section>
+    <section id="earnings-feed" class="earnings-timeline" data-empty="true" aria-label="Chronological earnings calendar">
+        <p class="empty-state earnings-empty-line">Loading scheduled earnings reports, EPS/revenue results, and breakout checks…</p>
+    </section>
 
     <aside class="earnings-rail" aria-labelledby="earnings-news-title">
         <header class="earnings-rail-head">
@@ -253,7 +255,7 @@
 </div>
 
 <template id="earnings-empty-template">
-    <p class="empty-state">Earnings evidence is being read.</p>
+    <p class="empty-state earnings-empty-line">Earnings evidence is being read.</p>
 </template>
 
 <partial name="_GroupActions" />

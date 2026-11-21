@@ -58,7 +58,9 @@
     <link rel="stylesheet" href="~/css/order-workflow.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/desk-theme.css" asp-append-version="true" />
     @await RenderSectionAsync("Styles", required: false)
-    <link rel="stylesheet" href="~/css/ui2-foundation.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/tokens.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/components.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/workspaces.css" asp-append-version="true" />
     <script src="~/js/theme.js" asp-append-version="true"></script>
 </head>
 <body class="workspace-app @(signedIn ? "workspace-authenticated" : "workspace-public")"

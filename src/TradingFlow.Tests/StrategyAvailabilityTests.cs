@@ -210,15 +210,14 @@ public sealed class StrategyAvailabilityTests
         public SimpleYamlReader Reader { get; } = new();
         private string Manifest => Path.Combine(Root, "configs", "strategy-catalog.json");
 
-        // Mirror the exact real strategy set so the normal catalog completeness and hashing rules run in every test.
+        // Mirror the retired/set-aside fixture strategy set so catalog completeness, lineage, and parking rules run in isolation.
         public Fixture()
         {
-            var repo = TestRepository.FindRoot();
-            var sourceManifest = Path.Combine(repo, "configs", "strategy-catalog.json");
+            var sourceRoot = RetiredStrategyFixtures.Root;
+            var sourceManifest = RetiredStrategyFixtures.CatalogPath;
             Directory.CreateDirectory(Path.GetDirectoryName(Manifest)!);
             File.Copy(sourceManifest, Manifest);
-            // These tests park and restore the opening-range versions; the operator catalog set them aside on 18 Nov 2026, so
-            // the copy starts with them enabled (every other entry, path and hash is the real one).
+            // These tests park and restore the opening-range and ETF versions; enable the set-aside fixtures in this isolated copy.
             var copy = JsonNode.Parse(File.ReadAllText(Manifest))!;
             TestRepository.EnableSetAsideStrategies(copy);
             File.WriteAllText(Manifest, copy.ToJsonString());
@@ -228,7 +227,7 @@ public sealed class StrategyAvailabilityTests
                 var relative = item.GetProperty("sourcePath").GetString()!;
                 var target = Path.Combine(Root, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(Path.Combine(repo, relative), target);
+                File.Copy(Path.Combine(sourceRoot, relative), target);
             }
         }
 

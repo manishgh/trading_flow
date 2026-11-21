@@ -327,7 +327,8 @@
                     return column + measurement(value, item.unit);
                 }).join(' · ') : 'Unavailable for this candle';
                 return [title(item), value, point?.availableAtUtc, point?.anchorUtc,
-                    point?.sourceRevision, point?.reconstructed, point?.observedAtUtc, point?.historySegment];
+                    point?.sourceRevision, point?.reconstructed, point?.observedAtUtc, point?.historySegment,
+                    item.formula, item.slot, item.token];
             });
         }
 

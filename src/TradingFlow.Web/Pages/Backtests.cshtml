@@ -75,6 +75,7 @@
                 <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="short">Select Short</button>
                 <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="clear">Clear</button>
             </div>
+            <p class="note lab-research-only-note">All listed strategies are research only.</p>
             <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
@@ -88,7 +89,10 @@
                             <span class="lab-strategy-meta">
                                 @StrategyHorizonResolver.Resolve(strategy.Definition) · @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
                             </span>
-                            <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
+                            @if (strategy.Lifecycle != StrategyLifecycleState.Research)
+                            {
+                                <span class="tag tag-neutral">@strategy.Lifecycle.ToString().ToUpperInvariant()</span>
+                            }
                         </span>
                     </label>
                     <details class="lab-strategy-details lab-provenance-popover">

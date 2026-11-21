@@ -36,11 +36,10 @@ public sealed class MonthlyBacktestPresentationTests
     [Fact]
     public void DayExitOnOctoberFirst_RemainsInOctoberAndCarriesPriorMonthEquity()
     {
-        var root = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs/strategy-catalog.json"), reader);
+        var catalog = RetiredStrategyFixtures.Catalog(reader);
         var runtime = new StrategyRunArtifactValidator(reader, catalog).ReadAndValidateRuntimeArtifact(
-            Path.Combine(root, "configs/backtest/strategies/opening-range-breakout.bt-v3.yaml"), StrategySelectionMode.Backtest);
+            RetiredStrategyFixtures.Strategy("opening-range-breakout.bt-v3.yaml"), StrategySelectionMode.Backtest);
         var start = DateTimeOffset.Parse("2026-09-01T04:00:00Z");
         var end = DateTimeOffset.Parse("2026-11-01T04:00:00Z");
         var exit = DateTimeOffset.Parse("2026-10-01T19:55:00Z");

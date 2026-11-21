@@ -16,10 +16,8 @@ public sealed class HistoricalNewsPresenceDecisionTests
     [InlineData("technical.opening-range-breakout", "1.2.0", "bc73189a1c26ae2741402c2ad84a3a3e88aec709d43253590f7c7fb3c6fdbcc4")]
     public void OriginalTechnicalArtifacts_RetainTheirPublishedCanonicalIdentities(string id, string version, string hash)
     {
-        var root = TestRepository.FindRoot();
-        // Retired swing versions keep their identities in the test-owned fixture catalog.
-        var catalog = id.StartsWith("swing.", StringComparison.Ordinal) ? RetiredStrategyFixtures.Catalog()
-            : new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
+        // Retired swing and set-aside intraday versions keep their identities in the test-owned fixture catalog.
+        var catalog = RetiredStrategyFixtures.Catalog();
         var artifact = catalog.RequireExact(new StrategyArtifactIdentity(id, version, hash));
         Assert.Null(artifact.ResolvedStrategy.EntryRules.HistoricalNewsDiagnostic);
         Assert.Null(artifact.AdmissionProfile.HistoricalNewsDiagnosticPolicyId);

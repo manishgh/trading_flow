@@ -175,7 +175,7 @@ public sealed class EtfTrendMonthEndTests
         var reader = new SimpleYamlReader();
         var catalog = Catalog(reader);
         var runtime = StrategyDecisionRequestAssembler.CreateBacktestRuntimeStrategy(validated.Definition, catalog);
-        var profile = reader.ReadBacktestRun(Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "etf-trend-profile.yaml"));
+        var profile = reader.ReadBacktestRun(RetiredStrategyFixtures.Profile("etf-trend-profile.yaml"));
         var screen = await PublishEligibleScreenAsync(Path.Combine(root.Path, "screen"));
         var start = Midnight(new(2026, 7, 1));
         var run = profile with
@@ -205,23 +205,20 @@ public sealed class EtfTrendMonthEndTests
         return PublishedResearchScreen.Read(folder);
     }
 
-    private static StrategyArtifactCatalog Catalog(SimpleYamlReader reader)
-    {
-        var root = TestRepository.FindRoot();
-        return new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
-    }
+    private static StrategyArtifactCatalog Catalog(SimpleYamlReader reader) =>
+        RetiredStrategyFixtures.Catalog(reader);
 
     private static string TrendFile() =>
-        Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", "etf-trend-10m.bt-v1.yaml");
+        RetiredStrategyFixtures.Strategy("etf-trend-10m.bt-v1.yaml");
 
     private static AuthorizedRuntimeStrategy TrendStrategy() => Strategy("etf-trend-10m.bt-v1.yaml");
 
-    // Read and validate a catalog strategy file for a backtest.
+    // Read and validate a retired fixture strategy file for a backtest.
     private static AuthorizedRuntimeStrategy Strategy(string file)
     {
         var reader = new SimpleYamlReader();
         return new StrategyRunArtifactValidator(reader, Catalog(reader)).ReadAndValidateRuntimeArtifact(
-            Path.Combine(TestRepository.FindRoot(), "configs", "backtest", "strategies", file), StrategySelectionMode.Backtest);
+            RetiredStrategyFixtures.Strategy(file), StrategySelectionMode.Backtest);
     }
 
     // Weekday sessions of the fixture (no holidays).

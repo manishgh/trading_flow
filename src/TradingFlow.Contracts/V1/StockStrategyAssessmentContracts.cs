@@ -1,12 +1,13 @@
 namespace TradingFlow.Contracts.V1;
 
-/// <summary>A selectable exact strategy and, when available, its recorded evaluation run.</summary>
+/// <summary>A selectable exact strategy and, when available, its recorded evaluation run and trade direction.</summary>
 public sealed record StockStrategyChoice(
     Guid? CandidateRunId,
     StrategyReference Strategy,
     string Name,
     string Mode,
-    DateTimeOffset? RunStartedAtUtc);
+    DateTimeOffset? RunStartedAtUtc,
+    string? Direction = null);
 
 /// <summary>Original shared-engine checks, never an order authorization.</summary>
 public sealed record StockStrategyAssessment(

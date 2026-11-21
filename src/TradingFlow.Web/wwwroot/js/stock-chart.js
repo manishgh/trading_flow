@@ -134,8 +134,8 @@
         });
     }
 
-    // Mount one read-only chart instance with scoped controls, data, optional host defaults/zone callback, and disposal.
-    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones, compactDesk, controlsHost, quickIntervalHost, onSeriesInfo } = {}) {
+    // Mount one read-only chart instance with scoped controls, data, optional host defaults/zone/highlight callbacks, and disposal.
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones, compactDesk, controlsHost, quickIntervalHost, onSeriesInfo, onHighlightChange } = {}) {
         const acceptance = Boolean(acceptanceCorrelation);
         let acceptanceStarted = false;
         const summaryNodes = new Map();
@@ -206,6 +206,8 @@
         let forming;
         let drawnForming;
         let pendingTradePlan = null;
+        let highlightedOverlay = null;
+        let studyLegendHost = null;
         let privateReady = false;
         let privateLayer = privateContext?.symbol === root.dataset.symbol
             ? window.TradingFlowPrivateChart?.mount(root, privateContext, events => plot?.setPrivateEvents(events), timestamp)
@@ -340,11 +342,12 @@
             const time = get('candle-time');
             if (time.textContent !== title) time.textContent = title;
             fields(get('values'), values, true);
-            const indicators = studies.readouts(start).map(([label, value, available, anchor, revision, reconstructedStudy, observed, historical]) =>
-                ({ label, value, available, anchor, revision, reconstructedStudy, observed, historical }));
+            const indicators = studies.readouts(start).map(([label, value, available, anchor, revision, reconstructedStudy, observed, historical, formula, slot, token]) =>
+                ({ label, value, available, anchor, revision, reconstructedStudy, observed, historical, formula, slot, token }));
             const studyReadout = get('study-values');
             studyReadout.hidden = !indicators.length;
             fields(studyReadout, indicators.map(({ label, value }) => [label, value]), true);
+            renderStudyLegend(indicators);
             const history = get('study-history');
             const notes = [
                 indicators.some(item => item.reconstructedStudy) ? 'Study history includes reconstructed values' : '',
@@ -358,6 +361,58 @@
             get('readout').hidden = false;
             if (announce) get('inspection').textContent = title + '. ' + fullValues
                 .map(([label, value]) => label + ' ' + value).join(', ');
+        }
+
+        // Renders clickable colored study legend chips inside the on-chart readout so study colors and hovered values stay visible on the chart.
+        function renderStudyLegend(indicators) {
+            const readout = get('readout');
+            if (!readout) return;
+            if (!studyLegendHost) {
+                studyLegendHost = element('div', null, 'stock-chart-study-legend');
+                studyLegendHost.dataset.chartStudyLegend = '';
+                readout.append(studyLegendHost);
+                on(studyLegendHost, 'click', event => {
+                    const chip = event.target.closest('[data-highlight-key]');
+                    if (!chip) return;
+                    const key = chip.dataset.highlightKey;
+                    setHighlightedOverlay(highlightedOverlay === key ? null : key, true);
+                });
+            }
+            const visible = (indicators || []).filter(item => item.formula && item.value && item.value !== 'Unavailable for this candle');
+            studyLegendHost.hidden = !visible.length;
+            if (!visible.length) {
+                studyLegendHost.replaceChildren();
+                return;
+            }
+            const nodes = visible.map(item => {
+                const highlightKey = String(item.formula || item.token || '').toLowerCase();
+                const shortLabel = String(item.label || item.formula).replace(/\s*·.*$/, '');
+                const chip = element('button', `${shortLabel} ${item.value}`, 'stock-chart-study-chip');
+                chip.type = 'button';
+                chip.dataset.highlightKey = highlightKey;
+                const active = highlightedOverlay === highlightKey;
+                chip.dataset.highlighted = String(active);
+                chip.setAttribute('aria-pressed', String(active));
+                const slot = Number.isInteger(item.slot) ? item.slot % 5 : 0;
+                chip.style.setProperty('--ind-swatch', `var(--stock-chart-study-${slot})`);
+                chip.title = `${item.label}: ${item.value} · Click to highlight on chart`;
+                return chip;
+            });
+            studyLegendHost.replaceChildren(...nodes);
+        }
+
+        // Syncs active highlight state on on-chart legend chips and forwards it to the plot and optional host callback.
+        function setHighlightedOverlay(key, notifyHost = false) {
+            highlightedOverlay = key ? String(key).trim().toLowerCase() : null;
+            plot?.setHighlightedOverlay(highlightedOverlay);
+            if (studyLegendHost) {
+                for (const chip of studyLegendHost.querySelectorAll('[data-highlight-key]')) {
+                    const active = chip.dataset.highlightKey === highlightedOverlay;
+                    chip.dataset.highlighted = String(active);
+                    chip.setAttribute('aria-pressed', String(active));
+                }
+            }
+            if (notifyHost) onHighlightChange?.(highlightedOverlay);
         }
 
         // Keep the same selected candle and matched studies in the chart details with their independent clocks.
@@ -743,6 +798,7 @@
                     if (start !== selected) inspect(start);
                 }, privateLayer ? updatePrivateWindow : undefined);
                 if (pendingTradePlan) plot.setTradePlanLevels(pendingTradePlan);
+                if (highlightedOverlay) plot.setHighlightedOverlay(highlightedOverlay);
             }
             if (reset) {
                 plot.setData({ bars: [], zones: [], levels: [], events: [], basisBreaks: [], interval });
@@ -862,6 +918,7 @@
             if (root.dataset.symbol === normalized && active) return;
             details.close();
             setTradePlanLevels(null);
+            setHighlightedOverlay(null, true);
             if (privateLayer && normalized !== privateContext.symbol) {
                 privateLayer.dispose();
                 privateLayer = null;
@@ -1043,10 +1100,14 @@
         return {
             setSymbol,
             setTradePlanLevels,
+            setHighlightedOverlay,
             // Close the details and release network work and canvases when the chart host is absent.
             dispose() {
                 details.close();
                 pendingTradePlan = null;
+                highlightedOverlay = null;
+                studyLegendHost?.remove();
+                studyLegendHost = null;
                 privateReady = false;
                 privateLayer?.dispose();
                 controller.abort();

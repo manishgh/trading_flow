@@ -109,7 +109,7 @@
     }
 
     // Draw only the part of a price band or level whose underlying data had become available.
-    function drawPriceRange(ctx, width, height, scale, candles, bars, start, end, lower, upper, color) {
+    function drawPriceRange(ctx, width, height, scale, candles, bars, start, end, lower, upper, color, highlighted = false) {
         if (!(end > start)) return;
         const left = Math.max(0, boundary(scale, bars, start));
         const right = Math.min(width, boundary(scale, bars, end));
@@ -119,10 +119,11 @@
         ctx.strokeStyle = color;
         ctx.fillStyle = color;
         if (upper !== lower) {
-            ctx.globalAlpha = .15;
+            ctx.globalAlpha = highlighted ? .48 : .15;
             ctx.fillRect(left, Math.max(0, top), right - left, Math.min(bottom, height) - Math.max(0, top));
         }
-        ctx.globalAlpha = .85;
+        ctx.lineWidth = highlighted ? 2.5 : 1;
+        ctx.globalAlpha = highlighted ? 1 : .85;
         ctx.beginPath();
         ctx.moveTo(left, top);
         ctx.lineTo(right, top);
@@ -131,11 +132,12 @@
             ctx.lineTo(right, bottom);
         }
         ctx.stroke();
+        ctx.lineWidth = 1;
         ctx.globalAlpha = 1;
     }
 
     // Reserve a short price annotation after the last candle for current-only geometry.
-    function drawCurrentBand(ctx, width, height, scale, candles, bars, band, color) {
+    function drawCurrentBand(ctx, width, height, scale, candles, bars, band, color, highlighted = false) {
         const left = boundary(scale, bars, bars.at(-1).endMs);
         const isZone = band.upper > band.lower;
         const right = Math.min(width, left + (isZone ? 40 : 20));
@@ -145,12 +147,13 @@
         const y = Math.max(0, top);
         const bandHeight = Math.max(2, Math.min(bottom, height) - y);
         ctx.fillStyle = color;
-        ctx.globalAlpha = isZone ? .28 : .68;
+        ctx.globalAlpha = isZone ? (highlighted ? .48 : .28) : (highlighted ? .95 : .68);
         ctx.fillRect(left, y, right - left, bandHeight);
         if (isZone) {
-            ctx.globalAlpha = .95;
-            ctx.fillRect(left, y, right - left, 1);
-            ctx.fillRect(left, y + bandHeight - 1, right - left, 1);
+            const border = highlighted ? 2.5 : 1;
+            ctx.globalAlpha = highlighted ? 1 : .95;
+            ctx.fillRect(left, y, right - left, border);
+            ctx.fillRect(left, y + bandHeight - border, right - left, border);
         }
         ctx.globalAlpha = 1;
     }
@@ -246,8 +249,9 @@
                 for (const band of model.zones) {
                     if (!model.layers[band.type] || model.hiddenZones.has(band.id)) continue;
                     const color = colors[band.type === 'support' ? 'up' : 'down'];
-                    if (band.currentOnly) drawCurrentBand(ctx, width, height, scale, candles, bars, band, color);
-                    else drawPriceRange(ctx, width, height, scale, candles, bars, band.start, band.end, band.lower, band.upper, color);
+                    const highlighted = model.highlightedOverlay === 'support' && band.type === 'support';
+                    if (band.currentOnly) drawCurrentBand(ctx, width, height, scale, candles, bars, band, color, highlighted);
+                    else drawPriceRange(ctx, width, height, scale, candles, bars, band.start, band.end, band.lower, band.upper, color, highlighted);
                 }
                 for (const level of model.levels) {
                     if (model.hiddenLevels.has(level.key)) continue;
@@ -291,8 +295,15 @@
         return true;
     }
 
-    // Draw study lines with explicit gaps and resets while the native series owns its autoscale.
+    // Matches an overlay highlight key (e.g. "sma20") against a study's formula or token prefix.
+    function matchesHighlightedStudy(study, key) {
+        if (!key || !study) return false;
+        return study.formula === key || String(study.token || '').startsWith(key);
+    }
+
+    // Draw study lines with explicit gaps, highlight emphasis/dimming, and an immediate redraw trigger.
     function attachStudyLine(component, scale, model, colors) {
+        let refresh;
         const renderer = {
             // Keep the first valid point and avoid connecting across unknown samples or calculation segments.
             draw(target) {
@@ -302,9 +313,13 @@
                     const begin = Math.max(0, Math.floor(range.from) - 1);
                     const end = Math.min(model.timeline.length - 1, Math.ceil(range.to) + 1);
                     const { study, index, series, color, dash } = component;
+                    const highlight = model.highlightedOverlay;
+                    const isMatch = Boolean(highlight) && matchesHighlightedStudy(study, highlight);
+                    const isDimmed = Boolean(highlight) && !isMatch;
                     ctx.save();
-                    ctx.lineWidth = component.index === 0 ? 1.6 : 1.25;
-                    ctx.setLineDash(dash);
+                    ctx.lineWidth = isMatch ? 3.0 : isDimmed ? 1.1 : (component.index === 0 ? 1.6 : 1.25);
+                    ctx.setLineDash(isMatch ? [] : dash);
+                    ctx.globalAlpha = isDimmed ? 0.28 : 1.0;
                     ctx.strokeStyle = colors[color];
                     ctx.beginPath();
                     let lastY;
@@ -337,9 +352,12 @@
             renderer() { return renderer; }
         };
         component.series.attachPrimitive({
+            // Capture Lightweight Charts' redraw hook so highlight toggles repaint immediately.
+            attached({ requestUpdate }) { refresh = requestUpdate; },
             // Return the persistent view across native chart redraws.
             paneViews() { return [view]; }
         });
+        return () => refresh?.();
     }
 
     // Name each visible lower pane inside its own canvas, alongside the accessible external readout.
@@ -378,7 +396,7 @@
         const chartRoot = element.closest('[data-stock-chart]');
         const colors = palette(chartRoot);
         const model = { bars: [], timeline: [], zones: [], sessions: [], levels: [], events: [], layers: {},
-            hiddenLevels: new Set(), hiddenZones: new Set(), studies: [], shownPane: null };
+            hiddenLevels: new Set(), hiddenZones: new Set(), studies: [], shownPane: null, highlightedOverlay: null };
         const chart = library.createChart(element, {
             autoSize: true,
             layout: { background: { color: colors.background }, textColor: colors.ink, attributionLogo: false, fontSize: 11 },
@@ -595,10 +613,21 @@
             const referenceLines = referencePrices.map(price => series.createPriceLine({
                 price, color: colors.grid, lineWidth: 1, lineStyle: library.LineStyle.Dashed, axisLabelVisible: false
             }));
-            const component = { study, index, series, color, dash, histogram, referenceLines };
-            if (!histogram) attachStudyLine(component, scale, model, colors);
+            const component = { study, index, series, color, dash, histogram, referenceLines, refresh: null };
+            if (!histogram) component.refresh = attachStudyLine(component, scale, model, colors);
             if (paneIndex && index === 0) attachStudyLabel(component, colors);
             return component;
+        }
+
+        // Highlights a selected study line or support band on the chart and lights up its Y-axis badge, or clears highlight on null.
+        function setHighlightedOverlay(key) {
+            model.highlightedOverlay = key ? String(key).trim().toLowerCase() : null;
+            for (const component of plotted) {
+                const isMatch = Boolean(model.highlightedOverlay) && matchesHighlightedStudy(component.study, model.highlightedOverlay);
+                component.series.applyOptions({ lastValueVisible: isMatch });
+                component.refresh?.();
+            }
+            refreshShading();
         }
 
         // Keep native panes and series across live snapshots unless the visible study layout changes.
@@ -627,12 +656,15 @@
             for (const [offset, component] of plotted.entries()) {
                 component.study = expected[offset].study;
                 const { study, index, histogram } = component;
+                const isMatch = Boolean(model.highlightedOverlay) && matchesHighlightedStudy(study, model.highlightedOverlay);
+                component.series.applyOptions({ lastValueVisible: isMatch });
                 component.series.setData(model.timeline.map(bar => {
                     const value = study.points.get(bar.startMs)?.values[index];
                     if (!Number.isFinite(value)) return { time: bar.time };
                     if (histogram) return { time: bar.time, value, color: value >= 0 ? colors.up : colors.down };
                     return { time: bar.time, value };
                 }));
+                component.refresh?.();
             }
         }
 
@@ -764,7 +796,7 @@
         // Pointer inspection updates the shared candle readout using its real interval start.
         chart.subscribeCrosshairMove(({ time }) => { if (typeof time === 'number') onInspect(time * 1000); });
         return {
-            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, setTradePlanLevels, visibleBounds,
+            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, setTradePlanLevels, setHighlightedOverlay, visibleBounds,
             // Stop observing theme changes and detach pane rendering when the component is removed.
             dispose() {
                 clearTradePlanLines();

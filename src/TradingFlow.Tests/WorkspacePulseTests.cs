@@ -185,7 +185,7 @@ public sealed class WorkspacePulseTests : IDisposable
         var layout = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "Pages", "Shared", "_Layout.cshtml"));
         Assert.DoesNotContain('\uFFFD', layout);
         foreach (var expected in new[] { "\"Desk\"", "\"Strategy Lab\"", "\"Catalysts & Options\"", "\"Portfolio & Audit\"",
-                     "\"/AccountLossReview\"", "loading&hellip;", "data-regime-pulse", "id=\"OpenCommandPalette\"", "ui2-foundation.css", "regime-pulse.js" })
+                     "\"/AccountLossReview\"", "loading&hellip;", "data-regime-pulse", "id=\"OpenCommandPalette\"", "tokens.css", "components.css", "workspaces.css", "regime-pulse.js" })
         {
             Assert.Contains(expected, layout);
         }

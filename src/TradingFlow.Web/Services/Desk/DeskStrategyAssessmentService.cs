@@ -38,6 +38,19 @@ public sealed class DeskStrategyAssessmentService(
             catalog.GetDisabledReason(artifact) is null);
     }
 
+    /// <summary>Resolves the normalized trade direction ("long" or "short") from the exact catalog artifact or its enabled strategy family.</summary>
+    private string? ResolveStrategyDirection(
+        StrategyReference identity,
+        StrategyArtifact? exactArtifact,
+        IReadOnlyList<StrategyArtifact> artifacts)
+    {
+        var raw = exactArtifact?.ResolvedStrategy.Direction
+            ?? artifacts.FirstOrDefault(artifact =>
+                artifact.Identity.StrategyId == identity.StrategyId &&
+                catalog.GetDisabledReason(artifact) is null)?.ResolvedStrategy.Direction;
+        return String.IsNullOrWhiteSpace(raw) ? null : raw.Trim().ToLowerInvariant();
+    }
+
     /// <summary>Lists enabled choices for current checks while retaining only non-retired, enabled recorded strategy/run choices.</summary>
     public async Task<IReadOnlyList<StockStrategyChoice>> ChoicesAsync(CancellationToken token)
     {
@@ -63,13 +76,15 @@ public sealed class DeskStrategyAssessmentService(
             var identity = new StrategyReference(item.SelectedStrategy!, item.StrategySemanticVersion, item.StrategyContentSha256);
             if (!IsPickerEligibleRecordedStrategy(identity, artifacts, out var artifact))
                 continue;
+            var direction = ResolveStrategyDirection(identity, artifact, artifacts);
             choices.Add(new StockStrategyChoice(item.RunId, identity,
-                artifact?.ResolvedStrategy.StrategyName ?? identity.StrategyId, item.Profile, item.StartedAtUtc));
+                artifact?.ResolvedStrategy.StrategyName ?? identity.StrategyId, item.Profile, item.StartedAtUtc, direction));
         }
         foreach (var artifact in artifacts.Where(item => catalog.GetDisabledReason(item) is null))
         {
             var identity = new StrategyReference(artifact.Identity.StrategyId, artifact.Identity.SemanticVersion, artifact.Identity.ContentSha256);
-            choices.Insert(0, new(null, identity, artifact.ResolvedStrategy.StrategyName, "current", null));
+            var direction = ResolveStrategyDirection(identity, artifact, artifacts);
+            choices.Insert(0, new(null, identity, artifact.ResolvedStrategy.StrategyName, "current", null, direction));
         }
         return choices;
     }

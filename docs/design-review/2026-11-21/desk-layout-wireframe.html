@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Desk layout wireframe — UI 2.0 review, 21 Nov 2026</title>
+<style>
+  /* Colours copied from the Slate Dark tokens in wwwroot/css/ui2-foundation.css. */
+  :root { --bg:#0b111b; --panel:#131c2b; --subtle:#182335; --line:#243247; --text:#f1f5f9; --muted:#a3b1c4;
+          --accent:#3b82f6; --gain:#2dd4bf; --loss:#fb7185; --warn:#fbbf24; --sidebar:220px; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.45 Inter, system-ui, sans-serif; }
+  .sel { font:11px/1.3 ui-monospace, Consolas, monospace; color:var(--accent); background:#14233d;
+         border:1px dashed #2b62b8; border-radius:4px; padding:1px 5px; overflow-wrap:anywhere; }
+  .note { color:var(--muted); font-size:12px; }
+  .frame { display:grid; grid-template-columns:var(--sidebar) 1fr; min-height:900px; max-width:1440px; }
+  .sidebar { background:var(--panel); border-right:1px solid var(--line); padding:16px 12px; display:flex; flex-direction:column; gap:6px; }
+  .sidebar a { color:var(--muted); padding:8px 10px; border-radius:8px; text-decoration:none; }
+  .sidebar a.on { background:#14233d; color:#8bb8fa; }
+  .main { display:flex; flex-direction:column; min-width:0; }
+  .bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; padding:6px 16px; background:var(--subtle); border-bottom:1px solid var(--line); }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:2px 10px; background:var(--panel); white-space:nowrap; }
+  .chip.bad { color:var(--loss); border-color:#8a3a4d; } .chip.warn { color:var(--warn); border-color:#7a5d12; }
+  .tabs { display:flex; gap:16px; padding:6px 16px; border-bottom:1px solid var(--line); color:var(--muted); }
+  .tabs b { color:var(--text); font-weight:600; }
+  .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 16px; }
+  .ctl { border:1px solid #5a6b85; border-radius:6px; padding:5px 8px; background:var(--panel); }
+  .grid { flex:1; display:grid; grid-template-columns:minmax(260px,26fr) minmax(480px,48fr) minmax(260px,26fr); gap:8px; padding:0 16px 16px; min-height:0; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { padding:0 6px; height:34px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; } th { color:var(--muted); font-weight:500; height:28px; }
+  tr.sel-row td { background:#14233d; }
+  .up { color:var(--gain); } .down { color:var(--loss); } .near { color:var(--warn); } .dim { color:var(--muted); }
+  .chart { flex:1; min-height:420px; border-radius:8px; background:var(--subtle); display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; text-align:center; color:var(--muted); position:relative; }
+  .legend { position:absolute; top:8px; left:10px; font-size:12px; color:var(--muted); }
+  .pill { border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-size:12px; white-space:nowrap; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .check { display:flex; gap:6px; } .ticket { margin-top:auto; border-top:1px solid var(--line); padding-top:8px; display:flex; flex-direction:column; gap:6px; }
+  .btn { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px; font-weight:600; }
+  .legend-box { max-width:1440px; padding:12px 16px; border-top:1px solid var(--line); }
+  .legend-box li { margin:3px 0; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <nav class="sidebar"><span class="sel">.workspace-sidebar (fixed, width var(--workspace-sidebar-width))</span>
+    <a class="on">Desk</a><a>Strategy Lab</a><a>Catalysts &amp; Options</a><a>Portfolio &amp; Audit</a></nav>
+  <div class="main">
+    <!-- Row 1: one status line replaces .workspace-status, .watch-head, [data-preparation-summary] and #desk-options-pulse -->
+    <div class="bar">
+      <span class="sel">.regime-pulse-strip — add margin-left: var(--workspace-sidebar-width) (D4)</span>
+      <span class="chip warn">Paper · trading paused</span>
+      <span class="chip">Market closed</span>
+      <span class="chip bad">SPY 689.81 · below 50-day · longs off</span>
+      <span class="chip bad">QQQ 608.45 · below 50-day</span>
+      <span class="chip">VIX — pending</span>
+      <span class="chip warn">Options stress: high</span><span class="sel">replaces #desk-options-pulse (G4)</span>
+      <span class="chip">Sectors XLI · XLP · XLV</span>
+      <span class="chip">Preparation paused ›</span><span class="sel">compact [data-preparation-summary] (G9)</span>
+    </div>
+    <div class="tabs"><b>Desk</b><span>Preparation</span><span>Stock groups</span>
+      <span class="sel">.workspace-subnav — remove .workspace-location, .watch-head eyebrow/h1/subtitle (G2)</span></div>
+    <div class="toolbar">
+      <span class="ctl">My groups: volatile ▾</span><span class="sel">#watch-source with optgroups (G11)</span>
+      <span class="ctl">Long · 21-EMA pullback v1.1 ▾</span><span class="sel">#watch-strategy optgroup Long/Short (G10)</span>
+      <span class="ctl">Find</span>
+      <span class="note">All 30 · Ready 0 · Near 0 · Held 0 · Rejected 0</span><span class="sel">.watch-view-switch merged into toolbar</span>
+      <span class="ctl">Fewer columns</span><span class="sel">#watch-density-toggle (G15)</span>
+    </div>
+    <div class="grid">
+      <section class="pane"><span class="sel">.watch-stocks — 34px rows (D2)</span>
+        <table>
+          <thead><tr><th>Stock</th><th>Mid</th><th>Day %</th><th title="Stored stories, last hour">News</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>ASTS</td><td>24.20</td><td class="up">▲ 4.00%</td><td></td><td class="dim">—</td></tr>
+            <tr><td>BKSY</td><td>17.40</td><td class="up">▲ 6.29%</td><td></td><td class="dim">—</td></tr>
+            <tr><td>MIAX</td><td>35.82</td><td class="down">▼ 1.58%</td><td></td><td class="near">◐ Near</td></tr>
+            <tr class="sel-row"><td>MU</td><td>610.64</td><td class="up">▲ 2.71%</td><td>▲1 ▼0</td><td class="down">✕ Gate</td></tr>
+            <tr><td>RKLB</td><td>47.36</td><td class="up">▲ 4.26%</td><td></td><td class="up">✓ Ready</td></tr>
+            <tr><td>SIVE</td><td class="dim">—</td><td class="dim">—</td><td></td><td class="dim">No quote</td></tr>
+            <tr><td colspan="5" class="dim">… 24 more rows visible without scrolling the page</td></tr>
+          </tbody>
+        </table>
+        <span class="sel">td.watch-news-summary blank at 0/0 (G5)</span>
+        <span class="sel">Strategy column hidden until a strategy is chosen (G6)</span>
+        <span class="sel">.watch-row-price small removed; stale price dimmed (G1)</span>
+      </section>
+
+      <section class="pane"><span class="sel">.watch-detail → .watch-chart-window</span>
+        <div class="row"><strong style="font-size:16px">MU</strong><strong style="font-size:16px">$610.64</strong><span class="up">▲ 2.71%</span>
+          <span class="note" title="Daily candles are the provider's completed SIP daily series">ⓘ</span><span class="sel">G7, G8</span>
+          <span style="margin-left:auto" class="row"><span class="ctl">1d</span><span class="ctl">1w</span><span class="ctl">5m</span><span class="ctl">Studies</span></span></div>
+        <div class="chart"><span class="legend">20 Nov · O 665.46 H 669.00 L 585.25 C 594.51 · Vol 59.5M <span class="sel">.stock-chart-readout as overlay (D8)</span></span>
+          Candles fill the remaining height<br>Entry / stop / target price lines<br><span class="sel">.stock-chart-stage flex:1 · marker series must not stretch price scale (D6)</span></div>
+        <div class="row"><span class="pill">SMA20 ↑ 786.65</span><span class="pill">SMA50 ↑ 912.19</span><span class="pill">SMA200 ↑ 772.36</span><span class="pill">ATR 61.83</span><span class="pill">Range 1W 29.4%</span>
+          <span class="sel">.watch-ind-pill[data-role="resistance"] neutral, not red (D7)</span></div>
+        <div class="row note">Options: expected move ±11.6% (5d) · put fear +40.7 · near vs 30d +11.4 · call/put 0.68×
+          <span class="sel">#desk-options-selected as one line; drop [data-options-field="note"] (G3)</span></div>
+      </section>
+
+      <section class="pane"><span class="sel">new third column: #watch-strategy-block + ticket (D3)</span>
+        <strong>Why / why not · 21-EMA pullback v1.1</strong>
+        <div class="check down">✕ SPY below rising 50-day average</div>
+        <div class="check up">✓ 20-day ADR 4.6% (needs ≥ 2.5%)</div>
+        <div class="check up">✓ No negative news in 48h</div>
+        <div class="check dim">○ Pullback not triggered yet</div>
+        <span class="note">Exact gate codes stay in each check's &lt;details&gt;.</span>
+        <div class="ticket"><span class="sel">[data-order-risk-strip]</span>
+          <div class="note">Max loss $500 (0.5%) · stop $61.83 away · 8 shares · target 2.5R</div>
+          <button class="btn" type="button">Preview bracket order</button>
+          <span class="note">Trading paused on this host — orders are rejected.</span></div>
+      </section>
+    </div>
+  </div>
+</div>
+<div class="legend-box note">
+  <strong style="color:var(--text)">How to read this wireframe</strong>
+  <ul>
+    <li>Blue dashed labels name the existing selector to change; codes (D1–D9, G1–G15) refer to <code>claude-ui-review-handoff.md</code>.</li>
+    <li>Values are taken from the 10089 preview on 21 Nov 2026 (MU, paper account, market closed) and are illustrative only.</li>
+    <li>Target at 1440×900: stock table starts within the first 260 px; chart, checklist and ticket visible without scrolling.</li>
+    <li>Below 1440 px the third column becomes a tab beside the chart; below 720 px the existing mobile card layout applies.</li>
+  </ul>
+</div>
+</body>
+</html>
