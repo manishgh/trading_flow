@@ -8,12 +8,18 @@
     const confirm = document.querySelector("[data-order-confirm]");
     const planButton = document.querySelector("[data-order-plan]");
     const riskButton = document.querySelector("[data-order-risk]");
+    const riskStrip = document.querySelector("[data-order-risk-strip]");
+    const riskBudgetEl = document.querySelector("[data-risk-budget]");
+    const riskStopDistEl = document.querySelector("[data-risk-stop-dist]");
+    const riskDollarEl = document.querySelector("[data-risk-dollar]");
+    const riskRrEl = document.querySelector("[data-risk-rr]");
+    const moneyFormat = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
     const query = new URLSearchParams(location.search);
     const exit = query.get("side") === "sell";
     const lifetime = new AbortController();
     window.addEventListener("pagehide", () => lifetime.abort(), {once:true});
     let confirmationStarted = false;
-    let context, run, candidate, preview, command, draftRequest, plan, busy = false;
+    let context, run, candidate, preview, command, draftRequest, plan, lastRiskBudget = null, busy = false;
     let key = crypto.randomUUID();
     let completed = false;
     // The popup can replace only an editable or resolved ticket, never a reviewed or uncertain command.
@@ -58,17 +64,50 @@
         if (!response.ok) throw new Error(value?.message || "Request failed (" + response.status + ")");
         return value;
     }
-    // Editing creates a new draft identity, while closing the popup never calls this.
-    function invalidate() { draftRequest = undefined; key = crypto.randomUUID(); plan = undefined; riskButton.disabled = true; }
+    // Pure display helper updating the risk-first summary readouts from server plan.riskBudget and ticket inputs without altering server authority.
+    function refreshRiskStrip() {
+        if (!riskStrip || exit) return;
+        const positive = name => {
+            const raw = form.elements[name]?.value;
+            if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+            const parsed = Number(raw);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        };
+        const liveBudget = typeof plan?.riskBudget === "number" && Number.isFinite(plan.riskBudget) && plan.riskBudget > 0 ? plan.riskBudget : null;
+        const budget = liveBudget ?? lastRiskBudget;
+        const limit = positive("limit");
+        const stop = positive("stop");
+        const target = positive("target");
+        const quantity = positive("quantity");
+        const wholeQty = quantity !== null && Number.isInteger(quantity) && quantity >= 1 ? quantity : null;
+        const stopDist = limit !== null && stop !== null && limit > stop ? limit - stop : null;
+        const orderRisk = stopDist !== null && wholeQty !== null ? stopDist * wholeQty : null;
+        const rr = stopDist !== null && target !== null && target > limit ? (target - limit) / stopDist : null;
+
+        if (riskBudgetEl) riskBudgetEl.textContent = budget !== null ? moneyFormat.format(budget) : "—";
+        if (riskStopDistEl) riskStopDistEl.textContent = stopDist !== null ? moneyFormat.format(stopDist) : "—";
+        if (riskDollarEl) {
+            riskDollarEl.textContent = orderRisk !== null ? moneyFormat.format(orderRisk) : "—";
+            if (orderRisk !== null && budget !== null && orderRisk > budget) riskDollarEl.dataset.tone = "warn";
+            else delete riskDollarEl.dataset.tone;
+        }
+        if (riskRrEl) riskRrEl.textContent = rr !== null ? rr.toFixed(2) + " : 1" : "—";
+    }
+    // Editing creates a new draft identity and clears plan/1R-sizing authority while preserving lastRiskBudget for display unless symbol or strategy changed.
+    function invalidate(clearBudget = false) {
+        draftRequest = undefined; key = crypto.randomUUID(); plan = undefined; riskButton.disabled = true;
+        if (clearBudget) lastRiskBudget = null;
+        refreshRiskStrip();
+    }
     // Explicit Edit releases a reviewed preview only before confirmation has started.
-    function reset() { if (busy || confirmationStarted) return; preview = command = undefined; completed = false; invalidate(); review.hidden = true; form.hidden = false; }
+    function reset() { if (busy || confirmationStarted) return; preview = command = undefined; completed = false; invalidate(true); review.hidden = true; form.hidden = false; }
     document.querySelector("[data-order-edit]").onclick = reset;
     // Symbol edits update the popup heading without changing the retained command lifecycle.
-    form.addEventListener("input", () => {
-        if (!busy) invalidate();
+    form.addEventListener("input", event => {
+        if (!busy) invalidate(event.target === form.elements.symbol || event.target === form.elements.strategy);
         if (parent !== window) parent.postMessage({type:'tradingflow:order-title',title:(exit ? 'Sell ' : 'Buy ') + form.elements.symbol.value.trim().toUpperCase()},location.origin);
     });
-    form.addEventListener("change", () => { if (!busy) invalidate(); });
+    form.addEventListener("change", event => { if (!busy) invalidate(event.target === form.elements.symbol || event.target === form.elements.strategy); });
     form.elements.symbol.value = query.get("ticker") || document.querySelector("[data-selected-symbol]")?.dataset.selectedSymbol || "";
     form.elements.quantity.value = query.get("quantity") || "1";
     form.elements.limit.value = query.get("limitPrice") || "";
@@ -101,6 +140,8 @@
             document.querySelector("[data-order-stop-note]").textContent = plan.stopNote;
             document.querySelector("[data-order-target-note]").textContent = plan.targetNote;
             riskButton.disabled = !(plan.riskBudget > 0 && plan.limit > plan.stop && plan.stop > 0);
+            lastRiskBudget = typeof plan.riskBudget === "number" && Number.isFinite(plan.riskBudget) && plan.riskBudget > 0 ? plan.riskBudget : null;
+            refreshRiskStrip();
             status.textContent = "Strategy prices loaded. Review before confirming.";
         } catch (error) { if (error.name !== "AbortError") status.textContent = error.message; }
         finally { busy = false; form.inert = false; }
@@ -111,6 +152,7 @@
         const quantity = Math.floor(plan.riskBudget / (plan.limit - plan.stop));
         if (quantity < 1) { status.textContent = "The account risk budget does not allow one share at this stop distance."; return; }
         form.elements.quantity.value = quantity; draftRequest = undefined; key = crypto.randomUUID();
+        refreshRiskStrip();
     };
     // Review binds a draft once; uncertain preview retries keep the same request and key.
     form.addEventListener("submit", async event => {
@@ -191,6 +233,7 @@
             }
         }
         status.textContent = exit ? "Review an exit from an existing position." : candidate ? "Paper strategy candidate " + candidate.readiness : "Administrator operator override; normal risk checks still apply.";
+        refreshRiskStrip();
         form.inert = false;
     } catch (error) { form.hidden = true; if (error.name !== "AbortError") status.textContent = error.message; }
     finally { busy = false; }

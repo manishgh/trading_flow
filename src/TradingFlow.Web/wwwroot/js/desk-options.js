@@ -43,9 +43,9 @@
         return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) + 'x' : '—';
     }
 
-    // Renders one OptionsSentimentSnapshot object into its card slot using textContent only.
+    // Renders one OptionsSentimentSnapshot object into its card slot across the Desk pulse and chart detail using textContent only.
     function renderCard(slotName, snapshot) {
-        const card = root.querySelector(`[data-options-slot="${slotName}"]`);
+        const card = document.querySelector('[data-options-slot="' + slotName + '"]');
         if (!card) return;
         if (!snapshot) {
             card.hidden = true;

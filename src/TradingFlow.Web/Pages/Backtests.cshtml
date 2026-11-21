@@ -91,8 +91,8 @@
                             <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
                         </span>
                     </label>
-                    <details class="lab-strategy-details">
-                        <summary>Identity &amp; assumptions</summary>
+                    <details class="lab-strategy-details lab-provenance-popover">
+                        <summary title="Inspect canonical SHA-256 identity and admission assumptions">ⓘ Provenance</summary>
                         <div class="lab-strategy-exact">
                             <strong>@strategy.Definition.StrategyName</strong>
                             <span class="lab-strategy-meta">Strategy: @strategy.Definition.StrategyId · @strategy.Identity.SemanticVersion</span>
@@ -377,6 +377,20 @@
             </div>
             <div id="saved-plan-matrix-body"></div>
         </section>
+        <dialog id="lab-matrix-drawer" class="lab-matrix-drawer" aria-labelledby="lab-matrix-drawer-title">
+            <header class="lab-matrix-drawer-head">
+                <div>
+                    <span class="eyebrow">MONTHLY DIAGNOSTICS</span>
+                    <h2 id="lab-matrix-drawer-title">Strategy month inspection</h2>
+                    <p class="note" id="lab-matrix-drawer-identity"></p>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="lab-matrix-drawer-close" aria-label="Close diagnostics drawer">Close</button>
+            </header>
+            <div class="lab-matrix-drawer-body" id="lab-matrix-drawer-body"></div>
+            <footer class="lab-matrix-drawer-foot">
+                <a class="btn btn-primary btn-sm" id="lab-matrix-drawer-report" href="/Backtests">Open full job report ↗</a>
+            </footer>
+        </dialog>
         @if (Model.SelectedJobMissing)
         {
             <section class="lab-panel" role="status">

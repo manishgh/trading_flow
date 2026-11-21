@@ -133,8 +133,8 @@
         });
     }
 
-    // Mount one read-only chart instance with scoped controls, data and disposal.
-    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost } = {}) {
+    // Mount one read-only chart instance with scoped controls, data, optional host default studies, and disposal.
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultStudies } = {}) {
         const acceptance = Boolean(acceptanceCorrelation);
         let acceptanceStarted = false;
         const summaryNodes = new Map();
@@ -169,6 +169,7 @@
         let preservedSession;
         let forming;
         let drawnForming;
+        let pendingTradePlan = null;
         let privateReady = false;
         let privateLayer = privateContext?.symbol === root.dataset.symbol
             ? window.TradingFlowPrivateChart?.mount(root, privateContext, events => plot?.setPrivateEvents(events), timestamp)
@@ -291,6 +292,11 @@
             studyReadout.hidden = !indicators.length;
             const measurements = indicators.map(({ label, value }) => [label, value]);
             fields(studyReadout, measurements, true);
+            const inlineStudies = get('inline-studies');
+            if (inlineStudies) {
+                inlineStudies.hidden = !indicators.length;
+                fields(inlineStudies, measurements, true);
+            }
             const history = get('study-history');
             const notes = [
                 indicators.some(item => item.reconstructedStudy) ? 'Study history includes reconstructed values' : '',
@@ -363,6 +369,11 @@
             fields(get('values'), [], true);
             fields(get('study-values'), [], true);
             get('study-values').hidden = true;
+            const inlineStudies = get('inline-studies');
+            if (inlineStudies) {
+                fields(inlineStudies, [], true);
+                inlineStudies.hidden = true;
+            }
             get('study-history').replaceChildren();
             get('study-history').hidden = true;
             renderSelectedEvidence(null, [], false);
@@ -669,12 +680,15 @@
                 if (acceptance) onAcceptanceEnded?.('Chart assets could not load.');
                 return;
             }
-            if (!plot) plot = plotting.createPlot(get('plot'), start => {
-                // Layout and programmatic crosshair updates must not replace a keyboard or prior selection.
-                if (!pointerMoved) return;
-                pointerMoved = false;
-                if (start !== selected) inspect(start);
-            }, privateLayer ? updatePrivateWindow : undefined);
+            if (!plot) {
+                plot = plotting.createPlot(get('plot'), start => {
+                    // Layout and programmatic crosshair updates must not replace a keyboard or prior selection.
+                    if (!pointerMoved) return;
+                    pointerMoved = false;
+                    if (start !== selected) inspect(start);
+                }, privateLayer ? updatePrivateWindow : undefined);
+                if (pendingTradePlan) plot.setTradePlanLevels(pendingTradePlan);
+            }
             if (reset) {
                 plot.setData({ bars: [], zones: [], levels: [], events: [], basisBreaks: [], interval });
                 plot.setLayers(layers, hiddenLevels, hiddenZones);
@@ -781,11 +795,18 @@
             }
         }
 
+        // Forwards advisory server Entry/Stop/Target reference levels to the active plot (or queues them until plot creation) and clears on null.
+        function setTradePlanLevels(plan) {
+            pendingTradePlan = plan || null;
+            plot?.setTradePlanLevels(pendingTradePlan);
+        }
+
         // Replace only the symbol, preserving the operator's interval and layer settings.
         function setSymbol(symbol) {
             const normalized = (symbol || '').trim().toUpperCase().replaceAll('.', '-');
             if (root.dataset.symbol === normalized && active) return;
             details.close();
+            setTradePlanLevels(null);
             if (privateLayer && normalized !== privateContext.symbol) {
                 privateLayer.dispose();
                 privateLayer = null;
@@ -842,7 +863,11 @@
                 checkbox.checked = typeof settings.layers?.[name] === 'boolean' ? settings.layers[name] : checkbox.defaultChecked;
                 layers[name] = checkbox.checked;
             }
-            const indicators = query.has('indicators') ? query.get('indicators').split(',') : settings.indicators;
+            const indicators = query.has('indicators')
+                ? query.get('indicators').split(',')
+                : Array.isArray(settings.indicators)
+                    ? settings.indicators
+                    : (Array.isArray(defaultStudies) ? defaultStudies : undefined);
             studies.restore(indicators, query.get('preset') ?? settings.preset);
         }
 
@@ -947,9 +972,11 @@
         if (root.dataset.symbol) startSelection();
         return {
             setSymbol,
+            setTradePlanLevels,
             // Close the details and release network work and canvases when the chart host is absent.
             dispose() {
                 details.close();
+                pendingTradePlan = null;
                 privateReady = false;
                 privateLayer?.dispose();
                 controller.abort();

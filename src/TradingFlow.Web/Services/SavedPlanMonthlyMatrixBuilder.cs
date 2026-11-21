@@ -1,4 +1,6 @@
+using System.Globalization;
 using TradingFlow.Contracts.V1;
+using TradingFlow.Domain.Backtesting;
 using TradingFlow.Web.Models;
 
 namespace TradingFlow.Web.Services;
@@ -10,6 +12,7 @@ namespace TradingFlow.Web.Services;
 public static class SavedPlanMonthlyMatrixBuilder
 {
     private const int MaxTopRejections = 8;
+    private const int MaxSampleTrades = 25;
 
     /// <summary>Projects all jobs belonging to <paramref name="plan"/> into distinct sorted months and per-job strategy/batch rows.</summary>
     public static SavedPlanMonthlyMatrixResponse Build(BacktestPlanResponse plan, IReadOnlyList<BacktestJobSnapshot> jobs)
@@ -60,6 +63,7 @@ public static class SavedPlanMonthlyMatrixBuilder
         var strategyName = ResolveStrategyName(plan, job, strategyId, semanticVersion);
         var cells = BuildCells(job);
         var topRejections = BuildTopRejections(job, strategyId);
+        var sampleTrades = BuildSampleTrades(job, strategyId);
         var unavailableReason = ResolveMonthlyUnavailableReason(job, cells);
 
         return new SavedPlanMonthlyMatrixRow(
@@ -73,7 +77,8 @@ public static class SavedPlanMonthlyMatrixBuilder
             job.Status,
             cells,
             topRejections,
-            unavailableReason);
+            unavailableReason,
+            sampleTrades);
     }
 
     // Surfaces a concrete explanation whenever a job has no monthly cells (failed, cancelled, pending, or writer rejected).
@@ -135,6 +140,41 @@ public static class SavedPlanMonthlyMatrixBuilder
             .ThenBy(pair => pair.Key, StringComparer.Ordinal)
             .Take(MaxTopRejections)
             .Select(pair => new SavedPlanRejectionSummary(pair.Key, pair.Value))
+            .ToArray();
+    }
+
+    // Projects up to 25 newest retained completed trades for this strategy stamped with NY exit month and realised R-multiple; never pools or aggregates returns.
+    private static IReadOnlyList<SavedPlanMonthlyTradeSample> BuildSampleTrades(BacktestJobSnapshot job, string strategyId)
+    {
+        var completedTrades = job.Result?.CompletedTrades;
+        if (completedTrades is not { Count: > 0 }) return [];
+
+        var strategyResults = job.Result?.StrategyResults;
+        var strategyResult = strategyResults?
+            .FirstOrDefault(item => item.StrategyId.Equals(strategyId, StringComparison.OrdinalIgnoreCase))
+            ?? (strategyResults is { Count: 1 } ? strategyResults[0] : null);
+        var valuationBasis = strategyResult?.PortfolioState?.ValuationBasis;
+        var singleStrategyJob = strategyResults is null || strategyResults.Count <= 1;
+
+        return completedTrades
+            .Where(trade =>
+                trade.StrategyId.Equals(strategyId, StringComparison.OrdinalIgnoreCase) ||
+                (String.IsNullOrEmpty(trade.StrategyId) && singleStrategyJob))
+            .OrderByDescending(trade => trade.ExitTimestamp)
+            .ThenBy(trade => trade.Ticker, StringComparer.OrdinalIgnoreCase)
+            .Take(MaxSampleTrades)
+            .Select(trade => new SavedPlanMonthlyTradeSample(
+                MonthlyBacktestPresentation.ExitSessionDate(trade, valuationBasis)
+                    .ToString("yyyy-MM", CultureInfo.InvariantCulture),
+                trade.Ticker,
+                trade.Direction,
+                trade.EntryPrice,
+                trade.ExitPrice,
+                trade.EntryTimestamp.ToUniversalTime(),
+                trade.ExitTimestamp.ToUniversalTime(),
+                trade.ExitReason,
+                trade.NetProfit,
+                BacktestDerivedMetrics.RMultiple(trade)))
             .ToArray();
     }
 }

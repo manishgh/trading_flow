@@ -414,8 +414,53 @@
         let privateMarkers;
         let privateEvents = [];
         let plotted = [];
+        let tradePlan = null;
+        let tradePlanLines = [];
         const markers = library.createSeriesMarkers(candles, [], { autoScale: false });
         const refreshShading = attachShading(candles, scale, model, colors);
+
+        // Removes all currently drawn Entry/Stop/Target price lines from the main candlestick series without altering candle data.
+        function clearTradePlanLines() {
+            for (const line of tradePlanLines) {
+                try { candles.removePriceLine(line); } catch { /* Series may already be disposed. */ }
+            }
+            tradePlanLines = [];
+        }
+
+        // Renders native Lightweight Charts reference lines for finite positive server Entry, Stop, and Target levels using theme palette colours.
+        function paintTradePlanLines() {
+            clearTradePlanLines();
+            if (!tradePlan) return;
+            const definitions = [
+                { price: tradePlan.limit, title: 'Entry', color: colors.levelA || '#3b82f6', lineStyle: library.LineStyle.Dashed },
+                { price: tradePlan.stop, title: 'Stop', color: colors.down || '#fb7185', lineStyle: library.LineStyle.Solid },
+                { price: tradePlan.target, title: 'Target', color: colors.up || '#2dd4bf', lineStyle: library.LineStyle.Solid }
+            ];
+            for (const item of definitions) {
+                if (typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price <= 0) continue;
+                tradePlanLines.push(candles.createPriceLine({
+                    price: item.price,
+                    color: item.color,
+                    lineWidth: 2,
+                    lineStyle: item.lineStyle,
+                    axisLabelVisible: true,
+                    title: item.title
+                }));
+            }
+        }
+
+        // Accepts advisory server Entry/Stop/Target levels (or null to clear) and updates native chart price lines without performing client math.
+        function setTradePlanLevels(plan) {
+            const toPositive = value => {
+                const parsed = typeof value === 'number' ? value : Number(value);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+            };
+            const limit = plan ? toPositive(plan.limit) : null;
+            const stop = plan ? toPositive(plan.stop) : null;
+            const target = plan ? toPositive(plan.target) : null;
+            tradePlan = (limit !== null || stop !== null || target !== null) ? { limit, stop, target } : null;
+            paintTradePlanLines();
+        }
 
         // Drop the native marker when its old coordinates no longer identify the selected candle.
         function clearCrosshair() {
@@ -689,6 +734,7 @@
             paintStudies();
             paintMarkers();
             paintPrivateEvents();
+            paintTradePlanLines();
             refreshShading();
         }
 
@@ -700,9 +746,11 @@
         // Pointer inspection updates the shared candle readout using its real interval start.
         chart.subscribeCrosshairMove(({ time }) => { if (typeof time === 'number') onInspect(time * 1000); });
         return {
-            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, visibleBounds,
+            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, setTradePlanLevels, visibleBounds,
             // Stop observing theme changes and detach pane rendering when the component is removed.
             dispose() {
+                clearTradePlanLines();
+                tradePlan = null;
                 theme.disconnect();
                 media.removeEventListener('change', themeChanged);
                 scale.unsubscribeSizeChange(clearCrosshair);

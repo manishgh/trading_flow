@@ -163,6 +163,9 @@ public sealed class DeskTicketPlanService
         if (strategy.ExitRules.ContinuationProtection is not null)
             return DeskTicketPlan.Unavailable(limit,
                 "Continuation protection requires the day-trading stop and target lifecycle, which is not connected yet.", riskBudget);
+        if (!strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
+            return DeskTicketPlan.Unavailable(limit,
+                "Order ticket planning supports long entries only.", riskBudget);
         if (setupBars.Count < 2 || setupSnapshots.Count != setupBars.Count ||
             executionBars.Count == 0 || executionSnapshots.Count != executionBars.Count)
         {

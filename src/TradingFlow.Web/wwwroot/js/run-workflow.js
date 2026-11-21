@@ -21,6 +21,13 @@
     const matrixPanel = document.getElementById('saved-plan-matrix-panel');
     const matrixTitle = document.getElementById('saved-plan-matrix-title');
     const matrixBody = document.getElementById('saved-plan-matrix-body');
+    const matrixDrawer = document.getElementById('lab-matrix-drawer');
+    const matrixDrawerTitle = document.getElementById('lab-matrix-drawer-title');
+    const matrixDrawerIdentity = document.getElementById('lab-matrix-drawer-identity');
+    const matrixDrawerBody = document.getElementById('lab-matrix-drawer-body');
+    const matrixDrawerReport = document.getElementById('lab-matrix-drawer-report');
+    const matrixDrawerClose = document.getElementById('lab-matrix-drawer-close');
+    const currencyFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
     let matrixRequestId = 0;
     let evidenceChoices = [];
     const lifetime = new AbortController();
@@ -35,6 +42,7 @@
         planPreview?.replaceChildren(); evidenceSummary?.replaceChildren();
         if (matrixBody) matrixBody.replaceChildren();
         if (matrixPanel) matrixPanel.hidden = true;
+        closeMatrixDrawer();
         clearPaperStockReview();
     }
     window.addEventListener('pagehide', leavePage);
@@ -185,9 +193,238 @@
         return { text: '0.00%', tone: 'flat' };
     }
 
+    // Closes the Strategy Lab slide-over diagnostics drawer and clears its rendered DOM nodes.
+    function closeMatrixDrawer() {
+        if (!matrixDrawer) return;
+        if (matrixDrawer.open) matrixDrawer.close();
+        matrixDrawerBody?.replaceChildren();
+    }
+
+    // Formats a nullable numeric USD figure safely without substituting zero for missing values.
+    function formatDrawerMoney(value, signed = false) {
+        if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+        const num = Number(value);
+        if (!signed) return currencyFormat.format(num);
+        const prefix = num > 0 ? '+' : num < 0 ? '\u2212' : '';
+        return prefix + currencyFormat.format(Math.abs(num));
+    }
+
+    // Builds the immutable NY-session monthly metrics card inside the slide-over drawer without aggregating across months.
+    function renderDrawerMonthMetrics(row, selectedCell, selectedMonth) {
+        const section = document.createElement('section');
+        section.className = 'lab-drawer-section';
+        const heading = document.createElement('h3');
+        heading.textContent = selectedMonth ? `Monthly record · ${selectedMonth} (NY)` : 'Monthly record';
+        section.append(heading);
+
+        if (!selectedCell) {
+            const note = document.createElement('p');
+            note.className = 'note';
+            note.textContent = row.monthlyUnavailableReason || 'No monthly valuation record is available for this selection.';
+            section.append(note);
+            return section;
+        }
+
+        const formatted = formatMatrixReturn(selectedCell);
+        const list = document.createElement('dl');
+        list.className = 'lab-drawer-metrics';
+        const entries = [
+            ['Monthly return', formatted.text + (selectedCell.partialMonth ? ' (partial month)' : ''), formatted.tone],
+            ['Valuation basis', valuationSubtitle(selectedCell.valuationBasis) || selectedCell.valuationBasis || 'Unavailable', null],
+            ['Opening → Closing equity', `${formatDrawerMoney(selectedCell.openingEquity)} → ${formatDrawerMoney(selectedCell.closingEquity)}`, null],
+            ['Max drawdown', selectedCell.maxDrawdownPct != null && Number.isFinite(Number(selectedCell.maxDrawdownPct)) ? `${Number(selectedCell.maxDrawdownPct).toFixed(2)}%` : '—', null],
+            ['Closed trades / Open positions', `${selectedCell.closedTrades ?? 0} closed · ${selectedCell.openPositions ?? 0} open`, null]
+        ];
+        for (const [label, value, tone] of entries) {
+            const group = document.createElement('div');
+            const dt = document.createElement('dt');
+            dt.textContent = label;
+            const dd = document.createElement('dd');
+            dd.textContent = value;
+            if (tone) {
+                dd.className = 'lab-matrix-return';
+                dd.dataset.tone = tone;
+            }
+            group.append(dt, dd);
+            list.append(group);
+        }
+        section.append(list);
+
+        if (selectedCell.unavailableReason) {
+            const reason = document.createElement('p');
+            reason.className = 'note lab-matrix-reason';
+            reason.textContent = selectedCell.unavailableReason;
+            section.append(reason);
+        }
+        return section;
+    }
+
+    // Builds the plain-English rejection funnel with native progress bars and canonical audit codes.
+    function renderDrawerRejections(row) {
+        const section = document.createElement('section');
+        section.className = 'lab-drawer-section';
+        const heading = document.createElement('h3');
+        heading.textContent = 'Top rejections funnel';
+        section.append(heading);
+
+        const rejections = row.topRejections || [];
+        if (!rejections.length) {
+            const none = document.createElement('p');
+            none.className = 'note';
+            none.textContent = 'No strategy or eligibility rejections recorded for this job.';
+            section.append(none);
+            return section;
+        }
+
+        const maxCount = Math.max(1, ...rejections.map(item => Number(item.count) || 0));
+        const list = document.createElement('ul');
+        list.className = 'lab-drawer-funnel';
+        for (const item of rejections) {
+            const li = document.createElement('li');
+            const rowHead = document.createElement('div');
+            rowHead.className = 'lab-drawer-funnel-head';
+            const label = document.createElement('strong');
+            label.textContent = humanizeRejectionCode(item.code);
+            const count = document.createElement('span');
+            count.className = 'num';
+            count.textContent = String(item.count);
+            rowHead.append(label, count);
+
+            const bar = document.createElement('progress');
+            bar.className = 'lab-drawer-progress';
+            bar.max = maxCount;
+            bar.value = Math.max(0, Number(item.count) || 0);
+            bar.setAttribute('aria-label', `${humanizeRejectionCode(item.code)}: ${item.count}`);
+
+            const code = document.createElement('code');
+            code.className = 'lab-drawer-code';
+            code.textContent = item.code;
+
+            li.append(rowHead, bar, code);
+            list.append(li);
+        }
+        section.append(list);
+        return section;
+    }
+
+    // Renders retained sample trades for the inspected NY month while clarifying that monthly % comes exclusively from MonthlyRunResult.
+    function renderDrawerSampleTrades(row, selectedMonth) {
+        const section = document.createElement('section');
+        section.className = 'lab-drawer-section';
+        const heading = document.createElement('h3');
+        heading.textContent = selectedMonth ? `Retained trade sample · ${selectedMonth}` : 'Retained trade sample';
+        const caveat = document.createElement('p');
+        caveat.className = 'note';
+        caveat.textContent = 'Retained sample of up to 25 newest completed trades. Monthly % returns above come exclusively from immutable MonthlyRunResult records.';
+        section.append(heading, caveat);
+
+        const allSamples = row.sampleTrades || [];
+        const samples = selectedMonth ? allSamples.filter(item => item.month === selectedMonth) : allSamples;
+        if (!samples.length) {
+            const empty = document.createElement('p');
+            empty.className = 'note';
+            empty.textContent = selectedMonth
+                ? `No retained completed trades exited in ${selectedMonth} within the 25-trade sample.`
+                : 'No retained completed trade samples are available for this job.';
+            section.append(empty);
+            return section;
+        }
+
+        const scroller = document.createElement('div');
+        scroller.className = 'table-scroll';
+        const table = document.createElement('table');
+        table.className = 'grid-table lab-drawer-trades-table';
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        for (const [label, isNum] of [['Ticker', false], ['Side', false], ['Entry', true], ['Exit', true], ['Exit reason', false], ['R', true], ['Net', true]]) {
+            const th = document.createElement('th');
+            th.scope = 'col';
+            if (isNum) th.className = 'num';
+            th.textContent = label;
+            headRow.append(th);
+        }
+        thead.append(headRow);
+        const tbody = document.createElement('tbody');
+        for (const trade of samples) {
+            const tr = document.createElement('tr');
+            const rVal = trade.rMultiple != null && Number.isFinite(Number(trade.rMultiple))
+                ? (Number(trade.rMultiple) > 0 ? '+' : Number(trade.rMultiple) < 0 ? '\u2212' : '') + Math.abs(Number(trade.rMultiple)).toFixed(2) + 'R'
+                : 'no stop';
+            const cells = [
+                [trade.ticker, false, null],
+                [trade.direction, false, null],
+                [formatDrawerMoney(trade.entryPrice), true, null],
+                [formatDrawerMoney(trade.exitPrice), true, null],
+                [trade.exitReason || '—', false, null],
+                [rVal, true, trade.rMultiple == null ? null : Number(trade.rMultiple) > 0 ? 'up' : Number(trade.rMultiple) < 0 ? 'down' : 'flat'],
+                [formatDrawerMoney(trade.netProfit, true), true, Number(trade.netProfit) > 0 ? 'up' : Number(trade.netProfit) < 0 ? 'down' : 'flat']
+            ];
+            for (const [text, isNum, tone] of cells) {
+                const td = document.createElement('td');
+                if (isNum) td.className = 'num';
+                if (tone) {
+                    const span = document.createElement('span');
+                    span.className = 'lab-matrix-return';
+                    span.dataset.tone = tone;
+                    span.textContent = text;
+                    td.append(span);
+                } else {
+                    td.textContent = text;
+                }
+                tr.append(td);
+            }
+            tbody.append(tr);
+        }
+        table.append(thead, tbody);
+        scroller.append(table);
+        section.append(scroller);
+        return section;
+    }
+
+    // Opens the Strategy Lab slide-over diagnostics drawer for one strategy/cohort/batch row and optional NY month.
+    function openMatrixDrawer(row, month = null) {
+        if (!matrixDrawer || !matrixDrawerBody) return;
+        const cells = row.cells || [];
+        const selectedCell = month ? cells.find(c => c.month === month) || null : (cells[cells.length - 1] || null);
+        const selectedMonth = month || selectedCell?.month || null;
+
+        if (matrixDrawerTitle) {
+            matrixDrawerTitle.textContent = `${row.strategyName || row.strategyId}${selectedMonth ? ' · ' + selectedMonth : ''}`;
+        }
+        if (matrixDrawerIdentity) {
+            const parts = [
+                row.strategyId,
+                row.semanticVersion ? 'v' + row.semanticVersion : '',
+                row.cohortName,
+                row.contentSha256 ? 'SHA-256 ' + row.contentSha256 : '',
+                row.createdAtUtc ? 'Batch ' + formatBatchStamp(row.createdAtUtc) : '',
+                'Status ' + row.status
+            ].filter(Boolean);
+            matrixDrawerIdentity.textContent = parts.join(' · ');
+        }
+        if (matrixDrawerReport) {
+            const params = new URLSearchParams({ jobId: row.jobId });
+            if (selectedMonth) params.set('month', selectedMonth);
+            matrixDrawerReport.href = '/Backtests?' + params.toString();
+        }
+
+        matrixDrawerBody.replaceChildren(
+            renderDrawerMonthMetrics(row, selectedCell, selectedMonth),
+            renderDrawerRejections(row),
+            renderDrawerSampleTrades(row, selectedMonth)
+        );
+        if (!matrixDrawer.open) matrixDrawer.showModal();
+    }
+
+    matrixDrawerClose?.addEventListener('click', closeMatrixDrawer);
+    matrixDrawer?.addEventListener('click', event => {
+        if (event.target === matrixDrawer) closeMatrixDrawer();
+    });
+
     // Cancels any in-flight matrix fetch and hides the matrix panel so stale responses cannot reopen it.
     function hideSavedPlanMatrix() {
         matrixRequestId++;
+        closeMatrixDrawer();
         if (matrixPanel) matrixPanel.hidden = true;
         matrixBody?.replaceChildren();
     }
@@ -290,30 +527,36 @@
                     if (row.monthlyUnavailableReason) td.title = row.monthlyUnavailableReason;
                     td.append(missing);
                 } else {
+                    const cellButton = document.createElement('button');
+                    cellButton.type = 'button';
+                    cellButton.className = 'lab-matrix-cell-btn';
+                    cellButton.setAttribute('aria-label', `Inspect ${row.strategyName || row.strategyId} ${month}`);
                     const formatted = formatMatrixReturn(cell);
                     const value = document.createElement('span');
                     value.className = 'lab-matrix-return';
                     value.dataset.tone = formatted.tone;
                     value.textContent = formatted.text;
-                    td.append(value);
+                    cellButton.append(value);
                     if (cell.partialMonth) {
                         const partial = document.createElement('span');
                         partial.className = 'lab-matrix-partial';
                         partial.textContent = ' (partial)';
-                        td.append(partial);
+                        cellButton.append(partial);
                     }
                     const basisLabel = valuationSubtitle(cell.valuationBasis);
                     const basis = document.createElement('span');
                     basis.className = 'cell-sub lab-matrix-basis';
                     basis.textContent = basisLabel || 'Valuation unavailable';
                     basis.title = cell.valuationBasis || '';
-                    td.append(basis);
+                    cellButton.append(basis);
                     if (cell.unavailableReason) {
                         const cellReason = document.createElement('span');
                         cellReason.className = 'cell-sub lab-matrix-reason';
                         cellReason.textContent = cell.unavailableReason;
-                        td.append(cellReason);
+                        cellButton.append(cellReason);
                     }
+                    cellButton.addEventListener('click', () => openMatrixDrawer(row, month));
+                    td.append(cellButton);
                     const details = [];
                     if (cell.openingEquity != null && cell.closingEquity != null) {
                         details.push(`Equity ${Number(cell.openingEquity).toFixed(2)} -> ${Number(cell.closingEquity).toFixed(2)}`);
@@ -328,12 +571,21 @@
             }
 
             const diagCell = document.createElement('td');
+            const diagActions = document.createElement('div');
+            diagActions.className = 'lab-matrix-diag-actions';
+            const inspectButton = document.createElement('button');
+            inspectButton.type = 'button';
+            inspectButton.className = 'btn btn-secondary btn-sm lab-matrix-inspect-btn';
+            inspectButton.textContent = 'Inspect';
+            inspectButton.addEventListener('click', () => openMatrixDrawer(row, null));
+            diagActions.append(inspectButton);
             const rejections = row.topRejections || [];
             if (!rejections.length) {
                 const none = document.createElement('span');
                 none.className = 'note';
                 none.textContent = 'None';
-                diagCell.append(none);
+                diagActions.append(none);
+                diagCell.append(diagActions);
             } else {
                 const details = document.createElement('details');
                 details.className = 'lab-matrix-rejections';
@@ -347,7 +599,7 @@
                     list.append(li);
                 }
                 details.append(summary, list);
-                diagCell.append(details);
+                diagCell.append(diagActions, details);
             }
             tr.append(diagCell);
             tbody.append(tr);

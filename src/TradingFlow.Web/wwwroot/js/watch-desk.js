@@ -32,6 +32,9 @@
     const reviewKey = savedDesk?.preparationKey || incoming.get('preparationKey');
     let started = false, restoredView = false;
     let deskChart, chartSymbol;
+    let scannerDensity = 'compact';
+    let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '';
+    const deskDefaultChartStudies = ['sma20:1d', 'sma50:1d', 'sma200:1d', 'rsi14', 'atr14:readout'];
     const moneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2});
     const numberFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits:2});
     const volumeFormat = new Intl.NumberFormat(undefined, {notation:'compact', maximumFractionDigits:2});
@@ -61,6 +64,7 @@
             }
             state.newsForAll=value.newsForAll!==false;
             state.evidenceOpen=value.evidenceOpen===true;
+            if(value.scannerDensityV2==='compact'||value.scannerDensityV2==='full')state.scannerDensityV2=value.scannerDensityV2;
             return state;
         }catch{return null;}
     }
@@ -70,10 +74,26 @@
         const choice=selectedStrategyChoice(), table=document.querySelector('.watch-table-scroll');
         const url='/Desk'+(incoming.has('env')?'?env='+encodeURIComponent(environment):'');
         return {url,operator,environment,source:el('source').value,search:el('search').value,sort:el('sort').value,view,page,selected,newsForAll,
+            scannerDensityV2:scannerDensity,
             strategyId:choice?.strategy.strategyId,semanticVersion:choice?.strategy.semanticVersion,
             contentSha256:choice?.strategy.contentSha256,runId:choice?.candidateRunId,
             preparationKey:el('source').value==='prepared'?reviewKey:undefined,evidenceOpen:el('evidence')?.open,
             scrollY:window.scrollY,tableLeft:table.scrollLeft,tableTop:table.scrollTop,newsTop:el('news').scrollTop};
+    }
+
+    // Switches the 40%-width Desk scanner between 6-column compact mode (default, keeping News visible while basic indicators live in the 60% chart window) and full 10-column mode.
+    function setScannerDensity(mode){
+        scannerDensity = mode === 'full' ? 'full' : 'compact';
+        const table = document.querySelector('.watch-table');
+        if (table) table.dataset.scannerDensity = scannerDensity;
+        const toggle = el('density-toggle');
+        if (toggle) {
+            toggle.textContent = scannerDensity === 'compact' ? 'Compact 6-col' : 'Full 10-col';
+            toggle.setAttribute('aria-pressed', String(scannerDensity === 'compact'));
+            toggle.title = scannerDensity === 'compact'
+                ? 'Showing 6 compact columns (keeps News; basic indicators are in the chart window); click for full 10-column table'
+                : 'Showing all 10 columns; click for compact 6-column scanner';
+        }
     }
 
     // Write only view state when leaving this document, including links handled before pagehide.
@@ -165,10 +185,12 @@
             Object.entries(choice.strategy).forEach(([key, value]) => query.set(key, value));
             if (choice.candidateRunId) query.set('runId', choice.candidateRunId);
         }
-        text('strategy-status', strategyLoadError || (choice ? choice.name + ' · ' + choice.strategy.semanticVersion + ' · ' + choice.strategy.contentSha256 +
-            (choice.candidateRunId ? ' · Run ' + choice.candidateRunId + ' · recorded evaluations, not current recommendations' :
-                restoredView ? ' · Refresh strategy checks to collect current evidence.' : ' · Collecting current strategy evidence for this page.') :
+        const statusNode = el('strategy-status');
+        text('strategy-status', strategyLoadError || (choice ? choice.name + ' · v' + choice.strategy.semanticVersion +
+            (choice.candidateRunId ? ' · Run ' + choice.candidateRunId + ' · recorded evaluations' :
+                restoredView ? ' · Refresh to collect current checks.' : ' · Collecting current checks…') :
             'Select a strategy to collect data and see its checks for each stock.'));
+        if (statusNode) statusNode.title = choice ? `${choice.strategy.strategyId} · v${choice.strategy.semanticVersion} · SHA-256 ${choice.strategy.contentSha256}` : '';
         return query;
     }
     // Reconnect observations with the selected exact strategy; old rows are cleared before a new response arrives.
@@ -177,6 +199,7 @@
         if(!restoredView&&currentJob&&['queued','running'].includes(currentJob.status))cancelAssessment(currentJob.jobId).catch(()=>{});
         currentJob=null;currentStocks=new Map();currentSignature='';currentSubmitting=false;currentFailure='';el('strategy-refresh').disabled=false;
         stream?.close();stopQuoteSocket();quoteSocket.view=null;quoteSocket.items.clear();quoteSocket.reason='';const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
+        clearChartTradePlan();
         syncChart(null);
         el('focus-content').hidden=true;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
         el('retry').hidden=true;text('connection','Connecting · live quotes');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
@@ -337,7 +360,8 @@
             submission.job=job;
             if(version!==generation){if(job&&['queued','running'].includes(job.status))cancelAssessment(job.jobId).catch(()=>{});return;}
             currentFailure='';currentJob=job;currentStocks=new Map((job.result?.stocks||[]).map(stock=>[stock.symbol,stock]));
-            text('strategy-status',choice.name+' · '+choice.strategy.semanticVersion+' · '+job.status+' · '+job.detail+' · Profile '+job.profileSha256);
+            text('strategy-status',choice.name+' · v'+choice.strategy.semanticVersion+' · '+job.status+' · '+job.detail);
+            el('strategy-status').title=`${choice.strategy.strategyId} · v${choice.strategy.semanticVersion} · SHA-256 ${choice.strategy.contentSha256} · Profile ${job.profileSha256}`;
             el('strategy-refresh').disabled=['queued','running'].includes(job.status);
             el('strategy-cancel').hidden=!['queued','running'].includes(job.status);
             applyCurrentAssessments();render();
@@ -488,8 +512,9 @@
             value.textContent=Number.isFinite(observed)?(field==='rsi'?number(observed):money(observed)):'—';
         }
         cell.title=detail;
-        const relative=technical?.relativeVolume;
+        const relative=technical?.relativeVolume, atr=technical?.atr;
         rvol.querySelector('strong').textContent=Number.isFinite(relative)&&relative>=0?number(relative)+'×':'—';
+        rvol.querySelector('small').textContent=Number.isFinite(atr)&&atr>=0?'ATR '+money(atr):'ATR —';
         rvol.title=detail;
         const volume=node.querySelector('.watch-volume'), observation=sessionVolume(row);
         volume.querySelector('strong').textContent=observation?volumeFormat.format(observation.volume):'—';
@@ -497,6 +522,18 @@
         volume.title=observation?number(observation.volume)+' SIP shares · '+observation.sessionDate+
             ' NY · observed '+when(observation.asOfUtc)+' · includes regular and extended hours and excludes overnight feed':
             'No verified SIP session volume.';
+    }
+
+    // Formats midpoint daily percent change against the server's previous close with a non-colour direction glyph; fails closed when either price is absent.
+    function formatRowDayChange(row){
+        const prev = row.previousClose?.close, mid = row.quote?.midPrice;
+        if (!(prev > 0) || typeof mid !== 'number' || !Number.isFinite(mid)) return { text: '—', value: null };
+        const pct = (mid / prev - 1) * 100;
+        if (!Number.isFinite(pct)) return { text: '—', value: null };
+        const abs = Math.abs(pct).toFixed(2) + '%';
+        if (pct > 0) return { text: '▲ +' + abs, value: pct };
+        if (pct < 0) return { text: '▼ \u2212' + abs, value: pct };
+        return { text: '0.00%', value: 0 };
     }
 
     // Show the time window of stored counts and distinguish a failed read from a successful zero.
@@ -542,7 +579,7 @@
         const row=document.createElement('tr');
         row.dataset.symbol=symbol;
         row.innerHTML=`<td><button type="button" class="watch-symbol-button"></button></td>
-            <td class="watch-row-price"><strong></strong><small></small></td>
+            <td class="watch-row-price"><strong></strong><span class="watch-day-change"></span><small></small></td>
             <td><div class="watch-trade-buttons">
                 <button type="button" data-order-side="buy">Buy<span class="watch-order-price"></span></button>
                 <button type="button" data-order-side="sell">Sell<span class="watch-order-price"></span></button>
@@ -594,6 +631,8 @@
         node.dataset.selected=String(symbol===selected);
         stock.setAttribute('aria-pressed',String(symbol===selected));
         node.querySelector('.watch-row-price strong').textContent=money(row.quote?.midPrice);
+        const dayChange=formatRowDayChange(row), dayNode=node.querySelector('.watch-day-change');
+        if(dayNode){dayNode.textContent=dayChange.text;tone(dayNode,dayChange.value);}
         strategy.querySelector('strong').textContent=signalLabel(row);
         strategy.querySelector('small').textContent=row.strategyAssessment?signalReason(row):'';
         strategy.title=signalReason(row);
@@ -713,16 +752,82 @@
         chartSymbol = symbol;
         if (symbol && !deskChart) {
             const root = el('focus-content').querySelector('[data-stock-chart]');
-            if (root) deskChart = window.TradingFlowStockChart?.mount(root, { summaryHost: el('chart-summary') });
+            if (root) deskChart = window.TradingFlowStockChart?.mount(root, { summaryHost: el('chart-summary'), defaultStudies: deskDefaultChartStudies });
         }
         deskChart?.setSymbol(symbol);
         window.dispatchEvent(new CustomEvent('tradingflow:desk-symbol-selected', { detail: { symbol: symbol || null } }));
     }
+    // Aborts any in-flight advisory trade-plan lookup, invalidates stale responses, and removes Entry/Stop/Target chart lines.
+    function clearChartTradePlan() {
+        tradePlanSeq++;
+        tradePlanKey = '';
+        if (tradePlanController) {
+            tradePlanController.abort();
+            tradePlanController = null;
+        }
+        deskChart?.setTradePlanLevels(null);
+    }
+
+    // Requests read-only server strategy reference levels (Entry/Stop/Target) for the selected stock and strategy; fails closed on change or error with zero client math.
+    async function syncChartTradePlan(row) {
+        const choice = selectedStrategyChoice();
+        const symbol = row?.membership?.symbol || null;
+        if (!symbol || !choice?.strategy) {
+            if (tradePlanKey || tradePlanController) clearChartTradePlan();
+            return;
+        }
+        const nextKey = JSON.stringify({ symbol, strategy: choice.strategy });
+        if (nextKey === tradePlanKey) return;
+        clearChartTradePlan();
+        tradePlanKey = nextKey;
+        const controller = new AbortController();
+        tradePlanController = controller;
+        const seq = ++tradePlanSeq;
+        try {
+            const askPrice = typeof row?.quote?.askPrice === 'number' && Number.isFinite(row.quote.askPrice) && row.quote.askPrice > 0
+                ? row.quote.askPrice
+                : null;
+            const response = await window.tradingFlowFetch('/api/v1/orders/plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contractVersion: '1.0',
+                    symbol,
+                    strategy: choice.strategy,
+                    limitPrice: askPrice
+                }),
+                signal: controller.signal
+            });
+            if (seq !== tradePlanSeq || controller.signal.aborted) return;
+            if (!response.ok) {
+                deskChart?.setTradePlanLevels(null);
+                return;
+            }
+            const plan = await response.json();
+            if (seq !== tradePlanSeq || controller.signal.aborted) return;
+            if (plan?.stop == null && plan?.target == null) {
+                deskChart?.setTradePlanLevels(null);
+                return;
+            }
+            deskChart?.setTradePlanLevels({
+                limit: plan?.limit ?? null,
+                stop: plan?.stop ?? null,
+                target: plan?.target ?? null
+            });
+        } catch (error) {
+            if (error?.name === 'AbortError') return;
+            if (seq === tradePlanSeq) deskChart?.setTradePlanLevels(null);
+        } finally {
+            if (tradePlanController === controller) tradePlanController = null;
+        }
+    }
+
     // Keep quote/account rendering separate from the selected strategy's recorded evidence.
     function renderFocus(){
         const row=snapshot?.rows.find(x=>x.membership.symbol===selected);
         el('focus-content').hidden=!row;
         syncChart(row?.membership.symbol ?? null);
+        void syncChartTradePlan(row ?? null);
         if(!row){text('symbol','Choose a stock');text('name','Select a row to see its price, holding and news.');text('mid','—');text('prev-close','');return;}
         text('symbol',row.membership.symbol);text('name',row.membership.name||row.membership.wishlists.map(x=>x.name).join(' · ')||'Finviz discovery');
         const change=row.previousClose?.close>0&&row.quote?.midPrice!=null?(row.quote.midPrice/row.previousClose.close-1)*100:null;
@@ -840,6 +945,7 @@
         const submission=assessmentSubmissions.get(currentSignature);
         // An explicit refresh starts new collection only after the previous attempt is known to be terminal.
         if(submission?.job&&['completed','failed','cancelled'].includes(submission.job.status))assessmentSubmissions.delete(currentSignature);
+        clearChartTradePlan();
         restoredView=false;currentJob=null;currentStocks=new Map();currentSignature='';currentFailure='';applyCurrentAssessments();render();observeCurrentStrategy(generation);
     };
     el('strategy-cancel').onclick=async()=>{const version=generation,id=currentJob?.jobId;if(!id)return;try{const job=await cancelAssessment(id);if(version===generation){currentJob=job;text('strategy-status',job.detail);applyCurrentAssessments();render();}}catch(error){if(version===generation)text('strategy-status',error.message);}};
@@ -859,6 +965,7 @@
     // Save the tab's view and release observations when leaving Desk.
     window.addEventListener('pagehide', () => {
         saveDeskReturn();
+        clearChartTradePlan();
         stream?.close();
         stopQuoteSocket();
         generation++;
@@ -884,6 +991,8 @@
     const initialSort=savedDesk?.sort??incoming.get('sort');
     if([...el('sort').options].some(option=>option.value===initialSort))el('sort').value=initialSort;
     setView(savedDesk?.view??incoming.get('view'));
+    setScannerDensity(savedDesk?.scannerDensityV2 || 'compact');
+    el('density-toggle')?.addEventListener('click', () => setScannerDensity(scannerDensity === 'compact' ? 'full' : 'compact'));
     const initialPage=Number(savedDesk?.page??incoming.get('page'));
     if(Number.isInteger(initialPage)&&initialPage>=0&&initialPage<=10000)page=initialPage;
 

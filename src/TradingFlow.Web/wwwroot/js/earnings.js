@@ -693,6 +693,13 @@
         countLabel.textContent = filtered.length || latestPayload.status?.windowCovered
             ? `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching stored events${latestPayload.truncated ? " · first 2000 shown" : ""}`
             : 'Current event count unconfirmed';
+        window.dispatchEvent(new CustomEvent('tradingflow:earnings-symbols-changed', {
+            detail: {
+                symbols: filtered.slice(0, 6).map(item => item.ticker).filter(Boolean),
+                search: searchInput?.value || '',
+                activeLane
+            }
+        }));
     }
 
     // Name the latest analysis result and show separately when Finviz and each news source were read.

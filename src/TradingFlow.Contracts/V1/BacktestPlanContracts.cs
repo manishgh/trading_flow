@@ -156,7 +156,8 @@ public sealed record SavedPlanMonthlyMatrixRow(
     string Status,
     IReadOnlyList<SavedPlanMonthlyMatrixCell> Cells,
     IReadOnlyList<SavedPlanRejectionSummary> TopRejections,
-    string? MonthlyUnavailableReason = null);
+    string? MonthlyUnavailableReason = null,
+    IReadOnlyList<SavedPlanMonthlyTradeSample>? SampleTrades = null);
 
 /// <summary>One immutable NY-session month cell sourced directly from <see cref="MonthlyRunResult"/>.</summary>
 public sealed record SavedPlanMonthlyMatrixCell(
@@ -173,3 +174,16 @@ public sealed record SavedPlanMonthlyMatrixCell(
 
 /// <summary>Canonical rejection code and recorded count for one strategy job's diagnostics.</summary>
 public sealed record SavedPlanRejectionSummary(string Code, int Count);
+
+/// <summary>One retained completed-trade sample stamped with its NY exit month for the Strategy Lab slide-over drawer.</summary>
+public sealed record SavedPlanMonthlyTradeSample(
+    string Month,
+    string Ticker,
+    string Direction,
+    decimal EntryPrice,
+    decimal ExitPrice,
+    DateTimeOffset EntryTimestampUtc,
+    DateTimeOffset ExitTimestampUtc,
+    string ExitReason,
+    decimal NetProfit,
+    decimal? RMultiple);

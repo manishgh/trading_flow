@@ -175,12 +175,31 @@ Because the running operator site on `http://127.0.0.1:10088` (`C:\project\tradi
   - Consistent `CATALYSTS & OPTIONS` eyebrow and contextual `Open Desk ↗` links on `News.cshtml` (preserving `Model.Ticker`) and `Earnings.cshtml`.
   - Responsive table/card and badge styling polish for Catalysts and Portfolio views in `ui2-foundation.css`.
 
-### Explicitly Deferred to Follow-Up Phase (Not Claimed Complete Here)
-- Desk 5-column compact scanner replacement (current 10-column table retained alongside the new sticky side-by-side layout).
-- Stock chart horizontal `Entry` / `Initial Stop (1.0 ATR)` / `Target (2.5R)` overlays and pinned OPRA strip underneath the chart.
-- Risk-First bracket order ticket redesign.
-- Strategy Lab slide-over trade drawer and `ⓘ Provenance` SHA-256 popover.
-- Catalysts `OPRA Implied Move vs 20d ADR%` ratio cards on News/Earnings.
+### Deferred Items Completed in Checkpoint UI-5 (2026-11-21)
+All five previously deferred UI 2.0 items were implemented in Checkpoint UI-5 on `ui/redesign-v2` (including direct user Desk UX refinements from `#214`, `#215`, and `#219`):
+1. **Desk 40% Scanner (6-col Compact Keeping News) + 60% Chart Window with Embedded Basic Indicators (`Desk.cshtml`, `_StockChart.cshtml`, `watch-desk.js`, `stock-chart.js`, `ui2-foundation.css`):**
+   - Desktop `.watch-grid` (`>= 1200px`) uses a 40% / 60% split (`minmax(360px, 2fr) minmax(540px, 3fr)`).
+   - Default compact 6-column scanner (`data-scanner-density="compact"`, toggled to `Full 10-col` via `#watch-density-toggle`, persisted under `scannerDensityV2`) keeps `Stock`, `Mid · Day %`, `Strategy`, **`News` positive/negative counts (col 6, never hidden)**, `RVOL · ATR`, and `Next action`, hiding only `Trade` (3), `Position` (5), `Daily technicals` (7 — moved into the 60% chart window), and `Volume` (9), with explicit `<col>` widths summing to 100%.
+   - Basic indicators live inside `.watch-chart-window`: Desk mounts `TradingFlowStockChart` with `defaultStudies: ['sma20:1d', 'sma50:1d', 'sma200:1d', 'rsi14', 'atr14:readout']` when no saved `localStorage` indicator list exists, surfaces live study readout chips inline (`[data-chart-inline-studies]`), and renders a single compact completed-1d pill strip (`SMA 20 · SMA 50 · SMA 200 · RSI · ATR · RVOL` + `More ▾` disclosure) inside the chart frame.
+   - Decluttered single-line chart header bar (`Interval`, `Session`, `Preset`, plus `Studies & settings` disclosure) and subtle single-row Desk toolbar (`Group`, `Strategy` + inline `↻ Refresh`/`Cancel`, `Find`, `Sort`, `+ Stock`, `+ Screen`, `Groups ↗`, plus compact single-line `#watch-strategy-status` with full 64-char SHA-256 in tooltip).
+2. **Chart `Entry`/`Stop`/`Target` Reference Lines + Pinned OPRA Strip Under Chart (`_OptionsSentimentPanel.cshtml`, `Desk.cshtml`, `desk-options.js`, `stock-chart-plot.js`, `stock-chart.js`, `watch-desk.js`, `DeskTicketPlanService.cs`):**
+   - Moved `#desk-options-selected` directly beneath `.watch-chart-window` inside `#watch-focus-content`.
+   - Added `setTradePlanLevels(plan)` via Lightweight Charts `createPriceLine`/`removePriceLine` with theme-change repaint and `dispose()` cleanup.
+   - Wired read-only `POST /api/v1/orders/plan` with `AbortController`, request sequence guard, `tradePlanKey` deduplication (no 1-second timer spam), explicit strategy-refresh clearing, long-only guard in `DeskTicketPlanService.Build`, and `plan?.stop != null || plan?.target != null` check so unavailable/non-long plans never draw inverted or stray ask-only lines.
+3. **Risk-First Bracket Order Ticket (`_OrderWorkflow.cshtml`, `order-workflow.js`, `ui2-foundation.css`):**
+   - Added entry-only `<section class="order-risk-strip" data-order-risk-strip data-entry-only>` (`1R Risk Budget`, `Stop Distance / sh`, `Order Risk ($)`, `Reward : Risk`), opened `<details class="order-options" data-entry-only open>` on entry tickets, and added pure display helper `refreshRiskStrip()` retaining `lastRiskBudget` across manual quantity/price edits (cleared on symbol/strategy change or `reset()`) while leaving server draft/preview/confirm authority untouched.
+4. **Strategy Lab Slide-Over Diagnostics & Trade Drawer + `ⓘ Provenance` Popover (`BacktestPlanContracts.cs`, `SavedPlanMonthlyMatrixBuilder.cs`, `Backtests.cshtml`, `run-workflow.js`, `ui2-foundation.css`):**
+   - Styled `.lab-provenance-popover` (`ⓘ Provenance`) preserving full SHA-256 and admission strings.
+   - Added `SavedPlanMonthlyTradeSample` and `SampleTrades` (capped at 25 newest trades, NY exit month via `MonthlyBacktestPresentation.ExitSessionDate`, `RMultiple` via `BacktestDerivedMetrics.RMultiple`; zero pooled/accumulated returns) and wired `<dialog id="lab-matrix-drawer">` on month-cell / `Inspect` click with `<progress>` rejection funnel and explicit caveat that monthly `%` comes exclusively from `MonthlyRunResult`.
+5. **Catalysts `OPRA Implied Move vs 20d ADR%` Ratio Cards (`CatalystOptionsAdrService.cs`, `DeskOptionsEndpoints.cs`, `News.cshtml`, `Earnings.cshtml`, `earnings.js`, `catalysts-opra.js`, `ui2-foundation.css`):**
+   - Added authenticated read-only `GET /api/v1/catalysts/options-adr?symbols=...` (1–6 validated US equity symbols, default `SPY,QQQ`, 6s timeout, bounded 3-minute in-memory ADR cache skipping failed schedules).
+   - Delegates 20-session ADR% math to canonical `SignalGenerator.ComputeAverageRangeAndDollarVolume` with exact 20-session schedule continuity (`TechnicalFactorCalculator.ExpectedCompletedSessions`), completed-bar causality, `HasFreshBenchmarkSession`, and fail-closed `Adr20Pct = null` on any missing session, stale bar, failed schedule, or `Close <= 0` / `High < Low` bar.
+   - Rendered `textContent`-only ratio cards (`✓ <1.2x`, `◐ 1.2x–2.0x`, `▲ >2.0x`) on `News` and `Earnings` (driven cleanly by `tradingflow:earnings-symbols-changed` without competing timers).
+
+### Independent Review Log (UI-5)
+- **Round 1 Code & Architecture Review (`#216` — REJECT):** Flagged (1) Desk scanner `<colgroup>` width sum + fresh `scannerDensityV2` key, (2) `catalysts-opra.js` competing 50ms/350ms timers and company-name search leakage, (3) `order-workflow.js` blanking `1R Risk Budget` on manual edits, (4) uncached `HttpClient` / 65d bar fetches per ADR request + clearing chart lines on strategy refresh. All resolved in Round 2.
+- **Round 1 Plan, Governance & Causality Review (`#217` — REJECT):** Flagged (1) `CatalystOptionsAdrService` ADR% formula divergence vs `SignalGenerator.ComputeAverageRangeAndDollarVolume` and silent corrupt-bar / missing-session bridging, (2) `DeskTicketPlanService.Build` short-strategy long inversion + lone ask-only line on unavailable plan, (3) `#215` user Desk layout & chart-window indicator placement, (4) updating this tracking plan. All resolved in Round 2.
+- **Round 2 Review & Verification:** Pending Round 2 sign-off from `@ui5-code-rev` and `@ui5-plan-rev`.
 
 ### Independent Review Log (UI-2 / UI-3 / UI-4)
 - **Round 1 Code Review (`#200` — REJECT):** Flagged (1) whole-table `SnapshotJson` scan + uncaught `InvalidDataException` in `GetSnapshotsForPlanAsync`, (2) `@RenderBody()` stylesheet `<link>` cascade order colliding with `ui2-foundation.css` at `>= 1200px`, plus 3 minor polish items (stale matrix fetch cancellation, newest-`CreatedAtUtc`-first row ordering, null-conditional consistency). All resolved in `39b7544`.

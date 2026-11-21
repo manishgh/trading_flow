@@ -49,7 +49,7 @@ public static class DeskOptionsEndpoints
                 ? new[] { "SPY", "QQQ" }
                 : new[] { "SPY", "QQQ", selectedSymbol }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-            var spotHints = await TryLoadSpotHintsAsync(quotes, requestedSymbols, cancellationToken);
+            var spotHints = await TryLoadSpotHintsAsync(quotes, requestedSymbols, cancellationToken, cancellationToken);
 
             var spyTask = optionsSource.GetSnapshotAsync("SPY", spotHints.GetValueOrDefault("SPY"), cancellationToken: cancellationToken);
             var qqqTask = optionsSource.GetSnapshotAsync("QQQ", spotHints.GetValueOrDefault("QQQ"), cancellationToken: cancellationToken);
@@ -78,6 +78,35 @@ public static class DeskOptionsEndpoints
                 selectedTask is null ? null : await selectedTask);
             return Results.Ok(response);
         });
+
+        // Read-only Catalysts endpoint comparing OPRA front-expiry implied move against completed 20-session ADR%.
+        group.MapGet("/catalysts/options-adr", async (
+            string? symbols,
+            IOptionsSentimentSource optionsSource,
+            AlpacaQuoteService quotes,
+            ConfigCatalogService catalog,
+            PaperRuntimeFactory runtimeFactory,
+            TimeProvider clock,
+            CancellationToken cancellationToken) =>
+        {
+            if (!CatalystOptionsAdrService.TryParseSymbols(symbols, out var parsedSymbols, out var error))
+            {
+                return Results.BadRequest(new ApiErrorResponse(
+                    ContractVersions.VersionOne,
+                    "invalid_symbols",
+                    error ?? "Invalid symbols query."));
+            }
+
+            var response = await CatalystOptionsAdrService.LoadAsync(
+                parsedSymbols,
+                optionsSource,
+                quotes,
+                catalog,
+                runtimeFactory,
+                clock,
+                cancellationToken);
+            return Results.Ok(response);
+        });
     }
 
     // Validates a US equity symbol string before passing it to provider quote and OPRA snapshot queries.
@@ -85,16 +114,17 @@ public static class DeskOptionsEndpoints
         symbol.Length is >= 1 and <= 12 &&
         symbol.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '.' or '-');
 
-    // Best-effort lookup of Desk mid-prices so OPRA queries can narrow strikes without failing when quotes are absent.
-    private static async Task<Dictionary<string, decimal?>> TryLoadSpotHintsAsync(
+    // Best-effort lookup of Desk mid-prices so OPRA queries can narrow strikes without failing when quotes are absent or timed out.
+    internal static async Task<Dictionary<string, decimal?>> TryLoadSpotHintsAsync(
         AlpacaQuoteService quotes,
         string[] symbols,
-        CancellationToken cancellationToken)
+        CancellationToken deadlineToken,
+        CancellationToken callerToken = default)
     {
         var hints = new Dictionary<string, decimal?>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var latest = await quotes.GetNewestQuotesAsync(symbols, cancellationToken);
+            var latest = await quotes.GetNewestQuotesAsync(symbols, deadlineToken);
             foreach (var pair in latest)
             {
                 if (pair.Value?.MidPrice is > 0m)
@@ -103,7 +133,7 @@ public static class DeskOptionsEndpoints
                 }
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !callerToken.IsCancellationRequested)
         {
             // AlpacaOptionsSnapshotClient falls back to stock snapshot / option parity when hints are absent.
         }
