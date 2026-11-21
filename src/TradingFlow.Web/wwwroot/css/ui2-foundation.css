@@ -311,7 +311,8 @@
 .watch-chart-window {
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel);
 }
-.watch-chart-window .stock-chart {
+.watch-chart-window .stock-chart,
+.workspace-app .watch-desk .watch-chart-window .stock-chart {
   border: 0; border-radius: 0; margin: 0; display: block; padding: 8px 10px;
 }
 .stock-chart-bar {
@@ -319,16 +320,22 @@
   padding: 4px 0 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px;
 }
 .stock-chart-bar .stock-chart-controls,
-.stock-chart-bar .stock-chart-study-toolbar {
+.stock-chart-bar .stock-chart-study-toolbar,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-controls,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-study-toolbar {
   display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0;
 }
 .stock-chart-bar .stock-chart-controls > label,
-.stock-chart-bar .stock-chart-study-toolbar > label {
+.stock-chart-bar .stock-chart-study-toolbar > label,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-controls > label,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-study-toolbar > label {
   display: inline-flex; flex-direction: row; align-items: center; gap: 5px; flex: 0 0 auto;
-  font-size: 0.72rem; color: var(--color-neutral-700); font-weight: 600;
+  flex-basis: auto; font-size: 0.72rem; color: var(--color-neutral-700); font-weight: 600;
 }
 .stock-chart-bar .stock-chart-controls select,
-.stock-chart-bar .stock-chart-study-toolbar > label select {
+.stock-chart-bar .stock-chart-study-toolbar > label select,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-controls select,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-study-toolbar > label select {
   height: 32px; min-height: 32px; padding: 2px 8px; font-size: 0.75rem; width: auto;
 }
 .stock-chart-more { position: relative; }
