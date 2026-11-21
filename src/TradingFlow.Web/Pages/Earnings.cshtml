@@ -24,10 +24,13 @@
         !String.Equals(pair.Value.ToString(), defaultValue, StringComparison.OrdinalIgnoreCase));
 }
 
-<link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+}
 
 <header class="page-header market-page-header">
     <div>
+        <span class="eyebrow">CATALYSTS &amp; OPTIONS</span>
         <h1>Earnings monitor</h1>
         <p>Reporting calendar, results and breakout evidence.</p>
         <p id="earnings-observation" role="status">First analysis status is being read…</p>
@@ -37,6 +40,9 @@
             <p id="earnings-calendar-evidence">Finviz calendar coverage not yet observed.</p>
             <ul id="earnings-news-evidence"></ul>
         </details>
+    </div>
+    <div class="actions">
+        <a class="btn btn-secondary btn-md" asp-page="/Desk">Open Desk ↗</a>
     </div>
 </header>
 

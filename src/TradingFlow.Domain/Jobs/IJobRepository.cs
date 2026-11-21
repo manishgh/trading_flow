@@ -37,6 +37,16 @@ public interface IDurableJobRepository : IJobRepository
         string jobType,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Reads durable jobs of <paramref name="jobType"/> belonging to saved plan <paramref name="planId"/>, newest first,
+    /// avoiding loading unrelated jobs' SnapshotJson payloads when supported by the backing store.
+    /// </summary>
+    Task<IReadOnlyList<PersistedJob>> GetJobsForPlanAsync(
+        string jobType,
+        long planId,
+        CancellationToken cancellationToken) =>
+        GetJobsAsync(jobType, cancellationToken);
+
     Task<bool> RequestCancellationAsync(
         Guid id,
         DateTimeOffset requestedAtUtc,

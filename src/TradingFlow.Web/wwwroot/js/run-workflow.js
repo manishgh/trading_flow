@@ -18,16 +18,23 @@
     const evidencePicker = form.querySelector('[data-evidence-picker]');
     const evidenceSummary = form.querySelector('[data-evidence-summary]');
     const evidenceAvailability = form.querySelector('[data-evidence-availability]');
+    const matrixPanel = document.getElementById('saved-plan-matrix-panel');
+    const matrixTitle = document.getElementById('saved-plan-matrix-title');
+    const matrixBody = document.getElementById('saved-plan-matrix-body');
+    let matrixRequestId = 0;
     let evidenceChoices = [];
     const lifetime = new AbortController();
     // Discards backend-bound choices on departure, including documents retained by browser history.
     function leavePage() {
         lifetime.abort(); pending = undefined; savedPlan = undefined; savedPlans = []; evidenceChoices = []; previewed = false;
+        matrixRequestId++;
         startKeys.clear();
         if (evidencePicker) evidencePicker.value = '';
         if (startPlanButton) startPlanButton.disabled = true;
         if (savePlanButton) savePlanButton.disabled = true;
         planPreview?.replaceChildren(); evidenceSummary?.replaceChildren();
+        if (matrixBody) matrixBody.replaceChildren();
+        if (matrixPanel) matrixPanel.hidden = true;
         clearPaperStockReview();
     }
     window.addEventListener('pagehide', leavePage);
@@ -113,7 +120,11 @@
         pending = undefined; savedPlan = undefined; previewed = false;
         if (startPlanButton) startPlanButton.disabled = true;
         if (savePlanButton) savePlanButton.disabled = true;
-        if (planPicker) planPicker.value = '';
+        if (planPicker && planPicker.value) {
+            planPicker.value = '';
+            if (matrixPanel?.dataset.currentPlanId) void loadSavedPlanMatrix(matrixPanel.dataset.currentPlanId);
+            else hideSavedPlanMatrix();
+        }
         planPreview?.replaceChildren();
         clearPaperStockReview();
         clearValidation();
@@ -132,6 +143,306 @@
         }
     }
     if (kind === 'backtest') form.querySelector('#SelectedConfigPath')?.addEventListener('change', applyBacktestProfile);
+
+    // Maps canonical engine rejection codes to plain-English labels for the saved-plan diagnostics disclosure.
+    const matrixRejectionLabels = {
+        min_average_range_pct_not_met: '20-day ADR% below minimum threshold',
+        regime_price_below_sma: 'Benchmark close below 50-day SMA',
+        regime_sma_not_rising: 'Benchmark 50-day SMA is not rising',
+        regime_sma_not_falling: 'Benchmark 50-day SMA is not falling',
+        market_regime_off_on_entry_day: 'Market regime gate is OFF (SPY)',
+        nasdaq_market_regime_off_on_entry_day: 'Nasdaq home-market gate is OFF (QQQ)',
+        vix_above_long_limit: 'VIX above long-entry limit (>22)',
+        vix_regime_off_on_entry_day: 'VIX above long-entry limit (>22)',
+        vix_below_short_limit: 'VIX below short-entry floor (<18)',
+        vix_short_regime_off_on_entry_day: 'VIX below short-entry floor (<18)',
+        vix_close_unknown_for_previous_session: 'Previous-session VIX close not yet published',
+        vix_lookup_failed: 'VIX data source unavailable',
+        sector_not_in_top_n: 'Stock sector is outside the Top-N leaders',
+        earnings_blackout: 'Inside pre-earnings blackout window',
+        insufficient_history: 'Insufficient completed bar history',
+        max_positions_reached: 'Maximum concurrent positions reached',
+        cooldown_active: 'Post-exit cooldown is active'
+    };
+
+    // Converts a canonical rejection code into a plain-English label while preserving the original code for tooltips.
+    function humanizeRejectionCode(code) {
+        const raw = String(code || '').trim();
+        const key = raw.toLowerCase();
+        if (matrixRejectionLabels[key]) return matrixRejectionLabels[key];
+        const cleaned = raw.replace(/^(strategy|regime|eligibility):/i, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : 'Rejected';
+    }
+
+    // Formats one immutable monthly return cell with a non-colour direction glyph and tone.
+    function formatMatrixReturn(cell) {
+        if (cell.returnPct === null || cell.returnPct === undefined) return { text: 'Unavailable', tone: 'muted' };
+        const value = Number(cell.returnPct);
+        if (!Number.isFinite(value)) return { text: 'Unavailable', tone: 'muted' };
+        const abs = Math.abs(value).toFixed(2) + '%';
+        if (value > 0) return { text: '▲ +' + abs, tone: 'up' };
+        if (value < 0) return { text: '▼ \u2212' + abs, tone: 'down' };
+        return { text: '0.00%', tone: 'flat' };
+    }
+
+    // Cancels any in-flight matrix fetch and hides the matrix panel so stale responses cannot reopen it.
+    function hideSavedPlanMatrix() {
+        matrixRequestId++;
+        if (matrixPanel) matrixPanel.hidden = true;
+        matrixBody?.replaceChildren();
+    }
+
+    // Translates the server valuation basis token into a short readable subtitle, returning null when unknown/unavailable.
+    function valuationSubtitle(basis) {
+        const value = String(basis || '').trim();
+        if (!value || value.toLowerCase() === 'unavailable') return null;
+        if (value.startsWith('marked_to_market_')) return 'Marked-to-market';
+        if (value === 'realized_closed_trade_equity') return 'Realized closed-trade';
+        return value.replaceAll('_', ' ');
+    }
+
+    // Formats a UTC creation timestamp compactly so repeated start batches of the same strategy/cohort stay distinct.
+    function formatBatchStamp(value) {
+        if (!value) return '';
+        const stamp = new Date(value);
+        return Number.isFinite(stamp.getTime()) ? stamp.toISOString().slice(0, 16).replace('T', ' ') + 'Z' : '';
+    }
+
+    // Renders the read-only Strategy × Month comparison matrix using text nodes only; never pools or accumulates returns.
+    function renderSavedPlanMatrix(matrix) {
+        if (!matrixPanel || !matrixBody) return;
+        matrixBody.replaceChildren();
+        if (matrixTitle) matrixTitle.textContent = `Saved plan ${matrix.planId} · ${matrix.runName}`;
+        matrixPanel.hidden = false;
+        const rows = matrix.rows || [];
+        const months = matrix.months || [];
+        if (!rows.length) {
+            const empty = document.createElement('p');
+            empty.className = 'empty-state';
+            empty.textContent = 'No executions have been recorded for this saved plan yet.';
+            matrixBody.append(empty);
+            return;
+        }
+
+        const scroller = document.createElement('div');
+        scroller.className = 'table-scroll';
+        scroller.setAttribute('role', 'region');
+        scroller.setAttribute('aria-label', 'Saved plan monthly returns matrix');
+        scroller.tabIndex = 0;
+
+        const table = document.createElement('table');
+        table.className = 'grid-table lab-matrix-table';
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        for (const [label, isNumeric] of [['Strategy / version / cohort / batch', false], ['Status', false], ...months.map(m => [m, true]), ['Top rejections', false]]) {
+            const th = document.createElement('th');
+            th.scope = 'col';
+            if (isNumeric) th.className = 'num';
+            th.textContent = label;
+            headRow.append(th);
+        }
+        thead.append(headRow);
+        table.append(thead);
+
+        const tbody = document.createElement('tbody');
+        for (const row of rows) {
+            const tr = document.createElement('tr');
+            const strategyCell = document.createElement('td');
+            const link = document.createElement('a');
+            link.href = '/Backtests?jobId=' + encodeURIComponent(row.jobId);
+            const strong = document.createElement('strong');
+            strong.textContent = row.strategyName || row.strategyId;
+            link.append(strong);
+            const shortHash = row.contentSha256 ? String(row.contentSha256).slice(0, 8) : '';
+            const batchStamp = formatBatchStamp(row.createdAtUtc);
+            const meta = document.createElement('span');
+            meta.className = 'cell-sub';
+            meta.textContent = [row.semanticVersion ? 'v' + row.semanticVersion : '', row.cohortName, shortHash, batchStamp].filter(Boolean).join(' · ');
+            const metaTitleParts = [];
+            if (row.contentSha256) metaTitleParts.push('SHA-256 ' + row.contentSha256);
+            if (row.createdAtUtc) metaTitleParts.push('Batch created ' + row.createdAtUtc);
+            if (metaTitleParts.length) meta.title = metaTitleParts.join(' · ');
+            strategyCell.append(link, meta);
+            tr.append(strategyCell);
+
+            const statusCell = document.createElement('td');
+            const statusTag = document.createElement('span');
+            statusTag.className = 'tag ' + (row.status === 'completed' ? 'tag-neutral' : 'tag-accent');
+            statusTag.textContent = row.status;
+            statusCell.append(statusTag);
+            if (row.monthlyUnavailableReason) {
+                const reasonNote = document.createElement('span');
+                reasonNote.className = 'cell-sub lab-matrix-reason';
+                reasonNote.textContent = row.monthlyUnavailableReason;
+                statusCell.append(reasonNote);
+            }
+            tr.append(statusCell);
+
+            const byMonth = new Map((row.cells || []).map(cell => [cell.month, cell]));
+            for (const month of months) {
+                const td = document.createElement('td');
+                td.className = 'num lab-matrix-cell';
+                const cell = byMonth.get(month);
+                if (!cell) {
+                    const missing = document.createElement('span');
+                    missing.className = 'note';
+                    missing.textContent = '—';
+                    if (row.monthlyUnavailableReason) td.title = row.monthlyUnavailableReason;
+                    td.append(missing);
+                } else {
+                    const formatted = formatMatrixReturn(cell);
+                    const value = document.createElement('span');
+                    value.className = 'lab-matrix-return';
+                    value.dataset.tone = formatted.tone;
+                    value.textContent = formatted.text;
+                    td.append(value);
+                    if (cell.partialMonth) {
+                        const partial = document.createElement('span');
+                        partial.className = 'lab-matrix-partial';
+                        partial.textContent = ' (partial)';
+                        td.append(partial);
+                    }
+                    const basisLabel = valuationSubtitle(cell.valuationBasis);
+                    const basis = document.createElement('span');
+                    basis.className = 'cell-sub lab-matrix-basis';
+                    basis.textContent = basisLabel || 'Valuation unavailable';
+                    basis.title = cell.valuationBasis || '';
+                    td.append(basis);
+                    if (cell.unavailableReason) {
+                        const cellReason = document.createElement('span');
+                        cellReason.className = 'cell-sub lab-matrix-reason';
+                        cellReason.textContent = cell.unavailableReason;
+                        td.append(cellReason);
+                    }
+                    const details = [];
+                    if (cell.openingEquity != null && cell.closingEquity != null) {
+                        details.push(`Equity ${Number(cell.openingEquity).toFixed(2)} -> ${Number(cell.closingEquity).toFixed(2)}`);
+                    }
+                    if (cell.maxDrawdownPct != null) details.push(`Max DD ${Number(cell.maxDrawdownPct).toFixed(2)}%`);
+                    if (cell.closedTrades != null || cell.openPositions != null) {
+                        details.push(`Closed ${cell.closedTrades ?? 0} · Open ${cell.openPositions ?? 0}`);
+                    }
+                    if (details.length) td.title = details.join(' · ');
+                }
+                tr.append(td);
+            }
+
+            const diagCell = document.createElement('td');
+            const rejections = row.topRejections || [];
+            if (!rejections.length) {
+                const none = document.createElement('span');
+                none.className = 'note';
+                none.textContent = 'None';
+                diagCell.append(none);
+            } else {
+                const details = document.createElement('details');
+                details.className = 'lab-matrix-rejections';
+                const summary = document.createElement('summary');
+                summary.textContent = `${rejections.length} reason${rejections.length === 1 ? '' : 's'}`;
+                const list = document.createElement('ul');
+                for (const item of rejections) {
+                    const li = document.createElement('li');
+                    li.title = item.code;
+                    li.textContent = `${humanizeRejectionCode(item.code)} (${item.count})`;
+                    list.append(li);
+                }
+                details.append(summary, list);
+                diagCell.append(details);
+            }
+            tr.append(diagCell);
+            tbody.append(tr);
+        }
+
+        table.append(tbody);
+        scroller.append(table);
+        matrixBody.append(scroller);
+    }
+
+    // Loads the read-only monthly comparison matrix for one saved plan while ignoring superseded responses.
+    async function loadSavedPlanMatrix(planId) {
+        if (!matrixPanel || !matrixBody) return;
+        const parsed = Number(planId);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+            hideSavedPlanMatrix();
+            return;
+        }
+        const requestId = ++matrixRequestId;
+        try {
+            const matrix = await api(`backtests/plans/${encodeURIComponent(parsed)}/monthly-matrix`);
+            if (requestId !== matrixRequestId || !matrixPanel.isConnected) return;
+            renderSavedPlanMatrix(matrix);
+        } catch (error) {
+            if (requestId !== matrixRequestId || error?.name === 'AbortError') return;
+            matrixBody.replaceChildren();
+            const note = document.createElement('p');
+            note.className = 'note';
+            note.textContent = error.message || 'Saved plan monthly matrix could not be loaded.';
+            matrixBody.append(note);
+            matrixPanel.hidden = false;
+        }
+    }
+
+    // Wires 1-click Long / Short / Clear strategy selection buttons and notifies the form change handler.
+    function wireStrategyDirectionHelpers() {
+        for (const button of form.querySelectorAll('[data-strategy-select]')) {
+            button.addEventListener('click', () => {
+                const mode = button.dataset.strategySelect;
+                let lastChanged = null;
+                for (const option of form.querySelectorAll('.lab-strategy-option')) {
+                    const checkbox = option.querySelector('input[type="checkbox"][name="StrategyPaths"]');
+                    if (!checkbox) continue;
+                    const direction = String(option.dataset.direction || '').toLowerCase();
+                    const nextChecked = mode === 'clear' ? false : direction === mode;
+                    if (checkbox.checked !== nextChecked) {
+                        checkbox.checked = nextChecked;
+                        lastChanged = checkbox;
+                    }
+                }
+                (lastChanged || form).dispatchEvent(new Event('change', { bubbles: true }));
+            });
+        }
+    }
+
+    // Wires quick UTC test-window preset buttons (e.g. May–Oct 2026 and Clear dates) and notifies validation/form state.
+    function wireWindowPresetHelpers() {
+        const startInput = form.elements.namedItem('TestWindowStartUtc');
+        const endInput = form.elements.namedItem('TestWindowEndUtc');
+        if (!(startInput instanceof HTMLInputElement) || !(endInput instanceof HTMLInputElement)) return;
+        for (const button of form.querySelectorAll('[data-window-preset]')) {
+            button.addEventListener('click', () => {
+                const preset = button.dataset.windowPreset;
+                startInput.value = preset === 'clear' ? '' : (button.dataset.windowStart || '');
+                endInput.value = preset === 'clear' ? '' : (button.dataset.windowEnd || '');
+                startInput.dispatchEvent(new Event('input', { bubbles: true }));
+                endInput.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+        }
+    }
+
+    // Pre-fills GroupSize to 1000 when selecting a research_screen stock source and both cohort inputs are blank.
+    function applyResearchScreenGroupDefault() {
+        const sourceSelect = form.querySelector('#StockSource');
+        const groupSize = form.elements.namedItem('GroupSize');
+        const manualCohorts = form.elements.namedItem('ManualCohorts');
+        if (!(sourceSelect instanceof HTMLSelectElement) || !(groupSize instanceof HTMLInputElement)) return;
+        const selected = sourceSelect.selectedOptions[0];
+        const isResearchScreen = selected?.dataset.sourceKind === 'research_screen' || String(selected?.value || '').startsWith('research_screen:');
+        const hasGroupSize = String(groupSize.value || '').trim().length > 0;
+        const hasManual = manualCohorts instanceof HTMLTextAreaElement && String(manualCohorts.value || '').trim().length > 0;
+        if (isResearchScreen && !hasGroupSize && !hasManual) {
+            groupSize.value = '1000';
+        }
+    }
+
+    if (kind === 'backtest') {
+        wireStrategyDirectionHelpers();
+        wireWindowPresetHelpers();
+        form.querySelector('#StockSource')?.addEventListener('change', applyResearchScreenGroupDefault);
+        applyResearchScreenGroupDefault();
+        if (matrixPanel?.dataset.currentPlanId) {
+            void loadSavedPlanMatrix(matrixPanel.dataset.currentPlanId);
+        }
+    }
     function utcInput(value) {
         const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
         if (!parts) return null;
@@ -407,7 +718,14 @@
         if (savePlanButton) savePlanButton.disabled = true;
         savedPlan = savedPlans.find(plan => String(plan.planId) === planPicker.value);
         startPlanButton.disabled = !savedPlan;
-        if (savedPlan) showPlan(savedPlan);
+        if (savedPlan) {
+            showPlan(savedPlan);
+            void loadSavedPlanMatrix(savedPlan.planId);
+        } else if (matrixPanel?.dataset.currentPlanId) {
+            void loadSavedPlanMatrix(matrixPanel.dataset.currentPlanId);
+        } else {
+            hideSavedPlanMatrix();
+        }
     });
     // A stable retry key prevents transport retries from creating duplicate portfolios.
     startPlanButton?.addEventListener('click', async () => {
@@ -423,6 +741,7 @@
                 link.textContent = ` ${job.cohort.cohortName} · ${job.cohort.strategy.strategyId} · ${job.status}`;
                 status.append(document.createElement('br'), link);
             }
+            void loadSavedPlanMatrix(id);
         } catch (error) { status.textContent = error.message; }
         finally { busy = false; startPlanButton.disabled = !savedPlan; }
     });

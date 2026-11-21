@@ -70,10 +70,15 @@
                     <p class="note" id="RunNameHelp">Use letters, digits, hyphens or underscores, or leave blank for a generated name.</p>
                 </div>
 
+            <div class="lab-quick-actions" role="group" aria-label="Quick strategy selection">
+                <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="long">Select Long</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="short">Select Short</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="clear">Clear</button>
+            </div>
             <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    <article class="lab-strategy-option">
+                    <article class="lab-strategy-option" data-direction="@strategy.Definition.Direction.ToString().ToLowerInvariant()">
                     <label class="lab-strategy">
                         @* Square, because these are independent multi-select. *@
                         <input type="checkbox" name="StrategyPaths" value="@strategy.Path"
@@ -162,6 +167,10 @@
 
         <fieldset class="lab-block">
             <legend class="section-heading">Test window</legend>
+            <div class="lab-quick-actions" role="group" aria-label="Quick UTC window presets">
+                <button type="button" class="btn btn-secondary btn-sm" data-window-preset="may-oct-2026" data-window-start="2026-05-01T00:00" data-window-end="2026-10-30T21:00">May–Oct 2026</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-window-preset="clear">Clear dates</button>
+            </div>
             <div class="lab-parameters">
                 <div class="field">
                     <label for="TestWindowStartUtc">From UTC</label>
@@ -359,6 +368,15 @@
        ======================================================================= *@
     <div class="lab-main">
         <partial name="_ResearchScreensPanel" />
+        <section class="lab-panel lab-plan-matrix" id="saved-plan-matrix-panel" data-current-plan-id="@(job?.Cohort?.PlanId)" hidden aria-live="polite">
+            <div class="lab-plan-matrix-head">
+                <div>
+                    <h2 class="section-heading" id="saved-plan-matrix-title">Saved plan monthly matrix</h2>
+                    <p class="note" id="saved-plan-matrix-subtitle">Monthly New York-session returns per strategy version and cohort on month-opening equity. No accumulated or pooled returns are shown.</p>
+                </div>
+            </div>
+            <div id="saved-plan-matrix-body"></div>
+        </section>
         @if (Model.SelectedJobMissing)
         {
             <section class="lab-panel" role="status">
@@ -489,7 +507,9 @@
     </div>
 </div>
 
-<link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
+}
 
 @section Scripts {
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>

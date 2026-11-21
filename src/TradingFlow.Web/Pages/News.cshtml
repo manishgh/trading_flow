@@ -17,10 +17,13 @@
         stockSource = Model.StockSource, view = Model.View, pageNumber = 1, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
 }
 
-<link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+}
 
 <header class="page-header compact-page-header market-page-header">
     <div>
+        <span class="eyebrow">CATALYSTS &amp; OPTIONS</span>
         <h1>News</h1>
         <p>Company news, sector stories and market events.</p>
         <div id="news-live-feed">
@@ -52,7 +55,14 @@
         </div>
     </div>
     <div class="actions">
-        <a class="button secondary" asp-page="/Desk">Open Desk</a>
+        @if (!String.IsNullOrWhiteSpace(Model.Ticker))
+        {
+            <a class="button secondary" asp-page="/Desk" asp-route-symbol="@Model.Ticker">Open Desk ↗</a>
+        }
+        else
+        {
+            <a class="button secondary" asp-page="/Desk">Open Desk ↗</a>
+        }
     </div>
 </header>
 

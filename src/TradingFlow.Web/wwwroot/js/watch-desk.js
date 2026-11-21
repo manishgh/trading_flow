@@ -616,11 +616,54 @@
         action.setAttribute('aria-label',action.textContent+' '+symbol);
         action.title=side?'Open the server-reviewed ticket':(row.holding?reasons.sell:reasons.buy)||'Open stock detail';
     }
+    // Maps canonical engine gate/rejection codes to plain-English labels while preserving exact audit codes for disclosure.
+    const checkLabels = {
+        min_average_range_pct_not_met: '20-day ADR% below minimum threshold',
+        regime_price_below_sma: 'Benchmark close below 50-day SMA',
+        regime_sma_not_rising: 'Benchmark 50-day SMA is not rising',
+        regime_sma_not_falling: 'Benchmark 50-day SMA is not falling',
+        market_regime_off_on_entry_day: 'Market regime gate is OFF (SPY)',
+        nasdaq_market_regime_off_on_entry_day: 'Nasdaq home-market gate is OFF (QQQ)',
+        vix_above_long_limit: 'VIX above long-entry limit (>22)',
+        vix_regime_off_on_entry_day: 'VIX above long-entry limit (>22)',
+        vix_below_short_limit: 'VIX below short-entry floor (<18)',
+        vix_short_regime_off_on_entry_day: 'VIX below short-entry floor (<18)',
+        vix_close_unknown_for_previous_session: 'Previous-session VIX close not yet published',
+        vix_lookup_failed: 'VIX data source unavailable',
+        sector_not_in_top_n: 'Stock sector is outside the Top-N leaders',
+        earnings_blackout: 'Inside pre-earnings blackout window',
+        insufficient_history: 'Insufficient completed bar history',
+        listing_exchange_unknown: 'Listing exchange is unknown',
+        listing_exchange_lookup_failed: 'Listing exchange lookup failed',
+        min_price_not_met: 'Price below minimum eligibility floor',
+        min_average_volume_not_met: 'Average share volume below minimum',
+        min_average_dollar_volume_not_met: 'Average dollar volume below minimum',
+        min_atr_not_met: 'ATR below minimum volatility floor',
+        cooldown_active: 'Post-exit cooldown is active',
+        max_positions_reached: 'Maximum concurrent positions reached'
+    };
+
+    // Converts one server strategy check into a plain-English label and non-colour glyph without altering server facts.
+    function humanizeCheck(check) {
+        const passed = Boolean(check?.passed);
+        const rawCode = String(check?.rejectionCode || '').trim();
+        const rawGate = String(check?.gateName || '').trim();
+        const normalizedCode = rawCode.toLowerCase();
+        const normalizedGate = rawGate.replace(/^(strategy|regime|eligibility):/i, '').toLowerCase();
+        const prettify = value => {
+            const cleaned = String(value || '').replace(/^(strategy|regime|eligibility):/i, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+            return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : 'Strategy check';
+        };
+        const label = (!passed && (checkLabels[normalizedCode] || checkLabels[normalizedGate]))
+            || (!passed && rawCode ? prettify(rawCode) : prettify(rawGate));
+        return { passed, glyph: passed ? '✓' : '✕', label };
+    }
+
     // Summarize only checks actually recorded by the shared engine; missing and expired evidence stays explicit.
     function observationLabel(row){const assessment=row.strategyAssessment;if(!assessment)return 'Select a strategy';if(assessment.state==='missing')return 'Missing strategy data';if(!['recorded','evaluated'].includes(assessment.state))return assessment.state==='failed'?'Evaluation failed':assessment.state==='cancelled'?'Evaluation cancelled':'Collecting strategy data';return assessment.expired?'Evaluation expired':assessment.checks.some(check=>!check.passed)?'Strategy conditions failed':'Evaluated checks passed';}
     // Short outcome of the selected strategy for a row and the first failed check behind it.
     function signalLabel(row){const a=row.strategyAssessment;if(!a)return 'Not selected';if(!['recorded','evaluated'].includes(a.state))return a.state==='missing'?'No data':a.state==='failed'?'Failed':a.state==='cancelled'?'Cancelled':'Warming';return a.expired?'Expired':a.checks.some(c=>!c.passed)?'Rejected':'Passed';}
-    function signalReason(row){const a=row.strategyAssessment;if(!a)return 'Choose a strategy at the top';const failed=a.checks?.find(c=>!c.passed);return failed?(failed.rejectionCode||failed.gateName.replace(/^strategy:/,'').replaceAll('_',' ')):a.detail||'';}
+    function signalReason(row){const a=row.strategyAssessment;if(!a)return 'Choose a strategy at the top';const failed=a.checks?.find(c=>!c.passed);return failed?humanizeCheck(failed).label:a.detail||'';}
     // The shown price is the bid/ask midpoint; it can stay unchanged while trades print, so bid, ask and time stay visible.
     function spreadDetail(row){const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;return 'Bid/ask midpoint, not last trade · bid '+money(bid)+' · ask '+money(ask)+(ask>0&&bid>0?' · spread '+number((ask-bid)/((ask+bid)/2)*100)+'%':'')+' · '+(row.quote?.feed==='overnight'?'overnight feed':'SIP')+' · '+quoteAge(row);}
     // Keep the page connection, the quote socket, Alpaca's subscription replies and quote age as separate facts.
@@ -722,14 +765,37 @@
             (assessment.evaluatedAtUtc ? ' · Evaluated ' + when(assessment.evaluatedAtUtc) : '') +
             (assessment.latestCompletedCandleAtUtc ? ' · Completed candle ' + when(assessment.latestCompletedCandleAtUtc) : '');
         for (const check of assessment.checks) {
+            const human = humanizeCheck(check);
             const entry = document.createElement('details');
+            entry.className = 'watch-strategy-check-item';
+            entry.dataset.passed = String(human.passed);
             const title = document.createElement('summary');
-            title.textContent = check.gateName.replace(/^strategy:/, '').replaceAll('_', ' ') + ': ' + (check.passed ? 'passed' : 'failed');
+            title.className = 'watch-strategy-check-summary';
+            const pill = document.createElement('span');
+            pill.className = 'watch-check-pill';
+            pill.dataset.passed = String(human.passed);
+            pill.textContent = human.glyph + ' ' + (human.passed ? 'Pass' : 'Fail');
+            const label = document.createElement('span');
+            label.className = 'watch-check-label';
+            label.textContent = human.label;
+            title.append(pill, label);
             entry.append(title);
-            if (check.rejectionCode) { const reason = document.createElement('p'); reason.textContent = check.rejectionCode; entry.append(reason); }
+            const canonical = document.createElement('p');
+            canonical.className = 'watch-fine watch-check-canonical';
+            const gateCode = document.createElement('code');
+            gateCode.textContent = check.gateName;
+            canonical.append(gateCode);
+            if (check.rejectionCode) {
+                canonical.append(' · ');
+                const rejectCode = document.createElement('code');
+                rejectCode.textContent = check.rejectionCode;
+                canonical.append(rejectCode);
+            }
+            entry.append(canonical);
             const values = document.createElement('pre');
             values.textContent = JSON.stringify(check.inputs, null, 2);
-            entry.append(values);el('strategy-checks').append(entry);
+            entry.append(values);
+            el('strategy-checks').append(entry);
         }
     }
     // Separate provider attempt status from the retained stories in this view.
@@ -841,5 +907,27 @@
             connect(restore,rememberedEntry||!!requested);
         }catch(e){text('connection',e.message);el('empty').querySelector('strong').textContent='Sources unavailable';el('retry').hidden=false;}
     }
+    // Steps through visible stock rows on ArrowDown/ArrowUp without hijacking text inputs or modified keystrokes.
+    function stepWatchRowSelection(event) {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select'))) return;
+        const rows = [...el('rows').querySelectorAll('tr[data-symbol]')];
+        if (!rows.length) return;
+        event.preventDefault();
+        const currentIndex = rows.findIndex(row => row.dataset.symbol === selected);
+        const nextIndex = currentIndex === -1
+            ? (event.key === 'ArrowDown' ? 0 : rows.length - 1)
+            : (event.key === 'ArrowDown' ? Math.min(rows.length - 1, currentIndex + 1) : Math.max(0, currentIndex - 1));
+        const nextRow = rows[nextIndex];
+        if (!nextRow?.dataset.symbol) return;
+        selectStock(nextRow.dataset.symbol, false);
+        nextRow.scrollIntoView({ block: 'nearest' });
+        if (document.activeElement?.closest?.('tr[data-symbol]')) {
+            nextRow.querySelector('.watch-symbol-button')?.focus({ preventScroll: true });
+        }
+    }
+    document.querySelector('.watch-table-scroll')?.addEventListener('keydown', stepWatchRowSelection);
     el('retry').onclick=start;start();
 })();

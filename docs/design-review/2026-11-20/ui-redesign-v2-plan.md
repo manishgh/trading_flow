@@ -157,4 +157,31 @@ Because the running operator site on `http://127.0.0.1:10088` (`C:\project\tradi
 2. **4-Workspace Navigation Grouping:** Happy collapsing the 7 current sidebar items into **`Desk` · `Strategy Lab` · `Catalysts & Options` · `Portfolio & Audit`** (keeping all existing URLs working)?
 
 ## Checkpoint UI-1 status (2026-11-21)
-Implemented: additive `ui2-foundation.css` (Slate Dark default, Calm Light, colour-blind), 4-workspace nav with sub-tabs (`/AccountLossReview` mapped to System), fail-closed regime strip + `GET /api/v1/workspace/regime-pulse` (volatile cache record, UTC-midnight daily bar match, completed/fresh/70-bar fail-closed checks, schedule-provider fail-closed contract, exact previous-session VIX lookup without walkback, VIX deadline timeout guard), Ask/Jump button, theme toggle, clean UTF-8 `&hellip;`. Verification: focused `WorkspacePulseTests` passing and `node --check` clean; ready for UI-1 independent re-review sign-off.
+- **Committed (`5a24c1e`):** Additive `ui2-foundation.css` (Slate Dark default, Calm Light, colour-blind), 4-workspace nav with sub-tabs (`/AccountLossReview` mapped to System), fail-closed regime strip + `GET /api/v1/workspace/regime-pulse` (volatile cache record, UTC-midnight daily bar match, completed/fresh/70-bar fail-closed checks, schedule-provider fail-closed contract, exact previous-session VIX lookup without walkback, VIX deadline timeout guard), Ask/Jump button, theme toggle, clean UTF-8 `&hellip;`.
+- **Independent Reviews & Verification:** Code review (`#189`) accepted with 3 minor fixes folded into `5a24c1e`; Plan & Governance review (`#191`) raised 4 blocking findings, all resolved in `5a24c1e` and accepted in `#196`. `WorkspacePulseTests` (10/10) + `node --check` green.
+
+## Checkpoints UI-2, UI-3 & UI-4 status — Implemented vs. Deferred Scope (2026-11-21)
+
+### Implemented Scope
+- **UI-2 (Desk 2.0):**
+  - Unclipped `.preparation-steps li` pills and calm 1-line `[data-preparation-summary][data-compact="true"]` mode for paused schedules or >12h expired evidence (never compacting unconfigured workflows, in-progress/failed/cancelled/unavailable steps, or unconfirmed workers on active schedules).
+  - Always-visible `#watch-order-help`, `#watch-exit-help`, `#watch-holding-block`, and `#watch-strategy-block` moved outside `<details id="watch-evidence">` (renamed `More technicals & group tools`).
+  - Side-by-side desktop `.watch-grid` (`>= 1200px`, sticky right `.watch-detail`, full-width `.watch-news` row 2) with `@section Styles` loaded strictly before `ui2-foundation.css`.
+  - Presentation-only `humanizeCheck(check)` with `✓` / `✕` pills (guarded by `!passed` for failure-worded labels, preserving canonical `gateName`, `rejectionCode`, and `inputs` JSON inside each `<details>` disclosure), plus `ArrowDown` / `ArrowUp` row stepping on `.watch-table-scroll`.
+- **UI-3 (Strategy Lab):**
+  - Read-only `GET /api/v1/backtests/plans/{id:long}/monthly-matrix` backed by plan-scoped SQLite `{Id, RequestJson}` two-step lookup (`SqliteJobRepository.GetJobsForPlanAsync`, avoiding loading unrelated `SnapshotJson` blobs and isolating malformed `RequestJson`) and `SavedPlanMonthlyMatrixBuilder` (strictly monthly NY-session returns per strategy identity/version/hash/cohort/batch, preserving partial months, valuation basis, job-level unavailable reasons, and per-job top rejections; zero accumulated or pooled returns).
+  - 1-click `Select Long`, `Select Short`, `Clear` buttons; `May–Oct 2026` / `Clear dates` UTC window presets; automatic `GroupSize = 1000` default when selecting a `research_screen` source with blank cohort inputs; accessible `#saved-plan-matrix-panel` rendered in `run-workflow.js` with race-safe request cancellation.
+- **UI-4 (Catalysts & Options + Portfolio Polish):**
+  - Consistent `CATALYSTS & OPTIONS` eyebrow and contextual `Open Desk ↗` links on `News.cshtml` (preserving `Model.Ticker`) and `Earnings.cshtml`.
+  - Responsive table/card and badge styling polish for Catalysts and Portfolio views in `ui2-foundation.css`.
+
+### Explicitly Deferred to Follow-Up Phase (Not Claimed Complete Here)
+- Desk 5-column compact scanner replacement (current 10-column table retained alongside the new sticky side-by-side layout).
+- Stock chart horizontal `Entry` / `Initial Stop (1.0 ATR)` / `Target (2.5R)` overlays and pinned OPRA strip underneath the chart.
+- Risk-First bracket order ticket redesign.
+- Strategy Lab slide-over trade drawer and `ⓘ Provenance` SHA-256 popover.
+- Catalysts `OPRA Implied Move vs 20d ADR%` ratio cards on News/Earnings.
+
+### Independent Review Log (UI-2 / UI-3 / UI-4)
+- **Round 1 Code Review (`#200` — REJECT):** Flagged (1) whole-table `SnapshotJson` scan + uncaught `InvalidDataException` in `GetSnapshotsForPlanAsync`, (2) `@RenderBody()` stylesheet `<link>` cascade order colliding with `ui2-foundation.css` at `>= 1200px`, plus 3 minor polish items (stale matrix fetch cancellation, newest-`CreatedAtUtc`-first row ordering, null-conditional consistency). All resolved.
+- **Round 1 Plan & Governance Review (`#201` — REJECT):** Flagged (1) `preparation-summary.js` compact mode hiding active/failed steps or unconfirmed workers and mislabeling unconfigured workflows, (2) Oct 8 reporting completeness (`valuationBasis` dropped when `unavailableReason` set, missing row-level `MonthlyUnavailableReason`, missing `ContentSha256` & `CreatedAtUtc` batch separation), (3) tracking plan scope accuracy, plus 2 polish items (`!passed` guard in `humanizeCheck`, moving `#watch-order-help`/`#watch-exit-help` outside `<details id="watch-evidence">`). All resolved.

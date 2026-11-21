@@ -9,8 +9,6 @@
     <partial name="_EnvironmentLock" model="environment" />
     return;
 }
-<link rel="stylesheet" href="~/css/watch-desk.css" asp-append-version="true" />
-<link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
 <section class="watch-desk" aria-label="Stock desk"
          data-operator="@(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value)"
          data-administrator="@User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator).ToString().ToLowerInvariant()">
@@ -64,13 +62,13 @@
       </header>
       <div id="watch-focus-content" hidden>
         <partial name="_StockChart" model="String.Empty" />
-        <details id="watch-evidence" class="watch-stock-evidence">
-          <summary>Stock evidence</summary>
         <p id="watch-order-help" class="watch-fine" hidden></p>
         <p id="watch-exit-help" class="watch-fine" hidden></p>
-        <form id="watch-follow"><label>Follow in a stock group<select id="watch-follow-list" required></select></label><button class="btn btn-secondary" type="submit">Follow stock</button><p id="watch-follow-status" role="status"></p></form>
         <div class="watch-detail-block" id="watch-holding-block"><h3>Holding</h3><dl class="watch-metrics"><dt>Shares</dt><dd id="watch-quantity">—</dd><dt>Average entry</dt><dd id="watch-entry">—</dd><dt>Market value</dt><dd id="watch-value">—</dd><dt>Unrealized P&amp;L</dt><dd id="watch-pl">—</dd></dl><a asp-page="/RunningTrades">View positions and protection</a></div>
         <div class="watch-detail-block" id="watch-strategy-block"><h3>Strategy · <span id="watch-observation"></span></h3><div id="watch-strategy-checks"></div></div>
+        <details id="watch-evidence" class="watch-stock-evidence">
+          <summary>More technicals &amp; group tools</summary>
+        <form id="watch-follow"><label>Follow in a stock group<select id="watch-follow-list" required></select></label><button class="btn btn-secondary" type="submit">Follow stock</button><p id="watch-follow-status" role="status"></p></form>
         <div class="watch-detail-block"><h3>Daily technicals</h3><p id="watch-tech-time" class="watch-fine"></p><dl class="watch-tech"><div><dt>SMA 10</dt><dd id="watch-sma10">—</dd></div><div><dt>SMA 20</dt><dd id="watch-sma20">—</dd></div><div><dt>SMA 50</dt><dd id="watch-sma50">—</dd></div><div><dt>SMA 200</dt><dd id="watch-sma200">—</dd></div><div><dt>RSI</dt><dd id="watch-rsi">—</dd></div><div><dt>EMA 20 / 50</dt><dd id="watch-ema">—</dd></div><div><dt>EMA 200</dt><dd id="watch-ema200">—</dd></div><div><dt>ATR</dt><dd id="watch-atr">—</dd></div><div><dt>RVOL</dt><dd id="watch-rvol">—</dd></div></dl><p id="watch-sip-volume" class="watch-fine"></p></div>
         <p class="watch-context-links"><a id="watch-stock-news" asp-page="/News">Open stock news</a> <a id="watch-stock-earnings" asp-page="/Earnings">Open earnings</a></p>
         </details>
@@ -85,6 +83,10 @@
   <p class="watch-footer">Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.</p>
 </section>
 <partial name="_OrderPopup" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/watch-desk.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/stock-chart.css" asp-append-version="true" />
+}
 @section Scripts {
     <script src="~/js/order-popup.js" asp-append-version="true"></script>
     <partial name="_StockChartScripts" />

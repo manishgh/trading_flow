@@ -131,3 +131,45 @@ public sealed record MonthlyRunBenchmark(string Ticker, decimal? ReturnPct, stri
     string? UnavailableReason, string? PriceAdjustmentPolicy = null, DateTimeOffset? PeriodStartUtc = null,
     DateTimeOffset? PeriodEndUtc = null, decimal? OpeningPrice = null, decimal? ClosingPrice = null,
     DateTimeOffset? OpeningTimestampUtc = null, DateTimeOffset? ClosingTimestampUtc = null);
+
+/// <summary>
+/// Read-only multi-strategy × NY-session month matrix for one saved backtest plan.
+/// Contains strictly monthly figures per strategy version and cohort on month-opening equity; never exposes accumulated
+/// multi-month or pooled multi-strategy/cohort returns.
+/// </summary>
+public sealed record SavedPlanMonthlyMatrixResponse(
+    string ContractVersion,
+    long PlanId,
+    string RunName,
+    IReadOnlyList<string> Months,
+    IReadOnlyList<SavedPlanMonthlyMatrixRow> Rows);
+
+/// <summary>One job/strategy/cohort/batch row in a saved plan's monthly comparison matrix.</summary>
+public sealed record SavedPlanMonthlyMatrixRow(
+    Guid JobId,
+    string CohortName,
+    string StrategyId,
+    string StrategyName,
+    string SemanticVersion,
+    string ContentSha256,
+    DateTimeOffset CreatedAtUtc,
+    string Status,
+    IReadOnlyList<SavedPlanMonthlyMatrixCell> Cells,
+    IReadOnlyList<SavedPlanRejectionSummary> TopRejections,
+    string? MonthlyUnavailableReason = null);
+
+/// <summary>One immutable NY-session month cell sourced directly from <see cref="MonthlyRunResult"/>.</summary>
+public sealed record SavedPlanMonthlyMatrixCell(
+    string Month,
+    decimal? ReturnPct,
+    decimal? OpeningEquity,
+    decimal? ClosingEquity,
+    decimal? MaxDrawdownPct,
+    int? ClosedTrades,
+    int? OpenPositions,
+    bool PartialMonth,
+    string ValuationBasis,
+    string? UnavailableReason);
+
+/// <summary>Canonical rejection code and recorded count for one strategy job's diagnostics.</summary>
+public sealed record SavedPlanRejectionSummary(string Code, int Count);

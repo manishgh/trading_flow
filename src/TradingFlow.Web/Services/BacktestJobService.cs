@@ -265,6 +265,58 @@ public sealed class BacktestJobService : IDurableJobHandler
         (await repository.GetJobsAsync(JobType, token)).OrderByDescending(job => job.CreatedAt).Take(count)
             .Select(job => MutableBacktestJob.FromPersisted(job, JsonOptions).ToSnapshot()).ToArray();
 
+    /// <summary>Reads all persisted backtest job snapshots belonging to one saved plan, newest first, without loading unrelated job snapshots.</summary>
+    public async Task<IReadOnlyList<BacktestJobSnapshot>> GetSnapshotsForPlanAsync(long planId, CancellationToken token = default)
+    {
+        if (planId <= 0) return [];
+        var persisted = await repository.GetJobsForPlanAsync(JobType, planId, token);
+        return persisted
+            .Where(job => TryReadPlanId(job.RequestJson) == planId)
+            .OrderByDescending(job => job.CreatedAt)
+            .Select(job => MutableBacktestJob.FromPersisted(job, JsonOptions).ToSnapshot())
+            .ToArray();
+    }
+
+    // Extracts workflow.cohort.planId via lightweight JsonDocument without allocating file evidence lists or crashing on malformed legacy payloads.
+    internal static long? TryReadPlanId(string? requestJson)
+    {
+        if (String.IsNullOrWhiteSpace(requestJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(requestJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!TryGetJsonProperty(root, "workflow", out var workflow) || workflow.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!TryGetJsonProperty(workflow, "cohort", out var cohort) || cohort.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!TryGetJsonProperty(cohort, "planId", out var planIdElement) || planIdElement.ValueKind != JsonValueKind.Number)
+                return null;
+            return planIdElement.TryGetInt64(out var planId) ? planId : null;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    // Case-insensitive property lookup so camelCase and PascalCase durable request payloads resolve identically.
+    private static bool TryGetJsonProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.TryGetProperty(name, out value)) return true;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
     public Task RecoverAsync(PersistedJob job, CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>Execute frozen inputs under this lease and publish monthly evidence before trimming the persisted UI snapshot.</summary>
