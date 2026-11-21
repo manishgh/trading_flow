@@ -10,6 +10,8 @@ using Microsoft.Extensions.Logging;
 using TradingFlow.Contracts.Transport;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Persistence;
+using TradingFlow.Domain.Research;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
 using TradingFlow.Engine.Strategies;
 using TradingFlow.Web;
@@ -96,11 +98,60 @@ public sealed class StockStrategyAssessmentTests
         Assert.Null(missing.CandidateId);
     }
 
+    /// <summary>Hides retired strategies without catalog YAML and disabled catalog strategies from the Desk picker without deleting SQLite audit rows.</summary>
+    [Fact]
+    public async Task ChoicesAsync_ExcludesRetiredAndDisabledRecordedStrategiesWithoutDeletingRows()
+    {
+        await using var database = new CandidateWorkflowTestDatabase();
+        await database.InitializeAsync();
+        var enabled = await SeedDecisionAsync(database, "technical.bollinger-squeeze-breakout", Guid.NewGuid());
+        var retired = await SeedDecisionAsync(database, "swing.connors-rsi2", Guid.NewGuid());
+        var disabled = await SeedDecisionAsync(database, "technical.opening-range-breakout", Guid.NewGuid());
+        var clock = new CandidateWorkflowTestClock(enabled.Request.AsOfUtc.AddMinutes(1));
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var service = Service(database, clock, cache);
+
+        var choices = await service.ChoicesAsync(default);
+        Assert.Contains(choices, choice => choice.CandidateRunId == enabled.RunId && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakout");
+        Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "swing.connors-rsi2");
+        Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "technical.opening-range-breakout");
+
+        // Persisted SQLite rows remain intact and directly readable by exact run/strategy identity.
+        await using var after = database.CreateDbContext();
+        Assert.Equal(3, await after.Candidates.CountAsync());
+        var retiredRead = await service.ReadAsync(retired.RunId, Identity(retired.Request), ["RGTI"], default);
+        Assert.Equal("recorded", Assert.Single(retiredRead.Stocks).State);
+        var disabledRead = await service.ReadAsync(disabled.RunId, Identity(disabled.Request), ["RGTI"], default);
+        Assert.Equal("recorded", Assert.Single(disabledRead.Stocks).State);
+    }
+
     /// <summary>Creates only disposable test rows containing the existing deterministic kernel fixture's original result.</summary>
     private static async Task<(Guid RunId, StrategyDecisionRequest Request, StrategyDecisionResult Decision)> SeedDecisionAsync(
-        CandidateWorkflowTestDatabase database)
+        CandidateWorkflowTestDatabase database,
+        string strategyId = "technical.bollinger-squeeze-breakout",
+        Guid? candidateId = null)
     {
-        var request = StrategyDecisionKernelTests.CreateRequest();
+        var baseRequest = StrategyDecisionKernelTests.CreateRequest();
+        var strategy = baseRequest.Strategy with { StrategyId = strategyId };
+        var identity = new StrategyArtifactIdentity(
+            strategy.StrategyId,
+            baseRequest.StrategyIdentity.SemanticVersion,
+            EvidenceCanonicalJson.ComputeSha256(new CanonicalStrategyDocument(
+                strategy.StrategyId,
+                baseRequest.StrategyIdentity.SemanticVersion,
+                strategy,
+                baseRequest.AdmissionProfile)));
+        var effectiveCandidateId = candidateId ?? baseRequest.Candidate.CandidateId;
+        var request = baseRequest with
+        {
+            Strategy = strategy,
+            StrategyIdentity = identity,
+            Candidate = baseRequest.Candidate with
+            {
+                CandidateId = effectiveCandidateId,
+                Identity = baseRequest.Candidate.Identity with { StrategyContentSha256 = identity.ContentSha256 }
+            }
+        };
         var decision = new StrategyDecisionKernel().Evaluate(request);
         var runId = Guid.NewGuid();
         await using var db = database.CreateDbContext();

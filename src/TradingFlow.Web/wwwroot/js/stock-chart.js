@@ -135,18 +135,53 @@
     }
 
     // Mount one read-only chart instance with scoped controls, data, optional host defaults/zone callback, and disposal.
-    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones } = {}) {
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones, compactDesk, controlsHost, quickIntervalHost, onSeriesInfo } = {}) {
         const acceptance = Boolean(acceptanceCorrelation);
         let acceptanceStarted = false;
         const summaryNodes = new Map();
+        const relocatedNodes = [];
         if (summaryHost) {
             const head = root.querySelector('.stock-chart-head');
             for (const name of ['status', 'completed-note', 'full']) summaryNodes.set(name, head.querySelector('[data-chart-' + name + ']'));
             summaryHost.append(...head.childNodes);
             head.hidden = true;
         }
-        // Find the component's elements inside this instance so other hosts remain independent.
-        const get = name => summaryNodes.get(name) || root.querySelector('[data-chart-' + name + ']');
+        // Relocates a chart sub-element into a compact Desk container and records its original slot for clean disposal.
+        function relocateNode(node, destination, prepend = false) {
+            if (!node || !destination) return;
+            relocatedNodes.push({ node, parent: node.parentNode, nextSibling: node.nextSibling });
+            if (prepend) destination.prepend(node);
+            else destination.append(node);
+        }
+        // Moves Desk readout into the chart stage overlay and tucks secondary controls/navigation inside Studies & settings while keeping Retry chart visible.
+        function applyCompactDeskLayout() {
+            if (!compactDesk) return;
+            root.dataset.compactDesk = 'true';
+            const stage = root.querySelector('.stock-chart-stage');
+            const readout = root.querySelector('[data-chart-readout]');
+            relocateNode(readout, stage);
+            const more = root.querySelector('.stock-chart-more');
+            const moreBody = more?.querySelector('.stock-chart-more-body');
+            if (moreBody) {
+                const navRow = element('div', null, 'stock-chart-more-nav');
+                for (const selector of ['[data-chart-older]', '[data-chart-latest]', '[data-chart-history-reload]', '[data-chart-details-open]', '[data-chart-history-status]']) {
+                    relocateNode(root.querySelector(selector), navRow);
+                }
+                const controlsRow = element('div', null, 'stock-chart-more-controls');
+                relocateNode(root.querySelector('.stock-chart-controls'), controlsRow);
+                const presetLabel = root.querySelector('.stock-chart-study-toolbar > label');
+                relocateNode(presetLabel, controlsRow);
+                moreBody.prepend(controlsRow, navRow);
+            }
+            if (more && controlsHost) {
+                relocateNode(more, controlsHost);
+            }
+        }
+        applyCompactDeskLayout();
+        // Find the component's elements inside this instance (and any Desk host slots) so other hosts remain independent.
+        const get = name => summaryNodes.get(name)
+            || root.querySelector('[data-chart-' + name + ']')
+            || controlsHost?.querySelector('[data-chart-' + name + ']');
         const transport = window.TradingFlowStockChartTransport;
         const plotting = window.TradingFlowStockChartPlot;
         const indicatorLibrary = window.TradingFlowStockChartIndicators;
@@ -181,11 +216,23 @@
             node.addEventListener(event, handler, { signal: controller.signal });
         }
 
+        // Forwards compact series status, completed-candle note, and source summary to the Desk info tooltip.
+        function emitSeriesInfo() {
+            if (!onSeriesInfo) return;
+            const parts = [
+                get('status')?.textContent,
+                get('completed-note')?.textContent,
+                get('source')?.textContent
+            ].filter(Boolean);
+            onSeriesInfo(parts.join(' · '));
+        }
+
         // Keep a status transition accessible while preserving the last price data on screen.
         function setStatus(state, text) {
             root.dataset.state = state;
             if (summaryHost) summaryHost.dataset.state = state;
             if (get('status').textContent !== text) get('status').textContent = text;
+            emitSeriesInfo();
         }
 
         // Surface live transport state alongside the source's independently reported status.
@@ -225,6 +272,7 @@
             if (showSessions) source.append(' · Shading: ',
                 element('span', 'Premarket', 'stock-chart-early'), ' / ',
                 element('span', 'Postmarket', 'stock-chart-late'));
+            emitSeriesInfo();
         }
 
         // Present preview evidence independently and never inspect it as a completed candle.
@@ -247,6 +295,7 @@
             if (enabled && status.textContent !== label) status.textContent = label;
             const completedNote = candidate ? 'Readout shows completed candles' : 'Completed candles only';
             if (get('completed-note').textContent !== completedNote) get('completed-note').textContent = completedNote;
+            emitSeriesInfo();
             get('forming-section').hidden = !enabled;
             fields(get('forming-evidence'), !enabled ? [] : [
                 ['Status', label],
@@ -279,10 +328,14 @@
             if (index === -1) return;
             const bar = currentBars[index];
             selected = start;
-            const values = [
+            const fullValues = [
                 ['Open', prices.format(bar.open)], ['High', prices.format(bar.high)], ['Low', prices.format(bar.low)],
                 ['Close', prices.format(bar.close)], ['Volume', numbers.format(bar.volume)]
             ];
+            const values = compactDesk ? [
+                ['O', prices.format(bar.open)], ['H', prices.format(bar.high)], ['L', prices.format(bar.low)],
+                ['C', prices.format(bar.close)], ['Vol', numbers.format(bar.volume)]
+            ] : fullValues;
             const title = candleCaption(bar, key.interval);
             const time = get('candle-time');
             if (time.textContent !== title) time.textContent = title;
@@ -303,7 +356,7 @@
             get('prev').disabled = index === 0;
             get('next').disabled = index === currentBars.length - 1;
             get('readout').hidden = false;
-            if (announce) get('inspection').textContent = title + '. ' + values
+            if (announce) get('inspection').textContent = title + '. ' + fullValues
                 .map(([label, value]) => label + ' ' + value).join(', ');
         }
 
@@ -626,6 +679,11 @@
                 ? '1d structure · ' + horizonLabels[context] + ' · Current confirmed zones'
                 : '15m structure · Current confirmed zones';
             get('context-label').hidden = weekly;
+            if (quickIntervalHost) {
+                for (const btn of quickIntervalHost.querySelectorAll('[data-quick-interval]')) {
+                    btn.setAttribute('aria-pressed', String(btn.dataset.quickInterval === interval));
+                }
+            }
             return context;
         }
 
@@ -895,6 +953,20 @@
             startSelection();
             savePreferences();
         });
+        if (quickIntervalHost) {
+            // Syncs compact Desk 1d/1w/5m quick buttons with the canonical interval select and saved preferences.
+            on(quickIntervalHost, 'click', event => {
+                const button = event.target.closest('[data-quick-interval]');
+                if (!button || acceptance) return;
+                const next = button.dataset.quickInterval;
+                const select = get('interval');
+                if (!select || select.value === next) return;
+                select.value = next;
+                studies.intervalChanged();
+                startSelection();
+                savePreferences();
+            });
+        }
         on(get('reset'), 'click', () => {
             if (acceptance) return;
             indicatorLibrary.remember(null);
@@ -982,6 +1054,13 @@
                 const result = stop();
                 active = null;
                 plot?.dispose();
+                for (let index = relocatedNodes.length - 1; index >= 0; index--) {
+                    const { node, parent, nextSibling } = relocatedNodes[index];
+                    if (parent) parent.insertBefore(node, nextSibling && nextSibling.parentNode === parent ? nextSibling : null);
+                }
+                relocatedNodes.length = 0;
+                for (const wrapper of root.querySelectorAll('.stock-chart-more-nav, .stock-chart-more-controls')) wrapper.remove();
+                delete root.dataset.compactDesk;
                 if (summaryHost) {
                     const head = root.querySelector('.stock-chart-head');
                     head.append(...summaryHost.childNodes);

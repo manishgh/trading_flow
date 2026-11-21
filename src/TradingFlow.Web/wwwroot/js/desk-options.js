@@ -1,11 +1,12 @@
-// Read-only OPRA options sentiment pulse for Desk (SPY, QQQ, and the currently selected stock).
+// Read-only OPRA options sentiment pulse for Desk (compact SPY/QQQ stress chip in top strip + selected stock strip).
 (() => {
     const root = document.getElementById('desk-options-pulse');
-    if (!root) return;
+    const stressChip = document.getElementById('desk-options-stress-chip');
+    const selectedCard = document.getElementById('desk-options-selected');
+    if (!root && !stressChip && !selectedCard) return;
 
     const statusEl = document.getElementById('desk-options-status');
     const refreshBtn = document.getElementById('desk-options-refresh');
-    const selectedCard = document.getElementById('desk-options-selected');
     const apiFetch = typeof window.tradingFlowFetch === 'function' ? window.tradingFlowFetch : window.fetch.bind(window);
 
     let activeSymbol = null;
@@ -158,6 +159,57 @@
 
         const noteEl = card.querySelector('[data-options-field="note"]');
         if (noteEl) noteEl.textContent = snapshot.summaryNote || '';
+        const contractDetail = typeof snapshot.liquidContractCount === 'number' && Number.isFinite(snapshot.liquidContractCount)
+            ? `${snapshot.liquidContractCount} liquid OPRA contracts (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness)`
+            : '';
+        card.title = [contractDetail, snapshot.summaryNote].filter(Boolean).join(' · ');
+    }
+
+    // Formats one benchmark OPRA snapshot into a concise tooltip line for the unified top-strip stress chip.
+    function formatBenchmarkTooltip(label, snapshot) {
+        if (!snapshot) return `${label}: unavailable`;
+        const regime = formatRegime(snapshot.regimeLabel);
+        const contracts = typeof snapshot.liquidContractCount === 'number' && Number.isFinite(snapshot.liquidContractCount)
+            ? ` · ${snapshot.liquidContractCount} liquid`
+            : '';
+        return `${label}: ${regime.text} · move ${formatMove(snapshot)} · skew ${formatVolPts(snapshot.skew25Delta)} · near vs 30d ${formatVolPts(snapshot.termStructureSpread)} · C/P ${formatRatio(snapshot.callPutVolumeRatio)}${contracts}`;
+    }
+
+    // Derives one compact SPY/QQQ options stress chip for the unified top bar while preserving full numbers in its tooltip.
+    function renderStressChip(spy, qqq, observedAtUtc, errorMessage) {
+        if (!stressChip) return;
+        stressChip.hidden = false;
+        if (errorMessage) {
+            stressChip.textContent = 'Options stress: —';
+            stressChip.dataset.tone = 'muted';
+            stressChip.title = `OPRA options sentiment unavailable (${errorMessage}).`;
+            return;
+        }
+        const items = [spy, qqq].filter(Boolean);
+        const labels = items.map(item => item.regimeLabel);
+        const hasBackwardation = labels.includes('term_backwardation_stress') ||
+            items.some(item => typeof item.termStructureSpread === 'number' && Number.isFinite(item.termStructureSpread) && item.termStructureSpread > 0.03);
+        const hasSkewStress = labels.includes('put_skew_hedging') || labels.includes('call_skew_squeeze_risk') ||
+            items.some(item => typeof item.skew25Delta === 'number' && Number.isFinite(item.skew25Delta) && (item.skew25Delta > 0.06 || item.skew25Delta < -0.04));
+        const hasNeutral = labels.includes('neutral');
+
+        let level = '—';
+        let tone = 'muted';
+        if (hasBackwardation) {
+            level = 'high';
+            tone = 'warn';
+        } else if (hasSkewStress) {
+            level = 'high';
+            tone = 'warn';
+        } else if (hasNeutral) {
+            level = 'normal';
+            tone = 'good';
+        }
+
+        stressChip.textContent = `Options stress: ${level}`;
+        stressChip.dataset.tone = tone;
+        const stamp = observedAtUtc ? `Updated ${new Date(observedAtUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} (5m cache)` : '';
+        stressChip.title = [formatBenchmarkTooltip('SPY', spy), formatBenchmarkTooltip('QQQ', qqq), stamp].filter(Boolean).join('\n');
     }
 
     // Cancels any superseded request and fetches SPY, QQQ, and optional selected-symbol OPRA context.
@@ -191,6 +243,7 @@
             if (seq !== requestSeq) return;
             renderCard('spy', data.spy);
             renderCard('qqq', data.qqq);
+            renderStressChip(data.spy, data.qqq, data.observedAtUtc, null);
             if (data.selected) {
                 renderCard('selected', data.selected);
             } else if (selectedCard) {
@@ -201,6 +254,7 @@
         } catch (err) {
             if (err && err.name === 'AbortError') return;
             if (seq !== requestSeq) return;
+            renderStressChip(null, null, null, err?.message || 'network error');
             if (statusEl) statusEl.textContent = `OPRA options sentiment unavailable (${err?.message || 'network error'}).`;
         } finally {
             if (seq === requestSeq && refreshBtn) {

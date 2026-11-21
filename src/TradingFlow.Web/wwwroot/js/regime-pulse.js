@@ -30,13 +30,15 @@
         return el;
     }
 
-    // Describes one benchmark with a glyph so colour is never the only cue.
+    // Describes one benchmark with explicit close price, 50-day context, and gate state so colour is never the only cue.
     function benchmarkChip(b) {
-        if (!b || !b.available) return chip(b ? b.symbol : "?", "— unavailable", "muted", "No benchmark bars were available.");
-        const close = b.lastClose != null ? " " + Number(b.lastClose).toFixed(2) : "";
-        if (b.longGateOn) return chip(b.symbol, "▲ Longs ON" + close, "good", b.summaryLabel);
-        if (b.shortGateOn) return chip(b.symbol, "▼ Shorts ON" + close, "bad", b.summaryLabel);
-        return chip(b.symbol, "◐ Both OFF" + close, "warn", b.summaryLabel);
+        if (!b || !b.available) return chip(b ? b.symbol : "?", "— unavailable", "muted", (b && b.summaryLabel) || "No benchmark bars were available.");
+        const close = b.lastClose != null ? Number(b.lastClose).toFixed(2) : "—";
+        const label = b.symbol + " " + close;
+        const title = [b.summaryLabel, b.lastSessionDate ? "as of " + b.lastSessionDate : ""].filter(Boolean).join(" · ");
+        if (b.longGateOn) return chip(label, "▲ rising 50-day · longs on", "good", title);
+        if (b.shortGateOn) return chip(label, "▼ below 50-day · longs off · shorts on", "bad", title);
+        return chip(label, "◐ 50-day flat · longs off", "warn", title);
     }
 
     // Shows the VIX close and what it does to long and short risk size.
@@ -53,8 +55,8 @@
         strip.textContent = "";
         strip.append(benchmarkChip(p.spy), benchmarkChip(p.qqq), vixChip(p.vix));
         const sectors = p.topSectors && p.topSectors.length ? p.topSectors.join(" · ") : "— not published";
-        strip.append(chip("Top sectors", sectors, p.topSectors && p.topSectors.length ? "good" : "muted",
-            p.topSectorsAsOfDate ? "Ranked as of " + p.topSectorsAsOfDate : "No sector screen published."));
+        strip.append(chip("Sectors", sectors, p.topSectors && p.topSectors.length ? "good" : "muted",
+            p.topSectorsAsOfDate ? "Top sectors ranked as of " + p.topSectorsAsOfDate : "No sector screen published."));
         const stamp = document.createElement("span");
         stamp.className = "regime-pulse-strip__stamp";
         stamp.textContent = "Checked " + new Date(p.observedAtUtc).toLocaleTimeString();

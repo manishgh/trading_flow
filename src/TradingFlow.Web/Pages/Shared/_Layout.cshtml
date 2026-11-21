@@ -29,7 +29,8 @@
         "Portfolio & Audit" => new[] { ("Positions", "/RunningTrades", new[] { "/RunningTrades" }), ("Orders", "/Orders", new[] { "/Orders", "/OrderTicket" }),
             ("Strategy runs", "/Paper", new[] { "/Paper", "/PaperJob" }), ("Audit", "/Audit", new[] { "/Audit", "/CandidateAudit" }) },
         _ => Array.Empty<(string, string, string[])>()
-    };    var systemPages = User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
+    };
+    var systemPages = User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
         ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
         : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") };
     // Preserve the current screen and filters when changing the account environment.
@@ -80,11 +81,7 @@
         </aside>
     }
     <header class="topbar">
-        @if (signedIn)
-        {
-            <div class="workspace-location"><span>Workspace</span><span aria-hidden="true">/</span><strong>@destination</strong></div>
-        }
-        else
+        @if (!signedIn)
         {
             <a class="brand" asp-page="/Desk" aria-label="TradingFlow">TradingFlow<span class="brand-dot">.</span></a>
             <nav class="primary-nav" aria-label="Primary navigation">
@@ -185,26 +182,28 @@
     </header>
     @if (signedIn)
     {
-        <div class="regime-pulse-strip" data-regime-pulse role="status" aria-label="Market regime">
-            <span class="regime-chip" data-tone="muted"><span class="regime-chip__label">Market regime</span><strong class="regime-chip__value">loading&hellip;</strong></span>
+        <div class="regime-pulse-strip" role="region" aria-label="Workspace status and market regime">
+            <div class="workspace-status" data-workspace-status data-trading-paused="@Runtime.TradingMutationsPaused.ToString().ToLowerInvariant()" aria-label="Workspace status" title="Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.">
+                <span class="regime-chip" data-workspace-runtime-chip data-tone="@(Runtime.TradingMutationsPaused ? "warn" : "muted")"><span class="regime-chip__label">@environment.Environment</span><strong class="regime-chip__value" data-workspace-runtime>@(Runtime.TradingMutationsPaused ? "Trading paused" : "Trading state unknown")</strong></span>
+                <span class="regime-chip" data-tone="muted" data-workspace-market>Market session unknown</span>
+                <span class="sr-only" data-workspace-feeds>Market feed state unknown</span>
+                <details class="workspace-freshness-popover">
+                    <summary class="regime-chip" data-tone="muted">Source freshness</summary>
+                    <div class="workspace-freshness-body">
+                        <p data-workspace-checked role="status">Reading server status…</p>
+                        <p data-workspace-orders></p>
+                        <ul data-workspace-sources></ul>
+                    </div>
+                </details>
+            </div>
+            <div class="regime-pulse-chips" data-regime-pulse role="status" aria-label="Market regime">
+                <span class="regime-chip" data-tone="muted"><span class="regime-chip__label">Market regime</span><strong class="regime-chip__value">loading&hellip;</strong></span>
+            </div>
+            <span class="regime-chip" id="desk-options-stress-chip" data-tone="muted" hidden></span>
+            <a class="regime-chip regime-chip--link" id="desk-preparation-chip" asp-page="/Preparation" data-tone="muted" hidden></a>
         </div>
     }
     <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
-        @if (signedIn)
-        {
-            <div class="workspace-status" data-workspace-status data-trading-paused="@Runtime.TradingMutationsPaused.ToString().ToLowerInvariant()" aria-label="Workspace status">
-                <strong>@environment.Environment</strong>
-                <strong data-workspace-runtime>@(Runtime.TradingMutationsPaused ? "Trading paused" : "Trading state unknown")</strong>
-                <span data-workspace-market>Market session unknown</span>
-                <span data-workspace-feeds>Market feed state unknown</span>
-                <details>
-                    <summary>Source freshness</summary>
-                    <p data-workspace-checked role="status">Reading server status…</p>
-                    <p data-workspace-orders></p>
-                    <ul data-workspace-sources></ul>
-                </details>
-            </div>
-        }
         @if (signedIn && subTabs.Length > 1)
         {
             <nav class="workspace-subnav" aria-label="@destination views">
@@ -213,7 +212,8 @@
                     <a asp-page="@tab.Item2" aria-current="@(IsCurrent(tab.Item3) ? "page" : null)">@tab.Item1</a>
                 }
             </nav>
-        }        @RenderBody()
+        }
+        @RenderBody()
     </main>
 
     @* One toast for the whole app. Screens announce through it rather than each

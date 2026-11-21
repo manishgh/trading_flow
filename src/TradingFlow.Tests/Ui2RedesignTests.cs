@@ -306,18 +306,21 @@ public sealed class Ui2RedesignTests
 
         var desk = WebFile("Pages/Desk.cshtml");
         var focusStart = desk.IndexOf("id=\"watch-focus-content\"", StringComparison.Ordinal);
-        var orderHelpStart = desk.IndexOf("id=\"watch-order-help\"", StringComparison.Ordinal);
-        var exitHelpStart = desk.IndexOf("id=\"watch-exit-help\"", StringComparison.Ordinal);
-        var holdingStart = desk.IndexOf("id=\"watch-holding-block\"", StringComparison.Ordinal);
-        var strategyStart = desk.IndexOf("id=\"watch-strategy-block\"", StringComparison.Ordinal);
         var chartWindowStart = desk.IndexOf("id=\"watch-chart-window\"", StringComparison.Ordinal);
         var technicalsStart = desk.IndexOf("id=\"watch-technicals-block\"", StringComparison.Ordinal);
+        var inspectorStart = desk.IndexOf("id=\"watch-inspector\"", StringComparison.Ordinal);
+        var strategyStart = desk.IndexOf("id=\"watch-strategy-block\"", StringComparison.Ordinal);
+        var holdingStart = desk.IndexOf("id=\"watch-holding-block\"", StringComparison.Ordinal);
         var evidenceStart = desk.IndexOf("<details id=\"watch-evidence\"", StringComparison.Ordinal);
+        var ticketDockStart = desk.IndexOf("id=\"watch-ticket-dock\"", StringComparison.Ordinal);
+        var orderHelpStart = desk.IndexOf("id=\"watch-order-help\"", StringComparison.Ordinal);
+        var exitHelpStart = desk.IndexOf("id=\"watch-exit-help\"", StringComparison.Ordinal);
 
         Assert.True(focusStart >= 0 && focusStart < chartWindowStart && chartWindowStart < technicalsStart &&
-                    technicalsStart < orderHelpStart && orderHelpStart < exitHelpStart &&
-                    exitHelpStart < holdingStart && holdingStart < strategyStart && strategyStart < evidenceStart,
-            "Chart window (with embedded completed-1d indicators), order hints, holding, and strategy readiness blocks must sit inside #watch-focus-content and outside <details id=\"watch-evidence\">.");
+                    technicalsStart < inspectorStart && inspectorStart < strategyStart && strategyStart < holdingStart &&
+                    holdingStart < evidenceStart && evidenceStart < ticketDockStart &&
+                    ticketDockStart < orderHelpStart && orderHelpStart < exitHelpStart,
+            "Chart window (with embedded completed-1d indicators) must sit in #watch-focus-content, and strategy readiness, holding, evidence, and ticket dock with order hints must sit in the third-column #watch-inspector.");
         Assert.Contains("<summary>Group &amp; catalyst tools</summary>", desk);
         Assert.Contains("@section Styles", desk);
 
@@ -348,8 +351,8 @@ public sealed class Ui2RedesignTests
         foreach (var token in new[]
                  {
                      ".preparation-steps li", "white-space: normal", "[data-preparation-summary][data-compact=\"true\"]",
-                     "@media (min-width: 1200px)", "html body.workspace-app .watch-desk .watch-grid",
-                     "minmax(260px, 3fr) minmax(560px, 7fr)", "position: sticky", ".watch-strategy-check-item"
+                     "@media (min-width: 1440px)", "html body.workspace-app .watch-desk .watch-grid",
+                     "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)", ".watch-strategy-check-item"
                  })
         {
             Assert.Contains(token, css);
@@ -661,7 +664,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("get('inline-studies')", chartJs);
 
         var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
-        foreach (var token in new[] { "function setScannerDensity(", "function formatRowDayChange(", "scannerDensityV2", "Compact 5-col", "Full 10-col", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
+        foreach (var token in new[] { "function setScannerDensity(", "function formatRowDayChange(", "scannerDensityV2", "Fewer columns", "All columns", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
         {
             Assert.Contains(token, watchDeskJs);
         }
@@ -712,9 +715,9 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("innerHTML", catalystsJs);
         Assert.DoesNotContain("setTimeout(", catalystsJs);
 
-        // CSS rules for all 5 UI-5 features (30% scanner / 70% chart window; compact 5-col scanner must NEVER hide News col 6)
+        // CSS rules for UI-5/UI-8 features (3-column Desk; compact scanner must NEVER hide News col 6)
         var css = WebFile("wwwroot/css/ui2-foundation.css");
-        foreach (var token in new[] { "minmax(260px, 3fr) minmax(560px, 7fr)", "[data-scanner-density=\"compact\"]", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
+        foreach (var token in new[] { "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)", "[data-scanner-density=\"compact\"]", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
         {
             Assert.Contains(token, css);
         }
@@ -836,15 +839,15 @@ public sealed class Ui2RedesignTests
         var css = WebFile("wwwroot/css/ui2-foundation.css");
         foreach (var token in new[]
                  {
-                     "minmax(260px, 3fr) minmax(560px, 7fr)",
+                     "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)",
                      "col:nth-child(10)",
                      "th:nth-child(10)",
                      "td:nth-child(10)",
-                     ".watch-stock-col { width: 17%; }",
-                     ".watch-price-col { width: 23%; }",
-                     ".watch-strategy-col { width: 22%; }",
-                     ".watch-news-col { width: 20%; }",
-                     ".watch-rvol-col { width: 18%; }",
+                     ".watch-stock-col { width: 18%; }",
+                     ".watch-price-col { width: 34%; }",
+                     ".watch-strategy-col { width: 18%; }",
+                     ".watch-news-col { width: 15%; }",
+                     ".watch-rvol-col { width: 15%; }",
                      ".watch-chart-window [data-chart-zone-key]",
                      ".watch-chart-indicators-strip",
                      ".watch-ind-pill",
@@ -854,6 +857,129 @@ public sealed class Ui2RedesignTests
         {
             Assert.Contains(token, css);
         }
+        Assert.DoesNotContain("nth-child(6)", css);
+    }
+
+    // Verifies Checkpoint UI-8 contracts: unified top status/regime strip (D4/D5/G1/G2/G4/G9), 34px scanner & strategy/news rules (D1/D2/G5/G6/G14/G15),
+    // chart marker grouping & overlay autoscale fix (D6), neutral resistance pills (D7), compact chart header/overlay readout (G3/G7/G8/D8), and 3-column Desk (D3).
+    [Fact]
+    public void Ui8DeskDenseLayoutChartScaleFixAndUnifiedRegimeStripContractsHold()
+    {
+        var layout = WebFile("Pages/Shared/_Layout.cshtml");
+        Assert.DoesNotContain("};    var systemPages =", layout);
+        Assert.DoesNotContain("}        @RenderBody()", layout);
+        Assert.DoesNotContain("class=\"workspace-location\"", layout);
+        foreach (var token in new[]
+                 {
+                     "data-workspace-status", "data-workspace-runtime-chip", "workspace-freshness-popover",
+                     "data-regime-pulse", "id=\"desk-options-stress-chip\"", "id=\"desk-preparation-chip\""
+                 })
+        {
+            Assert.Contains(token, layout);
+        }
+
+        var regimeJs = WebFile("wwwroot/js/regime-pulse.js");
+        Assert.Contains("rising 50-day · longs on", regimeJs);
+        Assert.Contains("below 50-day · longs off · shorts on", regimeJs);
+
+        var prepJs = WebFile("wwwroot/js/preparation-summary.js");
+        Assert.Contains("function syncPreparationChip(", prepJs);
+        Assert.Contains("Preparation paused", prepJs);
+        Assert.Contains("Preparation expired", prepJs);
+
+        var optionsJs = WebFile("wwwroot/js/desk-options.js");
+        Assert.Contains("function renderStressChip(", optionsJs);
+        Assert.Contains("desk-options-stress-chip", optionsJs);
+        Assert.Contains("Options stress:", optionsJs);
+        Assert.Contains("liquid OPRA contracts", optionsJs);
+
+        var desk = WebFile("Pages/Desk.cshtml");
+        Assert.Contains("<h1 class=\"visually-hidden\">Desk</h1>", desk);
+        Assert.DoesNotContain("<partial name=\"_OptionsSentimentPanel\"", desk);
+        Assert.Contains("data-has-strategy=\"false\"", desk);
+        Assert.Contains("Fewer columns", desk);
+        Assert.Contains("title=\"Stored stories in the last hour (partial coverage)\"", desk);
+        Assert.Contains("id=\"watch-focus-info\"", desk);
+        Assert.Contains("data-quick-interval=\"1d\"", desk);
+        Assert.Contains("id=\"watch-inspector\"", desk);
+        Assert.Contains("class=\"watch-mid-tabs\"", desk);
+        Assert.Contains("Why, News &amp; Ticket", desk);
+        Assert.Contains("id=\"watch-preview-bracket\"", desk);
+        // News must sit directly inside .watch-inspector outside hidden #watch-inspector-body and never inside a closed <details>.
+        Assert.DoesNotContain("watch-news-drawer\"", desk);
+        var inspectorBodyIdx = desk.IndexOf("id=\"watch-inspector-body\"", StringComparison.Ordinal);
+        var inspectorBodyCloseIdx = desk.IndexOf("<section class=\"watch-news\" id=\"watch-news\"", StringComparison.Ordinal);
+        var ticketDockIdx = desk.IndexOf("id=\"watch-ticket-dock\"", StringComparison.Ordinal);
+        Assert.True(inspectorBodyIdx >= 0 && inspectorBodyIdx < inspectorBodyCloseIdx && inspectorBodyCloseIdx < ticketDockIdx,
+            "#watch-news must sit directly inside .watch-inspector outside #watch-inspector-body and above #watch-ticket-dock.");
+        var betweenBodyAndNews = desk[inspectorBodyIdx..inspectorBodyCloseIdx];
+        Assert.Contains("</div>", betweenBodyAndNews);
+        Assert.Contains("id=\"watch-news-drawer-count\"", desk);
+
+        var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
+        foreach (var token in new[]
+                 {
+                     "function syncTableStrategyState(", "function setActiveDeskPane(",
+                     "function signalOutcome(", "'✓ Ready'", "'◐ Near'", "'✕ Gate'",
+                     "summary.positive===0&&summary.negative===0", "'▲'+summary.positive", "'▼'+summary.negative",
+                     "resistance (above price)", "support (below price)", "compactDesk: true"
+                 })
+        {
+            Assert.Contains(token, watchDeskJs);
+        }
+
+        var plotJs = WebFile("wwwroot/js/stock-chart-plot.js");
+        Assert.Contains("text: count > 1 ? String(count) : ''", plotJs);
+        Assert.Contains("paneIndex === 0 ? { autoscaleInfoProvider: () => null } : {}", plotJs);
+
+        var chartJs = WebFile("wwwroot/js/stock-chart.js");
+        foreach (var token in new[] { "compactDesk", "function applyCompactDeskLayout(", "quickIntervalHost", "onSeriesInfo" })
+        {
+            Assert.Contains(token, chartJs);
+        }
+
+        var css = WebFile("wwwroot/css/ui2-foundation.css");
+        foreach (var token in new[]
+                 {
+                     ".sr-only {",
+                     "clip-path: inset(50%);",
+                     ".workspace-authenticated .regime-pulse-strip { margin-left: var(--workspace-sidebar-width); }",
+                     ".regime-pulse-chips {",
+                     "display: contents;",
+                     "order: 99;",
+                     "details.workspace-freshness-popover[open]",
+                     ".workspace-app .watch-desk [data-preparation-summary][data-compact=\"true\"]",
+                     "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)",
+                     "[data-has-strategy=\"false\"] col:nth-child(4)",
+                     "height: 34px;",
+                     ".watch-chart-window .stock-chart-stage .stock-chart-readout",
+                     ".watch-mid-tabs",
+                     "html body.workspace-app .watch-desk .watch-grid[data-active-pane=\"inspector\"] .watch-detail { display: none !important; }",
+                     "--stock-chart-study-0:",
+                     "min-height: 460px; max-height: calc(100vh - 190px)",
+                     ".watch-toolbar #watch-strategy { max-width: 300px; }",
+                     "width: 100%; max-width: none;"
+                 })
+        {
+            Assert.Contains(token, css);
+        }
+        // Program.cs must honor an explicit ASPNETCORE_WEBROOT override so published hosts serve matched bin\wwwroot assets.
+        var program = WebFile("Program.cs");
+        Assert.Contains("Environment.GetEnvironmentVariable(\"ASPNETCORE_WEBROOT\")", program);
+        Assert.Contains("static string ResolveWebRootPath(", program);
+        // Header controls and info badge must stay hidden until a stock is selected.
+        Assert.Contains("id=\"watch-focus-controls\" hidden", desk);
+        Assert.Contains("id=\"watch-focus-info\"", desk);
+        Assert.Contains("el('focus-controls').hidden=!row;", watchDeskJs);
+        Assert.DoesNotContain("function rowQuoteAge(", watchDeskJs);
+        Assert.DoesNotContain("function signalLabel(", watchDeskJs);
+        // D7: Resistance pills must NEVER use red/rose (--color-loss / --bad-border).
+        var resStart = css.IndexOf(".watch-ind-pill[data-role=\"resistance\"]", StringComparison.Ordinal);
+        Assert.True(resStart >= 0);
+        var resEnd = css.IndexOf('}', resStart);
+        var resRule = css[resStart..resEnd];
+        Assert.DoesNotContain("--color-loss", resRule);
+        Assert.DoesNotContain("--bad-border", resRule);
         Assert.DoesNotContain("nth-child(6)", css);
     }
 

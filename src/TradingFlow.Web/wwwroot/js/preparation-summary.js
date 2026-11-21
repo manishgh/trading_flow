@@ -6,7 +6,22 @@
     const title = root.querySelector('#preparation-summary-title');
     const action = find('action'), actionUrl = action.href;
     const steps = Array.from(find('steps').children);
+    const prepChip = document.getElementById('desk-preparation-chip');
     const twelveHoursMs = 12 * 60 * 60 * 1000;
+
+    // Updates the unified top-strip preparation chip when compact mode is active, hiding it for active/failed/unconfigured runs.
+    function syncPreparationChip(mode, summary, href, detailTitle) {
+        if (!prepChip) return;
+        if (!mode?.compact || !summary) {
+            prepChip.hidden = true;
+            return;
+        }
+        prepChip.textContent = !summary.scheduleSavedOn ? 'Preparation paused \u203A' : 'Preparation expired \u203A';
+        prepChip.href = href || actionUrl;
+        prepChip.dataset.tone = !summary.scheduleSavedOn ? 'muted' : 'warn';
+        prepChip.title = detailTitle || mode.heading;
+        prepChip.hidden = false;
+    }
 
     // Identifies an active or failed preparation step that must never be hidden behind compact mode.
     function hasActiveOrFailedStep(stepText) {
@@ -40,6 +55,7 @@
         action.textContent = 'Open preparation';
         if (!summary) {
             delete root.dataset.compact;
+            syncPreparationChip(null, null, actionUrl, '');
             if (title) title.textContent = 'Today\u2019s preparation';
             find('target').textContent = status.preparationReadError || 'Saved preparation has not been read.';
             for (const [index, text] of ['Evening collection', 'Morning collection', 'Review', 'Open on Desk'].entries())
@@ -77,6 +93,7 @@
         } else {
             action.textContent = 'Set up preparation';
         }
+        syncPreparationChip(mode, summary, action.href, [mode.heading, find('target').textContent, status.preparationWorker?.detail].filter(Boolean).join(' · '));
     }
     document.addEventListener('workspace-status-changed', event => render(event.detail));
     render(window.tradingFlowWorkspaceStatus);

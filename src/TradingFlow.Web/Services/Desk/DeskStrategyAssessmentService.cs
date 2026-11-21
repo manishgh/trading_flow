@@ -3,6 +3,7 @@ using Microsoft.Extensions.Caching.Memory;
 using TradingFlow.Application.Candidates;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Data.Context;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Configuration;
 
 namespace TradingFlow.Web.Services.Desk;
@@ -16,7 +17,28 @@ public sealed class DeskStrategyAssessmentService(
     IMemoryCache cache,
     TimeProvider clock)
 {
-    /// <summary>Lists enabled choices for current checks while retaining the recent recorded strategy/run choices.</summary>
+    /// <summary>Determines whether a recorded run's strategy may appear in the Desk picker without deleting persisted audit rows.</summary>
+    private bool IsPickerEligibleRecordedStrategy(
+        StrategyReference identity,
+        IReadOnlyList<StrategyArtifact> artifacts,
+        out StrategyArtifact? matchedArtifact)
+    {
+        matchedArtifact = artifacts.FirstOrDefault(artifact =>
+            artifact.Identity.StrategyId == identity.StrategyId &&
+            artifact.Identity.SemanticVersion == identity.SemanticVersion &&
+            artifact.Identity.ContentSha256 == identity.ContentSha256);
+        if (matchedArtifact is not null)
+        {
+            return catalog.GetDisabledReason(matchedArtifact) is null;
+        }
+
+        // Retired strategies absent from the catalog (such as swing.connors-rsi2) and disabled strategy families stay hidden in the picker.
+        return artifacts.Any(artifact =>
+            artifact.Identity.StrategyId == identity.StrategyId &&
+            catalog.GetDisabledReason(artifact) is null);
+    }
+
+    /// <summary>Lists enabled choices for current checks while retaining only non-retired, enabled recorded strategy/run choices.</summary>
     public async Task<IReadOnlyList<StockStrategyChoice>> ChoicesAsync(CancellationToken token)
     {
         await using var db = await databases.CreateDbContextAsync(token);
@@ -35,13 +57,15 @@ public sealed class DeskStrategyAssessmentService(
                 groupRows.Key.StrategyContentSha256, groupRows.Key.Profile, groupRows.Key.StartedAtUtc
             }).Take(100).ToArrayAsync(token);
         var artifacts = catalog.GetSnapshot().ExecutableArtifacts;
-        var choices = recorded.Select(item => {
+        var choices = new List<StockStrategyChoice>();
+        foreach (var item in recorded)
+        {
             var identity = new StrategyReference(item.SelectedStrategy!, item.StrategySemanticVersion, item.StrategyContentSha256);
-            var artifact = artifacts.FirstOrDefault(artifact => artifact.Identity.StrategyId == identity.StrategyId &&
-                artifact.Identity.SemanticVersion == identity.SemanticVersion && artifact.Identity.ContentSha256 == identity.ContentSha256);
-            return new StockStrategyChoice(item.RunId, identity,
-                artifact?.ResolvedStrategy.StrategyName ?? identity.StrategyId, item.Profile, item.StartedAtUtc);
-        }).ToList();
+            if (!IsPickerEligibleRecordedStrategy(identity, artifacts, out var artifact))
+                continue;
+            choices.Add(new StockStrategyChoice(item.RunId, identity,
+                artifact?.ResolvedStrategy.StrategyName ?? identity.StrategyId, item.Profile, item.StartedAtUtc));
+        }
         foreach (var artifact in artifacts.Where(item => catalog.GetDisabledReason(item) is null))
         {
             var identity = new StrategyReference(artifact.Identity.StrategyId, artifact.Identity.SemanticVersion, artifact.Identity.ContentSha256);

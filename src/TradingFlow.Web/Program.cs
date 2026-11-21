@@ -43,7 +43,7 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
     ContentRootPath = webContentRoot,
-    WebRootPath = Path.Combine(webContentRoot, "wwwroot")
+    WebRootPath = ResolveWebRootPath(webContentRoot, Environment.GetEnvironmentVariable("ASPNETCORE_WEBROOT"))
 });
 // Console JSON is the portable production sink for local runs, containers,
 // Azure Monitor, Logstash, and Elastic. The ASP.NET Windows default includes
@@ -1191,6 +1191,14 @@ static string ResolveWebContentRoot(string currentDirectory)
     }
 
     return currentDirectory;
+}
+
+// Honors an explicit ASPNETCORE_WEBROOT override so published hosts serve matched bin\wwwroot assets alongside compiled Razor DLLs.
+static string ResolveWebRootPath(string webContentRoot, string? configuredWebRoot)
+{
+    return String.IsNullOrWhiteSpace(configuredWebRoot)
+        ? Path.Combine(webContentRoot, "wwwroot")
+        : configuredWebRoot.Trim();
 }
 
 

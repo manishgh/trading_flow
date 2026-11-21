@@ -469,20 +469,32 @@
 
         scale.subscribeSizeChange(clearCrosshair);
 
-        // Plot news and earnings at their matching candle while preserving each event's actual time in details.
+        // Plot at most one grouped news marker and one grouped earnings marker per candle, keeping full details in the dialog.
         function paintMarkers() {
-            const shapes = [];
+            const grouped = new Map();
             for (const event of model.events) {
                 if (!model.layers[event.kind]) continue;
                 const index = eventCandleIndex(model.bars, event, model.interval);
                 if (index < 0) continue;
-                shapes.push({
-                    time: model.bars[index].startMs / 1000, id: event.id, position: 'aboveBar',
-                    shape: event.kind === 'earnings' ? 'square' : 'circle',
-                    color: event.kind === 'earnings' ? colors.levelB : colors.levelA, size: .8
-                });
+                const time = model.bars[index].startMs / 1000;
+                const kind = event.kind === 'earnings' ? 'earnings' : 'news';
+                const key = `${time}:${kind}`;
+                const existing = grouped.get(key);
+                if (existing) existing.count += 1;
+                else grouped.set(key, { time, kind, count: 1 });
             }
-            markers.setMarkers(shapes.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)));
+            const shapes = [...grouped.values()]
+                .sort((a, b) => a.time - b.time || a.kind.localeCompare(b.kind))
+                .map(({ time, kind, count }) => ({
+                    time,
+                    id: `${kind}:${time}`,
+                    position: 'aboveBar',
+                    shape: kind === 'earnings' ? 'square' : 'circle',
+                    color: kind === 'earnings' ? colors.levelB : colors.levelA,
+                    size: .8,
+                    text: count > 1 ? String(count) : ''
+                }));
+            markers.setMarkers(shapes);
         }
 
         // Keep private events in their own marker collection and group only on displayed completed candles.
@@ -563,7 +575,7 @@
                 (study.display === 'pane' && (model.shownPane === null || study.token === model.shownPane))));
         }
 
-        // Add a native scale for a study component, with an explicit renderer for missing line samples.
+        // Add a native scale for a study component; price-pane overlays opt out of autoscaling so distant averages never flatten candles.
         function addComponent(study, index, paneIndex) {
             const column = study.columns[index];
             const histogram = column === 'histogram';
@@ -571,8 +583,14 @@
             const dash = [[], [5, 3], [2, 3], [8, 3, 2, 3]][(study.slot + index) % 4];
             const priceFormat = study.unit === 'shares' ? { type: 'volume' } : { type: 'price', precision: 4, minMove: .0001 };
             const options = { color: colors[color], lastValueVisible: false, priceLineVisible: false, priceFormat };
+            const lineOptions = {
+                ...options,
+                lineVisible: false,
+                crosshairMarkerVisible: false,
+                ...(paneIndex === 0 ? { autoscaleInfoProvider: () => null } : {})
+            };
             const series = histogram ? chart.addSeries(library.HistogramSeries, options, paneIndex) :
-                chart.addSeries(library.LineSeries, { ...options, lineVisible: false, crosshairMarkerVisible: false }, paneIndex);
+                chart.addSeries(library.LineSeries, lineOptions, paneIndex);
             const referencePrices = index === 0 && study.formula === 'rsi14' ? [30, 70] : [];
             const referenceLines = referencePrices.map(price => series.createPriceLine({
                 price, color: colors.grid, lineWidth: 1, lineStyle: library.LineStyle.Dashed, axisLabelVisible: false
