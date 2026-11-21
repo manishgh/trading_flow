@@ -9,6 +9,7 @@ using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Web.Models;
 using TradingFlow.Web.Services;
+using TradingFlow.Web.Services.Wishlists;
 
 namespace TradingFlow.Tests;
 
@@ -348,7 +349,7 @@ public sealed class Ui2RedesignTests
                  {
                      ".preparation-steps li", "white-space: normal", "[data-preparation-summary][data-compact=\"true\"]",
                      "@media (min-width: 1200px)", "html body.workspace-app .watch-desk .watch-grid",
-                     "minmax(360px, 2fr) minmax(540px, 3fr)", "position: sticky", ".watch-strategy-check-item"
+                     "minmax(260px, 3fr) minmax(560px, 7fr)", "position: sticky", ".watch-strategy-check-item"
                  })
         {
             Assert.Contains(token, css);
@@ -634,7 +635,7 @@ public sealed class Ui2RedesignTests
         Assert.Contains("class=\"watch-chart-window\"", desk);
         Assert.Contains("class=\"watch-strategy-group\"", desk);
         Assert.Contains("id=\"watch-strategy-refresh\"", desk);
-        Assert.Contains("data-chart-inline-studies", chartPartial);
+        Assert.DoesNotContain("data-chart-inline-studies", chartPartial);
         Assert.Contains("class=\"stock-chart-more\"", chartPartial);
         Assert.DoesNotContain("id=\"desk-options-selected\"", optionsPartial);
         var chartIdx = desk.IndexOf("<partial name=\"_StockChart\"", StringComparison.Ordinal);
@@ -657,10 +658,10 @@ public sealed class Ui2RedesignTests
         Assert.Contains("function setTradePlanLevels(", chartJs);
         Assert.Contains("setTradePlanLevels,", chartJs);
         Assert.Contains("defaultStudies", chartJs);
-        Assert.Contains("get('inline-studies')", chartJs);
+        Assert.DoesNotContain("get('inline-studies')", chartJs);
 
         var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
-        foreach (var token in new[] { "function setScannerDensity(", "function formatRowDayChange(", "scannerDensityV2", "Compact 6-col", "Full 10-col", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
+        foreach (var token in new[] { "function setScannerDensity(", "function formatRowDayChange(", "scannerDensityV2", "Compact 5-col", "Full 10-col", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
         {
             Assert.Contains(token, watchDeskJs);
         }
@@ -711,9 +712,145 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("innerHTML", catalystsJs);
         Assert.DoesNotContain("setTimeout(", catalystsJs);
 
-        // CSS rules for all 5 UI-5 features (60% chart window; compact 6-col scanner must NEVER hide News col 6)
+        // CSS rules for all 5 UI-5 features (30% scanner / 70% chart window; compact 5-col scanner must NEVER hide News col 6)
         var css = WebFile("wwwroot/css/ui2-foundation.css");
-        foreach (var token in new[] { "minmax(360px, 2fr) minmax(540px, 3fr)", "[data-scanner-density=\"compact\"]", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
+        foreach (var token in new[] { "minmax(260px, 3fr) minmax(560px, 7fr)", "[data-scanner-density=\"compact\"]", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
+        {
+            Assert.Contains(token, css);
+        }
+        Assert.DoesNotContain("nth-child(6)", css);
+    }
+
+    // Verifies completed-bar 1D / 5-session week / 21-session month volatility percentages and short/invalid bar null guards.
+    [Fact]
+    public void DailyObservationComputeVolatilityCoversOneDayWeekMonthAndShortHistoryNullGuards()
+    {
+        // Build 21 completed daily bars with distinct highs/lows in the 21d, 5d, and 1d windows ending on Close = 100.
+        var session = new DateOnly(2026, 11, 20);
+        var bars21 = Enumerable.Range(0, 21).Select(index =>
+        {
+            var date = session.AddDays(index - 20);
+            var low = index == 2 ? 80m : index == 17 ? 92m : 98m;
+            var high = index == 5 ? 115m : index == 19 ? 104m : 101m;
+            if (index == 20) { low = 97.5m; high = 102.5m; }
+            return new OhlcvBar("AAPL", new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero), "1d",
+                Open: 99m, High: high, Low: low, Close: 100m, Volume: 1_000_000m);
+        }).ToArray();
+
+        var full = DailyObservationService.ComputeVolatility(bars21);
+        Assert.NotNull(full);
+        Assert.Equal(5.00m, full!.DailyRangePct);    // (102.5 - 97.5) / 100 * 100
+        Assert.Equal(12.00m, full.WeekRangePct);     // (104 - 92) / 100 * 100 over trailing 5 bars (indices 16..20)
+        Assert.Equal(35.00m, full.MonthRangePct);    // (115 - 80) / 100 * 100 over trailing 21 bars
+
+        // Fewer than 21 bars (e.g., 10 bars): 1D and 1W populated, 1M stays null.
+        var tenBars = bars21[^10..];
+        var partialMonth = DailyObservationService.ComputeVolatility(tenBars);
+        Assert.NotNull(partialMonth);
+        Assert.Equal(5.00m, partialMonth!.DailyRangePct);
+        Assert.Equal(12.00m, partialMonth.WeekRangePct);
+        Assert.Null(partialMonth.MonthRangePct);
+
+        // Fewer than 5 bars (e.g., 4 bars): only 1D populated, 1W and 1M stay null.
+        var fourBars = bars21[^4..];
+        var shortHistory = DailyObservationService.ComputeVolatility(fourBars);
+        Assert.NotNull(shortHistory);
+        Assert.Equal(5.00m, shortHistory!.DailyRangePct);
+        Assert.Null(shortHistory.WeekRangePct);
+        Assert.Null(shortHistory.MonthRangePct);
+
+        // Empty history and invalid latest close fail closed to null.
+        Assert.Null(DailyObservationService.ComputeVolatility([]));
+        var zeroClose = bars21.ToArray();
+        zeroClose[^1] = zeroClose[^1] with { Close = 0m };
+        Assert.Null(DailyObservationService.ComputeVolatility(zeroClose));
+    }
+
+    // Verifies the Desk chart minimal-words polish, 30/70 split, no-Inspect compact 5-col table, zero More button,
+    // zero duplicate inline MA readout, and single-line SMA20/50/200 + Today support + ATR + 1D/1W/1M Volatility strip.
+    [Fact]
+    public void DeskChartMinimalWordsPolishHidesVerboseDiagnosticsAndExposesCompactSmaAndTodaySupportStrip()
+    {
+        var chartPartial = WebFile("Pages/Shared/_StockChart.cshtml");
+        var moreStart = chartPartial.IndexOf("<details class=\"stock-chart-more\">", StringComparison.Ordinal);
+        var announcementIdx = chartPartial.IndexOf("data-chart-settings-announcement", StringComparison.Ordinal);
+        var studiesIdx = chartPartial.IndexOf("data-chart-studies", StringComparison.Ordinal);
+        var contextIdx = chartPartial.IndexOf("data-chart-context-label", StringComparison.Ordinal);
+        var sourceIdx = chartPartial.IndexOf("data-chart-source", StringComparison.Ordinal);
+        Assert.True(moreStart >= 0 && moreStart < studiesIdx && studiesIdx < contextIdx && contextIdx < sourceIdx && sourceIdx < announcementIdx,
+            "Selected studies, context label, and source text must sit inside <details class=\"stock-chart-more\"> above the chart stage.");
+        Assert.DoesNotContain("data-chart-inline-studies", chartPartial);
+
+        var indicatorsJs = WebFile("wwwroot/js/stock-chart-indicators.js");
+        Assert.Contains("const preferenceKey = 'tradingflow.stock-chart.v3';", indicatorsJs);
+        Assert.Contains("row.title = item.reason;", indicatorsJs);
+        Assert.DoesNotContain("[reason, item.reason]", indicatorsJs);
+
+        var chartJs = WebFile("wwwroot/js/stock-chart.js");
+        Assert.Contains("defaultInterval, defaultStudies, onZones", chartJs);
+        Assert.Contains("minimumFractionDigits: 2, maximumFractionDigits: 2", chartJs);
+        Assert.DoesNotContain("inline-studies", chartJs);
+        var zoneKeyStart = chartJs.IndexOf("function renderZoneKey(", StringComparison.Ordinal);
+        var renderZonesStart = chartJs.IndexOf("function renderZones(", StringComparison.Ordinal);
+        Assert.True(zoneKeyStart >= 0 && zoneKeyStart < renderZonesStart);
+        var renderZoneKeyBody = chartJs[zoneKeyStart..renderZonesStart];
+        Assert.DoesNotContain("element('small'", renderZoneKeyBody);
+        Assert.DoesNotContain("Inputs available ' + zone.effectiveAtUtc", renderZoneKeyBody);
+        Assert.Contains("item.title =", renderZoneKeyBody);
+        Assert.Contains("onZones?.(visible,", renderZoneKeyBody);
+
+        var desk = WebFile("Pages/Desk.cshtml");
+        var stripStart = desk.IndexOf("class=\"watch-chart-indicators-strip\"", StringComparison.Ordinal);
+        var sma20Idx = desk.IndexOf("id=\"watch-sma20\"", StringComparison.Ordinal);
+        var sma50Idx = desk.IndexOf("id=\"watch-sma50\"", StringComparison.Ordinal);
+        var sma200Idx = desk.IndexOf("id=\"watch-sma200\"", StringComparison.Ordinal);
+        var todaySupportIdx = desk.IndexOf("id=\"watch-today-support\"", StringComparison.Ordinal);
+        var atrIdx = desk.IndexOf("id=\"watch-atr\"", StringComparison.Ordinal);
+        var volIdx = desk.IndexOf("id=\"watch-volatility\"", StringComparison.Ordinal);
+        Assert.True(stripStart >= 0 && stripStart < sma20Idx && sma20Idx < sma50Idx && sma50Idx < sma200Idx &&
+                    sma200Idx < todaySupportIdx && todaySupportIdx < atrIdx && atrIdx < volIdx,
+            "Desk chart strip must present SMA20, SMA50, SMA200, Today support, ATR, and Vol 1D/1W/1M on one unified line.");
+        Assert.DoesNotContain("watch-chart-ind-more", desk);
+        Assert.DoesNotContain("watch-tech-more", desk);
+
+        var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
+        foreach (var token in new[]
+                 {
+                     "const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];",
+                     "defaultInterval: '1d'",
+                     "onZones: handleDeskChartZones",
+                     "function deskReferencePrice(",
+                     "function renderSmaPill(",
+                     "function selectTodaySupportZone(",
+                     "function renderTodaySupportPill(",
+                     "function renderAtrPill(",
+                     "function renderVolatilityPill(",
+                     "row?.observation?.volatility",
+                     "function handleDeskChartZones(",
+                     "renderTodaySupportPill(null);"
+                 })
+        {
+            Assert.Contains(token, watchDeskJs);
+        }
+
+        var css = WebFile("wwwroot/css/ui2-foundation.css");
+        foreach (var token in new[]
+                 {
+                     "minmax(260px, 3fr) minmax(560px, 7fr)",
+                     "col:nth-child(10)",
+                     "th:nth-child(10)",
+                     "td:nth-child(10)",
+                     ".watch-stock-col { width: 17%; }",
+                     ".watch-price-col { width: 23%; }",
+                     ".watch-strategy-col { width: 22%; }",
+                     ".watch-news-col { width: 20%; }",
+                     ".watch-rvol-col { width: 18%; }",
+                     ".watch-chart-window [data-chart-zone-key]",
+                     ".watch-chart-indicators-strip",
+                     ".watch-ind-pill",
+                     ".watch-ind-pill[data-role=\"support\"]",
+                     ".watch-ind-pill[data-role=\"resistance\"]"
+                 })
         {
             Assert.Contains(token, css);
         }

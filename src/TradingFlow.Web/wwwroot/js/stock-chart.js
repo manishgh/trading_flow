@@ -2,6 +2,7 @@
     'use strict';
 
     const prices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 });
+    const zonePrices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const numbers = new Intl.NumberFormat();
     const percents = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, signDisplay: 'exceptZero' });
     const clockFormat = {
@@ -133,8 +134,8 @@
         });
     }
 
-    // Mount one read-only chart instance with scoped controls, data, optional host default studies, and disposal.
-    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultStudies } = {}) {
+    // Mount one read-only chart instance with scoped controls, data, optional host defaults/zone callback, and disposal.
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones } = {}) {
         const acceptance = Boolean(acceptanceCorrelation);
         let acceptanceStarted = false;
         const summaryNodes = new Map();
@@ -290,13 +291,7 @@
                 ({ label, value, available, anchor, revision, reconstructedStudy, observed, historical }));
             const studyReadout = get('study-values');
             studyReadout.hidden = !indicators.length;
-            const measurements = indicators.map(({ label, value }) => [label, value]);
-            fields(studyReadout, measurements, true);
-            const inlineStudies = get('inline-studies');
-            if (inlineStudies) {
-                inlineStudies.hidden = !indicators.length;
-                fields(inlineStudies, measurements, true);
-            }
+            fields(studyReadout, indicators.map(({ label, value }) => [label, value]), true);
             const history = get('study-history');
             const notes = [
                 indicators.some(item => item.reconstructedStudy) ? 'Study history includes reconstructed values' : '',
@@ -369,11 +364,6 @@
             fields(get('values'), [], true);
             fields(get('study-values'), [], true);
             get('study-values').hidden = true;
-            const inlineStudies = get('inline-studies');
-            if (inlineStudies) {
-                fields(inlineStudies, [], true);
-                inlineStudies.hidden = true;
-            }
             get('study-history').replaceChildren();
             get('study-history').hidden = true;
             renderSelectedEvidence(null, [], false);
@@ -410,27 +400,34 @@
             if (focus) [...get('levels').querySelectorAll('input')].find(input => input.dataset.chartLevel === focus)?.focus({ preventScroll: true });
         }
 
-        // Name each support/resistance band consistently in the compact key and the detailed evidence.
+        // Name each support/resistance band consistently in the detailed evidence modal.
         function zoneTitle(zone) {
             const label = zone.type === 'support' ? 'Support' : 'Resistance';
             return label + ' · ' + prices.format(zone.lower) + ' – ' + prices.format(zone.upper);
         }
 
-        // Label every enabled band beside the plot, including bands outside the visible price range.
+        // Format a compact 2-decimal support/resistance label with minimum words for the chart zone key.
+        function compactZoneTitle(zone) {
+            const label = zone.type === 'support' ? 'Support' : 'Resistance';
+            return label + ' ' + zonePrices.format(zone.lower) + '–' + zonePrices.format(zone.upper);
+        }
+
+        // Label visible bands concisely with 2-decimal bounds, keeping pivot/timestamp evidence in tooltips and notifying hosts.
         function renderZoneKey(zones) {
             const keyList = get('zone-key');
-            const visible = zones.filter(zone => layers[zone.type] && !hiddenZones.has(zone.id));
+            const visible = (zones || []).filter(zone => layers[zone.type] && !hiddenZones.has(zone.id));
             keyList.replaceChildren(...visible.map(zone => {
                 const item = element('li');
                 item.dataset.zoneType = zone.type;
                 const evidence = [zone.currentOnly ? 'Current zone' : 'Historical zone', zone.sourceTimeframe + ' pivots'];
                 if (zone.isPriceInBand) evidence.push('Latest close in band');
-                const cutoff = element('small', 'Inputs available ' + zone.effectiveAtUtc);
-                cutoff.title = timestamp(zone.effectiveAtUtc);
-                item.append(element('strong', zoneTitle(zone)), element('small', evidence.join(' · ')), cutoff);
+                if (zone.effectiveAtUtc) evidence.push('Inputs available ' + timestamp(zone.effectiveAtUtc));
+                item.title = evidence.join(' · ');
+                item.append(element('strong', compactZoneTitle(zone)));
                 return item;
             }));
             keyList.hidden = visible.length === 0;
+            onZones?.(visible, root.dataset.symbol || null);
         }
 
         // Show the boundaries and effective clock behind each eligible support or resistance band.
@@ -853,7 +850,8 @@
                 params.structure = 'daily';
                 params.lookback = context;
             } else if (context === 'intraday' || context === 'auto') params.structure = context;
-            for (const [name, fallback] of Object.entries(defaults)) {
+            const effectiveDefaults = defaultInterval ? { ...defaults, interval: defaultInterval } : defaults;
+            for (const [name, fallback] of Object.entries(effectiveDefaults)) {
                 const select = get(name);
                 const value = params[name] ?? settings[name];
                 select.value = [...select.options].some(option => option.value === value) ? value : fallback;

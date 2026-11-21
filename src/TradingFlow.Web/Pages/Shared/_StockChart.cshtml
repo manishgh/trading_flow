@@ -62,6 +62,7 @@
                         </label>
                         <button type="button" class="btn btn-secondary" data-chart-reset>Reset chart settings</button>
                     </div>
+                    <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
                     <details class="stock-chart-library" data-chart-library open>
                         <summary>Indicator library</summary>
                         <div class="stock-chart-study-picker">
@@ -88,15 +89,14 @@
                         <p class="stock-chart-study-description" data-chart-study-description></p>
                         <p class="stock-chart-study-feedback" data-chart-study-feedback role="status"></p>
                     </details>
+                    <p class="stock-chart-context" data-chart-context-label></p>
+                    <p class="stock-chart-source" data-chart-source></p>
                 </div>
             </details>
         </div>
     </div>
     <p class="visually-hidden" data-chart-settings-announcement role="status"></p>
-    <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
-    <p class="stock-chart-context" data-chart-context-label></p>
     <p class="stock-chart-note" data-chart-weekly-availability hidden>Indicators, price levels and session shading are available on daily or intraday charts.</p>
-    <p class="stock-chart-source" data-chart-source></p>
     <p class="stock-chart-source" data-chart-forming-status role="status" hidden></p>
     <ul class="stock-chart-zone-key" data-chart-zone-key aria-label="Current support and resistance zones" hidden></ul>
     <label class="stock-chart-pane-control" data-chart-pane-control hidden>Visible indicator pane
@@ -125,7 +125,6 @@
         </div>
         <p class="visually-hidden" data-chart-inspection role="status"></p>
         <dl class="stock-chart-values" data-chart-values></dl>
-        <dl class="stock-chart-values stock-chart-inline-studies" data-chart-inline-studies hidden></dl>
     </div>
     <dialog class="stock-chart-details" data-chart-details aria-labelledby="@detailsTitleId">
         <header class="stock-chart-details-head">

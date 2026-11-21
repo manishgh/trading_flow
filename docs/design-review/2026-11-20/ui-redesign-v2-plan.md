@@ -209,3 +209,18 @@ All five previously deferred UI 2.0 items were implemented in Checkpoint UI-5 on
 - **Round 2 Plan & Governance Review (`#204` — ACCEPT on `39b7544`):** Verified non-compaction guards in `preparation-summary.js`, full Oct 8 monthly reporting fidelity (`ContentSha256`, `CreatedAtUtc`, `MonthlyUnavailableReason`, `valuationBasis` + `unavailableReason`, zero accumulated/pooled returns), accurate implemented vs. deferred scope, and Desk polish.
 - **Round 2 Code & Architecture Review (`#205` — ACCEPT on `39b7544`):** Verified two-step `{Id, RequestJson}` SQLite plan lookup + `JsonDocument` fault isolation + `[FromServices]`, `@section Styles` cascade order + `html body.workspace-app` specificity, race-safe `hideSavedPlanMatrix()`, deterministic batch ordering, and text-node DOM safety.
 - **Verification Evidence:** `node --check` passed on all 4 modified JS files (`preparation-summary.js`, `watch-desk.js`, `run-workflow.js`, `regime-pulse.js`); `dotnet test` (`WorkspacePulseTests|Ui2RedesignTests|NewsCategoryUiTests|BacktestPlanTests`) passed **61/61** (0 warnings, 0 errors).
+
+## Checkpoint UI-6 status (2026-11-21)
+- **Desk 30/70 Split & Compact 5-Col Scanner (No `Inspect`, Keeps `News`):**
+  - Desktop `.watch-grid` (`>= 1200px`) updated to `minmax(260px, 3fr) minmax(560px, 7fr)` (30% left stock table / 70% right chart window).
+  - Compact default scanner (`Compact 5-col`) hides `col`/`th`/`td` `3, 5, 7, 9, 10` (removing `Next action`/`Inspect` col 10 while keeping `News` col 6 visible) with explicit `<col>` widths summing to 100% (`17% + 23% + 22% + 20% + 18%`).
+- **Minimal-Words Chart & Single-Line `SMA20/50/200` + `Today support` + `ATR` + `1D·1W·1M Volatility` Strip:**
+  - Moved `[data-chart-studies]`, `[data-chart-context-label]`, and `[data-chart-source]` inside `<details class="stock-chart-more">`; removed duplicate `[data-chart-inline-studies]` from `.stock-chart-readout` and removed the `More` disclosure button from `Desk.cshtml` (with null-safe DOM guards in `watch-desk.js`).
+  - Bumped chart `preferenceKey` to `'tradingflow.stock-chart.v3'`; moved `item.reason` into `row.title` + `<details>`; added `defaultInterval: '1d'` and `onZones` on `TradingFlowStockChart.mount(...)` (Desk defaults to `1d` + `['sma20', 'sma50', 'sma200']`, standalone `/Chart` defaults unchanged).
+  - Simplified `renderZoneKey` to 2-decimal `Support $XX.XX–$YY.YY` / `Resistance $XX.XX–$YY.YY` with pivot & timestamp evidence in `item.title` only (zero `<small>` sub-lines); hid `[data-chart-zone-key]` inside `.watch-chart-window`.
+  - Added `DeskVolatilitySummary(DailyRangePct, WeekRangePct, MonthRangePct)` and `DailyObservationService.ComputeVolatility(...)` on `DailyObservationResult.Volatility` from strictly verified completed `1d` SIP/all bars (`1D`, `5D`, `21D` ranges with null guards on `<5`/`<21` bars or non-positive close; missing renders `—`, never `0%`).
+  - Unified single-line `.watch-chart-indicators-strip` renders `#watch-sma20` (`SMA20 support/resistance $XX.XX`), `#watch-sma50`, `#watch-sma200`, `#watch-today-support` (clears immediately on symbol switch with stale-symbol guard), `#watch-atr` (`ATR $X.XX`), and `#watch-volatility` (`Vol 1D X.X% · 1W Y.Y% · 1M Z.Z%`) with zero visible dates or timestamps.
+- **Independent Reviews & Verification:**
+  - Plan, Governance & Causality Review (`#233` — **ACCEPT** on first pass).
+  - Senior Code & Architecture Review (`#234` — **ACCEPT** on first pass).
+  - `node --check` passed on `stock-chart.js`, `stock-chart-indicators.js`, `watch-desk.js`; single-process `dotnet test` (`Ui2RedesignTests|ChartIndicatorResourceTests|ChartEndpointTests|DeskTicketPlanTests|DailyObservation`) passed **46/46** (0 warnings, 0 errors).

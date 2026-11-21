@@ -156,7 +156,7 @@
   html body.workspace-app .watch-desk .watch-grid,
   .workspace-app .watch-desk .watch-grid,
   .watch-desk .watch-grid {
-    grid-template-columns: minmax(360px, 2fr) minmax(540px, 3fr);
+    grid-template-columns: minmax(260px, 3fr) minmax(560px, 7fr);
     align-items: start;
   }
   html body.workspace-app .watch-desk .watch-grid .watch-stocks,
@@ -273,7 +273,7 @@
   .lab-page .lab-panel { padding: 14px; }
 }
 
-/* ---- UI-5: Desk 40% scanner (6-col compact keeps News) & 60% chart window with embedded indicators ---- */
+/* ---- UI-5: Desk 30% scanner (5-col compact keeps News, removes Inspect) & 70% chart window ---- */
 .watch-view-head-tail {
   display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
@@ -287,27 +287,29 @@
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] {
   min-width: 0; width: 100%; table-layout: fixed;
 }
-/* Compact 6-col mode hides only Trade (3), Position (5), Daily technicals (7 — now inside the 60% chart window), and Volume (9); News (6) stays visible! */
+/* Compact 5-col mode hides Trade (3), Position (5), Daily technicals (7), Volume (9), and Next action/Inspect (10); News (6) stays visible! */
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(3),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(5),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(7),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(9),
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(10),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(3),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(5),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(7),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(9),
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(10),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(3),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(5),
 .workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(7),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(9) {
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(9),
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(10) {
   display: none;
 }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-stock-col { width: 14%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-price-col { width: 19%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-strategy-col { width: 21%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-news-col { width: 18%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-rvol-col { width: 14%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-action-col { width: 14%; }
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-stock-col { width: 17%; }
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-price-col { width: 23%; }
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-strategy-col { width: 22%; }
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-news-col { width: 20%; }
+.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-rvol-col { width: 18%; }
 .watch-chart-window {
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel);
 }
@@ -339,6 +341,7 @@
   height: 32px; min-height: 32px; padding: 2px 8px; font-size: 0.75rem; width: auto;
 }
 .stock-chart-more { position: relative; }
+.stock-chart-more[open] { flex: 1 0 100%; }
 .stock-chart-more > summary {
   display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px;
   border-radius: 6px; border: 1px solid var(--line); background: var(--panel-subtle);
@@ -349,8 +352,10 @@
   margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--panel-raised); display: flex; flex-direction: column; gap: 10px;
 }
+.stock-chart-more-body .stock-chart-studies { margin: 0; }
 .stock-chart-more-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
 .stock-chart-more-row select, .stock-chart-more-row button { min-height: 32px; height: 32px; font-size: 0.75rem; }
+.watch-chart-window [data-chart-zone-key] { display: none !important; }
 .watch-chart-window .stock-chart-context,
 .watch-chart-window .stock-chart-source {
   font-size: 0.72rem; line-height: 1.35; margin: 2px 0; color: var(--color-neutral-700);
@@ -358,37 +363,21 @@
 .watch-chart-indicators {
   border-top: 1px solid var(--line); padding: 6px 10px; background: var(--panel-subtle);
 }
-.watch-chart-indicators-row {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+.watch-chart-indicators-strip {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px;
 }
-.watch-chart-indicators .watch-tech-primary {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0; flex: 1 1 auto;
+.watch-ind-pill {
+  display: inline-flex; align-items: center; padding: 3px 9px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+  font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--color-text); white-space: nowrap; line-height: 1.35;
 }
-.watch-chart-indicators .watch-tech-primary > div {
-  display: inline-flex; flex-direction: row; align-items: baseline; gap: 5px;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+.watch-ind-pill[data-role="support"] {
+  border-color: var(--good-border); background: var(--color-gain-surface); color: var(--color-gain);
 }
-.watch-chart-indicators .watch-tech-primary dt { font-size: 0.68rem; color: var(--color-neutral-700); font-weight: 600; }
-.watch-chart-indicators .watch-tech-primary dd { margin: 0; font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.watch-tech-more > summary {
-  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--panel); font-size: 0.7rem; font-weight: 600;
-  color: var(--color-neutral-700); cursor: pointer; list-style: none;
+.watch-ind-pill[data-role="resistance"] {
+  border-color: var(--bad-border); background: var(--color-loss-surface); color: var(--color-loss);
 }
-.watch-tech-more > summary::-webkit-details-marker { display: none; }
-.watch-tech-more[open] .watch-tech-more-body {
-  margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line);
-}
-.stock-chart-inline-studies {
-  margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line);
-  display: flex; flex-wrap: wrap; gap: 6px 10px; font-variant-numeric: tabular-nums;
-}
-.stock-chart-inline-studies > div {
-  display: inline-flex; align-items: baseline; gap: 4px;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-subtle);
-}
-.stock-chart-inline-studies dt { font-size: 0.7rem; color: var(--color-neutral-700); }
-.stock-chart-inline-studies dd { margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--color-text); }
 
 /* ---- UI-5: Subtle single-row Desk toolbar & tight header spacing --------- */
 .workspace-app .watch-desk .watch-head {

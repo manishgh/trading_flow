@@ -45,7 +45,7 @@
     <label>Screen name<input name="name" required maxlength="120" placeholder="My momentum screen" /></label><label>Finviz URL or filters<input name="url" required maxlength="4000" placeholder="https://elite.finviz.com/screener.ashx?f=…" /></label><button class="btn btn-primary" type="submit">Save screen</button><button class="btn btn-secondary" type="button" id="watch-import-close">Close</button><p role="status" id="watch-import-status"></p>
   </form>
   <div class="watch-view-switch" role="group" aria-label="Show stocks"><button type="button" data-view="all" aria-pressed="true">All</button><button type="button" data-view="signals" aria-pressed="false">Signals <span data-view-count="signals"></span></button><button type="button" data-view="held" aria-pressed="false">Held <span data-view-count="held"></span></button><button type="button" data-view="rejected" aria-pressed="false">Rejected <span data-view-count="rejected"></span></button></div>
-  <div class="watch-view-head"><div><h2 id="watch-title">All followed stocks</h2><p id="watch-description">Active stocks across your stock groups.</p></div><div class="watch-view-head-tail"><button type="button" id="watch-density-toggle" class="btn btn-secondary btn-sm" aria-pressed="true" title="Showing 6 compact columns (keeps News); click for full 10-column table">Compact 6-col</button><span id="watch-count">— stocks</span></div></div>
+  <div class="watch-view-head"><div><h2 id="watch-title">All followed stocks</h2><p id="watch-description">Active stocks across your stock groups.</p></div><div class="watch-view-head-tail"><button type="button" id="watch-density-toggle" class="btn btn-secondary btn-sm" aria-pressed="true" title="Showing 5 compact columns (keeps News); click for full 10-column table">Compact 5-col</button><span id="watch-count">— stocks</span></div></div>
   <p id="watch-warning" class="watch-warning" role="status" hidden></p>
   <div class="watch-grid">
     <section class="watch-stocks" aria-label="Followed stocks">
@@ -68,17 +68,14 @@
       <div id="watch-focus-content" hidden>
         <div class="watch-chart-window" id="watch-chart-window">
           <partial name="_StockChart" model="String.Empty" />
-          <div class="watch-chart-indicators" id="watch-technicals-block" aria-label="Completed daily indicators">
-            <div class="watch-chart-indicators-row">
-              <dl class="watch-tech watch-tech-primary"><div><dt>SMA 20</dt><dd id="watch-sma20">—</dd></div><div><dt>SMA 50</dt><dd id="watch-sma50">—</dd></div><div><dt>SMA 200</dt><dd id="watch-sma200">—</dd></div><div><dt>RSI</dt><dd id="watch-rsi">—</dd></div><div><dt>ATR</dt><dd id="watch-atr">—</dd></div><div><dt>RVOL</dt><dd id="watch-rvol">—</dd></div></dl>
-              <details class="watch-tech-more">
-                <summary>More ▾</summary>
-                <div class="watch-tech-more-body">
-                  <dl class="watch-tech"><div><dt>SMA 10</dt><dd id="watch-sma10">—</dd></div><div><dt>EMA 20 / 50</dt><dd id="watch-ema">—</dd></div><div><dt>EMA 200</dt><dd id="watch-ema200">—</dd></div></dl>
-                  <p id="watch-tech-time" class="watch-fine"></p>
-                  <p id="watch-sip-volume" class="watch-fine"></p>
-                </div>
-              </details>
+          <div class="watch-chart-indicators" id="watch-technicals-block" aria-label="Key moving averages, today support, ATR and volatility">
+            <div class="watch-chart-indicators-strip">
+              <span class="watch-ind-pill" id="watch-sma20">SMA20 —</span>
+              <span class="watch-ind-pill" id="watch-sma50">SMA50 —</span>
+              <span class="watch-ind-pill" id="watch-sma200">SMA200 —</span>
+              <span class="watch-ind-pill" id="watch-today-support">Today support —</span>
+              <span class="watch-ind-pill" id="watch-atr">ATR —</span>
+              <span class="watch-ind-pill" id="watch-volatility">Vol 1D — · 1W — · 1M —</span>
             </div>
           </div>
         </div>

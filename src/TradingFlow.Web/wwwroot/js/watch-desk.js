@@ -31,18 +31,21 @@
     const savedDesk = explicit ? null : readDeskReturn();
     const reviewKey = savedDesk?.preparationKey || incoming.get('preparationKey');
     let started = false, restoredView = false;
-    let deskChart, chartSymbol;
+    let deskChart, chartSymbol, deskChartZones = [], deskChartZonesSymbol = null;
     let scannerDensity = 'compact';
     let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '';
-    const deskDefaultChartStudies = ['sma20:1d', 'sma50:1d', 'sma200:1d', 'rsi14', 'atr14:readout'];
+    const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];
     const moneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2});
+    const fixedMoneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:2});
     const numberFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits:2});
     const volumeFormat = new Intl.NumberFormat(undefined, {notation:'compact', maximumFractionDigits:2});
     const exchangeDateFormat = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'});
     // Format available prices and measures without treating a missing value as zero.
     const money = value => value == null ? '—' : moneyFormat.format(value);
+    const fixedMoney = value => typeof value === 'number' && Number.isFinite(value) ? fixedMoneyFormat.format(value) : '—';
+    const normalizeChartSymbol = value => (value || '').trim().toUpperCase().replaceAll('.', '-');
     const number = value => value == null ? '—' : numberFormat.format(value);
-    const text = (id, value) => { el(id).textContent = value; };
+    const text = (id, value) => { const node = el(id); if (node) node.textContent = value; };
     const when = value => value ? new Date(value).toLocaleString(undefined, {timeZone:'America/New_York'}) + ' NY · ' + new Date(value).toISOString() : 'Time unavailable';
     const safeUrl = value => { try { const u = new URL(value); return ['https:','http:'].includes(u.protocol) ? u.href : null; } catch { return null; } };
 
@@ -81,18 +84,18 @@
             scrollY:window.scrollY,tableLeft:table.scrollLeft,tableTop:table.scrollTop,newsTop:el('news').scrollTop};
     }
 
-    // Switches the 40%-width Desk scanner between 6-column compact mode (default, keeping News visible while basic indicators live in the 60% chart window) and full 10-column mode.
+    // Switches the 30%-width Desk scanner between 5-column compact mode (default, keeping News visible while removing Inspect) and full 10-column mode.
     function setScannerDensity(mode){
         scannerDensity = mode === 'full' ? 'full' : 'compact';
         const table = document.querySelector('.watch-table');
         if (table) table.dataset.scannerDensity = scannerDensity;
         const toggle = el('density-toggle');
         if (toggle) {
-            toggle.textContent = scannerDensity === 'compact' ? 'Compact 6-col' : 'Full 10-col';
+            toggle.textContent = scannerDensity === 'compact' ? 'Compact 5-col' : 'Full 10-col';
             toggle.setAttribute('aria-pressed', String(scannerDensity === 'compact'));
             toggle.title = scannerDensity === 'compact'
-                ? 'Showing 6 compact columns (keeps News; basic indicators are in the chart window); click for full 10-column table'
-                : 'Showing all 10 columns; click for compact 6-column scanner';
+                ? 'Showing 5 compact columns (keeps News; click any row to select); click for full 10-column table'
+                : 'Showing all 10 columns; click for compact 5-column scanner';
         }
     }
 
@@ -495,13 +498,15 @@
             Number.isFinite(readAt)&&Number.isFinite(asOf)&&Number.isFinite(barAt)&&barAt<=asOf&&asOf<=readAt&&
             validDate&&today&&date<=today&&date===exchangeDate(value.barTimestamp)&&String(value.feed||'').toLowerCase()==='sip'?value:null;
     }
-    // Retain SIP volume and receipt time in the selected stock's daily detail.
+    // Retain SIP volume and receipt time in the selected stock's daily detail when that element is present.
     function showSessionVolume(row){
+        const node=el('sip-volume');
+        if(!node)return;
         const value=sessionVolume(row);
-        text('sip-volume', value
+        node.textContent=value
             ? new Intl.NumberFormat().format(value.volume)+' SIP shares · '+value.sessionDate+' NY · observed '+when(value.asOfUtc)
-            : 'SIP session volume unavailable.');
-        el('sip-volume').title='Daily aggregate includes regular and extended hours; excludes overnight-feed trades.';
+            : 'SIP session volume unavailable.';
+        node.title='Daily aggregate includes regular and extended hours; excludes overnight-feed trades.';
     }
     // Display completed 1d values independently of quote freshness, and keep SIP daily volume separate.
     function renderDailyCells(node,row){
@@ -746,13 +751,117 @@
         link.href=orderReviewUrl(row,side);
         if(reason)link.setAttribute('aria-describedby',help);else link.removeAttribute('aria-describedby');
     }
+    // Returns the current server-observed reference price (quote midpoint or previous close) for support/resistance labeling.
+    function deskReferencePrice(row) {
+        const mid = row?.quote?.midPrice;
+        if (typeof mid === 'number' && Number.isFinite(mid) && mid > 0) return mid;
+        const prev = row?.previousClose?.close;
+        return typeof prev === 'number' && Number.isFinite(prev) && prev > 0 ? prev : null;
+    }
+    // Formats one completed daily SMA pill as support or resistance relative to the reference price using server values only.
+    function renderSmaPill(id, label, value, refPrice, detail) {
+        const node = el(id);
+        if (!node) return;
+        node.title = detail || '';
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+            node.textContent = label + ' —';
+            delete node.dataset.role;
+            return;
+        }
+        const formatted = fixedMoney(value);
+        if (refPrice == null) {
+            node.textContent = label + ' ' + formatted;
+            delete node.dataset.role;
+            return;
+        }
+        const role = refPrice >= value ? 'support' : 'resistance';
+        node.dataset.role = role;
+        node.textContent = label + ' ' + role + ' ' + formatted;
+    }
+    // Selects the nearest confirmed server support zone (preferring currentOnly and zones at or below the reference price).
+    function selectTodaySupportZone(zones, refPrice) {
+        const supports = (zones || []).filter(zone =>
+            zone && zone.type === 'support' && Number.isFinite(zone.lower) && Number.isFinite(zone.upper) &&
+            zone.lower > 0 && zone.upper >= zone.lower);
+        if (!supports.length) return null;
+        const pool = supports.some(zone => zone.currentOnly) ? supports.filter(zone => zone.currentOnly) : supports;
+        if (refPrice == null) return pool.reduce((best, zone) => zone.upper > best.upper ? zone : best, pool[0]);
+        const inBand = pool.filter(zone => zone.isPriceInBand || (zone.lower <= refPrice && refPrice <= zone.upper));
+        if (inBand.length) return inBand.reduce((best, zone) => zone.upper > best.upper ? zone : best, inBand[0]);
+        const below = pool.filter(zone => zone.upper <= refPrice);
+        if (below.length) return below.reduce((best, zone) => zone.upper > best.upper ? zone : best, below[0]);
+        return pool.reduce((best, zone) =>
+            Math.abs(zone.lower - refPrice) < Math.abs(best.lower - refPrice) ? zone : best, pool[0]);
+    }
+    // Renders the minimal-word Today support pill from confirmed server chart zones, clearing immediately when absent.
+    function renderTodaySupportPill(row) {
+        const node = el('today-support');
+        if (!node) return;
+        const symbolKey = normalizeChartSymbol(row?.membership?.symbol);
+        const zone = symbolKey && deskChartZonesSymbol === symbolKey
+            ? selectTodaySupportZone(deskChartZones, deskReferencePrice(row))
+            : null;
+        if (!zone) {
+            node.textContent = 'Today support —';
+            delete node.dataset.role;
+            node.title = 'No confirmed support zone for this view';
+            return;
+        }
+        const band = zone.upper - zone.lower >= 0.05
+            ? fixedMoney(zone.lower) + '–' + fixedMoney(zone.upper)
+            : fixedMoney(zone.upper);
+        node.dataset.role = 'support';
+        node.textContent = 'Today support ' + band;
+        node.title = [zone.currentOnly ? 'Current zone' : 'Historical zone',
+            zone.sourceTimeframe ? zone.sourceTimeframe + ' pivots' : '',
+            zone.effectiveAtUtc ? 'Inputs available ' + when(zone.effectiveAtUtc) : ''].filter(Boolean).join(' · ');
+    }
+    // Formats the completed daily ATR pill to 2 decimals using server values only.
+    function renderAtrPill(value, detail) {
+        const node = el('atr');
+        if (!node) return;
+        node.title = detail || '';
+        node.textContent = typeof value === 'number' && Number.isFinite(value) && value >= 0
+            ? 'ATR ' + fixedMoney(value)
+            : 'ATR —';
+    }
+    // Formats completed daily 1D/1W/1M high-low volatility percentages from server observation without inventing values.
+    function renderVolatilityPill(row) {
+        const node = el('volatility');
+        if (!node) return;
+        const trusted = ['ready', 'insufficient'].includes(row?.observation?.state);
+        const vol = trusted ? row?.observation?.volatility : null;
+        const pct = value => typeof value === 'number' && Number.isFinite(value) && value >= 0
+            ? value.toFixed(1) + '%'
+            : '—';
+        node.textContent = 'Vol 1D ' + pct(vol?.dailyRangePct) + ' · 1W ' + pct(vol?.weekRangePct) + ' · 1M ' + pct(vol?.monthRangePct);
+        node.title = 'Completed daily high-low range vs latest close (1D = 1 session, 1W = 5 sessions, 1M = 21 sessions)';
+    }
+    // Receives visible server-computed zones from the mounted chart and updates Today support only for the active symbol.
+    function handleDeskChartZones(zones, symbol) {
+        const normalized = normalizeChartSymbol(symbol);
+        const activeSymbol = normalizeChartSymbol(chartSymbol);
+        if (normalized && activeSymbol && normalized !== activeSymbol) return;
+        deskChartZones = Array.isArray(zones) ? zones : [];
+        deskChartZonesSymbol = normalized || null;
+        const row = snapshot?.rows.find(x => x.membership.symbol === selected) || null;
+        renderTodaySupportPill(row);
+    }
     // Start history only for a selected stock and ignore quote ticks that keep the same selection.
     function syncChart(symbol) {
         if (chartSymbol === symbol) return;
         chartSymbol = symbol;
+        deskChartZones = [];
+        deskChartZonesSymbol = null;
+        renderTodaySupportPill(null);
         if (symbol && !deskChart) {
             const root = el('focus-content').querySelector('[data-stock-chart]');
-            if (root) deskChart = window.TradingFlowStockChart?.mount(root, { summaryHost: el('chart-summary'), defaultStudies: deskDefaultChartStudies });
+            if (root) deskChart = window.TradingFlowStockChart?.mount(root, {
+                summaryHost: el('chart-summary'),
+                defaultInterval: '1d',
+                defaultStudies: deskDefaultChartStudies,
+                onZones: handleDeskChartZones
+            });
         }
         deskChart?.setSymbol(symbol);
         window.dispatchEvent(new CustomEvent('tradingflow:desk-symbol-selected', { detail: { symbol: symbol || null } }));
@@ -848,13 +957,20 @@
         text('quantity',accountStale?'Stale snapshot':row.holdingsKnown?row.holding?number(row.holding.quantity):'Not held':'Unknown');
         text('entry',money(row.holding?.averageEntry));text('value',money(row.holding?.marketValue));text('pl',money(row.holding?.unrealizedPl));tone(el('pl'),row.holding?.unrealizedPl);
         el('holding-block').title=(accountStale?'Stale: last observed values. ':'')+snapshot.account.detail+' · cost basis '+money(row.holding?.costBasis)+' · '+when(snapshot.account.readAtUtc);
-        const technical=dailyTechnical(row);text('sma10',money(technical?.sma10));text('sma20',money(technical?.sma20));text('sma50',money(technical?.sma50));text('sma200',money(technical?.sma200));text('tech-time',dailyTechnicalDetail(row));
-        text('rsi',number(technical?.rsi));text('ema',money(technical?.ema20)+' / '+money(technical?.ema50));text('ema200',money(technical?.ema200));text('atr',number(technical?.atr));
+        const technical=dailyTechnical(row), techDetail=dailyTechnicalDetail(row), refPrice=deskReferencePrice(row);
+        renderSmaPill('sma20','SMA20',technical?.sma20,refPrice,techDetail);
+        renderSmaPill('sma50','SMA50',technical?.sma50,refPrice,techDetail);
+        renderSmaPill('sma200','SMA200',technical?.sma200,refPrice,techDetail);
+        renderTodaySupportPill(row);
+        renderAtrPill(technical?.atr,techDetail);
+        renderVolatilityPill(row);
+        text('sma10',money(technical?.sma10));text('tech-time',techDetail);
+        text('rsi',number(technical?.rsi));text('ema',money(technical?.ema20)+' / '+money(technical?.ema50));text('ema200',money(technical?.ema200));
         const relativeVolume=technical?.relativeVolume;
         text('rvol',Number.isFinite(relativeVolume)&&relativeVolume>=0?number(relativeVolume):'—');
         // Strategy checks appear only once a strategy is chosen at the top.
         el('strategy-block').hidden=!selectedStrategyChoice();text('observation',observationLabel(row));renderStrategyChecks(row);
-        el('rsi').parentElement.parentElement.title=dailyTechnicalDetail(row);
+        const techBlock=el('technicals-block');if(techBlock)techBlock.title=techDetail;
         showSessionVolume(row);
     }
     // Display original rule names, outcomes and inputs; unvisited rules are never inferred to have passed.
@@ -972,6 +1088,8 @@
         void deskChart?.dispose();
         deskChart = null;
         chartSymbol = null;
+        deskChartZones = [];
+        deskChartZonesSymbol = null;
         const root = el('focus-content').querySelector('[data-stock-chart]');
         if (root) root.dataset.symbol = '';
     });

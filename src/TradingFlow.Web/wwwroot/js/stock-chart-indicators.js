@@ -29,7 +29,7 @@
     const strokePatterns = ['solid', 'dashed', 'dotted', 'dash-dot'];
     const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
     const mobileQuery = '(max-width: 600px)';
-    const preferenceKey = 'tradingflow.stock-chart.v2';
+    const preferenceKey = 'tradingflow.stock-chart.v3';
 
     // Decode only supported names and options so browser preferences cannot expand the server allowlist.
     function study(token) {
@@ -257,8 +257,11 @@
                 remove.dataset.chartStudyRemove = token;
                 remove.setAttribute('aria-label', 'Remove ' + title(item));
                 const reason = statusLabels[item.status] ?? 'Waiting for chart data';
-                if (reason) row.append(element('span', [reason, item.reason].filter(Boolean).join(' · '), 'stock-chart-study-state'));
-                else if (item.reason) detail.append(element('p', item.reason));
+                if (item.reason) {
+                    row.title = item.reason;
+                    detail.append(element('p', item.reason));
+                }
+                if (reason) row.append(element('span', reason, 'stock-chart-study-state'));
                 if (item.earlierUnavailable) detail.append(element('p', 'Some earlier pages have incompatible or missing study evidence. Reload earlier history to refresh those values.'));
                 if (item.separateHistory) detail.append(element('p', 'Earlier pages are separate observed calculation segments. Lines break at page boundaries; inspect a candle for that segment’s revision, receipt and seed.'));
                 if (item.formulaVersion) {
