@@ -36,18 +36,18 @@
         return result.length ? result : ['SPY', 'QQQ'];
     }
 
-    // Classifies an Implied Move / 20d ADR ratio into its non-colour glyph, badge text, and semantic tone.
+    // Classifies an Expected Move / 20d ADR ratio into its non-colour glyph, badge text, and semantic tone.
     function formatRatioPill(ratio) {
         if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) {
-            return { text: '—', tone: 'muted', title: 'Ratio unavailable (requires OPRA implied move and 20 completed daily sessions)' };
+            return { text: '—', tone: 'muted', title: 'Ratio unavailable (requires OPRA expected move and 20 completed daily sessions)' };
         }
         const label = ratio.toFixed(2) + 'x';
-        if (ratio < 1.2) return { text: '✓ ' + label, tone: 'good', title: 'Implied move under 1.2x 20d ADR' };
-        if (ratio <= 2.0) return { text: '◐ ' + label, tone: 'warn', title: 'Elevated implied move (1.2x–2.0x 20d ADR)' };
-        return { text: '▲ ' + label, tone: 'bad', title: 'Extreme implied move (>2.0x 20d ADR)' };
+        if (ratio < 1.2) return { text: '✓ ' + label, tone: 'good', title: 'Expected move under 1.2x 20d ADR' };
+        if (ratio <= 2.0) return { text: '◐ ' + label, tone: 'warn', title: 'Elevated expected move (1.2x–2.0x 20d ADR)' };
+        return { text: '▲ ' + label, tone: 'bad', title: 'Extreme expected move (>2.0x 20d ADR)' };
     }
 
-    // Formats front-expiry OPRA implied move percentage and trading-day horizon without substituting zero for missing values.
+    // Formats front-expiry OPRA expected move percentage and trading-day horizon without substituting zero for missing values.
     function formatImpliedMove(card) {
         if (typeof card?.frontImpliedMovePct !== 'number' || !Number.isFinite(card.frontImpliedMovePct)) return '—';
         const days = typeof card.tradingDaysToFrontExpiry === 'number' ? ` (${card.tradingDaysToFrontExpiry}d)` : '';
@@ -59,11 +59,22 @@
         return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value.toFixed(2) + '%' : '—';
     }
 
-    // Formats 25-delta call/put volatility skew in volatility points (e.g. "+4.2 pts").
+    // Formats 25-delta downside Put minus upside Call volatility skew in volatility points (e.g. "+4.2 pts").
     function formatSkew(value) {
         if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
         const pts = value * 100;
         return (pts >= 0 ? '+' : '\u2212') + Math.abs(pts).toFixed(1) + ' pts';
+    }
+
+    // Builds an explanatory tooltip for a card's Put vs Call fear value, including why '—' appears when illiquid.
+    function formatSkewTooltip(value) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+            return 'No liquid ~25-delta Call/Put pair met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on this expiry.';
+        }
+        const pts = value * 100;
+        if (pts > 0) return `Downside Puts are +${pts.toFixed(1)} IV pts pricier than Calls — traders paying up for downside protection.`;
+        if (pts < 0) return `Upside Calls are ${Math.abs(pts).toFixed(1)} IV pts pricier than Puts — upside call chasing.`;
+        return 'Downside Put and upside Call ~25-delta IV are balanced (0.0 pts).';
     }
 
     // Builds one DOM card node for a CatalystOptionsAdrCard using textContent only (no HTML string interpolation).
@@ -86,19 +97,36 @@
 
         const metrics = document.createElement('dl');
         metrics.className = 'catalysts-opra-metrics';
+        const hasMove = typeof card?.frontImpliedMovePct === 'number' && Number.isFinite(card.frontImpliedMovePct);
         const rows = [
-            ['OPRA Implied ±%', formatImpliedMove(card), 'Front-expiry ATM straddle implied move'],
-            ['20d ADR%', formatAdr(card.adr20Pct), card.adrAsOfSessionDate ? `Completed 20d ADR as of ${card.adrAsOfSessionDate} NY` : (card.adrUnavailableReason || 'Completed 20d ADR unavailable')],
-            ['25Δ Skew', formatSkew(card.skew25Delta), '25-delta call minus put implied volatility']
+            [
+                'Expected move',
+                formatImpliedMove(card),
+                'Expected ±% stock swing by the nearest options expiration, priced from the at-the-money Call + Put straddle. Compare against your stop-loss distance.',
+                hasMove ? `Expected ±${card.frontImpliedMovePct.toFixed(1)}% swing priced from the nearest ATM Call + Put straddle.` : 'No liquid at-the-money Call + Put straddle met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on the nearest expiry.'
+            ],
+            [
+                '20d ADR%',
+                formatAdr(card.adr20Pct),
+                'Average daily high-low range over the last 20 completed trading sessions relative to latest close.',
+                card.adrAsOfSessionDate ? `Completed 20d ADR as of ${card.adrAsOfSessionDate} NY` : (card.adrUnavailableReason || 'Completed 20d ADR unavailable')
+            ],
+            [
+                'Put vs Call fear',
+                formatSkew(card.skew25Delta),
+                "Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair.",
+                formatSkewTooltip(card.skew25Delta)
+            ]
         ];
-        for (const [label, value, title] of rows) {
+        for (const [label, value, labelTitle, valueTitle] of rows) {
             const cell = document.createElement('div');
-            cell.title = title;
             const dt = document.createElement('dt');
             dt.textContent = label;
+            dt.title = labelTitle;
             const dd = document.createElement('dd');
             dd.className = 'num';
             dd.textContent = value;
+            dd.title = valueTitle;
             cell.append(dt, dd);
             metrics.append(cell);
         }

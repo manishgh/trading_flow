@@ -857,6 +857,76 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("nth-child(6)", css);
     }
 
+    // Verifies UI-7 plain-English OPRA labels, regime badges, explanatory tooltips (including missing 25-delta skew),
+    // and help-cursor dotted underlines across Desk and Catalysts without altering data-options-field hooks.
+    [Fact]
+    public void OpraPlainEnglishLabelsAndTooltipsCoverDeskAndCatalystsWithoutBreakingFields()
+    {
+        var optionsPartial = WebFile("Pages/Shared/_OptionsSentimentPanel.cshtml");
+        var desk = WebFile("Pages/Desk.cshtml");
+        foreach (var html in new[] { optionsPartial, desk })
+        {
+            foreach (var token in new[]
+                     {
+                         "Expected move</dt><dd data-options-field=\"move\">",
+                         "Put vs Call fear</dt><dd data-options-field=\"skew\">",
+                         "Near vs 30d IV</dt><dd data-options-field=\"term\">",
+                         "Call/Put vol</dt><dd data-options-field=\"cpvol\">",
+                         "Compare against your stop-loss distance.",
+                         "Downside Put IV minus upside Call IV (~25 delta).",
+                         "Near-term implied volatility minus ~30-day implied volatility (vol points).",
+                         "Today's traded Call volume divided by Put volume across liquid strikes"
+                     })
+            {
+                Assert.Contains(token, html);
+            }
+            Assert.DoesNotContain("<dt>Implied move</dt>", html);
+            Assert.DoesNotContain("<dt>25Δ skew</dt>", html);
+            Assert.DoesNotContain("<dt>Term spread</dt>", html);
+            Assert.DoesNotContain("<dt>C/P vol</dt>", html);
+        }
+
+        var deskOptionsJs = WebFile("wwwroot/js/desk-options.js");
+        foreach (var token in new[]
+                 {
+                     "'Near-term event risk'",
+                     "'Upside call chasing'",
+                     "'Downside hedging'",
+                     "'Balanced options'",
+                     "'Thin options'",
+                     "function formatMetricTooltips(",
+                     "badgeEl.title = regime.title;",
+                     "moveEl.title = tips.move;",
+                     "skewEl.title = tips.skew;",
+                     "termEl.title = tips.term;",
+                     "cpEl.title = tips.cpvol;",
+                     "No liquid ~25-delta Call/Put pair met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on this expiry."
+                 })
+        {
+            Assert.Contains(token, deskOptionsJs);
+        }
+
+        var catalystsJs = WebFile("wwwroot/js/catalysts-opra.js");
+        foreach (var token in new[]
+                 {
+                     "'Expected move'",
+                     "'Put vs Call fear'",
+                     "function formatSkewTooltip(",
+                     "dt.title = labelTitle;",
+                     "dd.title = valueTitle;",
+                     "No liquid ~25-delta Call/Put pair met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on this expiry."
+                 })
+        {
+            Assert.Contains(token, catalystsJs);
+        }
+        Assert.DoesNotContain("'25Δ Skew'", catalystsJs);
+
+        var css = WebFile("wwwroot/css/ui2-foundation.css");
+        Assert.Contains(".watch-options-metrics dt[title]", css);
+        Assert.Contains(".watch-options-badge[title]", css);
+        Assert.Contains("cursor: help;", css);
+    }
+
     // Builds consecutive weekday 1d bars ending on lastDate with deterministic High-Low range for ADR% unit tests.
     private static OhlcvBar[] BuildConstantRangeDailyBars(string symbol, int count, DateOnly lastDate, decimal close, decimal range) =>
         BuildTrendingDailyBars(symbol, count, lastDate, startClose: close, step: 0m, range: range);

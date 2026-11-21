@@ -85,10 +85,10 @@
             <span class="watch-options-badge" data-options-field="badge">—</span>
           </div>
           <dl class="watch-options-metrics">
-            <div><dt>Implied move</dt><dd data-options-field="move">—</dd></div>
-            <div><dt>25Δ skew</dt><dd data-options-field="skew">—</dd></div>
-            <div><dt>Term spread</dt><dd data-options-field="term">—</dd></div>
-            <div><dt>C/P vol</dt><dd data-options-field="cpvol">—</dd></div>
+            <div><dt title="Expected ±% stock swing by the nearest options expiration, priced from the at-the-money Call + Put straddle. Compare against your stop-loss distance.">Expected move</dt><dd data-options-field="move">—</dd></div>
+            <div><dt title="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair.">Put vs Call fear</dt><dd data-options-field="skew">—</dd></div>
+            <div><dt title="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market.">Near vs 30d IV</dt><dd data-options-field="term">—</dd></div>
+            <div><dt title="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls).">Call/Put vol</dt><dd data-options-field="cpvol">—</dd></div>
           </dl>
           <p class="watch-fine" data-options-field="note"></p>
         </article>

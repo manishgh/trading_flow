@@ -422,6 +422,14 @@
 .watch-options-selected-strip {
   margin: 10px 0 4px; background: var(--panel-subtle); border-color: var(--line);
 }
+.watch-options-metrics dt[title],
+.watch-options-badge[title],
+.catalysts-opra-metrics dt[title],
+.catalysts-opra-ratio-pill[title] {
+  text-decoration: underline dotted color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 3px;
+  cursor: help;
+}
 
 /* ---- UI-5: Risk-first bracket order ticket strip ------------------------- */
 .order-risk-strip {

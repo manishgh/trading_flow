@@ -12,15 +12,45 @@
     let currentController = null;
     let requestSeq = 0;
 
-    // Maps canonical RegimeLabel codes to short trader-readable badges and CSS tones.
+    // Maps canonical RegimeLabel codes to plain-English trader badges, CSS tones, and explanatory tooltips.
     function formatRegime(label) {
         switch (label) {
-            case 'call_skew_squeeze_risk': return { text: 'Call squeeze risk', tone: 'warn' };
-            case 'put_skew_hedging': return { text: 'Put hedging', tone: 'loss' };
-            case 'term_backwardation_stress': return { text: 'Term backwardation', tone: 'warn' };
-            case 'neutral': return { text: 'Balanced', tone: 'gain' };
-            case 'no_liquid_options': return { text: 'No liquid chain', tone: 'muted' };
-            default: return { text: 'Unavailable', tone: 'muted' };
+            case 'term_backwardation_stress':
+                return {
+                    text: 'Near-term event risk',
+                    tone: 'warn',
+                    title: 'Near-term options cost much more in IV than 30-day options — traders are pricing in an immediate catalyst, earnings, or gap move.'
+                };
+            case 'call_skew_squeeze_risk':
+                return {
+                    text: 'Upside call chasing',
+                    tone: 'warn',
+                    title: 'Out-of-the-money Calls are pricier than Puts — heavy speculative upside demand or squeeze risk.'
+                };
+            case 'put_skew_hedging':
+                return {
+                    text: 'Downside hedging',
+                    tone: 'loss',
+                    title: 'Out-of-the-money Puts are pricier than Calls — traders are paying up for downside protection.'
+                };
+            case 'neutral':
+                return {
+                    text: 'Balanced options',
+                    tone: 'gain',
+                    title: 'Balanced call/put pricing and normal volatility curve across expirations.'
+                };
+            case 'no_liquid_options':
+                return {
+                    text: 'Thin options',
+                    tone: 'muted',
+                    title: 'Too few liquid options contracts passed liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness).'
+                };
+            default:
+                return {
+                    text: 'Unavailable',
+                    tone: 'muted',
+                    title: 'OPRA options context could not be loaded for this symbol.'
+                };
         }
     }
 
@@ -34,13 +64,51 @@
     // Formats front-expiry ATM straddle implied move and trading-day horizon.
     function formatMove(snapshot) {
         if (typeof snapshot?.frontImpliedMovePct !== 'number' || !Number.isFinite(snapshot.frontImpliedMovePct)) return '—';
-        const days = typeof snapshot.tradingDaysToFrontExpiry === 'number' ? ` (${snapshot.tradingDaysToFrontExpiry}d)` : '';
+        const days = typeof snapshot.tradingDaysToFrontExpiry === 'number' && Number.isFinite(snapshot.tradingDaysToFrontExpiry) ? ` (${snapshot.tradingDaysToFrontExpiry}d)` : '';
         return `±${snapshot.frontImpliedMovePct.toFixed(1)}%${days}`;
     }
 
     // Formats liquid call-to-put daily volume ratio.
     function formatRatio(value) {
         return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) + 'x' : '—';
+    }
+
+    // Builds plain-English explanatory tooltips for each metric value, including why a field shows '—'.
+    function formatMetricTooltips(snapshot) {
+        const hasMove = typeof snapshot?.frontImpliedMovePct === 'number' && Number.isFinite(snapshot.frontImpliedMovePct);
+        const days = typeof snapshot?.tradingDaysToFrontExpiry === 'number' && Number.isFinite(snapshot.tradingDaysToFrontExpiry) ? ` over ${snapshot.tradingDaysToFrontExpiry} trading days` : '';
+        const move = hasMove
+            ? `Expected ±${snapshot.frontImpliedMovePct.toFixed(1)}% swing${days} priced from the nearest at-the-money Call + Put straddle.`
+            : 'No liquid at-the-money Call + Put straddle met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on the nearest expiry.';
+
+        const hasSkew = typeof snapshot?.skew25Delta === 'number' && Number.isFinite(snapshot.skew25Delta);
+        let skew = 'No liquid ~25-delta Call/Put pair met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on this expiry.';
+        if (hasSkew) {
+            const pts = snapshot.skew25Delta * 100;
+            skew = pts > 0
+                ? `Downside Puts are +${pts.toFixed(1)} IV pts pricier than Calls — traders paying up for downside protection.`
+                : pts < 0
+                    ? `Upside Calls are ${Math.abs(pts).toFixed(1)} IV pts pricier than Puts — upside call chasing.`
+                    : 'Downside Put and upside Call ~25-delta IV are balanced (0.0 pts).';
+        }
+
+        const hasTerm = typeof snapshot?.termStructureSpread === 'number' && Number.isFinite(snapshot.termStructureSpread);
+        let term = 'Need liquid front-month and ~30-day expirations to compare near-term vs 30-day IV.';
+        if (hasTerm) {
+            const pts = snapshot.termStructureSpread * 100;
+            term = pts > 0
+                ? `Near-term IV is +${pts.toFixed(1)} pts above ~30-day IV — immediate catalyst or gap risk priced in.`
+                : `Near-term IV is ${Math.abs(pts).toFixed(1)} pts below ~30-day IV — calm normal volatility curve.`;
+        }
+
+        const hasCp = typeof snapshot?.callPutVolumeRatio === 'number' && Number.isFinite(snapshot.callPutVolumeRatio);
+        let cpvol = 'No liquid Put volume was recorded today to compute today\'s Call/Put volume ratio.';
+        if (hasCp) {
+            const side = snapshot.callPutVolumeRatio > 1 ? 'more Calls than Puts' : snapshot.callPutVolumeRatio < 1 ? 'more Puts than Calls' : 'even Call and Put volume';
+            cpvol = `${snapshot.callPutVolumeRatio.toFixed(2)}x traded Call volume vs Put volume across liquid strikes (${side}).`;
+        }
+
+        return { move, skew, term, cpvol };
     }
 
     // Renders one OptionsSentimentSnapshot object into its card slot across the Desk pulse and chart detail using textContent only.
@@ -60,19 +128,33 @@
         if (badgeEl) {
             badgeEl.textContent = regime.text;
             badgeEl.dataset.tone = regime.tone;
+            badgeEl.title = regime.title;
         }
 
+        const tips = formatMetricTooltips(snapshot);
         const moveEl = card.querySelector('[data-options-field="move"]');
-        if (moveEl) moveEl.textContent = formatMove(snapshot);
+        if (moveEl) {
+            moveEl.textContent = formatMove(snapshot);
+            moveEl.title = tips.move;
+        }
 
         const skewEl = card.querySelector('[data-options-field="skew"]');
-        if (skewEl) skewEl.textContent = formatVolPts(snapshot.skew25Delta);
+        if (skewEl) {
+            skewEl.textContent = formatVolPts(snapshot.skew25Delta);
+            skewEl.title = tips.skew;
+        }
 
         const termEl = card.querySelector('[data-options-field="term"]');
-        if (termEl) termEl.textContent = formatVolPts(snapshot.termStructureSpread);
+        if (termEl) {
+            termEl.textContent = formatVolPts(snapshot.termStructureSpread);
+            termEl.title = tips.term;
+        }
 
         const cpEl = card.querySelector('[data-options-field="cpvol"]');
-        if (cpEl) cpEl.textContent = formatRatio(snapshot.callPutVolumeRatio);
+        if (cpEl) {
+            cpEl.textContent = formatRatio(snapshot.callPutVolumeRatio);
+            cpEl.title = tips.cpvol;
+        }
 
         const noteEl = card.querySelector('[data-options-field="note"]');
         if (noteEl) noteEl.textContent = snapshot.summaryNote || '';

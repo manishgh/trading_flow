@@ -224,3 +224,7 @@ All five previously deferred UI 2.0 items were implemented in Checkpoint UI-5 on
   - Plan, Governance & Causality Review (`#233` — **ACCEPT** on first pass).
   - Senior Code & Architecture Review (`#234` — **ACCEPT** on first pass).
   - `node --check` passed on `stock-chart.js`, `stock-chart-indicators.js`, `watch-desk.js`; single-process `dotnet test` (`Ui2RedesignTests|ChartIndicatorResourceTests|ChartEndpointTests|DeskTicketPlanTests|DailyObservation`) passed **46/46** (0 warnings, 0 errors).
+
+## Checkpoint UI-7 status (2026-11-21)
+- **Plain-English OPRA Labels & Explanatory Tooltips (`_OptionsSentimentPanel.cshtml`, `Desk.cshtml`, `desk-options.js`, `catalysts-opra.js`, `ui2-foundation.css`):** Replaced OPRA metric labels with `Expected move`, `Put vs Call fear`, `Near vs 30d IV`, and `Call/Put vol` plus plain-English regime badges (`Near-term event risk`, `Upside call chasing`, `Downside hedging`, `Balanced options`, `Thin options`), dynamic `.title` value explanations (accurate `<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness` filter rationale for `'—'`), and dotted-underline `cursor: help` styling while preserving all `data-options-field` hooks and C# `OptionsSentimentSnapshot.SummaryNote`.
+- **Independent Reviews & Verification:** Code & DOM Safety Review (`#243` — **ACCEPT**) and Plan, UX & Financial Accuracy Review (`#244` — **ACCEPT**); `node --check` (`desk-options.js`, `catalysts-opra.js`) and single-process `dotnet test` (`Ui2RedesignTests|OptionsSentimentTests`) passed **21/21** (0 warnings, 0 errors).
