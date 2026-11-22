@@ -192,6 +192,18 @@ public sealed class EvidenceDatasetCollectionWorkflowTests : IAsyncLifetime
             "2026-07-08",
             partition.Dimensions["calendar_coverage_end_date_exclusive"]);
         Assert.Equal("true", partition.Dimensions["calendar_source_complete"]);
+
+        // Only the provider's four sessions are published, with regular hours in UTC; the 3 July holiday is not invented.
+        var rows = await new ParquetEvidencePartitionDataReader(new EvidenceParquetCodec(), store)
+            .ReadExchangeSessionsAsync(manifest);
+        Assert.Equal([new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 2), new DateOnly(2026, 7, 6), new DateOnly(2026, 7, 7)],
+            rows.Select(row => row.TradeDate).Order());
+        Assert.All(rows, row =>
+        {
+            Assert.Equal(new TimeOnly(13, 30), TimeOnly.FromDateTime(row.RegularOpenUtc.UtcDateTime));
+            Assert.Equal(new TimeOnly(20, 0), TimeOnly.FromDateTime(row.RegularCloseUtc.UtcDateTime));
+            Assert.False(row.IsEarlyClose);
+        });
     }
 
     private EvidenceDatasetCollectionWorkflow CreateWorkflow(

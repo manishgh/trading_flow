@@ -102,8 +102,8 @@ artifacts:
 strategies:
 
 
-# Swing candidates are ordered by durable market structure, catalyst,
-# strategy state, and executable liquidity evidence.
+# The rank weights below have no effect: the ranking service that read them was removed on 23 November 2026.
+# They are still accepted so earlier run files stay readable.
 universe:
   mode: unresolved_wishlist
   rank:
