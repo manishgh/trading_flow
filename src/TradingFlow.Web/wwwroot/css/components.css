@@ -212,6 +212,8 @@ select option {
   background: var(--panel-subtle); color: var(--color-accent-700); text-decoration: none; font-size: 0.75rem;
 }
 .news-entry.news-compact-row .news-row-link:hover { border-color: var(--color-accent-400); }
+.news-entry.news-compact-row .news-row-link.is-related { border-style: dashed; color: var(--color-neutral-700); }
+.news-fallback-notice { padding: 6px 10px; border: 1px solid var(--bad-border); border-radius: 6px; background: var(--color-loss-surface); color: var(--color-text); font-size: 0.8rem; }
 .news-entry.news-compact-row .news-row-more > summary {
   display: inline-flex; align-items: center; gap: 4px; font-size: 0.7rem; font-weight: 600;
   color: var(--color-neutral-700); cursor: pointer; list-style: none; user-select: none;

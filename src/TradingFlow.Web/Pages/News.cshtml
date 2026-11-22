@@ -3,7 +3,7 @@
 @{
     ViewData["Title"] = "News";
     ViewData["MainClass"] = "news-page market-workspace";
-    string PageUrl(int number) => Url.Page("/News", new { hours = Model.Hours, ticker = Model.Ticker,
+    string PageUrl(int number, int? hours = null) => Url.Page("/News", new { hours = hours ?? Model.Hours, ticker = Model.Ticker,
         provider = Model.Provider, source = Model.Source, classification = Model.Classification, category = Model.Category, sector = Model.Sector,
         sentiment = Model.Sentiment, search = Model.Search, linkedOnly = Model.LinkedOnly, stockLinkedOnly = Model.StockLinkedOnly,
         stockSource = Model.StockSource, view = Model.View, pageNumber = number, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
@@ -32,6 +32,10 @@
                 @if (status.Refresh.CompletedAtUtc is { } checkedAt)
                 { <span> · <time datetime="@checkedAt.ToString("O")">@checkedAt.ToString("dd MMM HH:mm") UTC</time></span> }
             </p>
+            @if (Model.SentimentProblem is { } sentimentProblem)
+            {
+                <p class="news-fallback-notice">@sentimentProblem</p>
+            }
             <p class="muted">@status.Detail @(status.Refresh.Running ? "The feed retries automatically." : "Check the feed worker in Operations.")</p>
             <details class="feed-evidence">
                 <summary>Source refresh evidence</summary>
@@ -214,6 +218,14 @@
         <div class="empty-state">
             <strong>@(Model.RefreshStatus?.Heading ?? "No matching stored headlines")</strong>
             <span>@(Model.RefreshStatus?.Detail ?? "Widen the window or clear a filter.")</span>
+            @if (Model.NewestMatchingUtc is { } newestMatching)
+            {
+                <span>The newest stored article for these filters is from <time datetime="@newestMatching.ToString("O")">@newestMatching.UtcDateTime.ToString("dd MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture) UTC</time>.</span>
+                @if (Model.CanWidenWindow)
+                {
+                    <a class="button secondary" href="@PageUrl(1, TradingFlow.Web.Pages.NewsModel.MaximumHours)">Show last 3 days</a>
+                }
+            }
         </div>
     }
     else

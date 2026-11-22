@@ -28,6 +28,7 @@ public class AlpacaNewsStreamService : BackgroundService
         TradingFlow.Web.Services.AlpacaCredentialProvider credentials,
         INewsFeedRepository repository,
         IEarningsRepository earnings,
+        NewsSentimentAnalyzer sentimentAnalyzer,
         ILogger<AlpacaNewsStreamService> logger)
     {
         _options = TradingFlow.Alpaca.AlpacaOptions.Create(TradingFlow.Engine.Configuration.ProductionProfile.Paper) with
@@ -37,7 +38,9 @@ public class AlpacaNewsStreamService : BackgroundService
         };
         _repository = repository;
         _earnings = earnings;
-        _sentimentAnalyzer = new TradingFlow.Alpaca.VaderSentimentAnalyzer();
+        // Each article waits for its FinBERT score before it is saved (operator decision, 22 November 2026). Failures are
+        // bounded by the scorer's time limit and pause, and are re-scored by NewsFeedService.RescoreAsync.
+        _sentimentAnalyzer = sentimentAnalyzer;
         _logger = logger;
     }
 
@@ -74,7 +77,7 @@ public class AlpacaNewsStreamService : BackgroundService
         }
     }
 
-    private async Task ProcessMessageAsync(JsonElement element, CancellationToken cancellationToken)
+    internal async Task ProcessMessageAsync(JsonElement element, CancellationToken cancellationToken)
     {
         var receivedAt = DateTimeOffset.UtcNow;
         // Alpaca stream messages have format {"T":"n", "headline":"...", "symbols":["AAPL"], ...}

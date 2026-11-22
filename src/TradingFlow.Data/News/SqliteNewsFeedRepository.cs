@@ -10,6 +10,15 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
     public async Task<NewsFeedPage> QueryAsync(NewsFeedQuery filter, CancellationToken token)
     {
         using var db = await dbFactory.CreateDbContextAsync(token);
+        var query = Filter(db, filter);
+        var total = await query.CountAsync(token);
+        var rows = await query.OrderByDescending(x => x.Timestamp).ThenBy(x => x.Id)
+            .Skip(Math.Clamp(filter.Skip, 0, Int32.MaxValue - 200)).Take(Math.Clamp(filter.Take, 1, 200)).ToArrayAsync(token);
+        return new(rows, total);
+    }
+    // Applies every News filter except paging; shared by the page query and the newest-article lookup.
+    private static IQueryable<PersistedNewsItem> Filter(TradingFlowDbContext db, NewsFeedQuery filter)
+    {
         var since = filter.SinceUtc.ToUniversalTime();
         var query = db.NewsItems.AsNoTracking().Where(x => x.Timestamp >= since);
         if (filter.UntilUtc is { } until) {
@@ -50,11 +59,9 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
                 x.Provider.ToLower() == "federal_reserve" ? "fed" : x.Ticker.ToUpper() != "MARKET" ? "company" :
                 words.Any(word => x.Headline.ToLower().Contains(word)) ? "macro" : "market") == classification);
         }
-        var total = await query.CountAsync(token);
-        var rows = await query.OrderByDescending(x => x.Timestamp).ThenBy(x => x.Id)
-            .Skip(Math.Clamp(filter.Skip, 0, Int32.MaxValue - 200)).Take(Math.Clamp(filter.Take, 1, 200)).ToArrayAsync(token);
-        return new(rows, total);
+        return query;
     }
+
     private readonly IDbContextFactory<TradingFlowDbContext> dbFactory;
 
     public SqliteNewsFeedRepository(IDbContextFactory<TradingFlowDbContext> dbFactory)
@@ -62,7 +69,100 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
         this.dbFactory = dbFactory;
     }
 
+    /// <summary>The scorer recorded for the in-process word-list scorer used while FinBERT has not scored an article.</summary>
+    public const string FallbackScorer = "vader";
+
+    /// <summary>The scorer recorded for an article stored before its first scoring finished.</summary>
+    public const string PendingScorer = "pending";
+
+    /// <summary>
+    /// Stores articles whose ID is not stored yet and returns the IDs it added; existing rows are never changed. If the live
+    /// feed adds one of them at the same moment, the insert is retried once without it.
+    /// </summary>
+    public async Task<IReadOnlySet<string>> InsertNewAsync(IReadOnlyCollection<CatalystEvent> items, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+            var byId = items.GroupBy(StorageId, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var ids = byId.Keys.ToArray();
+            var stored = (await db.NewsItems.Where(row => ids.Contains(row.Id)).Select(row => row.Id).ToArrayAsync(cancellationToken))
+                .ToHashSet(StringComparer.Ordinal);
+            var added = byId.Where(pair => !stored.Contains(pair.Key)).ToArray();
+            db.NewsItems.AddRange(added.Select(pair => NewRow(pair.Key, pair.Value, pair.Value.ClassificationVersion ?? PendingScorer)));
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken);
+                return added.Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
+            }
+            catch (DbUpdateException) when (attempt == 1)
+            {
+                // The live feed stored one of these IDs between the lookup and the save; look again.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes score, scorer and summary onto rows this refresh added, one conditional update per row: only while the receipt
+    /// time still matches (the live feed has not replaced it since), and a fallback score never replaces a FinBERT score.
+    /// Receipt and publication times, headline and link are not touched.
+    /// </summary>
+    public async Task ApplyEnrichmentAsync(IReadOnlyCollection<CatalystEvent> items, IReadOnlySet<string> addedIds, CancellationToken cancellationToken)
+    {
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        foreach (var item in items)
+        {
+            var id = StorageId(item);
+            if (!addedIds.Contains(id)) continue;
+            var scorer = item.ClassificationVersion ?? PendingScorer;
+            var isWeak = scorer is FallbackScorer or PendingScorer;
+            var rows = db.NewsItems.Where(row => row.Id == id &&
+                (!isWeak || row.SentimentAnalyzer == FallbackScorer || row.SentimentAnalyzer == PendingScorer));
+            if (item.ReceivedAt?.ToUniversalTime() is { } received) rows = rows.Where(row => row.IngestedAt == received);
+            await rows.ExecuteUpdateAsync(set => set.SetProperty(row => row.SentimentScore, item.SentimentScore)
+                .SetProperty(row => row.SentimentAnalyzer, scorer)
+                .SetProperty(row => row.Summary, item.Summary), cancellationToken);
+        }
+    }
+
+    /// <summary>Reads only the identifying fields of every item published since <paramref name="sinceUtc"/>, without a row limit.</summary>
+    public async Task<IReadOnlyList<PersistedNewsItem>> ListIdentitiesSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken)
+    {
+        var since = sinceUtc.ToUniversalTime();
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await db.NewsItems.AsNoTracking().Where(row => row.Timestamp >= since)
+            .Select(row => new PersistedNewsItem { Id = row.Id, Provider = row.Provider, Ticker = row.Ticker, Url = row.Url, Headline = row.Headline })
+            .ToArrayAsync(cancellationToken);
+    }
+
+    // Builds one new row from a provider article.
+    private static PersistedNewsItem NewRow(string id, CatalystEvent item, string? scorer) => new()
+    {
+        Id = id,
+        Ticker = item.Ticker.ToUpperInvariant(),
+        Timestamp = item.Timestamp.ToUniversalTime(),
+        Headline = item.Headline,
+        SentimentScore = item.SentimentScore,
+        Provider = item.Provider ?? "unknown",
+        Source = item.Source,
+        Url = item.Url,
+        Summary = item.Summary,
+        IngestedAt = (item.ReceivedAt ?? DateTimeOffset.UtcNow).ToUniversalTime(),
+        SentimentAnalyzer = scorer
+    };
+
+    /// <summary>
+    /// Stores or replaces articles from the live feed. If the refresh adds one of them at the same moment, the write is
+    /// retried once and then updates that row.
+    /// </summary>
     public async Task UpsertAsync(IReadOnlyCollection<CatalystEvent> items, CancellationToken cancellationToken)
+    {
+        try { await UpsertOnceAsync(items, cancellationToken); }
+        catch (DbUpdateException) { await UpsertOnceAsync(items, cancellationToken); }
+    }
+
+    // One attempt at storing or replacing the given articles.
+    private async Task UpsertOnceAsync(IReadOnlyCollection<CatalystEvent> items, CancellationToken cancellationToken)
     {
         if (items.Count == 0)
         {
@@ -73,25 +173,13 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
         var now = DateTimeOffset.UtcNow;
         foreach (var item in items)
         {
-            var id = BuildId(item);
+            var id = StorageId(item);
             var publishedAtUtc = item.Timestamp.ToUniversalTime();
             var ingestedAtUtc = (item.ReceivedAt ?? now).ToUniversalTime();
             var existing = await db.NewsItems.FindAsync([id], cancellationToken);
             if (existing is null)
             {
-                db.NewsItems.Add(new PersistedNewsItem
-                {
-                    Id = id,
-                    Ticker = item.Ticker.ToUpperInvariant(),
-                    Timestamp = publishedAtUtc,
-                    Headline = item.Headline,
-                    SentimentScore = item.SentimentScore,
-                    Provider = item.Provider ?? "unknown",
-                    Source = item.Source,
-                    Url = item.Url,
-                    Summary = item.Summary,
-                    IngestedAt = ingestedAtUtc
-                });
+                db.NewsItems.Add(NewRow(id, item, item.ClassificationVersion));
             }
             else
             {
@@ -101,6 +189,7 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
                 existing.Summary = item.Summary;
                 existing.Timestamp = publishedAtUtc;
                 existing.IngestedAt = ingestedAtUtc;
+                existing.SentimentAnalyzer = item.ClassificationVersion;
             }
         }
 
@@ -188,7 +277,45 @@ public sealed class SqliteNewsFeedRepository : INewsFeedRepository
             .ToArrayAsync(cancellationToken);
     }
 
-    private static string BuildId(CatalystEvent item)
+    /// <summary>
+    /// Reads the newest items since <paramref name="sinceUtc"/> whose recorded scorer is one of <paramref name="scorers"/>.
+    /// Rows without a recorded scorer (stored before it was recorded) never match.
+    /// </summary>
+    public async Task<IReadOnlyList<PersistedNewsItem>> GetScoredByAsync(
+        IReadOnlyCollection<string> scorers, DateTimeOffset sinceUtc, int limit, CancellationToken cancellationToken)
+    {
+        var since = sinceUtc.ToUniversalTime();
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await db.NewsItems.AsNoTracking()
+            .Where(item => item.SentimentAnalyzer != null && scorers.Contains(item.SentimentAnalyzer) && item.Timestamp >= since)
+            .OrderByDescending(item => item.Timestamp)
+            .Take(Math.Clamp(limit, 1, 500))
+            .ToArrayAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Replaces one item's score and scorer only while its receipt time and scorer are still those read, so a newer live
+    /// update is never overwritten. Headline, link, summary and times stay unchanged. Returns true when it was replaced.
+    /// </summary>
+    public async Task<bool> UpdateSentimentAsync(PersistedNewsItem read, decimal score, string scorer, CancellationToken cancellationToken)
+    {
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await db.NewsItems
+            .Where(row => row.Id == read.Id && row.SentimentAnalyzer == read.SentimentAnalyzer && row.IngestedAt == read.IngestedAt)
+            .ExecuteUpdateAsync(set => set.SetProperty(row => row.SentimentScore, score)
+                .SetProperty(row => row.SentimentAnalyzer, scorer), cancellationToken) > 0;
+    }
+
+    /// <summary>The publication time of the newest item matching the filter, or null; counts nothing.</summary>
+    public async Task<DateTimeOffset?> FindNewestAsync(NewsFeedQuery filter, CancellationToken cancellationToken)
+    {
+        using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        return await Filter(db, filter).OrderByDescending(row => row.Timestamp)
+            .Select(row => (DateTimeOffset?)row.Timestamp).FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>The stored row's identity: provider and article ID, else provider, stock, time and link or headline.</summary>
+    public static string StorageId(CatalystEvent item)
     {
         var provider = item.Provider ?? "unknown";
         var key = !String.IsNullOrWhiteSpace(item.ExternalId)

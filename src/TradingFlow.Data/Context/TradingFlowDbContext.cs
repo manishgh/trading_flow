@@ -283,6 +283,7 @@ public sealed class TradingFlowDbContext : IdentityDbContext<TradingFlowUser, Id
             entity.Property(e => e.Provider).HasMaxLength(50).IsRequired();
             entity.Property(e => e.Source).HasMaxLength(200);
             entity.Property(e => e.Url).HasMaxLength(1000);
+            entity.Property(e => e.SentimentAnalyzer).HasMaxLength(200);
             entity.Property(e => e.Timestamp).HasConversion(
                 value => value.UtcDateTime,
                 value => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)));

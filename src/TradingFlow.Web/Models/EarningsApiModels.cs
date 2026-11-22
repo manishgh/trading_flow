@@ -46,7 +46,8 @@ public sealed record EarningsNewsEvidenceResponse(
     string Provider,
     string? Source,
     string? Url,
-    string WhyItMatters);
+    string WhyItMatters,
+    string? LinkKind = null);
 
 public sealed record EarningsCalendarItemResponse(
     string Id,

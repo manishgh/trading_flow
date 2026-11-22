@@ -27,7 +27,7 @@
         <strong class="news-row-tickers" data-news-tickers title="Provider symbols: @Model.SymbolsLabel">@Model.SymbolsLabel</strong>
         <strong class="news-headline" data-news-headline>@Model.Headline</strong>
         <time class="news-row-time" data-news-time datetime="@Model.Timestamp.ToString("O")">@Model.Timestamp.UtcDateTime.ToString("dd MMM HH:mm") UTC</time>
-        <a class="news-row-link" data-news-link href="@Model.SafeUrl" hidden="@(Model.SafeUrl is null)" target="_blank" rel="noopener noreferrer" title="Open source article" aria-label="Open source article">↗</a>
+        <a class="news-row-link @(Model.LinkIsArticle ? "" : "is-related")" data-news-link href="@Model.SafeUrl" hidden="@(Model.SafeUrl is null)" target="_blank" rel="noopener noreferrer" title="@Model.LinkLabel" aria-label="@Model.LinkLabel">@(Model.LinkIsArticle ? "↗" : "↗?")</a>
     </div>
     <details class="news-row-more">
         <summary title="@rowTooltip">Details</summary>
@@ -45,6 +45,7 @@
             </div>
             <div class="news-entry-footer">
                 <span class="muted" data-news-source>@Model.Provider @Model.Source · @Model.Classification</span>
+                <span class="muted" data-news-link-note hidden="@(Model.SafeUrl is null)">@Model.LinkLabel</span>
                 @if (User.Identity?.IsAuthenticated == true) { <button type="button" class="button secondary btn-sm" data-group-action="add" data-tickers="@Model.GroupableTickers" hidden="@(Model.GroupableTickers.Length == 0)">Add symbols to group</button> }
                 @if (User.Identity?.IsAuthenticated == true)
                 {

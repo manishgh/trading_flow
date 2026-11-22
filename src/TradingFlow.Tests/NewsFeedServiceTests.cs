@@ -9,7 +9,7 @@ public class NewsFeedServiceTests
     public async Task ProviderFailure_DoesNotAbortOtherFeeds_ButShutdownCancellationEscapes()
     {
         var service = new NewsFeedService(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
-            TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger<NewsFeedService>.Instance);
+            TimeProvider.System, null!, Microsoft.Extensions.Logging.Abstractions.NullLogger<NewsFeedService>.Instance);
         var failure = await service.ReadSourceAsync("failed", () => throw new HttpRequestException("offline"), "covered", CancellationToken.None);
         Assert.Empty(failure.Events);
         Assert.Equal("failed", failure.Reading.State);

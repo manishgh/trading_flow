@@ -355,6 +355,7 @@ builder.Services.AddSingleton<INewsFeedRepository>(serviceProvider =>
     serviceProvider.GetRequiredService<SqliteNewsFeedRepository>());
 builder.Services.AddSingleton<TradingFlow.Domain.Wishlists.IWishlistRepository, SqliteWishlistRepository>();
 builder.Services.AddSingleton<ArticleTextFetcher>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.NewsSentimentAnalyzer>();
 builder.Services.AddHttpClient<OfficialMarketNewsProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);

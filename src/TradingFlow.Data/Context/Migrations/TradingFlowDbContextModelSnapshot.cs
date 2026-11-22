@@ -947,6 +947,10 @@ namespace TradingFlow.Data.Context.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SentimentAnalyzer")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("SentimentScore")
                         .HasColumnType("TEXT");
 

@@ -8,7 +8,8 @@ using TradingFlow.Web.Services.Wishlists;
 namespace TradingFlow.Web.Services.Desk;
 
 public sealed record DeskArticle(string Headline, string? Url, string Provider, DateTimeOffset PublishedAtUtc, IReadOnlyList<string> Symbols,
-    string? Source = null, string? Summary = null, decimal? SentimentScore = null, string? Classification = null);
+    string? Source = null, string? Summary = null, decimal? SentimentScore = null, string? Classification = null,
+    string? LinkKind = null);
 public sealed record DeskNewsSentiment(int Positive, int Negative, int Neutral, int Unscored,
     DateTimeOffset WindowStartUtc, DateTimeOffset AsOfUtc, bool Available);
 public sealed record DeskRow(DeskMembership Membership, AlpacaLatestQuote? Quote, string QuoteFreshness,
@@ -67,7 +68,7 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
             entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(15);
             try
             {
-                var stories = await newsFeed.GetStoriesAsync(new NewsStoryQuery(symbols, clock.GetUtcNow().AddHours(-72), 1000), ct);
+                var stories = await newsFeed.GetStoriesAsync(new NewsStoryQuery(symbols, clock.GetUtcNow().Subtract(NewsFeedService.DisplayWindow), 1000), ct);
                 return new NewsResult(ToArticles(stories), "Matched stored news · last 72h · up to 1,000 symbol records. Refreshes while connected; historical coverage may be incomplete.", true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -100,6 +101,7 @@ public sealed class DeskReadService(AlpacaQuoteService quotes, IDeskAccountReade
     // Preserve publication and classification provenance when projecting the deduplicated stored stories.
     private static IReadOnlyList<DeskArticle> ToArticles(IEnumerable<NewsStory> stories) => stories
         .Select(story => new DeskArticle(story.Lead.Headline, story.Lead.Url, story.Lead.Provider, story.Lead.Timestamp, story.Tickers,
-            story.Lead.Source, story.Lead.Summary, story.Lead.SentimentScore, NewsEvidenceClassification.Classify(story.Lead)))
+            story.Lead.Source, story.Lead.Summary, story.Lead.SentimentScore, NewsEvidenceClassification.Classify(story.Lead),
+            NewsLinkMatch.Classify(story.Lead.Provider, story.Lead.Headline, story.Lead.Url)))
         .OrderByDescending(article => article.PublishedAtUtc).ToArray();
 }

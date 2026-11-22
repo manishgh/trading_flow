@@ -6,10 +6,16 @@ namespace TradingFlow.Web.Models;
 public sealed record NewsPresentation(string Tickers, DateTimeOffset Timestamp, string Headline,
     decimal? SentimentScore, string? Provider, string? Source, string? Url, string? Summary,
     string Classification, string? WhyItMatters = null, IReadOnlyList<string>? Categories = null,
-    IReadOnlyList<string>? Sectors = null, string? CategoryRationale = null, string? CategoryVersion = null)
+    IReadOnlyList<string>? Sectors = null, string? CategoryRationale = null, string? CategoryVersion = null, string? LinkKind = null)
 {
     public string? SafeUrl => Uri.TryCreate(Url,UriKind.Absolute,out var uri) && uri.Scheme is "http" or "https" ? uri.AbsoluteUri : null;
-    public string Key => SafeUrl ?? $"{Headline}|{Timestamp:O}";
+    /// <summary>Row identity; the link alone is not enough because different stories can share one.</summary>
+    public string Key => $"{SafeUrl}|{Headline}|{Timestamp:O}";
+    public bool LinkIsArticle => LinkKind == NewsLinkMatch.Article;
+    public string LinkHost => Uri.TryCreate(SafeUrl, UriKind.Absolute, out var link)
+        ? link.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? link.Host[4..] : link.Host : "";
+    /// <summary>What the link is, in words, with the website it opens.</summary>
+    public string LinkLabel => (LinkIsArticle ? "Source article: " : "Related page, may not be this story: ") + LinkHost;
     public string GroupableTickers => String.Join(", ",Tickers.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
         .Where(x=>x != "MARKET" && x.Length is >= 1 and <= 16 && x.All(c=>Char.IsAsciiLetterOrDigit(c) || c is '.' or '-')));
     public string SentimentLabel => SentimentScore is null ? "Sentiment unavailable" : SentimentScore > .15m ? "Positive" : SentimentScore < -.15m ? "Negative" : "Neutral";
@@ -25,5 +31,6 @@ public sealed record NewsPresentation(string Tickers, DateTimeOffset Timestamp, 
         String.Join(", ",item.Ticker.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Select(x=>x.ToUpperInvariant()).Distinct().Order()),
         item.Timestamp,item.Headline,item.SentimentScore,item.Provider,item.Source,item.Url,item.Summary,
         item.Classification ?? NewsEvidenceClassification.Classify(new() {Ticker=item.Ticker,Headline=item.Headline,Provider=item.Provider ?? ""}),
-        Categories: item.Categories, Sectors: item.Sectors, CategoryRationale: item.CategoryRationale, CategoryVersion: item.CategoryVersion);
+        Categories: item.Categories, Sectors: item.Sectors, CategoryRationale: item.CategoryRationale, CategoryVersion: item.CategoryVersion,
+        LinkKind: item.LinkKind ?? NewsLinkMatch.Classify(item.Provider, item.Headline, item.Url));
 }
