@@ -102,7 +102,7 @@ public sealed class EarningsNewsRepositoryTests
         var official = new OfficialMarketNewsProvider(publicFeeds, NullLogger<OfficialMarketNewsProvider>.Instance, clock);
         var alpaca = new AlpacaCredentialProvider(new ConfigurationBuilder().Build(), _ => null);
         var service = new NewsFeedService(null!, null!, null!, repository,
-            null!, alpaca, null!, earnings.Object, official, finviz, clock, NullLogger<NewsFeedService>.Instance);
+            null!, alpaca, null!, earnings.Object, official, finviz, clock, new NewsSentimentAnalyzer(new TradingFlow.Alpaca.VaderSentimentAnalyzer()), NullLogger<NewsFeedService>.Instance);
         await service.RefreshOnceAsync(CancellationToken.None);
         await service.RefreshOnceAsync(CancellationToken.None);
 

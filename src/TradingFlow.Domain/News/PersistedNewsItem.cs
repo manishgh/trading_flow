@@ -21,4 +21,7 @@ public sealed class PersistedNewsItem
     public string? Summary { get; set; }
 
     public DateTimeOffset IngestedAt { get; set; }
+
+    /// <summary>The scorer behind SentimentScore ("vader" or the FinBERT model and revision); null when not recorded.</summary>
+    public string? SentimentAnalyzer { get; set; }
 }

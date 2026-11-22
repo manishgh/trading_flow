@@ -14,7 +14,8 @@ namespace TradingFlow.Web.Pages;
 /// </remarks>
 public sealed class NewsModel(
     NewsQueryService news,
-    NewsStockSourceService stockSources) : PageModel
+    NewsStockSourceService stockSources,
+    NewsSentimentAnalyzer sentiment) : PageModel
 {
     /// <summary>Sentiment bands. Thresholds match the labels the feed already emits.</summary>
     public static IReadOnlyList<(string Key, string Label)> SentimentBands { get; } =
@@ -34,7 +35,16 @@ public sealed class NewsModel(
         (72, "Last 3 days")
     ];
 
-    [BindProperty(SupportsGet = true)] public int Hours { get; set; } = 4;
+    /// <summary>Hours back; the default matches the Desk news panel so both show the same stories.</summary>
+    [BindProperty(SupportsGet = true)] public int Hours { get; set; } = MaximumHours;
+    public static int MaximumHours => (int)NewsFeedService.DisplayWindow.TotalHours;
+    public DateTimeOffset? NewestMatchingUtc { get; private set; }
+
+    /// <summary>Why new scores use VADER on this host, or null while FinBERT is ready.</summary>
+    public string? SentimentProblem => sentiment.Problem;
+
+    /// <summary>True when the three-day window would show something the current window does not.</summary>
+    public bool CanWidenWindow => Hours < MaximumHours && NewestMatchingUtc >= DateTimeOffset.UtcNow.AddHours(-MaximumHours);
     [BindProperty(SupportsGet = true)] public string? Ticker { get; set; }
     [BindProperty(SupportsGet = true)] public string? Search { get; set; }
     [BindProperty(SupportsGet = true)] public string? Provider { get; set; }
@@ -88,7 +98,7 @@ public sealed class NewsModel(
         var typedFilters = new[] { nameof(GroupId), nameof(Hours), nameof(PageNumber), nameof(PageSize), nameof(StocksPage), nameof(LinkedOnly), nameof(StockLinkedOnly), nameof(Cleared) };
         if (ModelState.Any(x => typedFilters.Contains(x.Key, StringComparer.OrdinalIgnoreCase) && x.Value?.Errors.Count > 0))
             return BadRequest("Choose valid news filters and stock-source identifiers.");
-        Hours = Math.Clamp(Hours, 1, 72);
+        Hours = Math.Clamp(Hours, 1, MaximumHours);
         PageSize = Math.Clamp(PageSize, 10, 200);
         PageNumber = Math.Clamp(PageNumber, 1, Int32.MaxValue / PageSize);
         if (View is not ("timeline" or "ticker")) return BadRequest("Choose timeline or ticker view.");
@@ -114,6 +124,7 @@ public sealed class NewsModel(
         Scope = null;
         FeedDescription = feed.Message ?? String.Empty;
         RefreshStatus = feed.Status;
+        NewestMatchingUtc = feed.NewestMatchingUtc;
         FeedEnabled = feed.Enabled;
         PageNumber = feed.Page;
         TotalBeforeFilters = feed.TotalMatching ?? feed.Items.Count;

@@ -28,6 +28,6 @@
                 <a asp-page="/Chart" asp-route-symbol="@symbol" stock-chart-symbol="@symbol" asp-route-env="@(Context.Request.Query["env"].ToString())" aria-label="Open chart for @symbol">@symbol chart</a>
             }
         }
-        <a data-news-link href="@Model.SafeUrl" hidden="@(Model.SafeUrl is null)" target="_blank" rel="noopener noreferrer">Open article</a>
+        <a data-news-link href="@Model.SafeUrl" hidden="@(Model.SafeUrl is null)" target="_blank" rel="noopener noreferrer" title="@Model.LinkLabel">@(Model.LinkIsArticle ? "Open article" : "Related page, may not be this story") · @Model.LinkHost</a>
     </div>
 </article>

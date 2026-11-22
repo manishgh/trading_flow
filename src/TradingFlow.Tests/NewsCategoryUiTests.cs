@@ -76,7 +76,7 @@ public sealed class NewsCategoryUiTests
     }
 
     [Fact]
-    public async Task PageAdapterPassesTopicsAndExistingFiltersToSharedQueryAndKeepsFourHourDefault()
+    public async Task PageAdapterPassesTopicsAndExistingFiltersToSharedQueryAndMatchesTheDeskWindow()
     {
         var records = new Mock<INewsFeedRepository>(MockBehavior.Strict);
         NewsFeedQuery? observed = null;
@@ -96,8 +96,8 @@ public sealed class NewsCategoryUiTests
         Assert.Equal("inflation", observed.Search); Assert.Equal("negative", observed.Sentiment);
         Assert.True(observed.LinkedOnly); Assert.Equal(20, observed.Skip); Assert.Equal(20, observed.Take);
         Assert.False(observed.StockLinkedOnly);
-        Assert.InRange((DateTimeOffset.UtcNow - observed.SinceUtc).TotalHours, 3.99, 4.01);
-        Assert.Equal(4, model.Hours); Assert.Equal("financial", model.Category); Assert.Equal("energy", model.Sector);
+        Assert.InRange((DateTimeOffset.UtcNow - observed.SinceUtc).TotalHours, 71.99, 72.01);
+        Assert.Equal(72, model.Hours); Assert.Equal("financial", model.Category); Assert.Equal("energy", model.Sector);
         Assert.Equal("Financial / macro", model.CategoryLabel); Assert.Equal("Energy", model.SectorLabel);
         Assert.Equal(2, model.PageNumber); Assert.Equal(3, model.StocksPage);
     }
@@ -112,6 +112,7 @@ public sealed class NewsCategoryUiTests
         records.Setup(x => x.QueryAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>()))
             .Callback<NewsFeedQuery, CancellationToken>((query, _) => observed = query)
             .ReturnsAsync(new NewsFeedPage([], 0));
+        records.Setup(x => x.FindNewestAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>())).ReturnsAsync((DateTimeOffset?)null);
         var model = Page(records.Object); model.LinkedOnly = articleLink; model.StockLinkedOnly = stockLink;
         Assert.IsType<PageResult>(await model.OnGetAsync(default));
         Assert.NotNull(observed); Assert.Equal(articleLink, observed.LinkedOnly); Assert.Equal(stockLink, observed.StockLinkedOnly);
@@ -195,10 +196,30 @@ public sealed class NewsCategoryUiTests
         Assert.Contains("@Model.GroupableTickers", partial);
     }
 
+    /// <summary>An empty window reports the newest stored match without pretending it belongs to the window.</summary>
+    [Fact]
+    public async Task EmptyWindowReportsTheNewestStoredMatch()
+    {
+        var newest = DateTimeOffset.UtcNow.AddHours(-33);
+        var records = new Mock<INewsFeedRepository>(MockBehavior.Strict);
+        records.Setup(x => x.QueryAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>())).ReturnsAsync(new NewsFeedPage([], 0));
+        records.Setup(x => x.FindNewestAsync(It.Is<NewsFeedQuery>(q => q.Ticker == "DASH"), It.IsAny<CancellationToken>())).ReturnsAsync(() => newest);
+        var model = Page(records.Object);
+        model.Ticker = "DASH"; model.Hours = 4;
+        Assert.IsType<PageResult>(await model.OnGetAsync(default));
+        Assert.Empty(model.Items);
+        Assert.Equal(newest, model.NewestMatchingUtc);
+        Assert.True(model.CanWidenWindow);
+        // Widening to three days would still show nothing, so it is not offered.
+        newest = DateTimeOffset.UtcNow.AddDays(-10);
+        await model.OnGetAsync(default);
+        Assert.False(model.CanWidenWindow);
+    }
+
     private static NewsModel Page(INewsFeedRepository records) => new(
         new NewsQueryService(records, Mock.Of<IWishlistRepository>(MockBehavior.Strict),
             Mock.Of<IDeskAccountReader>(MockBehavior.Strict), TimeProvider.System),
-        new NewsStockSourceService(null!))
+        new NewsStockSourceService(null!), new TradingFlow.Web.Services.NewsSentimentAnalyzer(new TradingFlow.Alpaca.VaderSentimentAnalyzer()))
         { PageContext = new PageContext { HttpContext = new DefaultHttpContext() } };
 
     private static string Source(string path) => File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", path));

@@ -110,13 +110,17 @@ public sealed class NewsStockSourceTests
         var account = new Mock<IDeskAccountReader>(MockBehavior.Strict);
         var news = new Mock<INewsFeedRepository>(MockBehavior.Strict);
         news.Setup(x => x.QueryAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>())).ReturnsAsync(new NewsFeedPage([], 0));
+        news.Setup(x => x.FindNewestAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>())).ReturnsAsync((DateTimeOffset?)null);
         var service = new NewsQueryService(news.Object, groups.Object, account.Object, TimeProvider.System);
         var anonymous = new ClaimsPrincipal(new ClaimsIdentity());
         foreach (var key in new[] { "finviz", "wishlists", "wishlists-finviz", "saved:" + Guid.NewGuid(), "positions" })
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.QueryAsync(new() { StockSource = key }, anonymous, default));
         Assert.True((await service.QueryAsync(new() { StockSource = "all" }, anonymous, default)).Enabled);
         groups.VerifyNoOtherCalls(); account.VerifyNoOtherCalls();
+        // Only the public request reads: its window, then (because it is empty) the newest article in the same public scope.
         news.Verify(x => x.QueryAsync(It.IsAny<NewsFeedQuery>(), It.IsAny<CancellationToken>()), Times.Once);
+        news.Verify(x => x.FindNewestAsync(It.Is<NewsFeedQuery>(q => q.ScopeTickers == null), It.IsAny<CancellationToken>()), Times.Once);
+        news.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -177,7 +181,7 @@ public sealed class NewsStockSourceTests
     public async Task NewsPageRejectsMalformedBoundGuidButDoesNotRejectUnboundResultValidation()
     {
         await using var f = await Fixture.CreateAsync();
-        var model = new TradingFlow.Web.Pages.NewsModel(f.Query, f.Sources) {
+        var model = new TradingFlow.Web.Pages.NewsModel(f.Query, f.Sources, new(new TradingFlow.Alpaca.VaderSentimentAnalyzer())) {
             PageContext = new Microsoft.AspNetCore.Mvc.RazorPages.PageContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() }
         };
         model.ModelState.AddModelError("groupId", "Invalid GUID");

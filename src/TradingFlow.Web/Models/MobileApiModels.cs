@@ -89,7 +89,7 @@ public sealed record MobileNewsFeedResponse(
     string? Message,
     IReadOnlyList<MobileNewsItem> Items,
     int? TotalMatching = null, int Page = 1, int PageSize = 50,
-    TradingFlow.Web.Services.NewsWindowStatus? Status = null);
+    TradingFlow.Web.Services.NewsWindowStatus? Status = null, DateTimeOffset? NewestMatchingUtc = null);
 
 public sealed record MobileNewsItem(
     string Ticker,
@@ -101,7 +101,7 @@ public sealed record MobileNewsItem(
     string? Url,
     string? Summary, string? Classification = null,
     IReadOnlyList<string>? Categories = null, IReadOnlyList<string>? Sectors = null,
-    string? CategoryRationale = null, string? CategoryVersion = null);
+    string? CategoryRationale = null, string? CategoryVersion = null, string? LinkKind = null);
 
 public sealed record MobileWishlistResponse(
     Guid Id,

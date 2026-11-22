@@ -4513,3 +4513,4 @@ progress.tf-progress.is-complete { --progress-color: var(--color-neutral-600); }
   .wishlists-page .wl-head-actions { width: 100%; }
   .wishlists-page .wl-settings-panel { left: 0; right: auto; }
 }
+.news-fallback-notice { padding: 6px 10px; border: 1px solid var(--bad-border, #a33); border-radius: 6px; font-size: 0.8rem; }

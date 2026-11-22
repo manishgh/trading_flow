@@ -9,7 +9,7 @@ window.TradingFlowNews = (() => {
   const normalize = raw => ({
     tickers:symbols(raw.symbols || raw.tickers || raw.ticker), timestamp:raw.timestamp || raw.publishedAtUtc,
     headline:raw.headline || 'Untitled article',summary:raw.summary || '',provider:raw.provider || '',source:raw.source || '',
-    classification:raw.classification || raw.category || 'Classification unavailable',why:raw.whyItMatters || '',url:safeUrl(raw.url),
+    classification:raw.classification || raw.category || 'Classification unavailable',why:raw.whyItMatters || '',url:safeUrl(raw.url),linkIsArticle:raw.linkKind === 'article',
     categories:topicKeys(raw.categories, categoryLabels),sectors:topicKeys(raw.sectors, sectorLabels),
     categoryRationale:raw.categoryRationale || '',categoryVersion:raw.categoryVersion || '',
     score:raw.sentimentScore !== null && raw.sentimentScore !== undefined && Number.isFinite(Number(raw.sentimentScore)) ? Number(raw.sentimentScore) : null
@@ -18,7 +18,7 @@ window.TradingFlowNews = (() => {
     const item=normalize(raw), positive=item.score !== null && item.score > .15, negative=item.score !== null && item.score < -.15;
     article.classList.add('news-entry','news-item');article.classList.toggle('is-positive',positive);article.classList.toggle('is-negative',negative);
     article.dataset.newsTicker=item.tickers.join(', ');article.dataset.newsTimestamp=item.timestamp || '';article.dataset.newsUrl=item.url || '';
-    article.dataset.newsKey=item.url || `${item.headline}|${item.timestamp || ''}`;
+    article.dataset.newsKey=`${item.url || ''}|${item.headline}|${item.timestamp || ''}`;
     const set=(key,value)=>{const node=article.querySelector(`[data-news-${key}]`);if(node.textContent!==String(value))node.textContent=value;return node;};
     set('tickers',item.tickers.map(x=>x==='MARKET'?'Broad market (MARKET)':x).join(', ') || 'Provider symbols unavailable');set('headline',item.headline);
     const date=new Date(item.timestamp),valid=Number.isFinite(date.getTime());
@@ -34,6 +34,9 @@ window.TradingFlowNews = (() => {
     }
     set('sentiment',item.score===null?'Sentiment unavailable':`${positive?'Positive':negative?'Negative':'Neutral'} ${item.score>0?'+':''}${item.score.toFixed(2)}`);
     const link=article.querySelector('[data-news-link]');link.hidden=!item.url;if(item.url)link.href=item.url;else link.removeAttribute('href');
+    const host=item.url?new URL(item.url).host.replace(/^www[.]/,''):'';
+    link.title=(item.linkIsArticle?'Source article: ':'Related page, may not be this story: ')+host;
+    link.textContent=(item.linkIsArticle?'Open article':'Related page, may not be this story')+' · '+host;
     const group=article.querySelector('[data-group-action]');if(group){const equities=item.tickers.filter(x=>x!=='MARKET'&&/^[A-Z0-9.-]{1,16}$/.test(x));group.dataset.tickers=equities.join(', ');group.hidden=!equities.length;}
     return article;
   }
@@ -44,7 +47,7 @@ window.TradingFlowNews = (() => {
     const topics=node('div','Topics','news-topic-labels'),topicLabel=document.createElement('small');topicLabel.textContent='Inferred display labels';topics.append(topicLabel,node('span','Categories'),node('span','Sectors'));
     const footer=document.createElement('div');footer.className='news-entry-footer';footer.append(node('span','Source','muted'));
     if(allowGroup){const button=document.createElement('button');button.type='button';button.className='button secondary';button.dataset.groupAction='add';button.textContent='Add symbols to group';footer.append(button);}
-    const link=node('a','Link');link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open article';footer.append(link);
+    const link=node('a','Link');link.target='_blank';link.rel='noopener noreferrer';footer.append(link);
     article.append(meta,node('strong','Headline','news-headline'),node('p','Summary'),node('p','Why','news-why'),topics,footer);
     return patch(article,raw);
   }

@@ -21,7 +21,12 @@ namespace TradingFlow.Web.Services;
 /// </summary>
 public sealed class NewsFeedService : BackgroundService
 {
-    private static readonly TimeSpan DisplayWindow = TimeSpan.FromHours(72);
+    /// <summary>How far back the News page and the Desk news panel look by default.</summary>
+    internal static readonly TimeSpan DisplayWindow = TimeSpan.FromHours(72);
+    // One re-scoring pass: at most this many items, this long, and this many fallback answers in a row.
+    private const int RescoreLimit = 200;
+    private const int RescoreFallbackStop = 3;
+    private static readonly TimeSpan RescoreBudget = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
     private const int EarningsStoriesPerStock = 5;
     // Bounded so the per-ticker REST sweep stays cheap at the poll cadence. This only has to
@@ -44,6 +49,7 @@ public sealed class NewsFeedService : BackgroundService
     private readonly TimeProvider clock;
     private readonly ILogger<NewsFeedService> logger;
     private readonly IWishlistRepository? wishlists;
+    private readonly NewsSentimentAnalyzer sentimentAnalyzer;
     private int alpacaSweepOffset;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
     private volatile bool running;
@@ -99,6 +105,7 @@ public sealed class NewsFeedService : BackgroundService
         OfficialMarketNewsProvider officialNews,
         FinvizClient finviz,
         TimeProvider clock,
+        NewsSentimentAnalyzer sentimentAnalyzer,
         ILogger<NewsFeedService> logger,
         IWishlistRepository? wishlists = null)
     {
@@ -113,6 +120,7 @@ public sealed class NewsFeedService : BackgroundService
         this.officialNews = officialNews;
         this.finviz = finviz;
         this.clock = clock;
+        this.sentimentAnalyzer = sentimentAnalyzer;
         this.logger = logger;
         this.wishlists = wishlists;
     }
@@ -210,26 +218,27 @@ public sealed class NewsFeedService : BackgroundService
 
             // Dedupe before capping. Capping first would let already-stored items crowd out the
             // gap-filled ones, which are the whole point of the Alpaca sweep.
-            var existing = await repository.GetRecentAsync(displayStartUtc, 5000, null, cancellationToken);
-            var existingKeys = existing
+            var existingKeys = (await repository.ListIdentitiesSinceAsync(displayStartUtc, cancellationToken))
                 .Select(StorageDedupeKey)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var unseen = collections.SelectMany(item => item.Events)
                 .Where(item => item.Timestamp >= displayStartUtc && !existingKeys.Contains(StorageDedupeKey(item)))
+                .DistinctBy(StorageDedupeKey, StringComparer.OrdinalIgnoreCase)
                 .OrderByDescending(item => item.Timestamp)
                 .Take(501)
                 .ToArray();
             var unseenEvents = unseen.Take(500).ToArray();
             // Publish provider headlines immediately; article enrichment must not hold up the live feed.
-            await repository.UpsertAsync(unseenEvents, cancellationToken);
+            var added = await repository.InsertNewAsync(unseenEvents, cancellationToken);
             var capped = unseen.Length > unseenEvents.Length;
             var state = ClassifyRefresh(readings, capped);
             latest = new(state, clock.GetUtcNow(), readings.ToArray(),
                 capped ? new Dictionary<string, NewsSourceReading>() : alpacaSymbols,
                 capped ? "The 500-new-headline storage limit was reached; this pass does not prove empty coverage."
                     : "Source readings reflect the latest completed refresh; retained headlines are displayed separately.");
-            var enrichedEvents = await EnrichNewsAsync(unseenEvents, cancellationToken);
-            await repository.UpsertAsync(enrichedEvents, cancellationToken);
+            var enrichedEvents = await EnrichNewsAsync(
+                unseenEvents.Where(item => added.Contains(SqliteNewsFeedRepository.StorageId(item))).ToArray(), cancellationToken);
+            await repository.ApplyEnrichmentAsync(enrichedEvents, added, cancellationToken);
             // The rolling window limits this view; original stored news must not expire automatically.
 
             logger.LogInformation(
@@ -323,6 +332,14 @@ public sealed class NewsFeedService : BackgroundService
                 try { await RefreshOnceAsync(stoppingToken); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
                 catch (Exception error) { logger.LogWarning(error, "Rolling news feed refresh failed."); }
+                // Outside the refresh gate, so on-demand refreshes never wait for scoring.
+                try
+                {
+                    await sentimentAnalyzer.ReadHealthAsync(stoppingToken);
+                    await RescoreAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (Exception error) { logger.LogWarning(error, "News re-scoring failed; it is tried again after the next refresh."); }
                 await Task.Delay(PollInterval, stoppingToken);
             }
         }
@@ -460,23 +477,24 @@ public sealed class NewsFeedService : BackgroundService
             return events;
         }
 
-        using var analyzer = CreateSentimentAnalyzer();
         using var throttle = new SemaphoreSlim(4);
-        var tasks = events.Select(item => EnrichSingleNewsAsync(item, analyzer.Value, throttle, cancellationToken));
+        var tasks = events.Select(item => EnrichSingleNewsAsync(item, throttle, cancellationToken));
         return await Task.WhenAll(tasks);
     }
 
     /// <summary>Bind enriched sentiment to the analyzer actually used and the time its assessment became available.</summary>
     private async Task<CatalystEvent> EnrichSingleNewsAsync(
         CatalystEvent item,
-        ISentimentAnalyzer sentimentAnalyzer,
         SemaphoreSlim throttle,
         CancellationToken cancellationToken)
     {
         await throttle.WaitAsync(cancellationToken);
         try
         {
-            var linkedText = await articleTextFetcher.FetchTextAsync(item.Url, cancellationToken);
+            // Text from a page that may be a different story must not reach the summary or the score.
+            var linkedText = NewsLinkMatch.Classify(item.Provider, item.Headline, item.Url) == NewsLinkMatch.Article
+                ? await articleTextFetcher.FetchTextAsync(item.Url, cancellationToken)
+                : null;
             var preview = BuildPreview(item.Summary, linkedText);
             var article = new NewsArticle(
                 item.Provider ?? "unknown",
@@ -488,7 +506,7 @@ public sealed class NewsFeedService : BackgroundService
                 linkedText,
                 item.Source,
                 item.Url);
-            var sentiment = await sentimentAnalyzer.AnalyzeAsync(article, cancellationToken);
+            var sentiment = await sentimentAnalyzer.AnalyzeInBackgroundAsync(article, cancellationToken);
             var assessedAt = DateTimeOffset.UtcNow;
             var previousAvailable = item.DecisionAvailableAt ?? item.ReceivedAt ?? item.Timestamp;
 
@@ -546,37 +564,37 @@ public sealed class NewsFeedService : BackgroundService
         return parts.Count == 0 ? null : String.Join(" - ", parts);
     }
 
-    private DisposableSentimentAnalyzer CreateSentimentAnalyzer()
+    /// <summary>
+    /// Scores recent items whose recorded scorer is VADER or still pending with FinBERT, from their headline and summary. A
+    /// pending item takes whatever scorer answers. Stops after a time budget or several fallback answers in a row, so a
+    /// stopped FinBERT costs a few quick requests. Items without a recorded scorer are left alone.
+    /// </summary>
+    internal async Task<int> RescoreAsync(CancellationToken cancellationToken)
     {
-        var endpoint = Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL")
-            ?? Environment.GetEnvironmentVariable("FINBERT_SENTIMENT_URL", EnvironmentVariableTarget.User);
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+        // Without FinBERT on this host a VADER score cannot improve, so only unfinished ones are scored.
+        string[] scorers = sentimentAnalyzer.IsConfigured
+            ? [NewsSentimentAnalyzer.FallbackName, SqliteNewsFeedRepository.PendingScorer]
+            : [SqliteNewsFeedRepository.PendingScorer];
+        var pending = await repository.GetScoredByAsync(scorers,
+            clock.GetUtcNow().Subtract(DisplayWindow), RescoreLimit, cancellationToken);
+        var started = clock.GetTimestamp();
+        int updated = 0, fallbacks = 0;
+        foreach (var item in pending)
         {
-            var httpClient = new HttpClient();
-            return new DisposableSentimentAnalyzer(
-                new FinbertHttpSentimentAnalyzer(httpClient, uri, fallback: new VaderSentimentAnalyzer()),
-                httpClient);
+            if (fallbacks >= RescoreFallbackStop || clock.GetElapsedTime(started) >= RescoreBudget) break;
+            var result = await sentimentAnalyzer.AnalyzeInBackgroundAsync(new NewsArticle(item.Provider, item.Id, item.Headline,
+                item.Timestamp, new[] { item.Ticker }, item.Summary, null, item.Source, item.Url), cancellationToken);
+            var isFallback = NewsSentimentAnalyzer.IsFallback(result.AnalyzerName);
+            fallbacks = isFallback ? fallbacks + 1 : 0;
+            if (isFallback && NewsSentimentAnalyzer.IsFallback(item.SentimentAnalyzer)) continue;
+            if (await repository.UpdateSentimentAsync(item, result.Score, result.AnalyzerName, cancellationToken)) updated++;
         }
 
-        return new DisposableSentimentAnalyzer(new VaderSentimentAnalyzer(), null);
-    }
-
-    private sealed class DisposableSentimentAnalyzer : IDisposable
-    {
-        private readonly IDisposable? disposable;
-
-        public DisposableSentimentAnalyzer(ISentimentAnalyzer value, IDisposable? disposable)
-        {
-            Value = value;
-            this.disposable = disposable;
-        }
-
-        public ISentimentAnalyzer Value { get; }
-
-        public void Dispose()
-        {
-            disposable?.Dispose();
-        }
+        if (fallbacks >= RescoreFallbackStop)
+            logger.LogWarning("News re-scoring stopped after {Count} articles in a row without a FinBERT score (FinBERT failed or is paused); {Waiting} recent item(s) keep their current score.",
+                fallbacks, pending.Count - updated);
+        if (updated > 0) logger.LogInformation("Re-scored {Count} news item(s) that had a VADER or pending score.", updated);
+        return updated;
     }
 
     private static MobileNewsItem ToMobileNewsItem(CatalystEvent item)
@@ -591,7 +609,8 @@ public sealed class NewsFeedService : BackgroundService
             item.Provider,
             item.Source,
             item.Url,
-            summary, ClassifyEvidence(new PersistedNewsItem {Ticker=item.Ticker,Provider=item.Provider ?? "",Headline=item.Headline}));
+            summary, ClassifyEvidence(new PersistedNewsItem {Ticker=item.Ticker,Provider=item.Provider ?? "",Headline=item.Headline}),
+            LinkKind: NewsLinkMatch.Classify(item.Provider, item.Headline, item.Url));
     }
 
     private static MobileNewsItem ToMobileNewsItem(PersistedNewsItem item)
@@ -606,7 +625,8 @@ public sealed class NewsFeedService : BackgroundService
             item.Provider,
             item.Source,
             item.Url,
-            summary, ClassifyEvidence(item));
+            summary, ClassifyEvidence(item),
+            LinkKind: NewsLinkMatch.Classify(item.Provider, item.Headline, item.Url));
     }
 
     private static MobileNewsItem ToAggregatedMobileNewsItem(IGrouping<string, PersistedNewsItem> group)
@@ -626,8 +646,10 @@ public sealed class NewsFeedService : BackgroundService
         return items[0] with { Ticker = FormatRelatedTickers(items.Select(item => item.Ticker)) };
     }
 
-    private static string NewsDedupeKey(CatalystEvent item)
+    // Collapses copies within one read; Alpaca articles by article ID per stock, because different articles share links.
+    internal static string NewsDedupeKey(CatalystEvent item)
     {
+        if (IsAlpaca(item.Provider) && !String.IsNullOrWhiteSpace(item.ExternalId)) return $"{SqliteNewsFeedRepository.StorageId(item)}|{item.Ticker}";
         var identity = !String.IsNullOrWhiteSpace(item.Url) ? item.Url : item.Headline;
         return $"{item.Provider}|{item.Ticker}|{item.Timestamp.UtcDateTime:yyyyMMddHHmm}|{identity}";
     }
@@ -673,11 +695,18 @@ public sealed class NewsFeedService : BackgroundService
             .ToArray();
     }
 
-    private static string StorageDedupeKey(CatalystEvent item) =>
-        $"{item.Provider}|{item.Ticker}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+    // Alpaca articles are the same only when their article ID is the same, because different headlines can share a link.
+    // Other providers keep stock plus link: Finviz IDs contain a hash that changes at every restart.
+    internal static string StorageDedupeKey(CatalystEvent item) => IsAlpaca(item.Provider)
+        ? SqliteNewsFeedRepository.StorageId(item)
+        : $"{item.Provider}|{item.Ticker}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
 
-    private static string StorageDedupeKey(PersistedNewsItem item) =>
-        $"{item.Provider}|{item.Ticker}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+    internal static string StorageDedupeKey(PersistedNewsItem item) => IsAlpaca(item.Provider)
+        ? item.Id
+        : $"{item.Provider}|{item.Ticker}|{NormalizeArticleIdentity(item.Url, item.Headline)}";
+
+    // True for items delivered by Alpaca, live or through the gap-fill read.
+    private static bool IsAlpaca(string? provider) => String.Equals(provider, "alpaca", StringComparison.OrdinalIgnoreCase);
 
     internal static string NormalizeHeadlineIdentity(string? headline)
     {
@@ -705,7 +734,8 @@ public sealed class NewsFeedService : BackgroundService
             first.Provider ?? "system",
             first.Source,
             first.Url,
-            ExplainEvidence(category));
+            ExplainEvidence(category),
+            NewsLinkMatch.Classify(first.Provider, first.Headline, first.Url));
     }
 
     private static string ClassifyEvidence(PersistedNewsItem item) => TradingFlow.Domain.News.NewsEvidenceClassification.Classify(item);

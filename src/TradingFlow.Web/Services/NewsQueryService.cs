@@ -31,6 +31,9 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
     IDeskAccountReader account, TimeProvider clock, NewsStockSourceService? stockSources = null,
     NewsFeedService? feed = null)
 {
+    // How far back an empty window looks for the newest matching article.
+    private const int NewestLookbackDays = 30;
+
     // Scoped to one request: the Razor membership list uses the same observation as its news filter.
     public NewsStockSelection? StockSelection { get; private set; }
     public static string StockSourceKey(NewsHubQuery query)
@@ -114,6 +117,10 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
             number = lastPage;
             page = await news.QueryAsync(filter with { Skip = (number - 1) * size }, token);
         }
+        // An empty window says when the newest matching article was published, so an operator can widen it knowingly.
+        var newest = page.TotalMatching == 0 && symbols is not { Count: 0 }
+            ? await news.FindNewestAsync(filter with { SinceUtc = now.AddDays(-NewestLookbackDays) }, token)
+            : null;
         var items = NewsStories.Combine(page.Records)
             .Select(story => {
                 var item = story.Lead;
@@ -123,12 +130,13 @@ public sealed class NewsQueryService(INewsFeedRepository news, IWishlistReposito
                     NewsEvidenceClassification.Classify(item),
                     topics.SelectMany(x => x.Categories).Distinct(StringComparer.Ordinal).ToArray(),
                     topics.SelectMany(x => x.Sectors).Distinct(StringComparer.Ordinal).ToArray(),
-                    topics[0].Rationale, NewsDisplayTaxonomy.Version);
+                    topics[0].Rationale, NewsDisplayTaxonomy.Version,
+                    NewsLinkMatch.Classify(item.Provider, item.Headline, item.Url));
             }).ToArray();
         var context = filter.IncludeMarketNews && symbols is not null && String.IsNullOrWhiteSpace(query.Ticker) && query.StockLinkedOnly != true
             ? " Broad MARKET context is included alongside stock-source stories; topic labels do not identify affected stocks." : "";
         return new(true, "stored", $"{stockDescription} Rolling {hours}h news feed.{context} Matching records are counted before duplicate articles on each page are combined.".Trim(),
             items, page.TotalMatching, number, size, feed?.DescribeWindow(query.Provider, query.Ticker, filter.SinceUtc,
-                page.TotalMatching, privateScope && symbols?.Count > 0));
+                page.TotalMatching, privateScope && symbols?.Count > 0), newest);
     }
 }
