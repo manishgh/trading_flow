@@ -2128,16 +2128,7 @@ public sealed class SqliteEvidenceCatalog :
         }
     }
 
-    internal Task<SqliteConnection> OpenMaintenanceConnectionAsync(
-        CancellationToken cancellationToken = default) =>
-        OpenAsync(cancellationToken);
-
     internal string DatabasePath => databasePath;
-
-    internal static Task ValidateCatalogIntegrityAsync(
-        SqliteConnection connection,
-        CancellationToken cancellationToken = default) =>
-        RequireIntegrityAsync(connection, cancellationToken);
 
     private async Task BootstrapAsync(CancellationToken cancellationToken)
     {

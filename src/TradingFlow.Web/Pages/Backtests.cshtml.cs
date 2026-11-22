@@ -343,11 +343,6 @@ public sealed class BacktestsModel : PageModel
         return Int32.TryParse(value, out var parsed) ? parsed : fallback;
     }
 
-    private static Guid? ParseGuid(string value)
-    {
-        return Guid.TryParse(value, out var parsed) ? parsed : null;
-    }
-
     public sealed record ResearchSnapshot(
         string RunId,
         string Directory,

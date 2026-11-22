@@ -171,22 +171,6 @@ public sealed class EvidenceContractTests
         Assert.Throws<ArgumentException>(() => Observation(Job('e'), null));
     }
 
-    [Fact]
-    public void RowProvenance_PreservesNegativeObservedLatency()
-    {
-        var provenance = new EvidenceRowProvenance(
-            1,
-            "run-1",
-            Hash('a'),
-            "commit-1",
-            "sip",
-            SourceTime.AddSeconds(5),
-            SourceTime,
-            new EvidenceRowLineage([Source("page-a", 'a')]));
-
-        Assert.True(provenance.ReceivedAtUtc < provenance.SourceTimestampUtc);
-    }
-
     [Theory]
     [InlineData(EvidenceCollectionState.Planned, EvidenceCollectionState.Collecting)]
     [InlineData(EvidenceCollectionState.Collecting, EvidenceCollectionState.Normalizing)]
@@ -383,9 +367,6 @@ public sealed class EvidenceContractTests
         var scannerMethods = typeof(IImmutableArtifactMaintenanceScanner).GetMethods()
             .Select(method => method.Name)
             .ToHashSet();
-        var retentionMethods = typeof(IEvidenceRetentionService).GetMethods()
-            .Select(method => method.Name)
-            .ToHashSet();
 
         Assert.Contains("RegisterCollectionPlanAsync", catalogMethods);
         Assert.Contains("SaveCollectionCheckpointAsync", catalogMethods);
@@ -398,7 +379,6 @@ public sealed class EvidenceContractTests
         Assert.DoesNotContain("EnumerateAsync", artifactMethods);
         Assert.Contains("ScanAsync", scannerMethods);
         Assert.DoesNotContain("DeleteAsync", scannerMethods);
-        Assert.Contains("RunAsync", retentionMethods);
         Assert.DoesNotContain("DeleteIfExistsAsync", artifactMethods);
     }
 
@@ -516,17 +496,6 @@ public sealed class EvidenceContractTests
         Assert.NotEqual(
             EvidenceCanonicalJson.ComputeSha256(first),
             EvidenceCanonicalJson.ComputeSha256(retry));
-    }
-
-    [Fact]
-    public void RetentionPolicy_EnforcesTwentyFourMonthEvidenceFloor()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new EvidenceRetentionPolicy(23, 24));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new EvidenceRetentionPolicy(24, 23));
-
-        var policy = new EvidenceRetentionPolicy(24, 24);
-        Assert.Equal(24, policy.RawObservationMonths);
-        Assert.Equal(24, policy.NormalizedDatasetMonths);
     }
 
     [Fact]

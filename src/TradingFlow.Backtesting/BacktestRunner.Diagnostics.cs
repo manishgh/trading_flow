@@ -732,7 +732,6 @@ public sealed partial class BacktestRunner
                     continue;
                 }
             }
-
         }
 
         execution.Complete(accounting?.AllowOpenAtCutoff == true ? accounting.CutoffUtc : null);
@@ -936,12 +935,6 @@ public sealed partial class BacktestRunner
     {
         var zone = ResolveTimezone(timezoneId);
         return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, zone).DateTime);
-    }
-
-    private static DateTime ToExchangeTime(DateTimeOffset timestamp, string timezoneId)
-    {
-        var zone = ResolveTimezone(timezoneId);
-        return TimeZoneInfo.ConvertTime(timestamp, zone).DateTime;
     }
 
     private static TimeZoneInfo ResolveTimezone(string timezoneId)

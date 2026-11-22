@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 using System.Net.Http.Json;
 using TradingFlow.Backtesting;
 using TradingFlow.Backtesting.Optimization;
-using TradingFlow.Backtesting.Research;
 using TradingFlow.Backtesting.StrategyEvaluation;
 using TradingFlow.Data.Evidence;
 using TradingFlow.Data.Evidence.Collection;

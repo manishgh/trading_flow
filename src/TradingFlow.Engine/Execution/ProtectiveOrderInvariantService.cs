@@ -462,11 +462,6 @@ public sealed class ProtectiveOrderInvariantService(
                    StringComparison.Ordinal);
     }
 
-    internal static bool HasProtectiveCoverage(
-        BrokerPosition position,
-        IReadOnlyList<ActiveBrokerOrder> openOrders) =>
-        ProtectiveCoverage(position, openOrders) >= Math.Abs(position.Qty);
-
     internal static decimal ProtectiveCoverage(
         BrokerPosition position,
         IReadOnlyList<ActiveBrokerOrder> openOrders) =>

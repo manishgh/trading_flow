@@ -74,20 +74,4 @@ public sealed record UniverseRankConfig(
         DefaultCatalystWeights,
         0.12m,
         8m);
-
-    public UniverseRankWeights WeightsFor(string horizon)
-    {
-        if (!horizon.Equals("swing", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentOutOfRangeException(nameof(horizon), "TradingFlow supports the swing horizon only.");
-        }
-
-        return Swing;
-    }
-
-    /// <summary>Weight for a catalyst kind, falling back to the no-catalyst weight.</summary>
-    public decimal CatalystWeightFor(string kind) =>
-        CatalystWeights.TryGetValue(kind, out var weight)
-            ? weight
-            : CatalystWeights.TryGetValue(NoCatalyst, out var none) ? none : 0m;
 }

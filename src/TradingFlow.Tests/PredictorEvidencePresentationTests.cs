@@ -67,22 +67,6 @@ public sealed class PredictorEvidencePresentationTests
         Assert.Empty(evidence.ErrorSummary);
     }
 
-    [Theory]
-    [InlineData("positive_setup", ModelDirection.Supportive)]
-    [InlineData("low_probability", ModelDirection.Opposed)]
-    [InlineData("ranked_candidate", ModelDirection.Neutral)]
-    [InlineData("neutral", ModelDirection.Neutral)]
-    [InlineData("abstain", ModelDirection.Neutral)]
-    [InlineData("watch_for_entry", ModelDirection.Neutral)]
-    [InlineData("bullish_watch", ModelDirection.Neutral)]
-    public void Direction_UsesFinalSignalAndCannotBeOverriddenByTheSwingLeg(string signal, ModelDirection expected)
-    {
-        var evidence = Evidence(signal, []);
-        evidence = evidence with { Swing = evidence.Swing! with { Signal = "positive_setup" } };
-        Assert.Equal(expected, UniverseRankService.ResolveDirection(evidence));
-        Assert.Equal(ModelDirection.Neutral, UniverseRankService.ResolveDirection(evidence with { AvailabilityStatus = "unavailable" }));
-    }
-
     private static MarketPredictorResult Evidence(string signal, IReadOnlyList<string> reasons)
     {
         var abstained = signal == "abstain";

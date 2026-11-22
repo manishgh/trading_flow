@@ -687,41 +687,6 @@ public sealed class AlpacaCorporateActionsEvidenceRequestAdapter(Uri marketDataR
     }
 }
 
-public sealed class FinvizRawEvidenceRequestAdapter(Uri? baseUri = null) : IEvidenceHttpRequestAdapter
-{
-    private readonly Uri baseUri = baseUri ?? new Uri("https://elite.finviz.com/");
-
-    public bool CanHandle(EvidenceCollectionRequest request) =>
-        request.Provider.Equals("finviz", StringComparison.Ordinal);
-
-    public HttpRequestMessage CreateRequest(
-        EvidenceCollectionRequest request,
-        string? pageToken)
-    {
-        if (pageToken is not null)
-        {
-            throw new InvalidOperationException(
-                "Finviz raw response requests do not define cursor pagination.");
-        }
-
-        var endpoint = Uri.TryCreate(request.Endpoint, UriKind.Absolute, out var absolute)
-            ? absolute
-            : new Uri(baseUri, request.Endpoint.TrimStart('/'));
-        return new HttpRequestMessage(
-            HttpMethod.Get,
-            AlpacaBarsEvidenceRequestAdapter.BuildUri(
-                endpoint.AbsoluteUri,
-                endpoint,
-                request.Parameters));
-    }
-
-    public ValueTask<EvidenceHttpPageMetadata> ReadPublishedPageMetadataAsync(
-        EvidenceSourceObservation observation,
-        ReadOnlyMemory<byte> rawContent,
-        CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new EvidenceHttpPageMetadata(null));
-}
-
 internal static class AlpacaCorporateActionPageMetadata
 {
     public static ValueTask<EvidenceHttpPageMetadata> ReadAsync(

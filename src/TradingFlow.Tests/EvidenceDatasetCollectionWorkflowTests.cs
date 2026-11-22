@@ -177,7 +177,7 @@ public sealed class EvidenceDatasetCollectionWorkflowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task CalendarRun_PublishesCompleteCoverageAndResolvesOpenAndClosedDates()
+    public async Task CalendarRun_PublishesCompleteCoverage()
     {
         var handler = new CountingHandler(
             _ => Response(HttpStatusCode.OK, CalendarPayload()));
@@ -192,25 +192,6 @@ public sealed class EvidenceDatasetCollectionWorkflowTests : IAsyncLifetime
             "2026-07-08",
             partition.Dimensions["calendar_coverage_end_date_exclusive"]);
         Assert.Equal("true", partition.Dimensions["calendar_source_complete"]);
-
-        var resolver = await new CatalogExchangeSessionResolverFactory(
-                catalog,
-                new ParquetEvidencePartitionDataReader(
-                    new EvidenceParquetCodec(),
-                    store))
-            .CreateAsync(result.DatasetId, Now.AddMinutes(2));
-
-        Assert.Equal(
-            EquityTradingSession.Regular,
-            resolver.Resolve(new DateTimeOffset(2026, 7, 2, 15, 0, 0, TimeSpan.Zero)).Session);
-        Assert.Equal(
-            EquityTradingSession.Closed,
-            resolver.Resolve(new DateTimeOffset(2026, 7, 3, 15, 0, 0, TimeSpan.Zero)).Session);
-        Assert.Equal(
-            EquityTradingSession.Closed,
-            resolver.Resolve(new DateTimeOffset(2026, 7, 4, 15, 0, 0, TimeSpan.Zero)).Session);
-        Assert.Throws<InvalidDataException>(() =>
-            resolver.Resolve(new DateTimeOffset(2026, 7, 8, 15, 0, 0, TimeSpan.Zero)));
     }
 
     private EvidenceDatasetCollectionWorkflow CreateWorkflow(

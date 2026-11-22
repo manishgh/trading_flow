@@ -101,12 +101,6 @@ public sealed record MarketEvidenceProfile
         return true;
     }
 
-    public MarketSessionSchedule ResolveSchedule(DateOnly tradeDate) =>
-        TryResolveSchedule(tradeDate, out var schedule)
-            ? schedule
-            : throw new InvalidOperationException(
-                $"Authoritative exchange calendar is unavailable for {tradeDate:yyyy-MM-dd}.");
-
     public MarketEvidenceProfile WithSessionSchedules(
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule> sessionSchedules) =>
         new(

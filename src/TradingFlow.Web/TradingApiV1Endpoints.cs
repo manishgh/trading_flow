@@ -873,24 +873,6 @@ public static class TradingApiV1Endpoints
         }
     }
 
-    private static bool TryResolvePaperSelectionMode(
-        string? value,
-        out StrategySelectionMode mode)
-    {
-        switch (value?.Trim().ToLowerInvariant())
-        {
-            case "shadow":
-                mode = StrategySelectionMode.RunPaperShadow;
-                return true;
-            case "experiment":
-                mode = StrategySelectionMode.RunPaperExperiment;
-                return true;
-            default:
-                mode = default;
-                return false;
-        }
-    }
-
     // Only Desk asks for the owner-scoped preparation projection; a failed read does not hide the runtime status.
     private static async Task<IResult> ReadWorkspaceStatusAsync(bool? includePreparation, WorkspaceStatusService status,
         TradingFlow.Application.Preparation.PreparationService preparation, HttpContext context,

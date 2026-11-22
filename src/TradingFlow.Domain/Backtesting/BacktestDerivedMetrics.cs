@@ -69,21 +69,6 @@ public static class BacktestDerivedMetrics
     }
 
     /// <summary>
-    /// Gross profit divided by gross loss.
-    /// </summary>
-    /// <remarks>
-    /// Null when there are no losses at all: the ratio is undefined rather than
-    /// infinite, and rendering it as a huge number would read as an extraordinary
-    /// edge rather than as too small a sample to have lost yet.
-    /// </remarks>
-    public static decimal? ProfitFactor(StrategyBacktestResult strategy)
-    {
-        var grossProfit = strategy.CompletedTrades.Where(trade => trade.NetProfit > 0m).Sum(trade => trade.NetProfit);
-        var grossLoss = Math.Abs(strategy.CompletedTrades.Where(trade => trade.NetProfit < 0m).Sum(trade => trade.NetProfit));
-        return grossLoss <= 0m ? null : grossProfit / grossLoss;
-    }
-
-    /// <summary>
     /// Realised R multiple for one trade: the move achieved divided by the risk
     /// taken, where risk is the distance from entry to the initial stop.
     /// </summary>

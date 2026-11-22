@@ -167,26 +167,6 @@ public interface IEvidenceReferenceSubjectRegistry
         CancellationToken cancellationToken = default);
 }
 
-public sealed record EvidenceRetentionRunResult(
-    int Considered,
-    int Tombstoned,
-    int Deleted,
-    int Failed);
-
-/// <summary>
-/// High-level retention boundary. It deliberately exposes no direct object-delete primitive;
-/// implementations must select candidates, verify pin closures, tombstone, and delete atomically
-/// with respect to the catalog writer.
-/// </summary>
-public interface IEvidenceRetentionService
-{
-    Task<EvidenceRetentionRunResult> RunAsync(
-        EvidenceRetentionPolicy policy,
-        DateTimeOffset evaluatedAtUtc,
-        int maximumObjects,
-        CancellationToken cancellationToken = default);
-}
-
 /// <summary>
 /// Authorization-sensitive boundary. Research assemblies must not receive this interface.
 /// </summary>

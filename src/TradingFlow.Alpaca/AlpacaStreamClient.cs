@@ -71,16 +71,6 @@ public sealed class AlpacaStreamClient : IAlpacaMarketStateStreamClient
         }
     }
 
-    public Task SubscribeBarsAsync(IReadOnlyCollection<string> tickers, CancellationToken cancellationToken)
-    {
-        var subPayload = new
-        {
-            action = "subscribe",
-            bars = tickers
-        };
-        return SendMessageAsync(subPayload, cancellationToken);
-    }
-
     /// <summary>
     /// Adds symbols to the shared market-state subscription. The acknowledgement is
     /// consumed by the normal read loop so this method never races a second receive.

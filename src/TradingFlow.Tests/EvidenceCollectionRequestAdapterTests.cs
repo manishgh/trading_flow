@@ -119,36 +119,6 @@ public sealed class EvidenceCollectionRequestAdapterTests
             adapter.CreateRequest(request, "unexpected-page"));
     }
 
-    [Fact]
-    public void FinvizBuilder_PreservesRawEndpointAndSafeScreenParameters()
-    {
-        var request = new EvidenceCollectionRequest(
-            "finviz",
-            "finviz",
-            "/export.ashx",
-            [],
-            null,
-            null,
-            "finviz-elite",
-            "raw",
-            "USD",
-            new DateOnly(2026, 7, 1),
-            new Dictionary<string, string>
-            {
-                ["v"] = "111",
-                ["f"] = "cap_mega,sh_avgvol_o500"
-            });
-
-        using var message = new FinvizRawEvidenceRequestAdapter()
-            .CreateRequest(request, null);
-        var query = ParseQuery(message.RequestUri!);
-
-        Assert.Equal("elite.finviz.com", message.RequestUri!.Host);
-        Assert.Equal("/export.ashx", message.RequestUri.AbsolutePath);
-        Assert.Equal("111", query["v"]);
-        Assert.Equal("cap_mega,sh_avgvol_o500", query["f"]);
-    }
-
     [Theory]
     [InlineData(200, EvidenceHttpStatusDisposition.Success)]
     [InlineData(206, EvidenceHttpStatusDisposition.Success)]

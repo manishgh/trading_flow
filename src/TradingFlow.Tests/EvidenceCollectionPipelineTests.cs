@@ -174,7 +174,7 @@ public sealed class EvidenceCollectionPipelineTests : IAsyncLifetime
             client,
             catalog,
             coordinator,
-            [new FinvizRawEvidenceRequestAdapter()],
+            [new PlainRequestAdapter()],
             new EvidenceHttpCollectionOptions(
                 workerCount: 2,
                 boundedCapacity: 2,
@@ -435,6 +435,18 @@ public sealed class EvidenceCollectionPipelineTests : IAsyncLifetime
             "SELECT COUNT(*) FROM source_observations WHERE job_id = $job;";
         command.Parameters.AddWithValue("$job", jobId);
         return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    // A request without paging, so the worker-bound test needs no provider format.
+    private sealed class PlainRequestAdapter : IEvidenceHttpRequestAdapter
+    {
+        public bool CanHandle(EvidenceCollectionRequest request) => request.Provider == "finviz";
+
+        public HttpRequestMessage CreateRequest(EvidenceCollectionRequest request, string? pageToken) =>
+            new(HttpMethod.Get, "https://plain.example.test/?v=" + request.Parameters["v"]);
+
+        public ValueTask<EvidenceHttpPageMetadata> ReadPublishedPageMetadataAsync(EvidenceSourceObservation observation,
+            ReadOnlyMemory<byte> rawContent, CancellationToken cancellationToken) => ValueTask.FromResult(new EvidenceHttpPageMetadata(null));
     }
 
     private sealed class SequenceHandler(params object[] sequence) : HttpMessageHandler

@@ -81,34 +81,3 @@ public static class HistoricalEvidenceResolver
     public static string PolicySha256(HistoricalReconstructionPolicy policy) =>
         HistoricalEvidenceManifestStore.Hash(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(policy));
 }
-
-public static class HistoricalAvailabilityAudit
-{
-    public static ImmutableArray<HistoricalAvailabilityAuditRow> Build(HistoricalEvidenceManifest manifest,
-        IEnumerable<DateTimeOffset> decisions, HistoricalAvailabilityMode mode,
-        HistoricalReconstructionPolicy? policy = null)
-    {
-        HistoricalEvidenceManifestStore.Validate(manifest);
-        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
-        var rows = ImmutableArray.CreateBuilder<HistoricalAvailabilityAuditRow>();
-        var originalSources = manifest.Observations.Where(source => source.OriginalDeliveryObserved &&
-            !String.IsNullOrWhiteSpace(source.OriginalDeliveryEvidence)).Select(source => source.ObservationId).ToHashSet(StringComparer.Ordinal);
-        var policyHash = mode is HistoricalAvailabilityMode.ConservativeProviderUpdateDiagnostic or HistoricalAvailabilityMode.OfficialArchivePublicationDiagnostic
-            ? HistoricalEvidenceResolver.PolicySha256(policy ?? HistoricalReconstructionPolicy.ConservativeV1) : null;
-        foreach (var decision in decisions.Distinct().Order())
-        {
-            HistoricalEvidenceManifestStore.RequireUtc(decision);
-            var counts = new Dictionary<(HistoricalFactKind Kind, string Status, string Reason), int>();
-            foreach (var fact in manifest.Facts)
-            {
-                var result = HistoricalEvidenceResolver.ResolveBound(manifest, fact, decision, mode, policy, originalSources, policyHash);
-                var key = (fact.Kind, result.Status, result.Reason);
-                counts[key] = counts.GetValueOrDefault(key) + 1;
-            }
-            foreach (var item in counts.OrderBy(pair => pair.Key.Kind).ThenBy(pair => pair.Key.Status, StringComparer.Ordinal)
-                         .ThenBy(pair => pair.Key.Reason, StringComparer.Ordinal))
-                rows.Add(new(decision, item.Key.Kind, mode, item.Key.Status, item.Key.Reason, item.Value, policyHash));
-        }
-        return rows.ToImmutable();
-    }
-}

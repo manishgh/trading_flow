@@ -198,10 +198,6 @@ public sealed partial class DeterministicExecutionSimulator : IDeterministicExec
         return fees + (finraTafCap > 0m ? Math.Min(taf, finraTafCap) : taf);
     }
 
-    /// <summary>Estimate one adverse fill with the same six-decimal output precision used by recorded simulated fills.</summary>
-    public static decimal EstimateAdverseFillPrice(decimal referencePrice, SimulatedOrderSide side, decimal adverseBps) =>
-        Decimal.Round(ApplyAdversePrice(referencePrice, side, adverseBps), 6);
-
     /// <summary>Price a whole-order fee estimate using the simulator's fixed and sell-side regulatory schedule and rounding.</summary>
     public static decimal EstimateExecutionFees(decimal price, int quantity, SimulatedOrderSide side,
         decimal fixedBuyFee, decimal fixedSellFee, decimal secFeeRate, decimal finraTafPerShare, decimal finraTafCap) =>

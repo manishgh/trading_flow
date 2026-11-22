@@ -143,21 +143,21 @@ public sealed class ApiContractSerializationTests
     {
         var timestamp = DateTimeOffset.Parse("2026-09-06T15:05:00Z");
         var jobId = Guid.NewGuid();
-        var expected = new EventStreamEnvelope<JobProgressEvent>(
+        var expected = new EventStreamEnvelope<string>(
             ContractVersions.VersionOne,
             $"jobs/{jobId:N}",
             438,
             "job.progress",
             timestamp,
-            new JobProgressEvent(new JobProgressResponse(jobId, "running", "market_pipeline", 44, 100, timestamp)));
+            "running");
 
         var json = JsonSerializer.Serialize(expected, JsonOptions);
-        var actual = JsonSerializer.Deserialize<EventStreamEnvelope<JobProgressEvent>>(json, JsonOptions);
+        var actual = JsonSerializer.Deserialize<EventStreamEnvelope<string>>(json, JsonOptions);
 
         Assert.NotNull(actual);
         Assert.Equal(438, actual.EventSequence);
         Assert.Equal("job.progress", actual.EventType);
-        Assert.Equal(expected.Payload.Job, actual.Payload.Job);
+        Assert.Equal("running", actual.Payload);
         Assert.Contains("\"eventSequence\":438", json, StringComparison.Ordinal);
     }
 

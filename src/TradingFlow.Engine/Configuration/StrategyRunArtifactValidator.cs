@@ -28,9 +28,6 @@ public sealed class StrategyRunArtifactValidator(
             allowIntegerValues: false));
     }
 
-    public StrategyDefinition ReadAndValidatePaper(string strategyPath)
-        => ReadAndValidatePaperArtifact(strategyPath).Definition;
-
     // Checks current source availability before a new backtest or diagnostic consumes an immutable strategy.
     public AuthorizedRuntimeStrategy ReadAndAuthorizeRuntimeArtifact(string strategyPath, StrategySelectionMode requiredMode)
     {
@@ -242,5 +239,4 @@ public sealed class StrategyRunArtifactValidator(
             JsonOptions)
         ?? throw new InvalidDataException(
             $"Strategy artifact manifest '{manifestPath}' is empty.");
-
 }

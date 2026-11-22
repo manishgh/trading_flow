@@ -4,11 +4,6 @@ namespace TradingFlow.Engine.Strategies;
 
 public sealed class BasicStrategyEvaluator
 {
-    public bool IsLongEntryCandidate(StrategyDefinition strategy, TradeSignal signal, decimal relativeVolume)
-    {
-        return GetLongEntryRejection(strategy, signal, relativeVolume) is null;
-    }
-
     // Evaluates all declared long entry rules for a completed setup bar, returning null when every rule passes
     // or a concrete diagnostic reason naming the first failing rule.
     public string? GetLongEntryRejection(StrategyDefinition strategy, TradeSignal signal, decimal relativeVolume)

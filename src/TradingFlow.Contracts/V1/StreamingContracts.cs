@@ -21,5 +21,3 @@ public sealed record StreamHeartbeatResponse(
 public sealed record CandidateChangedEvent(
     Guid CandidateRunId,
     CandidateStateResponse Candidate);
-
-public sealed record JobProgressEvent(JobProgressResponse Job);

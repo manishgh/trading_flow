@@ -83,8 +83,4 @@ public sealed class TradingEnvironmentService
         String.Equals(slug, "live", StringComparison.OrdinalIgnoreCase)
             ? TradingEnvironment.Live
             : TradingEnvironment.Paper;
-
-    /// <summary>Whether order entry is permitted in <paramref name="environment"/>.</summary>
-    public bool IsOrderEntryAllowed(TradingEnvironment environment) =>
-        GetState(environment).IsEnabled;
 }

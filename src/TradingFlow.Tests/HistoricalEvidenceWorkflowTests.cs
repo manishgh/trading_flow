@@ -129,7 +129,6 @@ public sealed class HistoricalEvidenceWorkflowTests
         var news = manifest.Facts.Single(fact => fact.Kind == HistoricalFactKind.NewsVersion);
         Assert.Equal(2, news.SourceObservationIds.Length);
         Assert.Equal(Capture, news.ActualReceivedAtUtc);
-        Assert.Equal(manifest.Facts.Length, HistoricalAvailabilityAudit.Build(manifest, [Decision], HistoricalAvailabilityMode.StrictOriginalDelivery).Sum(row => row.Count));
     }
 
     [Fact]

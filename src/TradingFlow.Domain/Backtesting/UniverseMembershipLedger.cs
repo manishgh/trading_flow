@@ -71,20 +71,4 @@ public sealed class UniverseMembershipLedger
             .OrderBy(decision => decision.Rank ?? int.MaxValue)
             .ThenBy(decision => decision.Security.Symbol, StringComparer.Ordinal)
             .ToArray();
-
-    public IReadOnlyList<UniverseMembershipDecision> GetActiveMembers(DateOnly sessionDate) =>
-        GetSessionDecisions(sessionDate)
-            .Where(decision => decision.IsMember)
-            .ToArray();
-
-    public bool TryGetDecision(
-        DateOnly sessionDate,
-        string symbol,
-        out UniverseMembershipDecision decision)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
-        return decisionsBySessionAndSymbol.TryGetValue(
-            (sessionDate, symbol.Trim().ToUpperInvariant()),
-            out decision!);
-    }
 }

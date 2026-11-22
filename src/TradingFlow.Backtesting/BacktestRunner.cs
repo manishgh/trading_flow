@@ -1416,12 +1416,6 @@ public sealed partial class BacktestRunner(
         return bars.Count;
     }
 
-    private static int FindFirstSignalIndexAtOrAfter(IReadOnlyList<OhlcvBar> bars, DateTimeOffset timestamp)
-    {
-        var index = FindFirstBarIndexAtOrAfter(bars, timestamp);
-        return Math.Max(0, index - 1);
-    }
-
     private int FindNextValidExecutionBarIndex(
         IReadOnlyList<OhlcvBar> bars,
         int startIndex,

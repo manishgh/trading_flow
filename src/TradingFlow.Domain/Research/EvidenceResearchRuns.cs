@@ -391,35 +391,6 @@ public sealed class EvidenceReferenceSubjectManifest
     public IReadOnlyList<EvidenceArtifactReference> ReferencedArtifacts { get; }
 }
 
-public sealed record EvidenceRetentionPolicy
-{
-    public EvidenceRetentionPolicy(
-        int rawObservationMonths,
-        int normalizedDatasetMonths)
-    {
-        if (rawObservationMonths < 24)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(rawObservationMonths),
-                "Raw evidence retention cannot be shorter than 24 calendar months.");
-        }
-
-        if (normalizedDatasetMonths < 24)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(normalizedDatasetMonths),
-                "Normalized evidence retention cannot be shorter than 24 calendar months.");
-        }
-
-        RawObservationMonths = rawObservationMonths;
-        NormalizedDatasetMonths = normalizedDatasetMonths;
-    }
-
-    public int RawObservationMonths { get; }
-
-    public int NormalizedDatasetMonths { get; }
-}
-
 public enum StrategyPromotionDecisionStatus
 {
     Accepted = 1,

@@ -223,14 +223,6 @@ public sealed partial class SignalGenerator
         }
     }
 
-    public bool PassesConfluenceGate(
-        StrategyDefinition strategy,
-        DateTimeOffset timestamp,
-        IReadOnlyDictionary<string, IReadOnlyList<IndicatorSnapshot>> snapshotsByTimeframe)
-    {
-        return GetConfluenceRejection(strategy, timestamp, snapshotsByTimeframe) is null;
-    }
-
     public string? GetConfluenceRejection(
         StrategyDefinition strategy,
         DateTimeOffset timestamp,

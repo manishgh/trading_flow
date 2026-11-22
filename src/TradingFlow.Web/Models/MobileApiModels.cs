@@ -2,31 +2,6 @@ namespace TradingFlow.Web.Models;
 
 public sealed record MobileStockPulseRequest(string Ticker, string PulseType, string Message);
 
-public sealed record MobilePaperRunRequest(
-    string BaseConfigPath,
-    string StrategyPath,
-    string RunName,
-    IReadOnlyList<string> Tickers,
-    string? ScreenerFilter,
-    bool AllowExtendedHoursTrading,
-    bool NewsEnabled,
-    string OrderExpiration,
-    string EntryOrderType,
-    Guid? WishlistId,
-    string PaperExecutionMode);
-
-public sealed record MobileBacktestRunRequest(
-    string BaseConfigPath,
-    string RunName,
-    int LookbackDays,
-    Guid? WishlistId,
-    IReadOnlyList<string> StrategyPaths,
-    decimal StartingCapital,
-    decimal AccountRiskBudgetPct,
-    decimal MaxPositionNotionalPct,
-    int MaxConcurrentPositions,
-    string CachePolicy);
-
 public sealed record MobileNotificationItem(
     DateTimeOffset Timestamp,
     string Severity,
@@ -245,14 +220,3 @@ public sealed record MobileWishlistItemRequest(
     string Ticker,
     string? DisplayName,
     string? Notes);
-
-public sealed record MobileOrderPreviewRequest(
-    string Ticker,
-    decimal Quantity,
-    decimal LimitPrice,
-    decimal StopLossPrice,
-    decimal TakeProfitPrice,
-    string Horizon,
-    bool AllowExtendedHoursTrading);
-
-public sealed record MobileOrderConfirmRequest(string TicketToken);

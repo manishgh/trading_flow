@@ -68,14 +68,6 @@ public sealed record JobFailureResponse(
     bool IsRetryable,
     DateTimeOffset FailedAtUtc);
 
-public sealed record JobProgressResponse(
-    Guid JobId,
-    string Status,
-    string CurrentStage,
-    int CompletedWorkItemCount,
-    int TotalWorkItemCount,
-    DateTimeOffset UpdatedAtUtc);
-
 public sealed record RunJobDetailsResponse(RunJobResponse Job, IReadOnlyList<string> Events, RunResultSummary? Result,
     IReadOnlyList<RunStrategyProgress> Strategies, IReadOnlyList<MonthlyRunResult>? MonthlyResults = null,
     string? MonthlyUnavailableReason = null, PreparedMarketDataSummaryResponse? PreparedMarketData = null,
@@ -128,4 +120,3 @@ public sealed record RunResultSummary(decimal? StartingCapital, decimal? EndingC
     decimal? TotalReturnPct, decimal? AverageDailyReturnPct, decimal? MaxDrawdownPct, int? AcceptedTradeCount, int? CandidateTradeCount);
 public sealed record RunStrategyProgress(string StrategyName, string Status, int CompletedTickerCount,
     int TotalTickerCount, string? CurrentTicker, IReadOnlyList<string> RecentEvents);
-

@@ -40,5 +40,3 @@ public sealed record HistoricalReconstructionPolicy(string ContractId, TimeSpan 
 public sealed record HistoricalAvailabilityResolution(string FactId, HistoricalAvailabilityMode Mode,
     bool Available, string Status, string Reason, DateTimeOffset? AvailableAtUtc,
     DateTimeOffset ActualReceivedAtUtc, string? ReconstructionContractId, string? ReconstructionPolicySha256 = null);
-public sealed record HistoricalAvailabilityAuditRow(DateTimeOffset DecisionAtUtc, HistoricalFactKind Kind,
-    HistoricalAvailabilityMode Mode, string Status, string Reason, int Count, string? ReconstructionPolicySha256 = null);

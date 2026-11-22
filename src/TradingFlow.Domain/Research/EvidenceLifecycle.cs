@@ -186,55 +186,6 @@ public sealed class EvidenceSourceObservation
     }
 }
 
-/// <summary>
-/// Required metadata carried by each normalized evidence record.
-/// </summary>
-public sealed class EvidenceRowProvenance
-{
-    public EvidenceRowProvenance(
-        int schemaVersion,
-        string runId,
-        string configHash,
-        string codeVersion,
-        string dataFeed,
-        DateTimeOffset sourceTimestampUtc,
-        DateTimeOffset receivedAtUtc,
-        EvidenceRowLineage lineage)
-    {
-        if (schemaVersion <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(schemaVersion));
-        }
-
-        SchemaVersion = schemaVersion;
-        RunId = EvidenceValue.NormalizeRequired(runId, nameof(runId));
-        ConfigHash = EvidenceValue.NormalizeSha256(configHash);
-        CodeVersion = EvidenceValue.NormalizeRequired(codeVersion, nameof(codeVersion));
-        DataFeed = EvidenceValue.NormalizeRequired(dataFeed, nameof(dataFeed)).ToLowerInvariant();
-        EvidenceValue.EnsureUtc(sourceTimestampUtc, nameof(sourceTimestampUtc));
-        EvidenceValue.EnsureUtc(receivedAtUtc, nameof(receivedAtUtc));
-        SourceTimestampUtc = sourceTimestampUtc;
-        ReceivedAtUtc = receivedAtUtc;
-        Lineage = lineage ?? throw new ArgumentNullException(nameof(lineage));
-    }
-
-    public int SchemaVersion { get; }
-
-    public string RunId { get; }
-
-    public string ConfigHash { get; }
-
-    public string CodeVersion { get; }
-
-    public string DataFeed { get; }
-
-    public DateTimeOffset SourceTimestampUtc { get; }
-
-    public DateTimeOffset ReceivedAtUtc { get; }
-
-    public EvidenceRowLineage Lineage { get; }
-}
-
 public enum EvidenceCollectionState
 {
     Planned = 1,

@@ -815,22 +815,6 @@ public sealed class RunConfigWriter
         }
     }
 
-    public void DeleteTempConfig(string configPath)
-    {
-        var fullPath = Path.GetFullPath(configPath);
-        var tempRoot = Path.GetFullPath(paths.GeneratedPaperConfigsRoot);
-        var relativePath = Path.GetRelativePath(tempRoot, fullPath);
-        var isSafeToDelete = !Path.IsPathRooted(relativePath)
-            && !relativePath.Equals("..", StringComparison.Ordinal)
-            && !relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-            && fullPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase);
-
-        if (isSafeToDelete && File.Exists(fullPath))
-        {
-            File.Delete(fullPath);
-        }
-    }
-
     // Preserve all resolved rules in generated snapshots and reject incompatible continuation settings before writing.
     public static string SerializeStrategyYaml(TradingFlow.Domain.Strategies.StrategyDefinition strategy)
     {

@@ -371,14 +371,11 @@ builder.Services.AddSingleton<CompanyNewsAssessmentPreviewService>();
 builder.Services.AddSingleton<NewsStockSourceService>();
 builder.Services.AddScoped<EarningsViewService>();
 builder.Services.AddSingleton<WarmupServiceClient>();
-builder.Services.AddSingleton<DeskPreparationService>();
 builder.Services.AddSingleton<DeskTicketPlanService>();
 builder.Services.AddSingleton<OrderTicketPlanService>();
-builder.Services.AddSingleton<WishlistUniverseResolver>();
 builder.Services.AddSingleton<DailyObservationService>();
 builder.Services.AddSingleton<IDailyObservationService>(sp => sp.GetRequiredService<DailyObservationService>());
 builder.Services.AddSingleton<WishlistDeskService>();
-builder.Services.AddSingleton<DeskUniverseEvidenceService>();
 builder.Services.AddMemoryCache();
 // Chart transport is read-only and shares the canonical market source with all hosts.
 builder.Services.AddSignalR(options =>
@@ -407,7 +404,6 @@ builder.Services.AddSingleton<TradingEnvironmentService>();
 builder.Services.AddSingleton<OperationalStatusService>();
 builder.Services.AddSingleton<WorkspaceStatusService>();
 builder.Services.AddSingleton<OperationsHealthService>();
-builder.Services.AddSingleton<UniverseRankService>();
 builder.Services.AddSingleton<ScreenerSyncService>();
 builder.Services.AddSingleton<IScreenerSnapshotSource>(services => services.GetRequiredService<ScreenerSyncService>());
 builder.Services.AddSingleton<IPaperRunUniverseSnapshotResolver, PaperRunUniverseSnapshotResolver>();
@@ -453,7 +449,6 @@ builder.Services.AddHttpClient<MarketPredictorHttpClient>(client =>
     }
     client.Timeout = Timeout.InfiniteTimeSpan;
 });
-builder.Services.AddTransient<TradingFlow.Web.Services.Wishlists.ScreenerVerificationService>();
 builder.Services.AddSingleton<TradingFlow.Web.Services.Wishlists.StockPulseReceiverService>();
 
 builder.Services.AddSingleton<TradingFlow.Engine.Execution.IBrokerClient>(serviceProvider =>

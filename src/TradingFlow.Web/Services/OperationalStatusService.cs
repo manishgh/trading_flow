@@ -160,17 +160,6 @@ public sealed class OperationalStatusService : IDisposable
 
     public static TimeSpan StaleQuoteThreshold => StaleQuoteAge;
 
-    /// <summary>Quote state for an arbitrary set of observations.</summary>
-    public (string Status, string Detail) DescribeQuoteAge(IEnumerable<DateTimeOffset?> quoteTimestamps)
-    {
-        var newest = quoteTimestamps
-            .Where(timestamp => timestamp.HasValue)
-            .Select(timestamp => timestamp!.Value.ToUniversalTime())
-            .DefaultIfEmpty()
-            .Max();
-        return DescribeQuote(timeProvider.GetUtcNow(), newest == default ? null : newest);
-    }
-
     public void Dispose()
     {
         provider?.Dispose();

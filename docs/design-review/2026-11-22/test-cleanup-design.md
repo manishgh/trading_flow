@@ -1,7 +1,8 @@
 # Design: remove dead code with its tests, shrink wasteful tests, speed up the suite
 
 Requested by the user on 22 November 2026 ("large number of tests … majority of them are old and could be even dead code").
-**Status: waiting for the user's approval; nothing is deleted or changed.**
+**Status: the user said on 23 November 2026 "remove all dead code and dead tests"; section 5 records what was removed and kept.
+Steps 2, 3 and 4 still wait for a decision.**
 
 ## 1. What was measured
 
@@ -110,3 +111,24 @@ Not proposed: orders, risk, account protection, no-look-ahead, fills and costs i
 
 - Android app (`TradingFlow.Mobile`, about 6,000 own lines, about 80 cases): still wanted?
 - `TradingFlow.WarmupService` (about 1,200 own lines, 23 cases): the website warms its own data; still used anywhere?
+
+## 5. Removed on 23 November 2026
+
+The search was repeated at type level and for services that the site registers but nothing asks for, until it found nothing new.
+**110 types and 25 methods, about 7,400 production lines; about 170 test cases and 19 test files.** In addition to section 2 steps
+1a and 1b: evidence backup, retention and orphan check; point-in-time universe builder and publication; exchange-session
+resolvers; desk preparation, desk evidence, screener verification and wishlist resolver services; unused transport records.
+
+Tests of live code that only used a removed type as a vehicle were kept and adjusted (worker bound, calendar publication,
+duplicate capture, event envelope, catalog interfaces).
+
+Kept although nothing calls them:
+
+| Kept | Why |
+|---|---|
+| , , , holdout registry calls |  requires the promotion and untouched-test-period rules |
+|  | Can answer what blocked signals would have done (VIX comparison) |
+|  |  says its dormant source must stay; the user decides |
+|  | Published contract with the Market Predictor project |
+| Android app records | The Android app was not built here |
+| About 38 short methods used only by tests | Test access or older variants; section 2 review continues |

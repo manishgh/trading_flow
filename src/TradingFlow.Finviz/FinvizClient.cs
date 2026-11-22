@@ -267,21 +267,6 @@ public sealed partial class FinvizClient : IDisposable
         return TimeZoneInfo.Utc;
     }
 
-    public async Task<string> GetStockDataAsync(string ticker, string period, CancellationToken cancellationToken = default)
-    {
-        // Example: /stock?t=MSFT&p=d&auth=xxx
-        var url = $"/stock?t={ticker.ToUpperInvariant()}&p={period}&auth={_options.AuthToken}";
-        return (await GetArchivedTextAsync(url, "stock_snapshot", "html", null, cancellationToken)).Text;
-    }
-
-    public async Task<string> GetNewsAsync(string ticker, CancellationToken cancellationToken = default)
-    {
-        // "v=3" - Stocks feed (no-ETFs)
-        // "t=MSFT,AAPL" - Filter out only for specified tickers
-        var url = $"/news?t={ticker.ToUpperInvariant()}&v=3&auth={_options.AuthToken}";
-        return (await GetArchivedTextAsync(url, "stock_news_html", "html", null, cancellationToken)).Text;
-    }
-
     public async Task<IReadOnlyList<CatalystEvent>> GetNewsExportAsync(int view, CancellationToken cancellationToken = default)
     {
         var url = $"/export/news?v={view}&auth={_options.AuthToken}";
@@ -416,14 +401,6 @@ public sealed partial class FinvizClient : IDisposable
         }
 
         return "Finviz update";
-    }
-
-    public async Task<string> GetFilingsAsync(string ticker, string filter, CancellationToken cancellationToken = default)
-    {
-        // "o=-filingDate" - order descending by filing date
-        // filter e.g. "annual-quarterly-current"
-        var url = $"/stock?t={ticker.ToUpperInvariant()}&f={filter}&o=-filingDate&auth={_options.AuthToken}";
-        return (await GetArchivedTextAsync(url, "filings_html", "html", null, cancellationToken)).Text;
     }
 
     /// <summary>

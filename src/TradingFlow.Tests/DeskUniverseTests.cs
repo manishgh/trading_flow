@@ -14,8 +14,6 @@ namespace TradingFlow.Tests;
 /// </summary>
 public sealed class DeskUniverseTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
-
     [Fact]
     public void ForAllWishlists_DeduplicatesSymbolsAndRecordsEveryList()
     {
@@ -144,41 +142,6 @@ public sealed class DeskUniverseTests
     }
 
     [Fact]
-    public void Preparation_ClassifiesEveryState()
-    {
-        Assert.Equal(DeskPreparationState.NotPrepared, DeskPreparationService.Classify(null, Now).State);
-        Assert.Equal(DeskPreparationState.Queued, DeskPreparationService.Classify(Intent("MU", null, "pending"), Now).State);
-        Assert.Equal(DeskPreparationState.Ready, DeskPreparationService.Classify(Intent("MU", Now.AddHours(-2), "warmed"), Now).State);
-        Assert.Equal(DeskPreparationState.Stale, DeskPreparationService.Classify(Intent("MU", Now.AddHours(-30), "warmed"), Now).State);
-        var failed = DeskPreparationService.Classify(Intent("MU", Now.AddHours(-1), "failed", "no bars"), Now);
-        Assert.Equal(DeskPreparationState.Failed, failed.State);
-        Assert.Equal("no bars", failed.Detail);
-    }
-
-    [Fact]
-    public void Preparation_ListsOnlySymbolsThatNeedWorkAndIgnoresInactiveIntents()
-    {
-        var snapshot = DeskPreparationService.Build(
-            ["MU", "NVDA", "TSLA", "AMD", "PLTR"],
-            [
-                Intent("MU", Now.AddHours(-1), "warmed"),
-                Intent("NVDA", Now.AddDays(-3), "warmed"),
-                Intent("TSLA", null, "pending"),
-                Intent("AMD", Now.AddHours(-1), "failed"),
-                Intent("PLTR", Now.AddHours(-1), "warmed") with { Active = false }
-            ],
-            [Run("older", Now.AddDays(-1)), Run("newest", Now.AddHours(-1))],
-            Now);
-
-        Assert.True(snapshot.Available);
-        Assert.Equal(["AMD", "NVDA", "PLTR"], snapshot.NeedingPreparation);
-        Assert.Equal(1, snapshot.Count(DeskPreparationState.Ready));
-        Assert.Equal(1, snapshot.Count(DeskPreparationState.Queued));
-        Assert.Equal("newest", snapshot.LatestRun?.RunId);
-        Assert.Equal(DeskPreparationState.Unknown, snapshot.For("ZZZ").State);
-    }
-
-    [Fact]
     public void StreamTickers_KeepsValidSymbolsOnceAndBoundsTheList()
     {
         var parsed = DeskStreamTickers.Parse(" mu,BRK.B, nvda ,MU,,1BAD,<script>,TOOLONGSYMBOL1");
@@ -211,11 +174,6 @@ public sealed class DeskUniverseTests
         new("paper", ticker, quantity, entry, current, pl, pl / (quantity * entry) * 100m,
             "open", "ref", null, null, "sell");
 
-    private static WarmupTickerIntentDto Intent(string ticker, DateTimeOffset? warmedAt, string status, string? error = null) =>
-        new(ticker, "desk", "desk", Now.AddDays(-5), 60, 14, ["1d"], true, true, warmedAt, status, error);
-
-    private static WarmupRunRecordDto Run(string id, DateTimeOffset startedAt) =>
-        new(id, "desk", startedAt, startedAt.AddMinutes(5), "completed", 1, 1, 0, []);
 }
 
 /// <summary>

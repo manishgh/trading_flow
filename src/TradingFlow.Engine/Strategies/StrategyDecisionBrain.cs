@@ -114,31 +114,6 @@ public sealed class StrategyDecisionBrain
             : null;
     }
 
-    public static string BuildSignalAuditJson(
-        TradeSignal signal,
-        decimal? relativeVolumeUsed,
-        string relativeVolumeSource,
-        IndicatorSnapshot snapshot)
-    {
-        return System.Text.Json.JsonSerializer.Serialize(new
-        {
-            signal,
-            relativeVolumeUsed,
-            relativeVolumeSource,
-            calculatedRelativeVolume = snapshot.RelativeVolume,
-            slotRelativeVolume = snapshot.SlotRelativeVolume,
-            slotMedianVolume = snapshot.SlotMedianVolume,
-            cumulativeSameTimeMedianVolume = snapshot.CumulativeSameTimeMedianVolume,
-            relativeVolumeSampleCount = snapshot.RelativeVolumeSampleCount,
-            slotRelativeVolumeSampleCount = snapshot.SlotRelativeVolumeSampleCount,
-            marketEvidenceProfileVersion = snapshot.MarketEvidenceProfileVersion,
-            relativeVolumeCohort = snapshot.RelativeVolumeCohort,
-            dataFeed = snapshot.DataFeed,
-            adjustmentPolicy = snapshot.AdjustmentPolicy,
-            marketEvidenceReliability = snapshot.MarketEvidenceReliability
-        });
-    }
-
     private static string FormatRelativeVolumeRejection(
         string reason,
         IndicatorSnapshot snapshot,
