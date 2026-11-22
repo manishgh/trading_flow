@@ -75,6 +75,11 @@ public interface IOrderDispatchService
     Task<int> RecoverPendingAsync(
         IBrokerClient broker,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Whether the local journal holds dispatch work that <see cref="RecoverPendingAsync"/> would process; never contacts the broker.</summary>
+    Task<bool> HasRecoverableWorkAsync(
+        string accountId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -195,6 +200,12 @@ public sealed class OrderDispatchService : IOrderDispatchService
                 CancellationToken.None);
         }
     }
+
+    /// <summary>Runs the same local query as <see cref="RecoverPendingAsync"/> and reports whether it found anything.</summary>
+    public async Task<bool> HasRecoverableWorkAsync(
+        string accountId,
+        CancellationToken cancellationToken = default) =>
+        (await dispatches.ListRecoverableIntentIdsAsync(accountId, cancellationToken)).Count != 0;
 
     /// <summary>Recover dispatchable work and retire entries that fail the current pre-POST fences.</summary>
     public async Task<int> RecoverPendingAsync(

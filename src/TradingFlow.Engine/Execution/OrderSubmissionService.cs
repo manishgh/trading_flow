@@ -197,6 +197,11 @@ public interface IOrderCommandService
     Task<int> RecoverPendingCancellationsAsync(
         IBrokerClient brokerClient,
         CancellationToken cancellationToken);
+
+    /// <summary>Whether the local journal holds exit, cancellation or stop-replacement work to recover; never contacts the broker.</summary>
+    Task<bool> HasRecoverableWorkAsync(
+        string accountId,
+        CancellationToken cancellationToken);
 }
 
 public interface IOrderSubmissionService : IOrderCommandService
@@ -647,6 +652,33 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
             brokerClient,
             cancellationToken);
     }
+
+    /// <summary>
+    /// Runs the local queries of the three recoveries owned here (unprepared exits, pending cancellations, pending stop
+    /// replacements) without contacting the broker. Enters the same mutation boundary, so a shutdown still rejects the
+    /// recovery cycle, and reports work when a required store is missing so the full pass raises its own error.
+    /// </summary>
+    public async Task<bool> HasRecoverableWorkAsync(
+        string accountId,
+        CancellationToken cancellationToken)
+    {
+        using var commandMutation = brokerMutations.Enter("check recoverable order work");
+        if (events is null || lifecycle is null || stopReplacements is null) return true;
+        return (await intentRepository.ListUnpreparedPositionExitsAsync(accountId, 1, cancellationToken)).Count != 0
+            || (await ListPendingCancellationsAsync(events, accountId, cancellationToken)).Length != 0
+            || (await stopReplacements.ListRecoverableCommandIdsAsync(accountId, 1, cancellationToken)).Count != 0;
+    }
+
+    // Lists this account's cancel requests that reached the broker but have no terminal answer recorded yet.
+    private static async Task<OrderStateSnapshot[]> ListPendingCancellationsAsync(
+        IOrderEventRepository events,
+        string accountId,
+        CancellationToken cancellationToken) =>
+        (await events.ListReconcilableAsync(accountId, cancellationToken))
+            .Where(snapshot =>
+                snapshot.State == OrderState.CancelPending &&
+                !String.IsNullOrWhiteSpace(snapshot.BrokerOrderId))
+            .ToArray();
 
     public async Task<int> RecoverUnpreparedPositionExitsAsync(
         IBrokerClient brokerClient,
@@ -1733,11 +1765,7 @@ public sealed class OrderSubmissionService : IOrderSubmissionService
         var account = accountBinding is null
             ? await brokerClient.GetAccountSnapshotAsync(cancellationToken)
             : await accountBinding.ValidateAsync(brokerClient, cancellationToken);
-        var pending = (await events.ListReconcilableAsync(account.AccountId, cancellationToken))
-            .Where(snapshot =>
-                snapshot.State == OrderState.CancelPending &&
-                !String.IsNullOrWhiteSpace(snapshot.BrokerOrderId))
-            .ToArray();
+        var pending = await ListPendingCancellationsAsync(events, account.AccountId, cancellationToken);
         var recovered = 0;
         var failed = 0;
         foreach (var snapshot in pending)

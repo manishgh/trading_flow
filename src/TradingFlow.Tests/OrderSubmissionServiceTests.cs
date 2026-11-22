@@ -928,6 +928,10 @@ public sealed class OrderSubmissionServiceTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        // These tests never run the recovery loop.
+        public Task<bool> HasRecoverableWorkAsync(string accountId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public async Task<OrderSubmissionResult> DispatchAsync(
             Guid intentId,
             IBrokerClient broker,

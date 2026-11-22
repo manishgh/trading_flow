@@ -62,7 +62,10 @@ public class AlpacaBrokerClientTests : IDisposable
             """);
         using var client = CreateClient(handler);
 
+        using var origin = TradingFlow.Engine.Execution.BrokerCallOrigin.Begin(TradingFlow.Engine.Execution.BrokerCallOrigin.OrderRecovery);
         var account = await client.GetAccountSnapshotAsync(CancellationToken.None);
+        Assert.Contains("\"caller\":\"order-recovery\"", await File.ReadAllTextAsync(Assert.Single(
+            Directory.GetFiles(archiveRoot, "*broker-account-snapshot.json.manifest.json", SearchOption.AllDirectories))), StringComparison.Ordinal);
 
         Assert.Equal("/v2/account", handler.Path);
         Assert.Equal("account-1", account.AccountId);

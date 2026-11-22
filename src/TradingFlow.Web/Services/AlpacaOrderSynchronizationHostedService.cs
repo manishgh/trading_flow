@@ -24,8 +24,10 @@ public sealed class AlpacaOrderSynchronizationHostedService(
 {
     private const string CredentialBlockSource = "alpaca_order_credentials";
 
+    // Runs order synchronization for the process lifetime; account reads it makes are labelled with its name.
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var origin = BrokerCallOrigin.Begin(BrokerCallOrigin.OrderSynchronization);
         if (!credentials.IsConfigured)
         {
             entryAdmission.Block(
