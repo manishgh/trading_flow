@@ -308,6 +308,11 @@ public sealed class WorkspacePagesTests
         Assert.True(stylesSectionIdx >= 0 && stylesSectionIdx < tokensCssIdx && tokensCssIdx < componentsCssIdx && componentsCssIdx < workspacesCssIdx,
             "_Layout.cshtml must render page Styles section strictly before tokens.css, components.css, and workspaces.css.");
         Assert.DoesNotContain("ui2-foundation.css", layout);
+        // One base sheet replaced the ten older ones; page styles and the three workspace sheets still follow it.
+        var baseIdx = layout.IndexOf("base.css", StringComparison.Ordinal);
+        Assert.True(baseIdx >= 0 && baseIdx < stylesSectionIdx);
+        foreach (var name in new[] { "site", "modernist", "desk-grid", "polish", "features", "workspace", "desk-universe", "orders-screen", "order-workflow", "desk-theme" })
+            Assert.False(File.Exists(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "wwwroot", "css", name + ".css")), name);
 
         var desk = WebFile("Pages/Desk.cshtml");
         var focusStart = desk.IndexOf("id=\"watch-focus-content\"", StringComparison.Ordinal);
