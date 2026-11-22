@@ -3,7 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
-const workflow = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/TradingFlow.Web/wwwroot/js/run-workflow.js'), 'utf8');
+// The page loads these three scripts in this order.
+const workflow = ['lab-matrix.js', 'lab-setup.js', 'run-workflow.js']
+  .map(name => fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/TradingFlow.Web/wwwroot/js', name), 'utf8'))
+  .join('\n');
 const reference = { id: 'approved-profile', manifestSha256: 'a'.repeat(64) };
 const summary = { reference, provider: 'fixture', version: 'v1', taxonomyVersions: ['taxonomy-2'], classifierVersions: ['classifier-3'],
   evaluationSha256s: ['b'.repeat(64)], availabilityBasis: ['actual_receipt'], coverageScopes: ['company', 'sector'],

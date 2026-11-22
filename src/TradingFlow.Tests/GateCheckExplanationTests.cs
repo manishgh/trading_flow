@@ -16,7 +16,6 @@ public sealed class GateCheckExplanationTests
     [InlineData("average_dollar_volume_below_minimum (Actual: 12345678, Required: 20000000)", "20-day average dollar volume $12,345,678: needs at least $20,000,000")]
     [InlineData("rsi_outside_range (Actual: 74.10, Required: 30.00-70.00)", "RSI 74.10: needs between 30.00 and 70.00")]
     [InlineData("short_rsi_below_range (Actual: 35.00, RequiredMin: 50.00)", "Short RSI 35.00: needs at least 50.00")]
-    [InlineData("options_put_skew_above_maximum (Actual: 0.1200, RequiredMax: 0.0800)", "Options put skew 0.1200: needs at most 0.0800")]
     [InlineData("gap_up_below_minimum (Actual: -0.40, Required: 2.00)", "Gap up -0.40%: needs at least 2.00%")]
     [InlineData("catalyst_entry_too_extended (Actual: 9.10, RequiredMax: 6.00)", "Price move since the news 9.10%: needs at most 6.00%")]
     [InlineData("price_too_far_below_52_week_high (Actual: -31.00, RequiredMin: -25.00)", "Price versus the 52-week high -31.00%: needs at least -25.00%")]

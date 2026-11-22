@@ -19,7 +19,7 @@ namespace TradingFlow.Tests;
 /// <summary>
 /// Offline deterministic verification for Alpaca Paid OPRA Options Sentiment Context (20 Nov 2026 design):
 /// OCC parsing, quote liquidity filtering, front straddle implied move, 25-delta put-call skew, IV term structure,
-/// Alpaca OPRA pagination/caching/archiving, refusal of removed skew vetoes, and zero hash drift on all existing strategies.
+/// Alpaca OPRA pagination/caching/archiving, and refusal of removed skew vetoes on all existing strategies.
 /// </summary>
 public sealed class OptionsSentimentTests
 {
@@ -453,24 +453,6 @@ public sealed class OptionsSentimentTests
         Assert.Equal(0.08m, snapshot.Skew25Delta);
         Assert.Equal(0.09m, snapshot.TermStructureSpread);
         Assert.Equal(OptionsSentimentRegime.TermBackwardationStress, snapshot.RegimeLabel);
-    }
-
-    [Fact]
-    public void ExistingSwingStrategyCatalogHashes_RemainByteForByteUnchanged()
-    {
-        var root = TestRepository.FindRoot();
-        var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
-
-        var strategies = catalog.GetSnapshot().ExecutableArtifacts.ToArray();
-        Assert.True(strategies.Length >= 10, $"Expected at least 10 registered strategies, got {strategies.Length}.");
-
-        foreach (var artifact in strategies)
-        {
-            var json = JsonSerializer.Serialize(artifact.ResolvedStrategy.EntryRules);
-            Assert.DoesNotContain("MaxLongPutSkew", json, StringComparison.Ordinal);
-            Assert.DoesNotContain("MinShortPutCallSkew", json, StringComparison.Ordinal);
-        }
     }
 
     [Fact]

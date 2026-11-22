@@ -14,10 +14,10 @@ using TradingFlow.Web.Services.Wishlists;
 namespace TradingFlow.Tests;
 
 /// <summary>
-/// Focused tests for Checkpoints UI-2, UI-3, and UI-4: plan-scoped SQLite lookup with fault isolation,
+/// Focused tests for the workspace pages: plan-scoped SQLite lookup with fault isolation,
 /// saved-plan monthly matrix builder (strictly monthly, non-pooled, batch/hash aware), and Razor/JS/CSS contracts.
 /// </summary>
-public sealed class Ui2RedesignTests
+public sealed class WorkspacePagesTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 21, 15, 0, 0, TimeSpan.Zero);
 
@@ -342,7 +342,7 @@ public sealed class Ui2RedesignTests
             Assert.Contains(token, prepJs);
         }
 
-        var deskJs = WebFile("wwwroot/js/watch-desk.js");
+        var deskJs = DeskScripts();
         foreach (var token in new[]
                  {
                      "function humanizeCheck(", "check?.explanation ||", "check.gateName", "check.rejectionCode", "check.inputs", "ArrowDown", "ArrowUp", "selectStock("
@@ -383,7 +383,7 @@ public sealed class Ui2RedesignTests
             Assert.Contains(token, lab);
         }
 
-        var workflowJs = WebFile("wwwroot/js/run-workflow.js");
+        var workflowJs = LabScripts();
         foreach (var token in new[]
                  {
                      "/monthly-matrix", "research_screen", "groupSize.value = '1000'",
@@ -682,7 +682,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain(">News</th>", desk);
         // Outside regular hours the column is relabelled so an after-hours move is never called "Day %".
         Assert.Contains("id=\"watch-change-head\"", desk);
-        var deskJs = WebFile("wwwroot/js/watch-desk.js");
+        var deskJs = DeskScripts();
         Assert.Contains("'Since close'", deskJs);
         Assert.Contains("Latest quote (session unknown)", deskJs);
         Assert.Contains("function changeBasisTitle(row)", deskJs);
@@ -714,7 +714,7 @@ public sealed class Ui2RedesignTests
         Assert.Contains("defaultStudies", chartJs);
         Assert.DoesNotContain("get('inline-studies')", chartJs);
 
-        var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
+        var watchDeskJs = DeskScripts();
         foreach (var token in new[] { "function formatRowDayChange(", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "function tradePlanOutdated(", "tradePlanMoveShare = 0.005, tradePlanMinimumGapMs = 30000", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
         {
             Assert.Contains(token, watchDeskJs);
@@ -738,8 +738,8 @@ public sealed class Ui2RedesignTests
             Assert.Contains(token, lab);
         }
 
-        var workflowJs = WebFile("wwwroot/js/run-workflow.js");
-        foreach (var token in new[] { "function openMatrixDrawer(", "function renderDrawerRejections(", "function renderDrawerSampleTrades(", "lab-drawer-progress", "MonthlyRunResult", "lab-matrix-inspect-btn" })
+        var workflowJs = LabScripts();
+        foreach (var token in new[] { "const planId = shownPlanId;", "shownPlanId = matrix.planId;", "function openMatrixDrawer(", "function renderDrawerRejections(", "function renderDrawerSampleTrades(", "lab-drawer-progress", "MonthlyRunResult", "lab-matrix-inspect-btn" })
         {
             Assert.Contains(token, workflowJs);
         }
@@ -766,7 +766,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("innerHTML", catalystsJs);
         Assert.DoesNotContain("setTimeout(", catalystsJs);
 
-        // CSS rules for UI-5/UI-8/UI-9 features (3-column Desk; compact scanner must NEVER hide News col 6)
+        // CSS rules for the Desk, Lab and Catalysts features (3-column Desk; compact scanner must NEVER hide News col 6)
         var css = CssBundle();
         foreach (var token in new[] { "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)", ".watch-col-close", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
         {
@@ -868,7 +868,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("watch-chart-ind-more", desk);
         Assert.DoesNotContain("watch-tech-more", desk);
 
-        var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
+        var watchDeskJs = DeskScripts();
         foreach (var token in new[]
                  {
                      "const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];",
@@ -909,7 +909,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("nth-child(10)", css);
     }
 
-    // Verifies Checkpoint UI-8 contracts: unified top status/regime strip (D4/D5/G1/G2/G4/G9), 34px scanner & strategy/news rules (D1/D2/G5/G6/G14/G15),
+    // Verifies the unified top status/regime strip (D4/D5/G1/G2/G4/G9), 34px scanner & strategy/news rules (D1/D2/G5/G6/G14/G15),
     // chart marker grouping & overlay autoscale fix (D6), neutral resistance pills (D7), compact chart header/overlay readout (G3/G7/G8/D8), and 3-column Desk (D3).
     [Fact]
     public void DeskDenseLayoutChartScaleAndUnifiedRegimeStripHold()
@@ -952,7 +952,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("<partial name=\"_OptionsSentimentPanel\"", desk);
         Assert.Contains("data-has-strategy=\"false\"", desk);
         Assert.DoesNotContain("Fewer columns", desk);
-        Assert.DoesNotContain("watch-news-summary", WebFile("wwwroot/js/watch-desk.js"));
+        Assert.DoesNotContain("watch-news-summary", DeskScripts());
         Assert.Contains("id=\"watch-focus-info\"", desk);
         Assert.Contains("data-quick-interval=\"1d\"", desk);
         Assert.Contains("id=\"watch-inspector\"", desk);
@@ -977,7 +977,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("id=\"watch-sell\"", afterNewsBeforeInspectorClose);
         Assert.Contains("id=\"watch-news-drawer-count\"", desk);
 
-        var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
+        var watchDeskJs = DeskScripts();
         foreach (var token in new[]
                  {
                      "function syncTableStrategyState(", "function setActiveDeskPane(",
@@ -1042,7 +1042,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("nth-child(6)", css);
     }
 
-    // Verifies UI-7 plain-English OPRA labels, regime badges, explanatory tooltips (including missing 25-delta skew),
+    // Verifies the plain-English OPRA labels, regime badges, explanatory tooltips (including missing 25-delta skew),
     // and help-cursor dotted underlines across Desk and Catalysts without altering data-options-field hooks.
     [Fact]
     public void OpraPlainEnglishLabelsAndTooltipsCoverDeskAndCatalystsWithoutBreakingFields()
@@ -1111,7 +1111,7 @@ public sealed class Ui2RedesignTests
         Assert.Contains("cursor: help;", css);
     }
 
-    // Verifies Checkpoint UI-9 contracts: 10-strategy active catalog cleanup, G10-G13, D9, 3-file CSS consolidation,
+    // Verifies the 10-strategy active catalog cleanup, G10-G13, D9, 3-file CSS consolidation,
     // scoped button heights, repo-relative mockup links, toolbar widths, header Buy/Sell placement, no Next action column,
     // distinct study color swatches + click-to-highlight, and readable Options strip with instant [data-tooltip] hover tooltips.
     [Fact]
@@ -1128,7 +1128,7 @@ public sealed class Ui2RedesignTests
         }
 
         // 2. G10 & G11: Strategy direction optgroups + short labels and explicit source optgroups.
-        var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
+        var watchDeskJs = DeskScripts();
         foreach (var token in new[]
                  {
                      "function shortStrategyName(", "['Long', []]", "['Short', []]", "['Other', []]",
@@ -1303,6 +1303,14 @@ public sealed class Ui2RedesignTests
     // Reads a source file from src/TradingFlow.Web relative to the active worktree root.
     private static string WebFile(string relativePath) =>
         File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", relativePath));
+
+    // The Desk page's own scripts, in the order the page loads them.
+    private static string DeskScripts() => String.Join("\n", new[] { "desk-format", "desk-quote-stream", "desk-market-view", "desk-chart-panel", "watch-desk" }
+        .Select(name => WebFile($"wwwroot/js/{name}.js")));
+
+    // The Backtests page's run scripts, in the order the page loads them.
+    private static string LabScripts() => String.Join("\n", new[] { "lab-matrix", "lab-setup", "run-workflow" }
+        .Select(name => WebFile($"wwwroot/js/{name}.js")));
 
     // Concatenates the three consolidated UI 2.0 stylesheets (tokens, components, workspaces) in cascade order.
     private static string CssBundle() =>

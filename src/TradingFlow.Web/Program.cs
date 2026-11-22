@@ -319,7 +319,7 @@ builder.Services.AddSingleton<IVixCloseSource>(serviceProvider =>
         // Windows .NET TLS to FRED can hang past its timeout; Windows' curl.exe answers in about half a second.
         preferSystemCurl: OperatingSystem.IsWindows());
 });
-// Read-only Alpaca paid OPRA options sentiment context for Desk display and optional strategy skew gates.
+// Read-only Alpaca paid OPRA options sentiment context for Desk display.
 builder.Services.AddHttpClient(TradingFlow.Alpaca.AlpacaOptionsSnapshotClient.HttpClientName, client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
