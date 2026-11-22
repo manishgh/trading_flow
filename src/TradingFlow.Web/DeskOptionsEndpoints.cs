@@ -51,13 +51,14 @@ public static class DeskOptionsEndpoints
                 ? new[] { "SPY", "QQQ" }
                 : new[] { "SPY", "QQQ", selectedSymbol }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-            // The selected stock's 20-day ADR% (shared cached loader) lets the snapshot compare its one-day expected move
-            // with a typical day; it loads in parallel and simply stays empty if the bars do not arrive in 6 seconds.
+            // The selected stock's 20-day ADR% and the 65-day forward exchange calendar (both cached per New York day)
+            // load in parallel with OPRA so holiday-aware trading days and implied/ADR ratios stay consistent without blocking OPRA.
             using var adrDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             adrDeadline.CancelAfter(TimeSpan.FromSeconds(6));
             var adrTask = selectedSymbol is null
                 ? Task.FromResult(new Dictionary<string, Adr20CalculationResult>(StringComparer.OrdinalIgnoreCase))
                 : adrService.LoadAdrAsync([selectedSymbol], adrDeadline.Token);
+            var schedulesTask = adrService.TryLoadOptionsSchedulesAsync(adrDeadline.Token);
             var spotHints = await TryLoadSpotHintsAsync(quotes, requestedSymbols, cancellationToken, cancellationToken);
 
             var spyTask = optionsSource.GetSnapshotAsync("SPY", spotHints.GetValueOrDefault("SPY"), cancellationToken: cancellationToken);
@@ -70,27 +71,32 @@ public static class DeskOptionsEndpoints
                 _ => optionsSource.GetSnapshotAsync(selectedSymbol, spotHints.GetValueOrDefault(selectedSymbol), cancellationToken: cancellationToken)
             };
 
+            var pending = new List<Task> { spyTask, qqqTask, schedulesTask };
             if (selectedTask is not null && selectedTask != spyTask && selectedTask != qqqTask)
             {
-                await Task.WhenAll(spyTask, qqqTask, selectedTask);
+                pending.Add(selectedTask);
             }
-            else
-            {
-                await Task.WhenAll(spyTask, qqqTask);
-            }
+
+            await Task.WhenAll(pending);
+            var schedules = await schedulesTask;
+            var spySnapshot = OptionsSentimentCalculator.WithMarketContext(await spyTask, adr20Pct: null, schedules);
+            var qqqSnapshot = OptionsSentimentCalculator.WithMarketContext(await qqqTask, adr20Pct: null, schedules);
 
             var selectedSnapshot = selectedTask is null ? null : await selectedTask;
             if (selectedSnapshot is not null && selectedSymbol is not null)
             {
                 var adr = await adrTask;
-                selectedSnapshot = OptionsSentimentCalculator.WithAdr20Pct(selectedSnapshot, adr.GetValueOrDefault(selectedSymbol)?.Adr20Pct);
+                selectedSnapshot = OptionsSentimentCalculator.WithMarketContext(
+                    selectedSnapshot,
+                    adr.GetValueOrDefault(selectedSymbol)?.Adr20Pct,
+                    schedules);
             }
 
             var response = new DeskOptionsSentimentResponse(
                 ContractVersions.VersionOne,
                 clock.GetUtcNow().ToUniversalTime(),
-                await spyTask,
-                await qqqTask,
+                spySnapshot,
+                qqqSnapshot,
                 selectedSnapshot);
             return Results.Ok(response);
         });

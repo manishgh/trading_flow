@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using TradingFlow.Data.Evidence.Screens;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
@@ -39,31 +40,40 @@ public static class SectorLeadersService
     };
 
     /// <summary>
-    /// Returns the cached ranking when it was computed for <paramref name="latestSession"/>; otherwise downloads completed
-    /// daily bars for the configured funds, ranks them and caches the result. Failures are returned as an unavailable
-    /// ranking with a reason and are not cached, so the next strip refresh retries.
+    /// Returns the cached ranking when it was computed for <paramref name="latestSession"/>; otherwise loads daily bars for the
+    /// configured funds (from the candle store when complete) and ranks them. Failures are returned as an unavailable ranking
+    /// with a reason and are not cached, so the next strip refresh retries.
     /// </summary>
     public static async Task<SectorLeaderRanking> GetLeadersAsync(
-        IMarketDataProvider provider,
+        Func<IMarketDataProvider> providerFactory,
         string sectorFundsFile,
         DateOnly? latestSession,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
         DateTimeOffset now,
         IMemoryCache cache,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ICandleStore? candleStore = null,
+        string providerName = "alpaca",
+        ILogger? logger = null)
     {
+        ArgumentNullException.ThrowIfNull(providerFactory);
         var key = $"sector-leaders:{latestSession:yyyy-MM-dd}";
         if (latestSession is not null && cache.TryGetValue(key, out SectorLeaderRanking? hit) && hit is not null) return hit;
 
         var funds = ReadFunds(sectorFundsFile);
         if (funds.Count == 0) return new SectorLeaderRanking(null, [], "No sector funds are configured.");
 
-        var barsBySymbol = new Dictionary<string, List<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var bar in provider.GetBarsAsync(funds, ["1d"], now - HistoryWindow, now, cancellationToken))
-        {
-            if (!barsBySymbol.TryGetValue(bar.Ticker, out var list)) barsBySymbol[bar.Ticker] = list = [];
-            list.Add(bar);
-        }
+        var barsBySymbol = await DeskMarketData.LoadDailyBarsWithStoreAsync(
+            providerFactory,
+            funds,
+            now - HistoryWindow,
+            now,
+            RequiredSessions,
+            schedules,
+            candleStore,
+            providerName,
+            cancellationToken,
+            logger: logger);
 
         var ranking = Rank(funds, barsBySymbol, schedules, now);
         if (ranking.UnavailableReason is null && latestSession is not null && ranking.AsOfSession == latestSession)

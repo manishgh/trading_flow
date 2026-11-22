@@ -189,34 +189,9 @@
     }
     if (kind === 'backtest') form.querySelector('#SelectedConfigPath')?.addEventListener('change', applyBacktestProfile);
 
-    // Maps canonical engine rejection codes to plain-English labels for the saved-plan diagnostics disclosure.
-    const matrixRejectionLabels = {
-        min_average_range_pct_not_met: '20-day ADR% below minimum threshold',
-        regime_price_below_sma: 'Benchmark close below 50-day SMA',
-        regime_sma_not_rising: 'Benchmark 50-day SMA is not rising',
-        regime_sma_not_falling: 'Benchmark 50-day SMA is not falling',
-        market_regime_off_on_entry_day: 'Market regime gate is OFF (SPY)',
-        nasdaq_market_regime_off_on_entry_day: 'Nasdaq home-market gate is OFF (QQQ)',
-        vix_above_long_limit: 'VIX above long-entry limit (>22)',
-        vix_regime_off_on_entry_day: 'VIX above long-entry limit (>22)',
-        vix_below_short_limit: 'VIX below short-entry floor (<18)',
-        vix_short_regime_off_on_entry_day: 'VIX below short-entry floor (<18)',
-        vix_close_unknown_for_previous_session: 'Previous-session VIX close not yet published',
-        vix_lookup_failed: 'VIX data source unavailable',
-        sector_not_in_top_n: 'Stock sector is outside the Top-N leaders',
-        earnings_blackout: 'Inside pre-earnings blackout window',
-        insufficient_history: 'Insufficient completed bar history',
-        max_positions_reached: 'Maximum concurrent positions reached',
-        cooldown_active: 'Post-exit cooldown is active'
-    };
-
-    // Converts a canonical rejection code into a plain-English label while preserving the original code for tooltips.
-    function humanizeRejectionCode(code) {
-        const raw = String(code || '').trim();
-        const key = raw.toLowerCase();
-        if (matrixRejectionLabels[key]) return matrixRejectionLabels[key];
-        const cleaned = raw.replace(/^(strategy|regime|eligibility):/i, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-        return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : 'Rejected';
+    // Returns the server's plain sentence for one rejection; the code itself stays in the tooltip.
+    function rejectionText(item) {
+        return item.explanation || String(item.code || 'Rejected');
     }
 
     // Formats one immutable monthly return cell with a non-colour direction glyph and tone.
@@ -322,7 +297,7 @@
             const rowHead = document.createElement('div');
             rowHead.className = 'lab-drawer-funnel-head';
             const label = document.createElement('strong');
-            label.textContent = humanizeRejectionCode(item.code);
+            label.textContent = rejectionText(item);
             const count = document.createElement('span');
             count.className = 'num';
             count.textContent = String(item.count);
@@ -332,7 +307,7 @@
             bar.className = 'lab-drawer-progress';
             bar.max = maxCount;
             bar.value = Math.max(0, Number(item.count) || 0);
-            bar.setAttribute('aria-label', `${humanizeRejectionCode(item.code)}: ${item.count}`);
+            bar.setAttribute('aria-label', `${rejectionText(item)}: ${item.count}`);
 
             const code = document.createElement('code');
             code.className = 'lab-drawer-code';
@@ -669,7 +644,7 @@
                 for (const item of rejections) {
                     const li = document.createElement('li');
                     li.title = item.code;
-                    li.textContent = `${humanizeRejectionCode(item.code)} (${item.count})`;
+                    li.textContent = `${rejectionText(item)} (${item.count})`;
                     list.append(li);
                 }
                 details.append(summary, list);

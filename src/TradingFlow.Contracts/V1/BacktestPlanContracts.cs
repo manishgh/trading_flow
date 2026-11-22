@@ -173,7 +173,7 @@ public sealed record SavedPlanMonthlyMatrixCell(
     string? UnavailableReason);
 
 /// <summary>Canonical rejection code and recorded count for one strategy job's diagnostics.</summary>
-public sealed record SavedPlanRejectionSummary(string Code, int Count);
+public sealed record SavedPlanRejectionSummary(string Code, int Count, string? Explanation = null);
 
 /// <summary>
 /// One job's trades that exited in one New York month. From the published result it holds every such trade; otherwise only

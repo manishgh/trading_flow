@@ -209,6 +209,16 @@ public sealed class WorkspacePulseTests : IDisposable
         Assert.False((await DeskMarketData.TryLoadSchedulesCachedAsync(failing, Now.AddDays(1), 15, cache, CancellationToken.None)).Succeeded);
         Assert.False((await DeskMarketData.TryLoadSchedulesCachedAsync(failing, Now.AddDays(1), 15, cache, CancellationToken.None)).Succeeded);
         Assert.Equal(2, failing.Loads);
+
+        // Requesting a 65-day forward calendar uses its own cache key so forward expiries are covered without colliding with the 1-day strip calendar.
+        var forward = await DeskMarketData.TryLoadSchedulesCachedAsync(provider, Now, 65, cache, CancellationToken.None, daysForward: 65);
+        Assert.True(forward.Succeeded);
+        Assert.NotNull(forward.Schedules);
+        Assert.True(forward.Schedules!.ContainsKey(DateOnly.FromDateTime(Now.UtcDateTime).AddDays(60)));
+        Assert.Equal(2, provider.Loads);
+        var forwardCached = await DeskMarketData.TryLoadSchedulesCachedAsync(provider, Now.AddMinutes(5), 65, cache, CancellationToken.None, daysForward: 65);
+        Assert.Same(forward.Schedules, forwardCached.Schedules);
+        Assert.Equal(2, provider.Loads);
     }
 
     [Fact]

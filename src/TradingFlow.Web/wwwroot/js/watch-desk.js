@@ -15,7 +15,7 @@
     // "Live" needs the open socket, a streamed quote and Alpaca's current confirmation of that stock's subscription.
     const isStreaming = row => row.quote?.source==='socket'&&quoteSocket.state==='live'&&row.quoteStream==='acknowledged';
     const rowNodes = new Map();
-    const returnKey = 'tradingflow.desk.return.v1';
+    const returnKey = 'tradingflow.desk.return';
     const incoming = new URLSearchParams(location.search);
     const environment = (incoming.get('env') || 'paper').toLowerCase();
     const strategyKeys = ['strategyId','semanticVersion','contentSha256','runId'];

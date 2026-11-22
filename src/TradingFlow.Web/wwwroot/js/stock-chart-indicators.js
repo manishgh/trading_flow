@@ -31,7 +31,9 @@
     const dollarFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const subDollarFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
     const mobileQuery = '(max-width: 600px)';
-    const preferenceKey = 'tradingflow.stock-chart.v3';
+    const preferenceKey = 'tradingflow.stock-chart';
+    // Settings saved before the key was renamed; read once and replaced on the next save.
+    const earlierPreferenceKey = 'tradingflow.stock-chart.v3';
 
     // Decode only supported names and options so browser preferences cannot expand the server allowlist.
     function study(token) {
@@ -68,7 +70,7 @@
     // Read browser-local settings when storage is allowed and keep the chart usable in private contexts.
     function preferences() {
         try {
-            const stored = JSON.parse(localStorage.getItem(preferenceKey));
+            const stored = JSON.parse(localStorage.getItem(preferenceKey) ?? localStorage.getItem(earlierPreferenceKey));
             return stored && typeof stored === 'object' ? stored : {};
         } catch {
             return {};
@@ -80,6 +82,7 @@
         try {
             if (settings) localStorage.setItem(preferenceKey, JSON.stringify(settings));
             else localStorage.removeItem(preferenceKey);
+            localStorage.removeItem(earlierPreferenceKey);
         } catch { /* Browser storage can be disabled. */ }
     }
 

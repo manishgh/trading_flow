@@ -224,6 +224,8 @@ public sealed class Ui2RedesignTests
         Assert.Equal(1, longRow.Cells[1].OpenPositions);
         Assert.Equal(["vix_above_long_limit", "min_average_range_pct_not_met", "earnings_blackout"], longRow.TopRejections.Select(x => x.Code));
         Assert.Equal([28, 12, 4], longRow.TopRejections.Select(x => x.Count));
+        // The drawer shows the sentence the server sends; the script holds no thresholds or labels of its own.
+        Assert.All(longRow.TopRejections, item => Assert.False(String.IsNullOrWhiteSpace(item.Explanation)));
 
         var shortRow = Assert.Single(matrix.Rows, r => r.StrategyId == "swing_short_v1");
         Assert.Equal(shortRef.ContentSha256, shortRow.ContentSha256);
@@ -296,7 +298,7 @@ public sealed class Ui2RedesignTests
     }
 
     [Fact]
-    public void DeskUi2ExposesAlwaysVisibleReadinessCompactPausedPreparationAndCascadeSafeLayout()
+    public void DeskExposesAlwaysVisibleReadinessCompactPausedPreparationAndCascadeSafeLayout()
     {
         var layout = WebFile("Pages/Shared/_Layout.cshtml");
         var stylesSectionIdx = layout.IndexOf("@await RenderSectionAsync(\"Styles\", required: false)", StringComparison.Ordinal);
@@ -352,7 +354,7 @@ public sealed class Ui2RedesignTests
         // The wording comes from the server; the script must not carry its own copy of the check labels.
         Assert.DoesNotContain("checkLabels", deskJs);
 
-        var css = Ui2CssBundle();
+        var css = CssBundle();
         foreach (var token in new[]
                  {
                      ".preparation-steps li", "white-space: normal", "[data-preparation-summary][data-compact=\"true\"]",
@@ -365,7 +367,7 @@ public sealed class Ui2RedesignTests
     }
 
     [Fact]
-    public void StrategyLabUi3WiresDirectionPillsWindowPresetsResearchScreenAutoGroupAndMonthlyMatrix()
+    public void StrategyLabWiresDirectionPillsWindowPresetsResearchScreenAutoGroupAndMonthlyMatrix()
     {
         var lab = WebFile("Pages/Backtests.cshtml");
         foreach (var token in new[]
@@ -666,7 +668,7 @@ public sealed class Ui2RedesignTests
     }
 
     [Fact]
-    public void Ui5ContractsCoverCompactScannerChartLevelsRiskTicketLabDrawerAndCatalystsOpra()
+    public void PagesCoverCompactScannerChartLevelsRiskTicketLabDrawerAndCatalystsOpra()
     {
         // 1. 40% left compact 6-col Desk scanner (keeps News col 6!) + 60% right chart window with embedded basic indicators & pinned OPRA
         var desk = WebFile("Pages/Desk.cshtml");
@@ -765,7 +767,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("setTimeout(", catalystsJs);
 
         // CSS rules for UI-5/UI-8/UI-9 features (3-column Desk; compact scanner must NEVER hide News col 6)
-        var css = Ui2CssBundle();
+        var css = CssBundle();
         foreach (var token in new[] { "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)", ".watch-col-close", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
         {
             Assert.Contains(token, css);
@@ -834,7 +836,8 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("data-chart-inline-studies", chartPartial);
 
         var indicatorsJs = WebFile("wwwroot/js/stock-chart-indicators.js");
-        Assert.Contains("const preferenceKey = 'tradingflow.stock-chart.v3';", indicatorsJs);
+        Assert.Contains("const preferenceKey = 'tradingflow.stock-chart';", indicatorsJs);
+        Assert.Contains("localStorage.getItem(preferenceKey) ?? localStorage.getItem(earlierPreferenceKey)", indicatorsJs);
         Assert.Contains("row.title = item.reason;", indicatorsJs);
         Assert.DoesNotContain("[reason, item.reason]", indicatorsJs);
 
@@ -885,7 +888,7 @@ public sealed class Ui2RedesignTests
             Assert.Contains(token, watchDeskJs);
         }
 
-        var css = Ui2CssBundle();
+        var css = CssBundle();
         foreach (var token in new[]
                  {
                      "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)",
@@ -909,7 +912,7 @@ public sealed class Ui2RedesignTests
     // Verifies Checkpoint UI-8 contracts: unified top status/regime strip (D4/D5/G1/G2/G4/G9), 34px scanner & strategy/news rules (D1/D2/G5/G6/G14/G15),
     // chart marker grouping & overlay autoscale fix (D6), neutral resistance pills (D7), compact chart header/overlay readout (G3/G7/G8/D8), and 3-column Desk (D3).
     [Fact]
-    public void Ui8DeskDenseLayoutChartScaleFixAndUnifiedRegimeStripContractsHold()
+    public void DeskDenseLayoutChartScaleAndUnifiedRegimeStripHold()
     {
         var layout = WebFile("Pages/Shared/_Layout.cshtml");
         Assert.DoesNotContain("};    var systemPages =", layout);
@@ -995,7 +998,7 @@ public sealed class Ui2RedesignTests
             Assert.Contains(token, chartJs);
         }
 
-        var css = Ui2CssBundle();
+        var css = CssBundle();
         foreach (var token in new[]
                  {
                      ".sr-only {",
@@ -1102,7 +1105,7 @@ public sealed class Ui2RedesignTests
         }
         Assert.DoesNotContain("'25Δ Skew'", catalystsJs);
 
-        var css = Ui2CssBundle();
+        var css = CssBundle();
         Assert.Contains(".watch-options-metrics dt[title]", css);
         Assert.Contains(".watch-options-badge[title]", css);
         Assert.Contains("cursor: help;", css);
@@ -1112,7 +1115,7 @@ public sealed class Ui2RedesignTests
     // scoped button heights, repo-relative mockup links, toolbar widths, header Buy/Sell placement, no Next action column,
     // distinct study color swatches + click-to-highlight, and readable Options strip with instant [data-tooltip] hover tooltips.
     [Fact]
-    public void Ui9FinalPassContractsCoverCatalogPickersLabTwoColCompactNewsEarningsEmptyTooltipsHighlightsAndThreeFileCss()
+    public void PagesCoverCatalogPickersLabColumnsCompactNewsEarningsTooltipsHighlightsAndStylesheets()
     {
         var root = TestRepository.FindRoot();
 
@@ -1302,7 +1305,7 @@ public sealed class Ui2RedesignTests
         File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", relativePath));
 
     // Concatenates the three consolidated UI 2.0 stylesheets (tokens, components, workspaces) in cascade order.
-    private static string Ui2CssBundle() =>
+    private static string CssBundle() =>
         String.Join("\n", WebFile("wwwroot/css/tokens.css"), WebFile("wwwroot/css/components.css"), WebFile("wwwroot/css/workspaces.css"));
 
     private sealed class InlineContextFactory(DbContextOptions<TradingFlowDbContext> options) : IDbContextFactory<TradingFlowDbContext>

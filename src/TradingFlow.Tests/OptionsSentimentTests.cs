@@ -592,6 +592,79 @@ public sealed class OptionsSentimentTests
         Assert.Equal(Math.Round(0.48m / 6.27m * 100m, 4), snapshot.FrontImpliedMovePct);
     }
 
+    [Fact]
+    public void HolidayAwareTradingDays_ExcludesThanksgivingAndScalesImpliedToAdrRatioAndPreservesSkewProvenance()
+    {
+        // Monday 2026-11-23 15:30 UTC (10:30 NY) -> Friday 2026-11-27 expiry:
+        // Weekdays only (Tue/Wed/Thu/Fri) = 4, but Thursday 2026-11-26 is US Thanksgiving (market closed) => 3 trading days!
+        var mondayUtc = new DateTimeOffset(2026, 11, 23, 15, 30, 0, TimeSpan.Zero);
+        var fridayExpiry = new DateOnly(2026, 11, 27);
+        var monthlyExpiry = new DateOnly(2026, 12, 18); // 25 calendar DTE (inside 20-45 DTE skew window)
+        var thanksgiving = new DateOnly(2026, 11, 26);
+
+        var schedules = new Dictionary<DateOnly, MarketSessionSchedule>();
+        for (var d = new DateOnly(2026, 11, 20); d <= new DateOnly(2026, 12, 20); d = d.AddDays(1))
+        {
+            var isOpen = d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday) && d != thanksgiving;
+            schedules[d] = isOpen ? MarketSessionSchedule.RegularDay(d) : MarketSessionSchedule.Closed(d);
+        }
+
+        // Front straddle: call mid 3.00 + put mid 3.00 = 6.00 / 100 = 6.0% implied move; ADR20 = 2.0%.
+        // 25-delta wings on 2026-12-18: Put $92 (delta -0.26, IV 34.25%) vs Call $108 (delta +0.24, IV 24.15%).
+        var quotes = new[]
+        {
+            Quote("SPY", fridayExpiry, isCall: true, strike: 100m, bid: 2.95m, ask: 3.05m, iv: 0.30m, delta: 0.50m, volume: 500m),
+            Quote("SPY", fridayExpiry, isCall: false, strike: 100m, bid: 2.95m, ask: 3.05m, iv: 0.30m, delta: -0.50m, volume: 500m),
+            Quote("SPY", monthlyExpiry, isCall: true, strike: 108m, bid: 1.15m, ask: 1.25m, iv: 0.2415m, delta: 0.2412m, volume: 400m),
+            Quote("SPY", monthlyExpiry, isCall: false, strike: 92m, bid: 1.45m, ask: 1.55m, iv: 0.3425m, delta: -0.2587m, volume: 700m)
+        };
+
+        // 1. Without calendar: 4 weekdays -> ratio = (6.0 / sqrt(4)) / 2.0 = 1.5000.
+        var weekdayOnly = OptionsSentimentCalculator.Calculate("SPY", mondayUtc, 100m, quotes, adr20Pct: 2.0m);
+        Assert.Equal(4, weekdayOnly.TradingDaysToFrontExpiry);
+        Assert.Equal(1.5000m, weekdayOnly.ImpliedToRealizedAdrRatio);
+
+        // 2. Thanksgiving excluded: 3 trading days -> ratio = (6.0 / sqrt(3)) / 2.0 ~= 1.7321.
+        var expectedRatio = Math.Round(6.0m / (decimal)Math.Sqrt(3) / 2.0m, 4);
+
+        // 3. WithMarketContext recomputes holiday-accurate trading days + sqrt(3)-scaled ADR ratio on a cached snapshot.
+        var cachedWithoutContext = OptionsSentimentCalculator.Calculate("SPY", mondayUtc, 100m, quotes);
+        Assert.Equal(4, cachedWithoutContext.TradingDaysToFrontExpiry);
+        Assert.Null(cachedWithoutContext.ImpliedToRealizedAdrRatio);
+
+        var enriched = OptionsSentimentCalculator.WithMarketContext(cachedWithoutContext, adr20Pct: 2.0m, schedules: schedules);
+        Assert.Equal(3, enriched.TradingDaysToFrontExpiry);
+        Assert.Equal(expectedRatio, enriched.ImpliedToRealizedAdrRatio);
+        Assert.Contains("(3d)", enriched.SummaryNote, StringComparison.Ordinal);
+
+        // 4. Trailing holiday boundary: [2026-11-23..2026-11-26] where Thanksgiving 2026-11-26 is closed must return 2 (Tue/Wed), NOT 3!
+        var mondayNy = new DateOnly(2026, 11, 23);
+        Assert.Equal(2, OptionsSentimentCalculator.CountTradingDaysExclusiveInclusive(mondayNy, thanksgiving, schedules));
+
+        // 5. Non-holiday week: when WithMarketContext changes only ImpliedToRealizedAdrRatio (tradingDays unchanged 4 -> 4),
+        //    SummaryNote must still be refreshed to include the updated implied/ADR ratio.
+        var nonHolidaySchedules = schedules.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Key == thanksgiving ? MarketSessionSchedule.RegularDay(pair.Key) : pair.Value);
+        var normalWeekEnriched = OptionsSentimentCalculator.WithMarketContext(cachedWithoutContext, adr20Pct: 2.0m, schedules: nonHolidaySchedules);
+        Assert.Equal(4, normalWeekEnriched.TradingDaysToFrontExpiry);
+        Assert.Equal(1.5000m, normalWeekEnriched.ImpliedToRealizedAdrRatio);
+        Assert.Contains("implied/ADR 1.50x", normalWeekEnriched.SummaryNote, StringComparison.Ordinal);
+
+        // 6. SkewProvenance carries exact Put/Call strikes, deltas (3 dp), IV% (2 dp), and expiry, preserved across enrichment.
+        foreach (var snap in new[] { weekdayOnly, OptionsSentimentCalculator.WithAdr20Pct(cachedWithoutContext, 2.0m), enriched, normalWeekEnriched })
+        {
+            Assert.NotNull(snap.SkewProvenance);
+            Assert.Equal(monthlyExpiry, snap.SkewProvenance!.ExpirationDate);
+            Assert.Equal(92m, snap.SkewProvenance.PutStrike);
+            Assert.Equal(-0.259m, snap.SkewProvenance.PutDelta);
+            Assert.Equal(34.25m, snap.SkewProvenance.PutIvPct);
+            Assert.Equal(108m, snap.SkewProvenance.CallStrike);
+            Assert.Equal(0.241m, snap.SkewProvenance.CallDelta);
+            Assert.Equal(24.15m, snap.SkewProvenance.CallIvPct);
+        }
+    }
+
     // Helper constructing a synthetic OPRA OptionContractQuote with standard OCC formatting.
     private static OptionContractQuote Quote(
         string underlying,

@@ -12,6 +12,21 @@
     let activeSymbol = null;
     let currentController = null;
     let requestSeq = 0;
+    let lastPayload = null;
+
+    // Returns true when workspace status explicitly indicates we are outside regular US equity market hours.
+    function isOutsideRegularSession() {
+        const status = window.tradingFlowWorkspaceStatus;
+        const session = String(status?.marketSession ?? status?.market ?? '').trim().toLowerCase();
+        if (!session || session.includes('unknown') || session.includes('unavailable')) return false;
+        return !session.includes('regular');
+    }
+
+    // Formats an option strike price without trailing fractional zeroes (e.g. 92 -> "92", 142.5 -> "142.5").
+    function formatStrike(value) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+        return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    }
 
     // Maps canonical RegimeLabel codes to plain-English trader badges, CSS tones, and explanatory tooltips.
     function formatRegime(label) {
@@ -91,6 +106,17 @@
                 : pts < 0
                     ? `Upside Calls are ${Math.abs(pts).toFixed(1)} IV pts pricier than Puts — upside call chasing.`
                     : 'Downside Put and upside Call ~25-delta IV are balanced (0.0 pts).';
+            const prov = snapshot?.skewProvenance;
+            if (prov && typeof prov.putStrike === 'number' && Number.isFinite(prov.putStrike) &&
+                typeof prov.callStrike === 'number' && Number.isFinite(prov.callStrike)) {
+                const expDate = typeof prov.expirationDate === 'string' ? prov.expirationDate.trim() : '';
+                const exp = expDate ? ` (${expDate})` : '';
+                const putDelta = typeof prov.putDelta === 'number' && Number.isFinite(prov.putDelta) ? prov.putDelta.toFixed(2) : '—';
+                const callDelta = typeof prov.callDelta === 'number' && Number.isFinite(prov.callDelta) ? prov.callDelta.toFixed(2) : '—';
+                const putIv = typeof prov.putIvPct === 'number' && Number.isFinite(prov.putIvPct) ? prov.putIvPct.toFixed(1) : '—';
+                const callIv = typeof prov.callIvPct === 'number' && Number.isFinite(prov.callIvPct) ? prov.callIvPct.toFixed(1) : '—';
+                skew += ` · Wings${exp}: Put $${formatStrike(prov.putStrike)} (Δ ${putDelta}, IV ${putIv}%) vs Call $${formatStrike(prov.callStrike)} (Δ ${callDelta}, IV ${callIv}%)`;
+            }
         }
 
         const hasTerm = typeof snapshot?.termStructureSpread === 'number' && Number.isFinite(snapshot.termStructureSpread);
@@ -103,10 +129,13 @@
         }
 
         const hasCp = typeof snapshot?.callPutVolumeRatio === 'number' && Number.isFinite(snapshot.callPutVolumeRatio);
-        let cpvol = 'No liquid Put volume was recorded today to compute today\'s Call/Put volume ratio.';
+        let cpvol = 'No liquid Put volume was recorded to compute a Call/Put volume ratio.';
         if (hasCp) {
             const side = snapshot.callPutVolumeRatio > 1 ? 'more Calls than Puts' : snapshot.callPutVolumeRatio < 1 ? 'more Puts than Calls' : 'even Call and Put volume';
             cpvol = `${snapshot.callPutVolumeRatio.toFixed(2)}x traded Call volume vs Put volume across liquid strikes (${side}).`;
+        }
+        if (isOutsideRegularSession()) {
+            cpvol += ' Outside regular hours this is each contract\'s latest recorded daily volume, normally the last session.';
         }
 
         return { move, skew, term, cpvol };
@@ -270,19 +299,14 @@
             }
             const data = await response.json();
             if (seq !== requestSeq) return;
-            renderCard('spy', data.spy);
-            renderCard('qqq', data.qqq);
-            renderStressChip(data.spy, data.qqq, data.observedAtUtc, null);
-            if (data.selected) {
-                renderCard('selected', data.selected);
-            } else if (selectedCard) {
-                selectedCard.hidden = true;
-            }
+            lastPayload = data;
+            renderPayload(data);
             const stamp = data.observedAtUtc ? new Date(data.observedAtUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
             if (statusEl) statusEl.textContent = stamp ? `Read-only OPRA snapshot · updated ${stamp} (5m cache)` : 'Read-only OPRA snapshot';
         } catch (err) {
             if (err && err.name === 'AbortError') return;
             if (seq !== requestSeq) return;
+            lastPayload = null;
             renderStressChip(null, null, null, err?.message || 'network error');
             if (statusEl) statusEl.textContent = `OPRA options sentiment unavailable (${err?.message || 'network error'}).`;
         } finally {
@@ -292,8 +316,26 @@
         }
     }
 
+    // Re-renders all visible options cards and the stress chip from the last fetched payload without extra network calls.
+    function renderPayload(data) {
+        if (!data) return;
+        renderCard('spy', data.spy);
+        renderCard('qqq', data.qqq);
+        renderStressChip(data.spy, data.qqq, data.observedAtUtc, null);
+        // A redraw must not bring back a stock that is no longer selected.
+        if (data.selected && data.selected.symbol === activeSymbol) {
+            renderCard('selected', data.selected);
+        } else if (selectedCard) {
+            selectedCard.hidden = true;
+        }
+    }
+
     refreshBtn?.addEventListener('click', () => {
         loadOptionsSentiment(activeSymbol);
+    });
+
+    document.addEventListener('workspace-status-changed', () => {
+        if (lastPayload) renderPayload(lastPayload);
     });
 
     window.addEventListener('tradingflow:desk-symbol-selected', (event) => {

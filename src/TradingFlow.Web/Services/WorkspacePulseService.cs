@@ -30,7 +30,8 @@ public sealed class WorkspacePulseService(
     TimeProvider clock,
     IMemoryCache cache,
     ILogger<WorkspacePulseService> logger,
-    IVixCloseSource? vixSource = null)
+    IVixCloseSource? vixSource = null,
+    ICandleStore? candleStore = null)
 {
     private const string PulseCacheKey = "workspace-pulse";
     private static readonly TimeSpan PulseLifetime = TimeSpan.FromSeconds(60);
@@ -83,39 +84,66 @@ public sealed class WorkspacePulseService(
         {
             using var benchmarkDeadline = new CancellationTokenSource(BenchmarkDeadline);
             using var sectorDeadline = new CancellationTokenSource(SectorDeadline);
-            IMarketDataProvider? provider = null;
-            try
+            var requiredCloses = Math.Max(rules.Long?.RequiredCloses ?? 0, rules.Short?.RequiredCloses ?? 0);
+            // Cover all 254 completed sector sessions and any benchmark regime lookback so ICandleStore gap checks
+            // verify every single expected session across the entire window rather than only the newest two weeks.
+            var calendarDaysBack = Math.Max(420, requiredCloses * 2 + 45);
+            var providerLock = new object();
+            IMarketDataProvider? lazyProvider = null;
+            // Creates the provider at most once per strip build, only when a calendar or candle-store miss actually requires it.
+            IMarketDataProvider GetOrCreateProvider()
             {
-                provider = runtimeFactory.CreateProvider(defaultProfile);
-                (scheduleSucceeded, schedules) = await DeskMarketData.TryLoadSchedulesCachedAsync(provider, now, 15, cache, benchmarkDeadline.Token, logger);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Market data provider or exchange calendar unavailable for the regime strip ({ErrorType}).", ex.GetType().Name);
-                scheduleSucceeded = false;
-                schedules = null;
+                lock (providerLock)
+                {
+                    return lazyProvider ??= runtimeFactory.CreateProvider(defaultProfile);
+                }
             }
 
-            if (provider is not null && scheduleSucceeded)
+            try
             {
-                DateOnly? expectedSession = schedules is { Count: > 0 } && VixRegime.TryExpectedPreviousSession(schedules, now, out var expected)
-                    ? expected : null;
-                var sectorTask = LoadSectorsAsync(provider, schedules, expectedSession, now, sectorDeadline.Token);
-                var requiredCloses = Math.Max(rules.Long?.RequiredCloses ?? 0, rules.Short?.RequiredCloses ?? 0);
-                var spyTask = LoadBenchmarkOrReasonAsync(provider, "SPY", requiredCloses, expectedSession, schedules, now, benchmarkDeadline.Token);
-                var qqqTask = LoadBenchmarkOrReasonAsync(provider, "QQQ", requiredCloses, expectedSession, schedules, now, benchmarkDeadline.Token);
-                var (spyBars, spyReason) = await spyTask;
-                var (qqqBars, qqqReason) = await qqqTask;
-                spyPulse = spyBars is null ? UnavailableBenchmark("SPY", spyReason ?? "Unavailable") : EvaluateBenchmark("SPY", spyBars, schedules, now, rules);
-                qqqPulse = qqqBars is null ? UnavailableBenchmark("QQQ", qqqReason ?? "Unavailable") : EvaluateBenchmark("QQQ", qqqBars, schedules, now, rules);
-                previousSession = spyPulse.Available ? spyPulse.LastSessionDate : null;
-                sectors = await sectorTask;
+                try
+                {
+                    (scheduleSucceeded, schedules) = await DeskMarketData.TryLoadSchedulesCachedAsync(
+                        () => runtimeFactory.CreateProvider(defaultProfile),
+                        now,
+                        calendarDaysBack,
+                        cache,
+                        benchmarkDeadline.Token,
+                        logger,
+                        disposeCreatedProvider: true);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Market data provider or exchange calendar unavailable for the regime strip ({ErrorType}).", ex.GetType().Name);
+                    scheduleSucceeded = false;
+                    schedules = null;
+                }
+
+                if (scheduleSucceeded)
+                {
+                    DateOnly? expectedSession = schedules is { Count: > 0 } && VixRegime.TryExpectedPreviousSession(schedules, now, out var expected)
+                        ? expected : null;
+                    var providerName = defaultProfile.Provider;
+                    var sectorTask = LoadSectorsAsync(GetOrCreateProvider, providerName, schedules, expectedSession, now, sectorDeadline.Token);
+                    var spyTask = LoadBenchmarkOrReasonAsync(GetOrCreateProvider, providerName, "SPY", requiredCloses, expectedSession, schedules, now, benchmarkDeadline.Token);
+                    var qqqTask = LoadBenchmarkOrReasonAsync(GetOrCreateProvider, providerName, "QQQ", requiredCloses, expectedSession, schedules, now, benchmarkDeadline.Token);
+                    var (spyBars, spyReason) = await spyTask;
+                    var (qqqBars, qqqReason) = await qqqTask;
+                    spyPulse = spyBars is null ? UnavailableBenchmark("SPY", spyReason ?? "Unavailable") : EvaluateBenchmark("SPY", spyBars, schedules, now, rules);
+                    qqqPulse = qqqBars is null ? UnavailableBenchmark("QQQ", qqqReason ?? "Unavailable") : EvaluateBenchmark("QQQ", qqqBars, schedules, now, rules);
+                    previousSession = spyPulse.Available ? spyPulse.LastSessionDate : null;
+                    sectors = await sectorTask;
+                }
+                else
+                {
+                    spyPulse = UnavailableBenchmark("SPY", "Exchange schedule unavailable");
+                    qqqPulse = UnavailableBenchmark("QQQ", "Exchange schedule unavailable");
+                    sectors = new SectorLeaderRanking(null, [], "Exchange schedule unavailable.");
+                }
             }
-            else
+            finally
             {
-                spyPulse = UnavailableBenchmark("SPY", "Exchange schedule unavailable");
-                qqqPulse = UnavailableBenchmark("QQQ", "Exchange schedule unavailable");
-                sectors = new SectorLeaderRanking(null, [], "Exchange schedule unavailable.");
+                (lazyProvider as IDisposable)?.Dispose();
             }
         }
 
@@ -285,10 +313,11 @@ public sealed class WorkspacePulseService(
             : (1m, $"{side} full size ({band})");
     }
 
-    // Loads a benchmark's daily bars once per completed session: the result is cached when it already contains the expected
-    // latest session, so the one-minute refresh reuses it until the next session completes.
+    // Loads a benchmark's daily bars once per completed session through ICandleStore (reusing persisted native completed 1d
+    // bars when complete), invoking providerFactory lazily only on cache/store miss.
     private async Task<IReadOnlyList<OhlcvBar>> LoadBenchmarkBarsAsync(
-        IMarketDataProvider provider,
+        Func<IMarketDataProvider> providerFactory,
+        string providerName,
         string symbol,
         int requiredCloses,
         DateOnly? expectedSession,
@@ -299,8 +328,20 @@ public sealed class WorkspacePulseService(
         var key = $"workspace-pulse-bars:{symbol}:{expectedSession:yyyy-MM-dd}:{requiredCloses}";
         if (expectedSession is not null && cache.TryGetValue(key, out IReadOnlyList<OhlcvBar>? cached) && cached is not null) return cached;
         var start = now.AddDays(-Math.Max(170, requiredCloses * 2 + 40));
-        var bars = VixRegime.FilterTradingDayBars(
-            await new RegimeGateService(vixSource).LoadBenchmarkDailyBarsAsync(provider, symbol, ["1d", "1h"], start, now, token), schedules);
+        var loaded = await DeskMarketData.LoadDailyBarsWithStoreAsync(
+            providerFactory,
+            [symbol],
+            start,
+            now,
+            Math.Max(1, requiredCloses),
+            schedules,
+            candleStore,
+            providerName,
+            token,
+            allowHourlyFallback: true,
+            vixSource: vixSource,
+            logger: logger);
+        var bars = VixRegime.FilterTradingDayBars(loaded.GetValueOrDefault(symbol) ?? [], schedules);
         var latest = VixRegime.PreviousSession(bars.Where(bar => DeskMarketData.IsCompletedBar(bar, now)).ToArray(), now);
         if (expectedSession is not null && latest == expectedSession) cache.Set(key, bars, TimeSpan.FromHours(20));
         return bars;
@@ -308,7 +349,8 @@ public sealed class WorkspacePulseService(
 
     // Loads one benchmark's bars, turning a timeout or provider error into a plain reason for that benchmark only.
     private async Task<(IReadOnlyList<OhlcvBar>? Bars, string? Reason)> LoadBenchmarkOrReasonAsync(
-        IMarketDataProvider provider,
+        Func<IMarketDataProvider> providerFactory,
+        string providerName,
         string symbol,
         int requiredCloses,
         DateOnly? expectedSession,
@@ -318,7 +360,7 @@ public sealed class WorkspacePulseService(
     {
         try
         {
-            return (await LoadBenchmarkBarsAsync(provider, symbol, requiredCloses, expectedSession, schedules, now, token), null);
+            return (await LoadBenchmarkBarsAsync(providerFactory, providerName, symbol, requiredCloses, expectedSession, schedules, now, token), null);
         }
         catch (OperationCanceledException)
         {
@@ -348,7 +390,8 @@ public sealed class WorkspacePulseService(
 
     // Ranks the configured sector funds for the expected latest completed session, returning a reason on failure.
     private async Task<SectorLeaderRanking> LoadSectorsAsync(
-        IMarketDataProvider provider,
+        Func<IMarketDataProvider> providerFactory,
+        string providerName,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
         DateOnly? expectedSession,
         DateTimeOffset now,
@@ -356,8 +399,8 @@ public sealed class WorkspacePulseService(
     {
         try
         {
-            return await SectorLeadersService.GetLeadersAsync(provider, Path.Combine(paths.ConfigsRoot, "research", "sector-funds.txt"),
-                expectedSession, schedules, now, cache, token);
+            return await SectorLeadersService.GetLeadersAsync(providerFactory, Path.Combine(paths.ConfigsRoot, "research", "sector-funds.txt"),
+                expectedSession, schedules, now, cache, token, candleStore, providerName, logger);
         }
         catch (OperationCanceledException)
         {

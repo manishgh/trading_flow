@@ -1,4 +1,5 @@
 using System.Globalization;
+using TradingFlow.Application.Candidates;
 using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Backtesting;
 using TradingFlow.Web.Models;
@@ -143,6 +144,9 @@ public static class SavedPlanMonthlyMatrixBuilder
             .ToArray();
     }
 
+    // Counts carry no per-check numbers, so each code is explained by its name alone.
+    private static readonly IReadOnlyDictionary<string, string?> NoInputs = new Dictionary<string, string?>();
+
     // Extracts the highest-frequency rejection codes recorded for this single job's strategy diagnostic.
     private static IReadOnlyList<SavedPlanRejectionSummary> BuildTopRejections(BacktestJobSnapshot job, string strategyId)
     {
@@ -157,7 +161,7 @@ public static class SavedPlanMonthlyMatrixBuilder
             .OrderByDescending(pair => pair.Value)
             .ThenBy(pair => pair.Key, StringComparer.Ordinal)
             .Take(MaxTopRejections)
-            .Select(pair => new SavedPlanRejectionSummary(pair.Key, pair.Value))
+            .Select(pair => new SavedPlanRejectionSummary(pair.Key, pair.Value, GateCheckExplanation.Describe(pair.Key, NoInputs)))
             .ToArray();
     }
 

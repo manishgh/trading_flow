@@ -49,7 +49,8 @@ public sealed class CatalystOptionsAdrService(
     AlpacaQuoteService quotes,
     TimeProvider clock,
     IMemoryCache cache,
-    ILogger<CatalystOptionsAdrService> logger)
+    ILogger<CatalystOptionsAdrService> logger,
+    ICandleStore? candleStore = null)
 {
     internal const int RequiredAdrSessions = 20;
     internal const int MaxSymbolsPerRequest = 6;
@@ -250,7 +251,43 @@ public sealed class CatalystOptionsAdrService(
         _ => "extreme"
     };
 
-    /// <summary>Loads options snapshots and ADR% for 1–6 symbols under a 6-second limit, degrading each symbol on its own.</summary>
+    private const int CalendarDaysBack = 65;
+    private const int CalendarDaysForward = 65;
+
+    /// <summary>
+    /// Loads the cached exchange session calendar covering 65 days back and 65 days forward (spanning the 60 DTE OPRA
+    /// expiry window) so Desk and Catalysts options cards count holiday-accurate trading days to expiry. Checks
+    /// <see cref="IMemoryCache"/> before reading paper config or allocating a provider, deduplicates concurrent cold misses
+    /// via <see cref="DeskMarketData.TryLoadSchedulesCachedAsync"/>, and disposes any created provider. Returns null on
+    /// missing profile or provider outage so callers degrade gracefully to weekday counts.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?> TryLoadOptionsSchedulesAsync(CancellationToken deadlineToken)
+    {
+        try
+        {
+            var (succeeded, schedules) = await DeskMarketData.TryLoadSchedulesCachedAsync(
+                () =>
+                {
+                    var profile = catalog.DefaultPaperConfig()?.Config;
+                    return profile is null ? null : runtimeFactory.CreateProvider(profile);
+                },
+                clock.GetUtcNow().ToUniversalTime(),
+                CalendarDaysBack,
+                cache,
+                deadlineToken,
+                logger: logger,
+                daysForward: CalendarDaysForward,
+                disposeCreatedProvider: true);
+            return succeeded ? schedules : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !deadlineToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Exchange calendar for options trading-day context could not be read ({ErrorType}).", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    /// <summary>Loads options snapshots, holiday-aware trading days, and ADR% for 1–6 symbols under a 6-second limit, degrading each symbol on its own.</summary>
     public async Task<CatalystOptionsAdrResponse> LoadAsync(string[] symbols, CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow().ToUniversalTime();
@@ -258,21 +295,24 @@ public sealed class CatalystOptionsAdrService(
         deadline.CancelAfter(RequestDeadline);
 
         var adrTask = LoadAdrAsync(symbols, deadline.Token);
+        var schedulesTask = TryLoadOptionsSchedulesAsync(deadline.Token);
         var spotHints = await DeskOptionsEndpoints.TryLoadSpotHintsAsync(quotes, symbols, deadline.Token, cancellationToken);
         var opraTasks = symbols.ToDictionary(
             symbol => symbol,
             symbol => TryLoadOptionsSnapshotAsync(symbol, spotHints.GetValueOrDefault(symbol), now, deadline.Token, cancellationToken),
             StringComparer.OrdinalIgnoreCase);
 
-        await Task.WhenAll(opraTasks.Values.Cast<Task>().Append(adrTask));
+        await Task.WhenAll(opraTasks.Values.Cast<Task>().Append(adrTask).Append(schedulesTask));
         var adrBySymbol = await adrTask;
+        var schedules = await schedulesTask;
 
         var cards = new List<CatalystOptionsAdrCard>(symbols.Length);
         foreach (var symbol in symbols)
         {
-            var snapshot = await opraTasks[symbol];
+            var rawSnapshot = await opraTasks[symbol];
             var adr = adrBySymbol.GetValueOrDefault(symbol) ?? new Adr20CalculationResult(null, null, "ADR% unavailable");
-            var ratio = ComputeDailyImpliedMoveToAdrRatio(snapshot, adr.Adr20Pct);
+            var snapshot = OptionsSentimentCalculator.WithMarketContext(rawSnapshot, adr.Adr20Pct, schedules);
+            decimal? ratio = snapshot.ImpliedToRealizedAdrRatio is { } value ? Math.Round(value, 2) : null;
             cards.Add(new CatalystOptionsAdrCard(symbol, snapshot.FrontImpliedMovePct, snapshot.TradingDaysToFrontExpiry, adr.Adr20Pct,
                 adr.AsOfSessionDate, ratio, snapshot.Skew25Delta, snapshot.RegimeLabel, snapshot.SummaryNote, adr.UnavailableReason,
                 ClassifyImpliedMoveBand(ratio)));
@@ -316,8 +356,8 @@ public sealed class CatalystOptionsAdrService(
     // Cache key for one symbol's ADR on one New York date (a session's bars complete once per day).
     private static string AdrKey(string symbol, DateOnly nyDate) => $"adr20:{symbol.ToUpperInvariant()}:{nyDate:yyyy-MM-dd}";
 
-    // Downloads 65 days of daily bars for the symbols under its own limit (not a caller's), computes ADR% and caches each
-    // successful result under that New York date's key (12 hours at most, so it never outlives the date); failures are logged and not cached.
+    // Loads 65 days of daily bars through ICandleStore (allocating and disposing a provider lazily only on calendar/store miss)
+    // under its own limit, computes ADR% and caches each successful result under that New York date's key; failures are logged and not cached.
     private async Task<Dictionary<string, Adr20CalculationResult>> DownloadAdrAsync(IReadOnlyList<string> symbols, DateOnly nyDate, DateTimeOffset now)
     {
         var result = new Dictionary<string, Adr20CalculationResult>(StringComparer.OrdinalIgnoreCase);
@@ -329,22 +369,45 @@ public sealed class CatalystOptionsAdrService(
         }
 
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var providerLock = new object();
+        IMarketDataProvider? lazyProvider = null;
+        // Creates the provider at most once per ADR download batch, only when calendar cache or ICandleStore actually misses.
+        IMarketDataProvider GetOrCreateProvider()
+        {
+            lock (providerLock)
+            {
+                return lazyProvider ??= runtimeFactory.CreateProvider(profile);
+            }
+        }
+
         try
         {
-            var provider = runtimeFactory.CreateProvider(profile);
-            var (scheduleSucceeded, schedules) = await DeskMarketData.TryLoadSchedulesAsync(provider, now, 65, deadline.Token, logger: logger);
+            var (scheduleSucceeded, schedules) = await DeskMarketData.TryLoadSchedulesCachedAsync(
+                () => runtimeFactory.CreateProvider(profile),
+                now,
+                CalendarDaysBack,
+                cache,
+                deadline.Token,
+                logger: logger,
+                daysForward: CalendarDaysForward,
+                disposeCreatedProvider: true);
             if (!scheduleSucceeded)
             {
                 foreach (var symbol in symbols) result[symbol] = new Adr20CalculationResult(null, null, "Exchange schedule unavailable");
                 return result;
             }
 
-            var bars = new Dictionary<string, List<OhlcvBar>>(StringComparer.OrdinalIgnoreCase);
-            await foreach (var bar in provider.GetBarsAsync(symbols, ["1d"], now.AddDays(-65), now, deadline.Token))
-            {
-                if (!bars.TryGetValue(bar.Ticker, out var list)) bars[bar.Ticker] = list = [];
-                list.Add(bar);
-            }
+            var bars = await DeskMarketData.LoadDailyBarsWithStoreAsync(
+                GetOrCreateProvider,
+                symbols,
+                now.AddDays(-CalendarDaysBack),
+                now,
+                RequiredAdrSessions,
+                schedules,
+                candleStore,
+                profile.Provider,
+                deadline.Token,
+                logger: logger);
 
             foreach (var symbol in symbols)
             {
@@ -364,6 +427,10 @@ public sealed class CatalystOptionsAdrService(
         {
             logger.LogWarning(ex, "Daily bars for ADR% could not be read for {Symbols} ({ErrorType}).", string.Join(",", symbols), ex.GetType().Name);
             foreach (var symbol in symbols) result.TryAdd(symbol, new Adr20CalculationResult(null, null, "Daily bars could not be read."));
+        }
+        finally
+        {
+            (lazyProvider as IDisposable)?.Dispose();
         }
 
         return result;
