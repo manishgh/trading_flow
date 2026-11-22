@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
 
     <!-- Semantic colour tokens.
-         Mirrors src/TradingFlow.Web/wwwroot/css/site.css so both surfaces share one
+         Mirrors src/TradingFlow.Web/wwwroot/css/base.css so both surfaces share one
          vocabulary and one set of contrast-verified values.
 
          Every pair is Light/Dark. Consume them with AppThemeBinding, never as a bare

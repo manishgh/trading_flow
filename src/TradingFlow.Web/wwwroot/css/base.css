@@ -924,7 +924,7 @@ pre {
   background: var(--bad-fill);
   border-color: var(--bad-fill);
 }
-/* The toast lives in the layout and is styled by .toast in modernist.css.
+/* The toast lives in the layout and is styled by .toast in this file.
    This alias keeps the older `.signal-toast` hook working for any screen not
    yet migrated; visibility is the `hidden` attribute, as everywhere else. */
 .news-inline-link,
@@ -2670,7 +2670,7 @@ progress.tf-progress.is-complete { --progress-color: var(--color-neutral-600); }
 /* ---- modernist ---- */
 /* Modernist component layer.
 
-   The design system's own classes, authored against the tokens in site.css.
+   The design system's own classes, authored against the tokens in this file.
    Source of truth for the intended look: design/tokens/modernist.styles.css and
    design/tokens/README-tokens.md. This file is the app's copy of that vocabulary
    with two deliberate differences:
@@ -2679,7 +2679,7 @@ progress.tf-progress.is-complete { --progress-color: var(--color-neutral-600); }
        defaults in the source file, because these are operator screens
      - colours resolve through --color-* so the dark and CVD schemes keep working
 
-   Nothing page-specific belongs here. Page rules live in site.css. */
+   Nothing page-specific belongs here. Page rules live in the page sections. */
 /* ---------------------------------------------------------------------------
    Buttons
    Labels are flush left everywhere, including .btn-block: a column of buttons
@@ -2990,7 +2990,7 @@ input[type="checkbox"] { accent-color: var(--color-accent); width: 16px; height:
    Tables
    Shared by the desk grid, positions, orders, wishlists and operations. Any
    table whose min-content width can exceed its column must sit inside
-   .table-scroll (declared in site.css).
+   .table-scroll (declared in this file).
    --------------------------------------------------------------------------- */
 .grid-table { width: 100%; border-collapse: collapse; }
 .grid-table th {
@@ -3105,7 +3105,7 @@ th[aria-sort="descending"] .sort-header::after { content: "\25BE"; }
    and wwwroot/js/desk-presets.js and appended to document.body. No Razor page
    carries this markup, so every selector below is authored against DOM those two
    scripts create. Colour comes from the shared token set only; visibility is the
-   `hidden` attribute, which site.css already forces to `display: none`. */
+   `hidden` attribute, which this file already forces to `display: none`. */
 /* ---------------------------------------------------------------------------
    Command palette
    A modal layer. .signal-toast is the highest content layer at z-index 1000, so
@@ -3217,7 +3217,7 @@ th[aria-sort="descending"] .sort-header::after { content: "\25BE"; }
    stored query string, so every control here is a button that ends in a
    location change or a localStorage write - never a form submission.
    --------------------------------------------------------------------------- */
-/* Neither surface animates. The global prefers-reduced-motion rule in site.css
+/* Neither surface animates. The global prefers-reduced-motion rule in this file
    already neutralises transitions; this states the intent locally so a future
    hover flourish cannot reintroduce motion on a live trading screen. */
 @media (prefers-reduced-motion: reduce) {
@@ -3395,9 +3395,9 @@ fieldset.lab-block legend+* {clear:both }
 .prep-tag.is-attention { background: var(--warn-surface); color: var(--warn-ink); border: 1px solid var(--warn-border); }
 .prep-tag.is-failed { background: var(--bad-surface); color: var(--bad); border: 1px solid var(--bad-border); }
 /* The phone summary and the floating ticket action are phone controls.
-   modernist.css loads after site.css, and its .metric-strip and .btn display
+   The modernist rules come after the site rules, and their .metric-strip and .btn display
    rules re-showed both at desktop width; this puts them back behind the phone
-   breakpoint where site.css meant them to be. */
+   breakpoint where the site rules meant them to be. */
 /* The strip carries eight cells now: the seven operational ones plus the
    account-wide portfolio. Same breakpoint as the site rule it widens. */
 /* Phone: choosing what to monitor happens at the list level - the universe

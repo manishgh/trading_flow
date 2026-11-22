@@ -82,6 +82,8 @@ Housekeeping
   fail-closed `max_long_put_skew` / `min_short_put_call_skew` Paper/Desk/Mobile vetoes rejected upfront in historical
   backtests and signal studies (`0 warnings / 0 errors` Debug build, `78/78` Round 2 tests green, all 10 `v1` swing
   strategy hashes unchanged, both independent reviewers ACCEPT in Round 2).
+  The two skew vetoes were removed on `ui/redesign-v2` on 22 Nov (commit `35c0148`): no option history is stored, so a
+  backtest could never test them. The options readings stay as display only; `main` still has the vetoes.
 - `982feda` FRED `VIXCLS` Windows Schannel TLS fix (19 Nov): HTTP/1.1 exact + scoped System32 OpenSSL `curl.exe` fallback
   for `fred.stlouisfed.org` (`33/33` tests green, both reviewers ACCEPT).
 - `6297fc3` Checkpoint 9 (Web UI Research Screen Builder, Two-Step 5-Minute Bar Collector & `Minimum ADR%` Daily Eligibility, 19 Nov):
