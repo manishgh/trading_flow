@@ -115,7 +115,7 @@ Not proposed: orders, risk, account protection, no-look-ahead, fills and costs i
 ## 5. Removed on 23 November 2026
 
 The search was repeated at type level and for services that the site registers but nothing asks for, until it found nothing new.
-**110 types and 25 methods, about 7,400 production lines; about 170 test cases and 19 test files.** In addition to section 2 steps
+**107 types and 25 methods, about 7,200 production lines; about 162 test cases and 18 test files.** In addition to section 2 steps
 1a and 1b: evidence backup, retention and orphan check; point-in-time universe builder and publication; exchange-session
 resolvers; desk preparation, desk evidence, screener verification and wishlist resolver services; unused transport records.
 
@@ -126,9 +126,14 @@ Kept although nothing calls them:
 
 | Kept | Why |
 |---|---|
-| , , , holdout registry calls |  requires the promotion and untouched-test-period rules |
-|  | Can answer what blocked signals would have done (VIX comparison) |
-|  |  says its dormant source must stay; the user decides |
-|  | Published contract with the Market Predictor project |
+| `SwingResearchPromotionEvaluator`, `CatalystGroundTruthPromotionGate`, `ConfiguredPromotionPrincipalAuthorizer`, holdout registry calls | `operating-boundaries.md` requires the promotion and untouched-test-period rules |
+| `PromotionEvaluator` with its tests (removed first, restored after review) | Promotion limits: sample size, out-of-sample, benchmark, walk-forward |
+| `BacktestOpportunityShadowReplay` | Can answer what blocked signals would have done (VIX comparison) |
+| `TradingFlow.Etoro` | `ProductionCompositionTests` says its dormant source must stay; the user decides |
+| `MarketPredictorHttpClient.GetBatchAsync` | Published contract with the Market Predictor project |
 | Android app records | The Android app was not built here |
-| About 38 short methods used only by tests | Test access or older variants; section 2 review continues |
+| About 38 short methods used only by tests | Test access or older variants; the review continues |
+
+Consequences the user should know: no code backs up the evidence catalog (`tradingflow.db` backups continue), and historical
+universe membership, which promotion requires, must be rebuilt or restored from git (`32da8f8`) when it is needed. Section 1b had recommended keeping
+both; the instruction "remove all dead code" decided it. `UniverseRankConfig` is still read from run files but no longer used.

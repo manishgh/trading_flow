@@ -87,7 +87,7 @@ Rules, from `AGENTS.md` and the user:
   `/v2/stocks/snapshots` (`AlpacaQuoteService.GetPreviousClosesAsync`, cached per
   symbol per New York day); recomputed by `trading-flow-desk.js` on every live quote;
   optional sortable `Chg %` column.
-- **Preparation** (`Services/DeskPreparationService.cs`): reads the warmup service
+- **Preparation** (`Services/DeskPreparationService.cs`, removed on 23 November 2026 because no page used it): read the warmup service
   (`WarmupService:BaseUrl`, default `http://127.0.0.1:53120`) with a 2 s budget; shows
   Ready / Queued / Stale (>24 h) / Failed / Not prepared per symbol; Prepare queues
   the ones that need it. "Preparation" was interpreted as the Warmup feature; the

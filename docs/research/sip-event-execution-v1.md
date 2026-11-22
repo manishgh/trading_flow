@@ -25,6 +25,7 @@ parent to have filled and its report to be available. Custom per-fill protection
 is a distinct primitive and must not be described as a native bracket. A native
 parent partially filled at route expiry has no assumed repair or child orders.
 
+*Removed from the code on 23 November 2026 because nothing called it; the last version is in git at `32da8f8`.*
 `EventBacktestExecutionReplay.ReplayAsync` is the additive single-opportunity
 research coordinator. Its inputs are a frozen raw-unit intent from the shared
 strategy brain, a complete event timeline, explicit future daily liquidation

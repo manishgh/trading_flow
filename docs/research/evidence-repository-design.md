@@ -437,6 +437,9 @@ Production:
 - no shared SQLite database on Azure Files;
 - retention and deletion operate through catalog references and pins.
 
+*Status 23 November 2026: the unused retention, orphan-check and catalog-backup services were removed from the code (last version in git
+at `32da8f8`). Nothing deletes evidence, and no code backs up the evidence catalog; the rules below apply to any future service.*
+
 Raw evidence is retained for at least 24 calendar months and indefinitely when pinned by a
 promotion, holdout, audit, or legal hold. Research manifests, quality reports,
 promotion decisions, and operational journals are retained indefinitely.

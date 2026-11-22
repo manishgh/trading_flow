@@ -53,9 +53,9 @@ snapshots. This separation is a genuine strength — keep it.
 ### Trustworthiness layer (recent work, phase 0)
 - **Point-in-time universe** (`HistoricalScreenerUniverseProvider`): no-lookahead
   selection, per-run or per-day, static / Finviz / both candidate pools.
-- **Execution realism** (`ExecutionRealismModel`): bar-participation fill cap + SEC/FINRA
+- **Execution realism** (`DeterministicExecutionSimulator`): bar-participation fill cap + SEC/FINRA
   regulatory costs.
-- **Promotion gate** (`PromotionEvaluator`): min trades, OOS, benchmark, walk-forward,
+- **Promotion gate** (`PromotionEvaluator`, not called by a program yet): min trades, OOS, benchmark, walk-forward,
   ticker-concentration.
 - **Universe evidence gate** (`UniversePromotionEligibilityValidator`): promotion fails
   closed unless the run carries a point-in-time membership ledger and provider snapshot
