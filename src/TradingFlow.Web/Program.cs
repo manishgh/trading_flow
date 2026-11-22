@@ -312,7 +312,9 @@ builder.Services.AddSingleton<IVixCloseSource>(serviceProvider =>
     return new FredVixCloseSource(
         () => clients.CreateClient(FredVixCloseSource.HttpClientName),
         serviceProvider.GetRequiredService<TimeProvider>(),
-        serviceProvider.GetRequiredService<ILogger<FredVixCloseSource>>());
+        serviceProvider.GetRequiredService<ILogger<FredVixCloseSource>>(),
+        // Windows .NET TLS to FRED can hang past its timeout; Windows' curl.exe answers in about half a second.
+        preferSystemCurl: OperatingSystem.IsWindows());
 });
 // Read-only Alpaca paid OPRA options sentiment context for Desk display and optional strategy skew gates.
 builder.Services.AddHttpClient(TradingFlow.Alpaca.AlpacaOptionsSnapshotClient.HttpClientName, client =>

@@ -32,7 +32,6 @@
     const reviewKey = savedDesk?.preparationKey || incoming.get('preparationKey');
     let started = false, restoredView = false;
     let deskChart, chartSymbol, deskChartZones = [], deskChartZonesSymbol = null, deskChartSeriesInfo = '', deskHighlightedOverlay = null;
-    let scannerDensity = 'compact';
     let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '';
     const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];
     const moneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2});
@@ -67,7 +66,6 @@
             }
             state.newsForAll=value.newsForAll!==false;
             state.evidenceOpen=value.evidenceOpen===true;
-            if(value.scannerDensityV2==='compact'||value.scannerDensityV2==='full')state.scannerDensityV2=value.scannerDensityV2;
             return state;
         }catch{return null;}
     }
@@ -77,26 +75,10 @@
         const choice=selectedStrategyChoice(), table=document.querySelector('.watch-table-scroll');
         const url='/Desk'+(incoming.has('env')?'?env='+encodeURIComponent(environment):'');
         return {url,operator,environment,source:el('source').value,search:el('search').value,sort:el('sort').value,view,page,selected,newsForAll,
-            scannerDensityV2:scannerDensity,
             strategyId:choice?.strategy.strategyId,semanticVersion:choice?.strategy.semanticVersion,
             contentSha256:choice?.strategy.contentSha256,runId:choice?.candidateRunId,
             preparationKey:el('source').value==='prepared'?reviewKey:undefined,evidenceOpen:el('evidence')?.open,
             scrollY:window.scrollY,tableLeft:table.scrollLeft,tableTop:table.scrollTop,newsTop:el('news').scrollTop};
-    }
-
-    // Switches the Desk scanner between fewer-column compact mode (default, keeping News visible) and all-column mode.
-    function setScannerDensity(mode){
-        scannerDensity = mode === 'full' ? 'full' : 'compact';
-        const table = document.querySelector('.watch-table');
-        if (table) table.dataset.scannerDensity = scannerDensity;
-        const toggle = el('density-toggle');
-        if (toggle) {
-            toggle.textContent = scannerDensity === 'compact' ? 'Fewer columns' : 'All columns';
-            toggle.setAttribute('aria-pressed', String(scannerDensity === 'compact'));
-            toggle.title = scannerDensity === 'compact'
-                ? 'Showing fewer columns (keeps News; click any row to select); click for all columns'
-                : 'Showing all columns; click for fewer columns';
-        }
     }
 
     // Mirrors whether a strategy is selected onto .watch-table so the Strategy column stays hidden until chosen.
@@ -149,7 +131,7 @@
     // Load normal sources with an explicit optgroup for every item, including any owner-verified prepared list.
     async function sources(chosen, strictPrepared = true) {
         catalog = await api('sources');
-        el('source').replaceChildren();el('follow-list').replaceChildren();el('add-list').replaceChildren();
+        el('source').replaceChildren();el('add-list').replaceChildren();
         const prepared=await readPreparedOption();
         if(prepared) catalog.push(prepared);
         const groups=[...new Set(catalog.map(x=>x.group||'Overview'))];
@@ -158,7 +140,7 @@
             optgroup.label=group;
             for (const item of catalog.filter(x=>(x.group||'Overview')===group)) {
                 optgroup.append(new Option(item.name,item.key));
-                if(item.key.startsWith('wishlist:')){el('follow-list').add(new Option(item.name,item.key.slice(9)));el('add-list').add(new Option(item.name,item.key.slice(9)));}
+                if(item.key.startsWith('wishlist:'))el('add-list').add(new Option(item.name,item.key.slice(9)));
             }
             el('source').append(optgroup);
         }
@@ -357,7 +339,7 @@
         if(snapshot&&selected)renderFocus();
         updateHealth();
     }
-    function patchRow(row){const node=rowNodes.get(row.membership.symbol);if(node){updateStockRow(node,row);ageStockRow(node,row);updateRowAction(node,row);}}
+    function patchRow(row){const node=rowNodes.get(row.membership.symbol);if(node){updateStockRow(node,row);ageStockRow(node,row);}}
     // Use a streamed quote only when it is newer than the row's; a snapshot quote is never relabelled as streamed.
     function mergeLiveQuote(row){
         const item=quoteSocket.items.get(row.membership.symbol);
@@ -546,71 +528,66 @@
     }
     // Display completed 1d values independently of quote freshness, and keep SIP daily volume separate.
     function renderDailyCells(node,row){
-        const technical=dailyTechnical(row), detail=dailyTechnicalDetail(row);
-        const cell=node.querySelector('.watch-technical'), rvol=node.querySelector('.watch-rvol');
-        for(const value of cell.querySelectorAll('[data-technical]')){
-            const field=value.dataset.technical, observed=technical?.[field];
-            value.textContent=Number.isFinite(observed)?(field==='rsi'?number(observed):money(observed)):'—';
-        }
-        cell.title=detail;
+        const technical=dailyTechnical(row), detail=dailyTechnicalDetail(row), rvol=node.querySelector('.watch-rvol');
         const relative=technical?.relativeVolume, atr=technical?.atr;
         rvol.querySelector('strong').textContent=Number.isFinite(relative)&&relative>=0?number(relative)+'×':'—';
-        rvol.querySelector('small').textContent=Number.isFinite(atr)&&atr>=0?'ATR '+money(atr):'ATR —';
-        rvol.title=detail;
-        const volume=node.querySelector('.watch-volume'), observation=sessionVolume(row);
-        volume.querySelector('strong').textContent=observation?volumeFormat.format(observation.volume):'—';
-        volume.querySelector('small').textContent=observation?observation.sessionDate:'Unavailable';
-        volume.title=observation?number(observation.volume)+' SIP shares · '+observation.sessionDate+
-            ' NY · observed '+when(observation.asOfUtc)+' · includes regular and extended hours and excludes overnight feed':
-            'No verified SIP session volume.';
+        // The column header says "RVOL · ATR", so the cell shows the ATR dollar value without repeating the label.
+        rvol.querySelector('small').textContent=Number.isFinite(atr)&&atr>=0?money(atr):'—';
+        rvol.title='RVOL '+(Number.isFinite(relative)?number(relative)+'×':'—')+' · ATR '+money(atr)+' · '+detail;
     }
 
-    // Formats midpoint daily percent change against the server's previous close with a non-colour direction glyph; fails closed when either price is absent.
+    // True only during the regular New York session, when "mid vs previous close" really is today's change.
+    // The server sends the session as Closed, Overnight, Premarket, Regular, AfterHours or Unknown.
+    function isRegularSession(){
+        return String(snapshot?.session||'').toLowerCase().startsWith('regular');
+    }
+
+    // Names the quote that is being compared outside regular hours, without claiming the market is closed when the
+    // session is overnight or could not be read.
+    function quoteSessionLabel(row){
+        const session=String(snapshot?.session||'').toLowerCase();
+        if(row.quote?.feed==='overnight'||session==='overnight')return 'Overnight quote';
+        if(session.startsWith('pre'))return 'Pre-market quote';
+        if(session.startsWith('post')||session==='afterhours')return 'After-hours quote';
+        if(session.startsWith('closed'))return 'Latest quote (market closed)';
+        return 'Latest quote (session unknown)';
+    }
+
+    // Says exactly what the percentage compares, e.g. "After-hours quote vs 2026-11-20 close $594.51". The previous
+    // close is the latest completed session before today in New York, so on a weekday evening the figure includes
+    // today's regular-session move as well as the after-hours move.
+    function changeBasisTitle(row){
+        const date=row.previousClose?.sessionDate;
+        return quoteSessionLabel(row)+' vs '+(date?date+' close ':'previous close ')+money(row.previousClose?.close)+
+            '. This includes every move since that close, not only the latest session.';
+    }
+
+    // Formats the midpoint's percent change against the server's previous close with a non-colour direction glyph;
+    // fails closed when either price is absent (the tooltip then still names the previous close when it is known).
     function formatRowDayChange(row){
         const prev = row.previousClose?.close, mid = row.quote?.midPrice;
-        if (!(prev > 0) || typeof mid !== 'number' || !Number.isFinite(mid)) return { text: '—', value: null };
+        const fallbackTitle = prev > 0 ? 'Prev close ' + money(prev) : '';
+        if (!(prev > 0) || typeof mid !== 'number' || !Number.isFinite(mid)) return { text: '—', value: null, title: fallbackTitle };
         const pct = (mid / prev - 1) * 100;
-        if (!Number.isFinite(pct)) return { text: '—', value: null };
+        if (!Number.isFinite(pct)) return { text: '—', value: null, title: fallbackTitle };
         const abs = Math.abs(pct).toFixed(2) + '%';
-        if (pct > 0) return { text: '▲ +' + abs, value: pct };
-        if (pct < 0) return { text: '▼ \u2212' + abs, value: pct };
-        return { text: '0.00%', value: 0 };
+        const title = isRegularSession() ? 'Today: midpoint vs previous close ' + money(prev) : changeBasisTitle(row);
+        if (pct > 0) return { text: '▲ +' + abs, value: pct, title };
+        if (pct < 0) return { text: '▼ \u2212' + abs, value: pct, title };
+        return { text: '0.00%', value: 0, title };
     }
 
-    // Render compact 1-line stored news counts: empty at 0/0, ▲N ▼M when active, and Unavailable on read failure.
-    function renderNewsSentiment(cell,row){
-        const summary=row.newsSentiment, positive=cell.querySelector('.watch-news-positive');
-        const negative=cell.querySelector('.watch-news-negative');
-        const asOf=Date.parse(summary?.asOfUtc), start=Date.parse(summary?.windowStartUtc), now=Date.now();
-        const stale=!connected||!Number.isFinite(asOf)||asOf>now+5000||now-asOf>30000;
-        const available=summary?.available===true;
-        const windowNote=available?(stale?'Observed 1h · partial':'Last 1h · partial'):'News read unavailable';
-        if(!available){
-            positive.textContent='Unavailable';
-            positive.hidden=false;
-            positive.classList.remove('watch-gain');
-            negative.textContent='';
-            negative.hidden=true;
-            negative.classList.remove('watch-loss');
-        }else if(summary.positive===0&&summary.negative===0){
-            positive.textContent='';
-            positive.hidden=true;
-            positive.classList.remove('watch-gain');
-            negative.textContent='';
-            negative.hidden=true;
-            negative.classList.remove('watch-loss');
-        }else{
-            positive.textContent='▲'+summary.positive;
-            positive.hidden=false;
-            positive.classList.toggle('watch-gain',summary.positive>0);
-            negative.textContent='▼'+summary.negative;
-            negative.hidden=false;
-            negative.classList.toggle('watch-loss',summary.negative>0);
-        }
-        cell.title=available?`${windowNote} · ${summary.positive} positive · ${summary.negative} negative · ${summary.neutral} neutral · ${summary.unscored} unscored · ` +
-            when(Number.isFinite(start)?summary.windowStartUtc:null)+' → '+when(Number.isFinite(asOf)?summary.asOfUtc:null):
-            'Stored news counts could not be read.';
+    // Relabels the change column (text and tooltip) so it never claims "Day %" for an after-hours or weekend comparison.
+    function renderChangeHeader(){
+        const head=el('change-head');
+        if(!head)return;
+        const regular=isRegularSession();
+        head.textContent=regular?'Today':'Since close';
+        head.title=regular
+            ?'Percent change of the bid/ask midpoint since the previous close'
+            :'Percent change of the latest midpoint since the previous completed session\u2019s close; outside regular hours this includes every move since that close';
     }
+
     // Render server-provided facts and recorded checks without introducing client-side strategy thresholds.
     function render() {
         if(!snapshot)return;
@@ -630,37 +607,21 @@
         rows.forEach((row,index)=>{const node=rowNodes.get(row.membership.symbol),at=el('rows').children[index];if(at!==node)el('rows').insertBefore(node,at||null);});
         el('empty').hidden=rows.length>0;
         if(!rows.length){el('empty').querySelector('strong').textContent=snapshot.selection.error?'Screen unavailable':filter?'No matching stocks':'No stocks in this view';el('empty').querySelector('p').textContent=snapshot.selection.error?'The failed screen is not being shown as a successful empty result.':filter?'Try a different symbol or clear the search.':'Add stocks to a stock group or select a screener to discover stocks.';}
-        renderFocus();renderNews();ageRows();updateHealth();
+        renderChangeHeader();renderFocus();renderNews();ageRows();updateHealth();
     }
-    // Stable native buttons preserve keyboard focus while quotes update cell text on compact single-line rows.
+    // Builds one stock row: symbol, previous close, current midpoint, change since that close, strategy status, RVOL/ATR.
+    // Buy and Sell live in the chart header for the selected stock, news in the right column, technicals under the chart.
     function createStockRow(symbol){
         const row=document.createElement('tr');
         row.dataset.symbol=symbol;
-        row.innerHTML=`<td><button type="button" class="watch-symbol-button"></button></td>
-            <td class="watch-row-price"><strong></strong><span class="watch-day-change"></span></td>
-            <td><div class="watch-trade-buttons">
-                <button type="button" data-order-side="buy">Buy<span class="watch-order-price"></span></button>
-                <button type="button" data-order-side="sell">Sell<span class="watch-order-price"></span></button>
-            </div></td>
-            <td class="watch-row-strategy"><strong></strong><small></small></td>
-            <td class="watch-row-position"><strong></strong><small></small></td>
-            <td class="watch-news-summary"><span class="watch-news-counts"><span class="watch-news-positive"></span><span class="watch-news-negative"></span></span></td>
-            <td class="watch-technical">
-                <div>SMA 10/20 <span data-technical="sma10"></span> / <span data-technical="sma20"></span></div>
-                <div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div>
-                <div>RSI <span data-technical="rsi"></span></div>
-            </td>
-            <td class="watch-rvol"><strong></strong><small>Daily</small></td>
-            <td class="watch-volume"><strong></strong><small></small></td>`;
+        row.innerHTML=`<td class="watch-col-stock"><button type="button" class="watch-symbol-button"></button></td>
+            <td class="watch-col-close num watch-row-close"></td>
+            <td class="watch-col-now num watch-row-price"><strong></strong></td>
+            <td class="watch-col-change num watch-row-change"><span class="watch-day-change"></span></td>
+            <td class="watch-col-strategy watch-row-strategy"><strong></strong><small></small></td>
+            <td class="watch-col-rvol num watch-rvol"><strong></strong><small></small></td>`;
         const stock=row.querySelector('.watch-symbol-button');
         stock.textContent=symbol;
-        for(const button of row.querySelectorAll('[data-order-side]')){
-            button.addEventListener('click',event=>{
-                event.stopPropagation();
-                selectStock(symbol,false);
-                openOrder(button.dataset.orderSide,button);
-            });
-        }
         row.addEventListener('click',()=>selectStock(symbol,true));
         return row;
     }
@@ -683,26 +644,17 @@
         node.dataset.selected=String(symbol===selected);
         stock.setAttribute('aria-pressed',String(symbol===selected));
         node.querySelector('.watch-row-price strong').textContent=money(row.quote?.midPrice);
+        const close=node.querySelector('.watch-row-close');
+        close.textContent=money(row.previousClose?.close);
+        close.title=row.previousClose?'Close on '+row.previousClose.sessionDate+' (New York session)':'Previous close unavailable';
         const dayChange=formatRowDayChange(row), dayNode=node.querySelector('.watch-day-change');
-        if(dayNode){dayNode.textContent=dayChange.text;tone(dayNode,dayChange.value);}
+        if(dayNode){dayNode.textContent=dayChange.text;dayNode.title=dayChange.title;tone(dayNode,dayChange.value);}
         const outcome=signalOutcome(row);
         strategy.dataset.tone=outcome.tone;
         strategy.querySelector('strong').textContent=outcome.text;
         strategy.querySelector('small').textContent=row.strategyAssessment?signalReason(row):'';
         strategy.title=signalReason(row);
         renderDailyCells(node,row);
-    }
-    // Keep both review actions updated in all-columns mode using server bid/ask prices and restriction hints.
-    function updateRowAction(node,row){
-        const symbol=row.membership.symbol;
-        const reasons={buy:orderRestrictionHint(row,'buy'),sell:orderRestrictionHint(row,'sell')};
-        for(const button of node.querySelectorAll('[data-order-side]')){
-            const buy=button.dataset.orderSide==='buy', side=button.dataset.orderSide;
-            const price=buy?row.quote?.askPrice:row.quote?.bidPrice;
-            button.title=reasons[side]?'Review order · '+reasons[side]:(buy?'Review buy at the ask':'Review sell at the bid');
-            button.setAttribute('aria-label',(buy?'Buy ':'Sell ')+symbol);
-            button.querySelector('.watch-order-price').textContent=price>0?money(price):'—';
-        }
     }
     // Maps canonical engine gate/rejection codes to plain-English labels while preserving exact audit codes for disclosure.
     const checkLabels = {
@@ -1097,7 +1049,7 @@
         text('mid',money(row.quote?.midPrice));
         text('prev-close',dayChange.text==='—'?'':dayChange.text);
         if(el('prev-close')){
-            el('prev-close').title=row.previousClose?'Prev close '+money(row.previousClose.close):'';
+            el('prev-close').title=dayChange.title;
             tone(el('prev-close'),dayChange.value);
         }
         text('quote-detail','Bid/ask midpoint · '+quoteAge(row)+' · bid '+money(row.quote?.bidPrice)+' · ask '+money(row.quote?.askPrice));
@@ -1106,12 +1058,9 @@
         const buyReason=orderRestrictionHint(row,'buy'),sellReason=orderRestrictionHint(row,'sell');
         reviewLink('buy',buyReason,row,'watch-order-help');
         reviewLink('sell',sellReason,row,sellReason===buyReason?'watch-order-help':'watch-exit-help');
-        text('order-help',buyReason);el('order-help').hidden=!buyReason;
-        text('exit-help',sellReason);el('exit-help').hidden=!sellReason||sellReason===buyReason;
-        const symbol=encodeURIComponent(row.membership.symbol);
-        el('stock-news').href='/News?ticker='+symbol;
-        el('stock-earnings').href='/Earnings?search='+symbol;
-        el('follow').hidden=el('source').value==='prepared'||row.membership.wishlists.length>0||!el('follow-list').options.length;
+        // Restriction reasons (for example "trading is paused") stay in the Buy/Sell tooltips; the hidden text keeps
+        // them available to screen readers through aria-describedby without another visible paragraph.
+        text('order-help',buyReason);text('exit-help',sellReason);
         const accountStale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
         // Holding appears only for a held stock or when holdings could not be read; flat positions stay collapsed.
         el('holding-block').hidden=!row.holding&&row.holdingsKnown;
@@ -1129,8 +1078,8 @@
         text('rsi',number(technical?.rsi));text('ema',money(technical?.ema20)+' / '+money(technical?.ema50));text('ema200',money(technical?.ema200));
         const relativeVolume=technical?.relativeVolume;
         text('rvol',Number.isFinite(relativeVolume)&&relativeVolume>=0?number(relativeVolume):'—');
-        // Keep the Why / why not block structured in Col 3 with a clear prompt when no strategy is chosen.
-        el('strategy-block').hidden=false;text('observation',observationLabel(row));renderStrategyChecks(row);
+        // The Why / why not block appears only once a strategy is selected; without one it would only ask for a choice.
+        el('strategy-block').hidden=!selectedStrategyChoice();text('observation',observationLabel(row));renderStrategyChecks(row);
         const techBlock=el('technicals-block');if(techBlock)techBlock.title=techDetail;
         showSessionVolume(row);
     }
@@ -1144,7 +1093,7 @@
         if (!assessment) {
             const prompt = document.createElement('p');
             prompt.className = 'watch-fine';
-            prompt.textContent = 'Select a strategy in the toolbar to inspect why this stock qualifies or fails.';
+            prompt.textContent = 'Strategy checks for this stock have not been collected yet. Use Refresh in the toolbar.';
             el('strategy-checks').append(prompt);
             el('strategy-block').title = '';
             return;
@@ -1199,18 +1148,12 @@
         if(!articles.length){const p=document.createElement('p');p.className='watch-fine';p.textContent=unavailable?'Stored news could not be read. Retry when the connection recovers.':'No matched stories in the stored 72-hour window. This does not establish complete news coverage.';el('news-list').append(p);return;}
         for(const article of articles) el('news-list').append(window.TradingFlowNews.create(article,{allowGroup:false}));
     }
-    // A closed market can have old quotes, and an old holding stays visible with its original observation.
+    // A closed market can have old quotes; mark a price stale when its quote is over two minutes old or the stream is down.
     function ageStockRow(node,row){
-        const price=node.querySelector('.watch-row-price'), position=node.querySelector('.watch-row-position');
+        const price=node.querySelector('.watch-row-price');
         price.title=spreadDetail(row)+' · provider time '+when(row.quote?.timestamp);
         const streaming=isStreaming(row);
         price.classList.toggle('watch-stale',(!connected&&!streaming)||Date.now()-Date.parse(row.quote?.timestamp)>120000);
-        const stale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
-        position.querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' sh':'—';
-        const pl=position.querySelector('small');
-        pl.textContent=row.holding?(stale?'Last observed ':'')+money(row.holding.unrealizedPl):'';
-        tone(pl,row.holding?.unrealizedPl);
-        renderNewsSentiment(node.querySelector('.watch-news-summary'),row);
     }
     // Age observations without rebuilding rows or resetting the chart and focus.
     function ageRows(){
@@ -1219,7 +1162,6 @@
             const node=rowNodes.get(row.membership.symbol);
             if(!node)continue;
             ageStockRow(node,row);
-            updateRowAction(node,row);
         }
     }
     el('source').onchange=()=>{page=0;el('search').value='';connect();};el('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{page=0;connect();},300);};
@@ -1240,7 +1182,7 @@
     el('add').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]');button.disabled=true;text('add-status','Checking with Alpaca…');try{const added=await api('stocks',{symbol:form.elements.symbol.value,wishlistId:el('add-list').value});text('add-status',added.message);form.elements.symbol.value='';}catch(e){text('add-status',e.message);}finally{button.disabled=false;form.elements.symbol.focus();}};
     el('import-open').onclick=()=>{el('import').hidden=false;el('import').elements.name.focus();};el('import-close').onclick=()=>{el('import').hidden=true;el('import-open').focus();};
     el('import').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]');button.disabled=true;try{const saved=await api('screens',{name:form.elements.name.value,url:form.elements.url.value});await sources(saved.key);el('import').hidden=true;form.reset();connect();}catch(e){text('import-status',e.message);}finally{button.disabled=false;}};
-    el('follow').onsubmit=async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;try{await api('follow',{source:el('source').value,symbol:selected,wishlistId:el('follow-list').value});text('follow-status','Added. Membership refreshes with the next update.');}catch(e){text('follow-status',e.message);}finally{button.disabled=false;}};
+
     document.addEventListener('workspace-status-changed',()=>render());
     document.addEventListener('click',event=>{
         const link=event.target.closest('a[href]');
@@ -1277,9 +1219,22 @@
     const initialSort=savedDesk?.sort??incoming.get('sort');
     if([...el('sort').options].some(option=>option.value===initialSort))el('sort').value=initialSort;
     setView(savedDesk?.view??incoming.get('view'));
-    setScannerDensity(savedDesk?.scannerDensityV2 || 'compact');
     syncTableStrategyState();
-    el('density-toggle')?.addEventListener('click', () => setScannerDensity(scannerDensity === 'compact' ? 'full' : 'compact'));
+    // Publishes where the three Desk columns start (below the top bar, status strip, sub-tabs and toolbar) as
+    // --desk-grid-top, so the CSS can give the columns and chart exactly the remaining screen height even when the
+    // status strip wraps to a second line. Re-measured when the page or the strip changes size.
+    function syncDeskGridTop(){
+        const grid=desk.querySelector('.watch-grid');
+        if(!grid)return;
+        const top=Math.round(grid.getBoundingClientRect().top+window.scrollY);
+        document.documentElement.style.setProperty('--desk-grid-top',top+'px');
+    }
+    syncDeskGridTop();
+    window.addEventListener('resize',syncDeskGridTop);
+    if(window.ResizeObserver){
+        const observer=new ResizeObserver(syncDeskGridTop);
+        for(const node of [document.querySelector('.regime-pulse-strip'),document.querySelector('.topbar'),desk.querySelector('.watch-toolbar')])if(node)observer.observe(node);
+    }
     el('technicals-block')?.addEventListener('click', event => {
         const pill = event.target.closest('[data-highlight-key]');
         if (pill) toggleDeskHighlight(pill.dataset.highlightKey);

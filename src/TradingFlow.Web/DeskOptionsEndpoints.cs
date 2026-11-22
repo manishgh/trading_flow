@@ -1,6 +1,7 @@
 using TradingFlow.Contracts.V1;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
+using TradingFlow.Engine.Market;
 using TradingFlow.Web.Services;
 
 namespace TradingFlow.Web;
@@ -27,6 +28,8 @@ public static class DeskOptionsEndpoints
             string? symbol,
             IOptionsSentimentSource optionsSource,
             AlpacaQuoteService quotes,
+            ConfigCatalogService catalog,
+            PaperRuntimeFactory runtimeFactory,
             TimeProvider clock,
             CancellationToken cancellationToken) =>
         {
@@ -49,6 +52,14 @@ public static class DeskOptionsEndpoints
                 ? new[] { "SPY", "QQQ" }
                 : new[] { "SPY", "QQQ", selectedSymbol }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
+            // The selected stock's 20-day ADR% (shared cached loader) lets the snapshot compare its one-day expected move
+            // with a typical day; it loads in parallel and simply stays empty if the bars do not arrive in 6 seconds.
+            using var adrDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            adrDeadline.CancelAfter(TimeSpan.FromSeconds(6));
+            var adrTask = selectedSymbol is null
+                ? Task.FromResult(new Dictionary<string, Adr20CalculationResult>(StringComparer.OrdinalIgnoreCase))
+                : CatalystOptionsAdrService.LoadAdrAsync([selectedSymbol], catalog, runtimeFactory,
+                    clock.GetUtcNow().ToUniversalTime(), adrDeadline.Token, cancellationToken);
             var spotHints = await TryLoadSpotHintsAsync(quotes, requestedSymbols, cancellationToken, cancellationToken);
 
             var spyTask = optionsSource.GetSnapshotAsync("SPY", spotHints.GetValueOrDefault("SPY"), cancellationToken: cancellationToken);
@@ -70,12 +81,19 @@ public static class DeskOptionsEndpoints
                 await Task.WhenAll(spyTask, qqqTask);
             }
 
+            var selectedSnapshot = selectedTask is null ? null : await selectedTask;
+            if (selectedSnapshot is not null && selectedSymbol is not null)
+            {
+                var adr = await adrTask;
+                selectedSnapshot = OptionsSentimentCalculator.WithAdr20Pct(selectedSnapshot, adr.GetValueOrDefault(selectedSymbol)?.Adr20Pct);
+            }
+
             var response = new DeskOptionsSentimentResponse(
                 ContractVersions.VersionOne,
                 clock.GetUtcNow().ToUniversalTime(),
                 await spyTask,
                 await qqqTask,
-                selectedTask is null ? null : await selectedTask);
+                selectedSnapshot);
             return Results.Ok(response);
         });
 

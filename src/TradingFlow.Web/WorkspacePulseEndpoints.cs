@@ -22,7 +22,9 @@ public sealed record BenchmarkRegimePulse(
     string SummaryLabel);
 
 /// <summary>
-/// Read-only summary of the previous session's FRED VIXCLS close and its resulting swing risk multipliers.
+/// Read-only summary of the previous session's FRED VIXCLS close and its resulting swing risk multipliers. When that
+/// session's close is not published yet, <c>LatestPublishedClose</c>/<c>LatestPublishedDate</c> still show the newest
+/// close FRED has, for display only (sizing keeps waiting for the exact previous-session close).
 /// </summary>
 public sealed record VixRegimePulse(
     bool Available,
@@ -31,7 +33,9 @@ public sealed record VixRegimePulse(
     decimal LongRiskScale,
     string LongLabel,
     decimal ShortRiskScale,
-    string ShortLabel);
+    string ShortLabel,
+    decimal? LatestPublishedClose = null,
+    DateOnly? LatestPublishedDate = null);
 
 /// <summary>
 /// Authenticated workspace-wide market regime, VIX sizing, and leading-sector snapshot displayed in the top bar.
@@ -43,7 +47,9 @@ public sealed record WorkspaceRegimePulseResponse(
     BenchmarkRegimePulse Qqq,
     VixRegimePulse Vix,
     IReadOnlyList<string> TopSectors,
-    string? TopSectorsAsOfDate);
+    string? TopSectorsAsOfDate,
+    IReadOnlyList<SectorLeader> TopSectorLeaders,
+    string? TopSectorsUnavailableReason);
 
 /// <summary>
 /// Maps <c>GET /api/v1/workspace/regime-pulse</c> using the shared <see cref="RegimeGateService"/> and
@@ -54,6 +60,14 @@ public static class WorkspacePulseEndpoints
     private sealed record CachedPulseEntry(WorkspaceRegimePulseResponse Payload, DateTimeOffset ExpiresAtUtc);
 
     private static readonly SemaphoreSlim CacheGate = new(1, 1);
+
+    // FRED's own HTTPS request does not complete on this host; FredVixCloseSource falls back to Windows curl after
+    // two 10-second attempts, so the first read takes over 20 seconds; VIX gets its own 35-second limit (later reads go
+    // straight to curl and take about half a second) instead of the 6-second limit used for the benchmark bars.
+    private static readonly TimeSpan VixDeadline = TimeSpan.FromSeconds(35);
+
+    // A year of daily bars for eleven sector funds is fetched once per completed session; allow longer than 6 seconds.
+    private static readonly TimeSpan SectorDeadline = TimeSpan.FromSeconds(20);
     private static volatile CachedPulseEntry? cachedPulse;
 
     private static readonly RegimeRules CanonicalLongSpyRule = new(
@@ -113,7 +127,8 @@ public static class WorkspacePulseEndpoints
         });
     }
 
-    // Evaluates SPY, QQQ, FRED VIXCLS, and the latest published Top-3 sector screen under a bounded 6-second timeout.
+    // Evaluates SPY and QQQ under a 6-second limit, and FRED VIXCLS and the live top-6 sector ranking in parallel under
+    // their own longer limits, failing each part closed to an explicit "unavailable" value.
     private static async Task<WorkspaceRegimePulseResponse> BuildPulseAsync(
         ConfigCatalogService catalog,
         PaperRuntimeFactory runtimeFactory,
@@ -124,6 +139,12 @@ public static class WorkspacePulseEndpoints
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(6));
+        using var vixDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        vixDeadline.CancelAfter(VixDeadline);
+        var vixTask = LoadVixAsync(vixSource, vixDeadline.Token, cancellationToken);
+        using var sectorDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        sectorDeadline.CancelAfter(SectorDeadline);
+        Task<SectorLeaderRanking> sectorTask = Task.FromResult(new SectorLeaderRanking(null, [], "Market data provider is not configured."));
 
         var spyPulse = UnavailableBenchmark("SPY");
         var qqqPulse = UnavailableBenchmark("QQQ");
@@ -142,6 +163,7 @@ public static class WorkspacePulseEndpoints
                 (scheduleSucceeded, schedules) = await TryLoadSchedulesAsync(provider, now, deadline.Token, cancellationToken);
                 if (scheduleSucceeded)
                 {
+                    sectorTask = LoadSectorsAsync(provider, paths, schedules, now, sectorDeadline.Token, cancellationToken);
                     var spyTask = gate.LoadBenchmarkDailyBarsAsync(provider, "SPY", ["1d", "1h"], start, now, deadline.Token);
                     var qqqTask = gate.LoadBenchmarkDailyBarsAsync(provider, "QQQ", ["1d", "1h"], start, now, deadline.Token);
                     await Task.WhenAll(spyTask, qqqTask);
@@ -167,19 +189,9 @@ public static class WorkspacePulseEndpoints
             }
         }
 
-        VixCloseSeries? vixSeries = null;
-        try
-        {
-            vixSeries = await VixRegime.TryLoadLatestAsync(vixSource, deadline.Token);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // Degrade to an unavailable VIX badge on deadline timeout instead of failing the request with HTTP 500.
-            vixSeries = null;
-        }
-
+        var vixSeries = await vixTask;
         var vixPulse = BuildVixPulse(vixSeries, previousSession, now, scheduleSucceeded, schedules);
-        var (topSectors, sectorsDate) = TryReadLatestTopSectors(paths.ResearchScreensRoot);
+        var sectors = await sectorTask;
 
         return new WorkspaceRegimePulseResponse(
             ContractVersions.VersionOne,
@@ -187,8 +199,51 @@ public static class WorkspacePulseEndpoints
             spyPulse,
             qqqPulse,
             vixPulse,
-            topSectors,
-            sectorsDate);
+            sectors.Leaders.Select(leader => leader.Symbol).ToArray(),
+            sectors.AsOfSession?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            sectors.Leaders,
+            sectors.UnavailableReason);
+    }
+
+    // Loads FRED VIX closes under the VIX limit, degrading a timeout to "unavailable" instead of failing the request.
+    private static async Task<VixCloseSeries?> LoadVixAsync(IVixCloseSource? vixSource, CancellationToken vixToken, CancellationToken callerToken)
+    {
+        try
+        {
+            return await VixRegime.TryLoadLatestAsync(vixSource, vixToken);
+        }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    // Ranks the configured sector funds for the expected latest completed session, returning an explicit reason on
+    // timeout or provider failure so the strip shows why sectors are missing.
+    private static async Task<SectorLeaderRanking> LoadSectorsAsync(
+        IMarketDataProvider provider,
+        ProjectPaths paths,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
+        DateTimeOffset now,
+        CancellationToken sectorToken,
+        CancellationToken callerToken)
+    {
+        DateOnly? latestSession = schedules is { Count: > 0 } && VixRegime.TryExpectedPreviousSession(schedules, now, out var expected)
+            ? expected
+            : null;
+        try
+        {
+            return await SectorLeadersService.GetLeadersAsync(
+                provider, Path.Combine(paths.ConfigsRoot, "research", "sector-funds.txt"), latestSession, schedules, now, sectorToken);
+        }
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        {
+            return new SectorLeaderRanking(null, [], "Sector fund bars did not arrive within 20 seconds.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new SectorLeaderRanking(null, [], "Sector fund bars could not be read: " + ex.Message);
+        }
     }
 
     // Evaluates both bullish (rising 50-SMA) and bearish (falling 50-SMA) gates on completed trading-day bars, failing closed on missing, stale, or insufficient history.
@@ -242,7 +297,7 @@ public static class WorkspacePulseEndpoints
     }
 
     // Returns true only when a bar has both finished its timeframe window and become known by the observation instant.
-    private static bool IsCompletedBar(OhlcvBar bar, DateTimeOffset now) =>
+    internal static bool IsCompletedBar(OhlcvBar bar, DateTimeOffset now) =>
         bar.Timestamp.Add(TimeframeParser.Parse(bar.Timeframe)) <= now &&
         (bar.KnownAtUtc is null || bar.KnownAtUtc <= now);
 
@@ -304,7 +359,9 @@ public static class WorkspacePulseEndpoints
         var shortDecision = VixRegime.Decide(CanonicalShortSpyRule, series, targetSession);
         if (longDecision.Close is not { } close)
         {
-            return new VixRegimePulse(false, targetSession, null, 0m, "VIX close pending", 0m, "VIX close pending");
+            decimal? latestClose = series.LastDate is { } lastDate && series.TryGetClose(lastDate, out var lastClose) ? Math.Round(lastClose, 2) : null;
+            return new VixRegimePulse(false, targetSession, null, 0m, "VIX close pending", 0m, "VIX close pending",
+                latestClose, latestClose is null ? null : series.LastDate);
         }
 
         var longLabel = longDecision.Rejection is not null ? "Longs OFF (>22)"
@@ -347,98 +404,6 @@ public static class WorkspacePulseEndpoints
         {
             return (false, null);
         }
-    }
-
-    // Reads the final session's Top-3 ranked sector ETFs from any published sector-funds-top3 research screen on disk.
-    internal static (IReadOnlyList<string> Sectors, string? AsOfDate) TryReadLatestTopSectors(string screensDir)
-    {
-        try
-        {
-            if (!Directory.Exists(screensDir))
-            {
-                return ([], null);
-            }
-
-            var candidateFolder = Directory.GetDirectories(screensDir, "sector-funds-top3*")
-                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
-            if (candidateFolder is null)
-            {
-                return ([], null);
-            }
-
-            var eligiblePath = Path.Combine(candidateFolder, "eligible.csv");
-            if (!File.Exists(eligiblePath))
-            {
-                return ([], null);
-            }
-
-            // Read only the tail lines of eligible.csv so this stays O(1) regardless of multi-year screen length.
-            var tailLines = ReadTailLines(eligiblePath, maxBytes: 4096);
-            string? latestDate = null;
-            var symbols = new List<string>(3);
-            for (var i = tailLines.Count - 1; i >= 0; i--)
-            {
-                var line = tailLines[i];
-                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("session_date,", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var parts = line.Split(',');
-                if (parts.Length < 2)
-                {
-                    continue;
-                }
-
-                var rowDate = parts[0].Trim();
-                var ticker = parts[1].Trim().ToUpperInvariant();
-                if (latestDate is null)
-                {
-                    latestDate = rowDate;
-                }
-                else if (!string.Equals(rowDate, latestDate, StringComparison.Ordinal))
-                {
-                    break;
-                }
-
-                symbols.Add(ticker);
-            }
-
-            symbols.Reverse();
-            return (symbols, latestDate);
-        }
-        catch
-        {
-            return ([], null);
-        }
-    }
-
-    // Reads the trailing UTF-8 lines from a CSV file without loading the full file into memory.
-    private static List<string> ReadTailLines(string path, int maxBytes)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        var length = stream.Length;
-        var readBytes = (int)Math.Min(length, maxBytes);
-        stream.Seek(length - readBytes, SeekOrigin.Begin);
-        var buffer = new byte[readBytes];
-        var totalRead = 0;
-        while (totalRead < readBytes)
-        {
-            var n = stream.Read(buffer, totalRead, readBytes - totalRead);
-            if (n <= 0) break;
-            totalRead += n;
-        }
-
-        var text = System.Text.Encoding.UTF8.GetString(buffer, 0, totalRead);
-        var lines = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).ToList();
-        if (length > readBytes && lines.Count > 1)
-        {
-            // Drop potentially partial first line when seeking into the middle of the file.
-            lines.RemoveAt(0);
-        }
-
-        return lines;
     }
 
     // Builds a fail-closed unavailable benchmark pulse with an explicit diagnostic label.

@@ -317,15 +317,16 @@ public sealed class Ui2RedesignTests
         var orderHelpStart = desk.IndexOf("id=\"watch-order-help\"", StringComparison.Ordinal);
         var exitHelpStart = desk.IndexOf("id=\"watch-exit-help\"", StringComparison.Ordinal);
         var holdingStart = desk.IndexOf("id=\"watch-holding-block\"", StringComparison.Ordinal);
-        var evidenceStart = desk.IndexOf("<details id=\"watch-evidence\"", StringComparison.Ordinal);
         var newsStart = desk.IndexOf("<section class=\"watch-news\" id=\"watch-news\"", StringComparison.Ordinal);
 
         Assert.True(focusStart >= 0 && focusStart < chartWindowStart && chartWindowStart < technicalsStart &&
                     technicalsStart < inspectorStart && inspectorStart < strategyStart && strategyStart < planSummaryStart &&
                     planSummaryStart < orderHelpStart && orderHelpStart < exitHelpStart &&
-                    exitHelpStart < holdingStart && holdingStart < evidenceStart && evidenceStart < newsStart,
-            "Chart window (with embedded completed-1d indicators) must sit in #watch-focus-content, and strategy readiness with order hints, holding, evidence, and news must sit in #watch-inspector with no ticket buttons below news.");
-        Assert.Contains("<summary>Group &amp; catalyst tools</summary>", desk);
+                    exitHelpStart < holdingStart && holdingStart < newsStart,
+            "Chart window (with embedded completed-1d indicators) must sit in #watch-focus-content, and strategy readiness with order hints, holding and news must sit in #watch-inspector with no ticket buttons below news.");
+        // The group & catalyst tools and the strategy-runs panel left the Desk (operator feedback, 22 Nov 2026).
+        Assert.DoesNotContain("watch-evidence", desk);
+        Assert.DoesNotContain("_CandidateWorkflow", desk);
         Assert.Contains("@section Styles", desk);
 
         var prepJs = WebFile("wwwroot/js/preparation-summary.js");
@@ -356,7 +357,7 @@ public sealed class Ui2RedesignTests
                  {
                      ".preparation-steps li", "white-space: normal", "[data-preparation-summary][data-compact=\"true\"]",
                      "@media (min-width: 1440px)", "html body.workspace-app .watch-desk .watch-grid",
-                     "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)", ".watch-strategy-check-item"
+                     "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)", ".watch-strategy-check-item"
                  })
         {
             Assert.Contains(token, css);
@@ -397,15 +398,19 @@ public sealed class Ui2RedesignTests
     }
 
     [Fact]
-    public void CatalystsAndOptionsUi4HeadersExposeEyebrowAndContextualDeskLinks()
+    public void CatalystsAndOptionsHeadersKeepScreenReaderTitleAndContextualDeskLinks()
     {
+        // The sidebar and sub-tab name the screen, so the visible eyebrow/heading/subtitle are gone and the
+        // heading stays for screen readers only.
         var news = WebFile("Pages/News.cshtml");
-        Assert.Contains("<span class=\"eyebrow\">CATALYSTS &amp; OPTIONS</span>", news);
+        Assert.Contains("<h1 class=\"visually-hidden\">News</h1>", news);
+        Assert.DoesNotContain("class=\"eyebrow\"", news);
         Assert.Contains("asp-route-symbol=\"@Model.Ticker\">Open Desk ↗</a>", news);
         Assert.Contains("@section Styles", news);
 
         var earnings = WebFile("Pages/Earnings.cshtml");
-        Assert.Contains("<span class=\"eyebrow\">CATALYSTS &amp; OPTIONS</span>", earnings);
+        Assert.Contains("<h1 class=\"visually-hidden\">Earnings monitor</h1>", earnings);
+        Assert.DoesNotContain("class=\"eyebrow\"", earnings);
         Assert.Contains("asp-page=\"/Desk\">Open Desk ↗</a>", earnings);
         Assert.Contains("@section Styles", earnings);
     }
@@ -426,9 +431,14 @@ public sealed class Ui2RedesignTests
         Assert.Equal(3.31m, computed.Adr20Pct);
         Assert.Equal(session, computed.AsOfSessionDate);
         Assert.Null(computed.UnavailableReason);
-        Assert.Equal(Math.Round(7.00m / 3.31m, 2), CatalystOptionsAdrService.ComputeImpliedMoveToAdrRatio(7.00m, computed.Adr20Pct));
-        Assert.Null(CatalystOptionsAdrService.ComputeImpliedMoveToAdrRatio(null, computed.Adr20Pct));
-        Assert.Null(CatalystOptionsAdrService.ComputeImpliedMoveToAdrRatio(7.00m, null));
+        // A ±7.00% move over 5 trading days is a one-day move of 7.00 / √5 = 3.13%; against a 3.31% ADR that is 0.95x,
+        // not the 2.11x an unscaled 5-day / 1-day comparison would report.
+        var fiveDayMove = TradingFlow.Domain.Market.OptionsSentimentSnapshot.Unavailable("NVDA", now, "test")
+            with { FrontImpliedMovePct = 7.00m, TradingDaysToFrontExpiry = 5 };
+        Assert.Equal(0.95m, CatalystOptionsAdrService.ComputeDailyImpliedMoveToAdrRatio(fiveDayMove, computed.Adr20Pct));
+        Assert.Null(CatalystOptionsAdrService.ComputeDailyImpliedMoveToAdrRatio(fiveDayMove with { FrontImpliedMovePct = null }, computed.Adr20Pct));
+        Assert.Null(CatalystOptionsAdrService.ComputeDailyImpliedMoveToAdrRatio(fiveDayMove with { TradingDaysToFrontExpiry = null }, computed.Adr20Pct));
+        Assert.Null(CatalystOptionsAdrService.ComputeDailyImpliedMoveToAdrRatio(fiveDayMove, null));
 
         // Corrupt D-1 bar (Close <= 0) must fail closed rather than dropping D-1 and computing from stale D-21..D-2.
         var badLatestClose = trendingBars.ToArray();
@@ -635,9 +645,17 @@ public sealed class Ui2RedesignTests
         var desk = WebFile("Pages/Desk.cshtml");
         var optionsPartial = WebFile("Pages/Shared/_OptionsSentimentPanel.cshtml");
         var chartPartial = WebFile("Pages/Shared/_StockChart.cshtml");
-        Assert.Contains("id=\"watch-density-toggle\"", desk);
-        Assert.Contains("data-scanner-density=\"compact\"", desk);
-        Assert.Contains("Mid · Day %", desk);
+        // One fixed stock table: Stock · Prev close · Now · Today · Strategy · RVOL/ATR, no column modes and no News column.
+        Assert.DoesNotContain("watch-density-toggle", desk);
+        Assert.DoesNotContain("data-scanner-density", desk);
+        foreach (var column in new[] { ">Prev close</th>", ">Now</th>", ">Today</th>", ">Strategy</th>" }) Assert.Contains(column, desk);
+        Assert.DoesNotContain(">News</th>", desk);
+        // Outside regular hours the column is relabelled so an after-hours move is never called "Day %".
+        Assert.Contains("id=\"watch-change-head\"", desk);
+        var deskJs = WebFile("wwwroot/js/watch-desk.js");
+        Assert.Contains("'Since close'", deskJs);
+        Assert.Contains("Latest quote (session unknown)", deskJs);
+        Assert.Contains("function changeBasisTitle(row)", deskJs);
         Assert.Contains("RVOL · ATR", desk);
         Assert.Contains("class=\"watch-chart-window\"", desk);
         Assert.Contains("class=\"watch-strategy-group\"", desk);
@@ -668,7 +686,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("get('inline-studies')", chartJs);
 
         var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
-        foreach (var token in new[] { "function setScannerDensity(", "function formatRowDayChange(", "scannerDensityV2", "Fewer columns", "All columns", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
+        foreach (var token in new[] { "function formatRowDayChange(", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
         {
             Assert.Contains(token, watchDeskJs);
         }
@@ -721,7 +739,7 @@ public sealed class Ui2RedesignTests
 
         // CSS rules for UI-5/UI-8/UI-9 features (3-column Desk; compact scanner must NEVER hide News col 6)
         var css = Ui2CssBundle();
-        foreach (var token in new[] { "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)", "[data-scanner-density=\"compact\"]", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
+        foreach (var token in new[] { "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)", ".watch-col-close", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
         {
             Assert.Contains(token, css);
         }
@@ -843,12 +861,11 @@ public sealed class Ui2RedesignTests
         var css = Ui2CssBundle();
         foreach (var token in new[]
                  {
-                     "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)",
-                     ".watch-stock-col { width: 18%; }",
-                     ".watch-price-col { width: 34%; }",
-                     ".watch-strategy-col { width: 18%; }",
-                     ".watch-news-col { width: 15%; }",
-                     ".watch-rvol-col { width: 15%; }",
+                     "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)",
+                     ".watch-table .watch-col-stock { width: 15%; }",
+                     ".watch-table .watch-col-close { width: 19%; }",
+                     ".watch-table .watch-col-change { width: 21%; }",
+                     ".watch-table[data-has-strategy=\"false\"] .watch-col-strategy { display: none; }",
                      ".watch-chart-window [data-chart-zone-key]",
                      ".watch-chart-indicators-strip",
                      ".watch-ind-pill",
@@ -881,8 +898,11 @@ public sealed class Ui2RedesignTests
         }
 
         var regimeJs = WebFile("wwwroot/js/regime-pulse.js");
-        Assert.Contains("rising 50-day · longs on", regimeJs);
-        Assert.Contains("below 50-day · longs off · shorts on", regimeJs);
+        // Short chip words keep the whole strip on one line; the 50-day detail moves into the tooltip.
+        Assert.Contains("▲ 50-day: longs", regimeJs);
+        Assert.Contains("▼ 50-day: shorts", regimeJs);
+        Assert.Contains("◐ 50-day: neither", regimeJs);
+        Assert.Contains("Each strategy applies its own regime settings.", regimeJs);
 
         var prepJs = WebFile("wwwroot/js/preparation-summary.js");
         Assert.Contains("function syncPreparationChip(", prepJs);
@@ -899,8 +919,8 @@ public sealed class Ui2RedesignTests
         Assert.Contains("<h1 class=\"visually-hidden\">Desk</h1>", desk);
         Assert.DoesNotContain("<partial name=\"_OptionsSentimentPanel\"", desk);
         Assert.Contains("data-has-strategy=\"false\"", desk);
-        Assert.Contains("Fewer columns", desk);
-        Assert.Contains("title=\"Stored stories in the last hour (partial coverage)\"", desk);
+        Assert.DoesNotContain("Fewer columns", desk);
+        Assert.DoesNotContain("watch-news-summary", WebFile("wwwroot/js/watch-desk.js"));
         Assert.Contains("id=\"watch-focus-info\"", desk);
         Assert.Contains("data-quick-interval=\"1d\"", desk);
         Assert.Contains("id=\"watch-inspector\"", desk);
@@ -930,7 +950,6 @@ public sealed class Ui2RedesignTests
                  {
                      "function syncTableStrategyState(", "function setActiveDeskPane(",
                      "function signalOutcome(", "'✓ Ready'", "'◐ Near'", "'✕ Gate'",
-                     "summary.positive===0&&summary.negative===0", "'▲'+summary.positive", "'▼'+summary.negative",
                      "resistance (above price)", "support (below price)", "compactDesk: true"
                  })
         {
@@ -955,11 +974,10 @@ public sealed class Ui2RedesignTests
                      ".workspace-authenticated .regime-pulse-strip { margin-left: var(--workspace-sidebar-width); }",
                      ".regime-pulse-chips {",
                      "display: contents;",
-                     "order: 99;",
                      "details.workspace-freshness-popover[open]",
                      ".workspace-app .watch-desk [data-preparation-summary][data-compact=\"true\"]",
-                     "minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr)",
-                     "[data-has-strategy=\"false\"] col:nth-child(4)",
+                     "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)",
+                     "[data-has-strategy=\"false\"] .watch-col-strategy",
                      "height: 34px;",
                      ".watch-chart-window .stock-chart-stage .stock-chart-readout",
                      ".watch-mid-tabs",

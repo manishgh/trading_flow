@@ -28,6 +28,8 @@
     const columnLabels = { value: '', lower: 'Lower', middle: 'Middle', upper: 'Upper', macd: 'MACD', signal: 'Signal', histogram: 'Histogram', adx: 'ADX', pdi: '+DI', mdi: '−DI' };
     const strokePatterns = ['solid', 'dashed', 'dotted', 'dash-dot'];
     const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
+    const dollarFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const subDollarFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
     const mobileQuery = '(max-width: 600px)';
     const preferenceKey = 'tradingflow.stock-chart.v3';
 
@@ -153,10 +155,11 @@
         return columnLabels[name] || name;
     }
 
-    // Combine the measurement with an explicit unit where the indicator has one.
+    // Combine the measurement with an explicit unit; dollar values use the same "$1,234.56" format as the Desk price pills.
     function measurement(value, unit) {
+        if (unit === 'USD') return (Math.abs(value) < 1 ? subDollarFormat : dollarFormat).format(value);
         const number = format.format(value);
-        return unit === '%' || unit === '×' ? number + unit : unit === 'USD' || unit === 'shares' ? number + ' ' + unit : number;
+        return unit === '%' || unit === '×' ? number + unit : unit === 'shares' ? number + ' ' + unit : number;
     }
 
     // Mount selection controls and keep page/plot owners responsible for transport and candle navigation.

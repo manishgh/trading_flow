@@ -23,9 +23,8 @@
 
 <header class="page-header compact-page-header market-page-header">
     <div>
-        <span class="eyebrow">CATALYSTS &amp; OPTIONS</span>
-        <h1>News</h1>
-        <p>Company news, sector stories and market events.</p>
+        @* The sidebar and sub-tab already name this screen; the heading stays for screen readers only. *@
+        <h1 class="visually-hidden">News</h1>
         <div id="news-live-feed">
         @if (Model.FeedEnabled && Model.RefreshStatus is { } status)
         {

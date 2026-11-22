@@ -36,15 +36,22 @@
         return result.length ? result : ['SPY', 'QQQ'];
     }
 
-    // Classifies an Expected Move / 20d ADR ratio into its non-colour glyph, badge text, and semantic tone.
+    // Classifies the server's one-day expected move ÷ 20d ADR ratio into a glyph, badge text and tone.
+    // Scale: a day's expected close-to-close move is roughly half a day's high-to-low range, so about 0.5x means
+    // option prices expect an ordinary day. Bands: under 0.75x normal, 0.75x–1.25x elevated (about 1.5–2.5 times the
+    // usual movement), over 1.25x extreme. These are display bands from that rule of thumb, not calibrated on history
+    // and not trading rules.
     function formatRatioPill(ratio) {
         if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) {
-            return { text: '—', tone: 'muted', title: 'Ratio unavailable (requires OPRA expected move and 20 completed daily sessions)' };
+            return { text: '—', tone: 'muted', title: 'Ratio unavailable (needs an options expected move, its days to expiry and 20 completed daily sessions)' };
         }
         const label = ratio.toFixed(2) + 'x';
-        if (ratio < 1.2) return { text: '✓ ' + label, tone: 'good', title: 'Expected move under 1.2x 20d ADR' };
-        if (ratio <= 2.0) return { text: '◐ ' + label, tone: 'warn', title: 'Elevated expected move (1.2x–2.0x 20d ADR)' };
-        return { text: '▲ ' + label, tone: 'bad', title: 'Extreme expected move (>2.0x 20d ADR)' };
+        const basis = 'How much movement option prices expect for one day, compared with the stock’s 20-day average high-to-low range. ' +
+            'The expected move is the price of the nearest at-the-money call plus put, spread evenly over the trading days to expiry ' +
+            '(divided by the square root of the number of days). About 0.5x is an ordinary day. Display guide only, not a trading rule';
+        if (ratio < 0.75) return { text: '✓ ' + label, tone: 'good', title: basis + ': normal (under 0.75x).' };
+        if (ratio <= 1.25) return { text: '◐ ' + label, tone: 'warn', title: basis + ': elevated (0.75x–1.25x).' };
+        return { text: '▲ ' + label, tone: 'bad', title: basis + ': extreme (over 1.25x).' };
     }
 
     // Formats front-expiry OPRA expected move percentage and trading-day horizon without substituting zero for missing values.
@@ -144,11 +151,16 @@
         bar.setAttribute('aria-label', `${card.symbol} implied move to 20d ADR ratio: ${ratioInfo.text}`);
         barWrap.append(bar);
 
-        const note = document.createElement('p');
-        note.className = 'watch-fine catalysts-opra-note';
-        note.textContent = [card.adrUnavailableReason, card.summaryNote].filter(Boolean).join(' · ');
-
-        article.append(head, metrics, barWrap, note);
+        // The server's summary sentence repeats the numbers above, so it moves into the card tooltip; only a reason
+        // why ADR is missing stays visible, because it explains a blank value.
+        article.title = card.summaryNote || '';
+        article.append(head, metrics, barWrap);
+        if (card.adrUnavailableReason) {
+            const note = document.createElement('p');
+            note.className = 'watch-fine catalysts-opra-note';
+            note.textContent = card.adrUnavailableReason;
+            article.append(note);
+        }
         return article;
     }
 

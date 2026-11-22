@@ -60,8 +60,11 @@ html body.workspace-app .watch-desk .watch-inspector .watch-news,
   background: var(--panel-subtle); font-variant-numeric: tabular-nums; font-size: 0.72rem !important;
   color: var(--color-neutral-800);
 }
+/* Buy/Sell stay on one row. The name/price group (.watch-focus-identity, below) has no min-width: 0, so it
+   cannot shrink under its content; when space runs out the interval controls wrap to a second line instead
+   of sliding underneath the trade buttons. */
 .watch-focus-head .watch-focus-trade {
-  display: inline-flex; align-items: center; gap: 5px; margin-left: 4px;
+  display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; flex: 0 0 auto; flex-wrap: nowrap;
 }
 .watch-focus-head .watch-focus-trade .btn-sm {
   min-height: 26px; height: 26px; padding: 0 10px; font-size: 0.72rem; line-height: 1;
@@ -71,13 +74,16 @@ html body.workspace-app .watch-desk .watch-inspector .watch-news,
   html body.workspace-app .watch-desk .watch-grid,
   .workspace-app .watch-desk .watch-grid,
   .watch-desk .watch-grid {
-    grid-template-columns: minmax(260px, 26fr) minmax(480px, 48fr) minmax(260px, 26fr);
+    grid-template-columns: minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr);
     grid-template-rows: minmax(0, 1fr);
     gap: 8px;
     align-items: stretch;
     width: 100%;
     max-width: none;
-    height: calc(100vh - 205px);
+    /* The grid takes the rest of the screen below its own top edge, measured by watch-desk.js into --desk-grid-top
+       (top bar, status strip, sub-tabs and toolbar vary when the strip wraps); the chart then fills its column
+       instead of stretching to the stock list height. */
+    height: calc(100vh - var(--desk-grid-top, 280px) - 10px);
     min-height: 540px;
   }
   html body.workspace-app .watch-desk .watch-grid .watch-stocks,
@@ -229,63 +235,32 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
   display: inline; font-size: 0.72rem; font-weight: 600; font-variant-numeric: tabular-nums;
   margin-left: 5px; line-height: 1.2;
 }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] {
-  min-width: 0; width: 100%; table-layout: fixed;
+/* One stock table (no column modes): Stock · Prev close · Now · Today · Strategy · RVOL/ATR. Columns are sized by
+   class, not by position, and Strategy appears only once a strategy is selected. Rows are one 34 px line. */
+.workspace-app .watch-desk .watch-table { width: 100%; min-width: 0; table-layout: fixed; }
+.workspace-app .watch-desk .watch-table .watch-col-stock { width: 15%; }
+.workspace-app .watch-desk .watch-table .watch-col-close { width: 19%; }
+.workspace-app .watch-desk .watch-table .watch-col-now { width: 19%; }
+.workspace-app .watch-desk .watch-table .watch-col-change { width: 21%; }
+.workspace-app .watch-desk .watch-table .watch-col-strategy { width: 18%; }
+.workspace-app .watch-desk .watch-table .watch-col-rvol { width: 26%; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="false"] .watch-col-strategy { display: none; }
+.workspace-app .watch-desk .watch-table th {
+  height: 28px; padding: 0 5px; font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Compact mode hides Trade (3), Position (5), Daily technicals (7), and Volume (9); News stays visible! */
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(3),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(5),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(7),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] col:nth-child(9),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(3),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(5),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(7),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th:nth-child(9),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(3),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(5),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(7),
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td:nth-child(9),
-/* G6: Hide Strategy column (4) until a strategy is selected. */
-.workspace-app .watch-desk .watch-table[data-has-strategy="false"] col:nth-child(4),
-.workspace-app .watch-desk .watch-table[data-has-strategy="false"] th:nth-child(4),
-.workspace-app .watch-desk .watch-table[data-has-strategy="false"] td:nth-child(4) {
-  display: none;
-}
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-stock-col { width: 18%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-price-col { width: 34%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-strategy-col { width: 18%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-news-col { width: 15%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-rvol-col { width: 15%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"][data-has-strategy="false"] .watch-stock-col { width: 21%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"][data-has-strategy="false"] .watch-price-col { width: 41%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"][data-has-strategy="false"] .watch-news-col { width: 18%; }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"][data-has-strategy="false"] .watch-rvol-col { width: 20%; }
-
-/* D2: 34px single-line scanner rows */
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] th {
-  height: 28px; padding: 0 6px; font-size: 0.6875rem; white-space: nowrap;
-}
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] tbody tr {
-  height: 34px;
-}
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] td {
-  height: 34px; padding: 0 6px; font-size: 0.78rem; line-height: 34px;
+.workspace-app .watch-desk .watch-table tbody tr { height: 34px; }
+.workspace-app .watch-desk .watch-table td {
+  height: 34px; padding: 0 5px; font-size: 0.78rem; line-height: 34px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
 }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-symbol-button {
+.workspace-app .watch-desk .watch-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.workspace-app .watch-desk .watch-table .watch-symbol-button {
   display: inline-flex; align-items: center; height: 34px; min-height: 32px;
   padding: 0; font-size: 0.8125rem; font-weight: 700; line-height: 1;
 }
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-row-strategy small,
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-rvol small {
-  display: none;
-}
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-news-counts {
-  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 0.72rem; font-weight: 600;
-}
-.workspace-app .watch-desk .watch-table[data-scanner-density="compact"] .watch-news-counts > span {
-  display: inline;
-}
+.workspace-app .watch-desk .watch-table .watch-row-strategy small { display: none; }
+.workspace-app .watch-desk .watch-table .watch-rvol small { display: inline; white-space: nowrap; margin: 0 0 0 5px; font-size: 0.68rem; color: var(--muted); }
+.workspace-app .watch-desk .watch-table .watch-day-change { margin-left: 0; }
 .watch-row-strategy[data-tone="good"] strong { color: var(--color-gain); }
 .watch-row-strategy[data-tone="warn"] strong { color: var(--warn-ink); }
 .watch-row-strategy[data-tone="bad"] strong { color: var(--color-loss); }
@@ -297,7 +272,7 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
   gap: 6px 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); min-height: 38px;
 }
 .watch-focus-identity {
-  display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: nowrap;
+  display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: nowrap;
 }
 .watch-focus-identity h2 { font-size: 1rem; margin: 0; line-height: 1.2; }
 .watch-focus-identity strong { font-size: 1rem; font-weight: 700; line-height: 1.2; }
@@ -363,12 +338,17 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
 .watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-bar {
   display: none;
 }
+/* The chart takes the screen height left after the header, toolbar, pills and options line
+   (about 375 px on a 900 px screen, up to 560 px on tall screens), so those stay visible without scrolling. */
+.watch-chart-window .stock-chart[data-compact-desk="true"] {
+  --desk-chart-height: clamp(300px, calc(100vh - var(--desk-grid-top, 280px) - 245px), 560px);
+}
 .watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-stage {
-  flex: 1 1 auto; min-height: 420px; border: 0; border-radius: 8px 8px 0 0;
+  flex: 1 1 auto; min-height: var(--desk-chart-height); border: 0; border-radius: 8px 8px 0 0;
   display: flex; flex-direction: column; overflow: hidden;
 }
 .watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-plot {
-  flex: 1 1 auto; min-height: 420px; height: calc(100% + var(--stock-chart-panes, 0) * 90px);
+  flex: 1 1 auto; min-height: var(--desk-chart-height); height: calc(100% + var(--stock-chart-panes, 0) * 90px);
 }
 .watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-navigation {
   margin: 0; padding: 4px 8px; border-top: 1px solid var(--line);
@@ -381,7 +361,7 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
 }
 .watch-chart-window .stock-chart-stage .stock-chart-readout {
   position: absolute; top: 6px; left: 8px; right: 56px; z-index: 6;
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 4px 8px; white-space: nowrap;
   padding: 4px 8px; margin: 0; border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 88%, transparent);
   backdrop-filter: blur(4px);
@@ -389,6 +369,9 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
   font-size: 0.72rem; line-height: 1.2; pointer-events: none;
   overflow: hidden;
 }
+/* On the Desk the moving-average pills under the chart already show these values and toggle the
+   highlight, so the on-chart readout stays one line (date · O H L C · volume) and covers fewer candles. */
+.watch-chart-window .stock-chart-stage .stock-chart-readout .stock-chart-study-legend { display: none; }
 .stock-chart-study-legend {
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px;
   pointer-events: auto;
@@ -567,28 +550,30 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
   font-size: 0.72rem !important; margin: 0 2px 4px !important;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* G3 + #267: Readable single-line options strip below SMA/Vol pills with instant hover tooltips */
+/* Compact options line under the indicator pills: plain "label value" pairs separated by dots instead of
+   boxed cards, so the chart, its pills and this line fit a 900 px-high screen. Tooltips are unchanged. */
 .watch-options-selected-strip {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
-  padding: 7px 12px; margin: 6px 0 0; background: var(--panel-subtle);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  padding: 5px 10px; margin: 4px 0 0; background: var(--panel-subtle);
   border-color: var(--line); flex-shrink: 0; overflow: visible;
 }
 .watch-options-selected-strip .watch-options-card-head {
-  margin: 0; gap: 8px; display: inline-flex; align-items: center;
+  margin: 0; gap: 6px; display: inline-flex; align-items: center;
 }
-.watch-options-prefix { font-size: 0.8125rem; font-weight: 700; color: var(--color-neutral-700); }
+.watch-options-prefix { font-size: 0.75rem; font-weight: 700; color: var(--color-neutral-700); }
 .watch-options-selected-strip .watch-options-badge {
-  font-size: 0.875rem; font-weight: 700; padding: 4px 10px; font-variant-numeric: tabular-nums;
+  font-size: 0.75rem; font-weight: 700; padding: 2px 8px; font-variant-numeric: tabular-nums;
 }
-.watch-options-selected-strip .watch-options-metrics {
-  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; overflow: visible;
-}
+/* The metric list joins the strip flow so the title and values share rows instead of the title taking a row alone. */
+.watch-options-selected-strip .watch-options-metrics { display: contents; }
 .watch-options-selected-strip .watch-options-metrics > div {
-  display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap;
-  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel);
+  display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; padding: 0;
 }
-.watch-options-selected-strip .watch-options-metrics dt { font-size: 0.8rem; color: var(--color-neutral-700); font-weight: 600; }
-.watch-options-selected-strip .watch-options-metrics dd { margin: 0; font-size: 0.875rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.watch-options-selected-strip .watch-options-metrics > div + div::before {
+  content: "·"; margin: 0 8px; color: var(--muted);
+}
+.watch-options-selected-strip .watch-options-metrics dt { font-size: 0.72rem; color: var(--color-neutral-700); font-weight: 600; }
+.watch-options-selected-strip .watch-options-metrics dd { margin: 0; font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text); }
 .watch-options-selected-strip [data-options-field="note"] { display: none; }
 
 /* ---- Strategy Lab: 2-column Long/Short list (G12), provenance & monthly matrix drawer ---- */
@@ -769,4 +754,10 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
     min-width: 0;
   }
   .lab-page .lab-panel { padding: 14px; }
+}
+
+/* View tabs: a small gap and pill between each label and its count ("Signals 0"). */
+.workspace-app .watch-desk .watch-toolbar .watch-view-switch button { display: inline-flex; align-items: center; gap: 5px; }
+.workspace-app .watch-desk .watch-view-switch [data-view-count] {
+  margin: 0; padding: 0 5px; min-width: 16px; border-radius: 999px; background: var(--panel-subtle); opacity: 1; text-align: center;
 }

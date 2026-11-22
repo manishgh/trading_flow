@@ -1,8 +1,11 @@
 (() => {
     'use strict';
 
-    const prices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 });
     const zonePrices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const subDollarPrices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    // Formats chart prices (readout, levels, zones) with two decimals and up to four only below $1, matching the
+    // dollar format of the study values in stock-chart-indicators.js. The Desk table's own money() keeps two decimals.
+    const prices = { format: value => (Math.abs(Number(value)) < 1 ? subDollarPrices : zonePrices).format(value) };
     const numbers = new Intl.NumberFormat();
     const percents = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, signDisplay: 'exceptZero' });
     const clockFormat = {

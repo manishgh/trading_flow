@@ -219,12 +219,16 @@ public static class CatalystOptionsAdrService
     }
 
     /// <summary>
-    /// Computes the ratio of OPRA front-expiry implied move (%) to completed 20-day ADR%, returning null when either input is missing or non-positive.
+    /// Compares a one-day implied move with the 20-day average daily range using the shared options calculator:
+    /// the front-expiry straddle move is divided by √(trading days to expiry) before dividing by ADR%, so a 5-day move is
+    /// not compared with a 1-day range. Returns null when the move, the days to expiry or ADR% is missing or non-positive.
     /// </summary>
-    public static decimal? ComputeImpliedMoveToAdrRatio(decimal? frontImpliedMovePct, decimal? adr20Pct) =>
-        frontImpliedMovePct is > 0m && adr20Pct is > 0m
-            ? Math.Round(frontImpliedMovePct.Value / adr20Pct.Value, 2)
-            : null;
+    public static decimal? ComputeDailyImpliedMoveToAdrRatio(OptionsSentimentSnapshot snapshot, decimal? adr20Pct)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var ratio = OptionsSentimentCalculator.WithAdr20Pct(snapshot, adr20Pct).ImpliedToRealizedAdrRatio;
+        return ratio is { } value ? Math.Round(value, 2) : null;
+    }
 
     /// <summary>
     /// Loads OPRA snapshots and completed 20-session ADR% for 1–6 symbols under a bounded 6-second timeout.
@@ -243,62 +247,22 @@ public static class CatalystOptionsAdrService
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(6));
 
-        var cachedAdr = new Dictionary<string, Adr20CalculationResult>(StringComparer.OrdinalIgnoreCase);
-        var uncachedSymbols = new List<string>(symbols.Length);
-        foreach (var symbol in symbols)
-        {
-            if (AdrCache.TryGetValue(symbol, out var hit) && hit.ExpiresAtUtc > now)
-            {
-                cachedAdr[symbol] = hit.Result;
-            }
-            else
-            {
-                uncachedSymbols.Add(symbol);
-            }
-        }
-
-        var spotHintsTask = DeskOptionsEndpoints.TryLoadSpotHintsAsync(quotes, symbols, deadline.Token, cancellationToken);
-        var barsTask = uncachedSymbols.Count > 0
-            ? TryLoadDailyBarsAndSchedulesAsync([.. uncachedSymbols], catalog, runtimeFactory, now, deadline.Token, cancellationToken)
-            : Task.FromResult((true, (IReadOnlyDictionary<DateOnly, MarketSessionSchedule>?)null, new Dictionary<string, List<OhlcvBar>>(StringComparer.OrdinalIgnoreCase)));
-
-        var spotHints = await spotHintsTask;
+        var adrTask = LoadAdrAsync(symbols, catalog, runtimeFactory, now, deadline.Token, cancellationToken);
+        var spotHints = await DeskOptionsEndpoints.TryLoadSpotHintsAsync(quotes, symbols, deadline.Token, cancellationToken);
         var opraTasks = symbols.ToDictionary(
             symbol => symbol,
             symbol => TryLoadOptionsSnapshotAsync(optionsSource, symbol, spotHints.GetValueOrDefault(symbol), now, deadline.Token, cancellationToken),
             StringComparer.OrdinalIgnoreCase);
 
-        await Task.WhenAll(opraTasks.Values.Cast<Task>().Append(barsTask));
-        var (scheduleSucceeded, schedules, barsBySymbol) = await barsTask;
-
-        if (uncachedSymbols.Count > 0 && scheduleSucceeded)
-        {
-            SweepExpiredCacheEntries(now);
-            foreach (var symbol in uncachedSymbols)
-            {
-                var symbolBars = barsBySymbol.GetValueOrDefault(symbol) ?? [];
-                var computed = ComputeAdr20Pct(symbolBars, schedules, now, scheduleSucceeded: true);
-                cachedAdr[symbol] = computed;
-                if (AdrCache.Count < MaxCacheEntries || AdrCache.ContainsKey(symbol))
-                {
-                    AdrCache[symbol] = new CachedAdrEntry(computed, now.Add(AdrCacheTtl));
-                }
-            }
-        }
-        else if (uncachedSymbols.Count > 0)
-        {
-            foreach (var symbol in uncachedSymbols)
-            {
-                cachedAdr[symbol] = new Adr20CalculationResult(null, null, "Exchange schedule unavailable");
-            }
-        }
+        await Task.WhenAll(opraTasks.Values.Cast<Task>().Append(adrTask));
+        var cachedAdr = await adrTask;
 
         var cards = new List<CatalystOptionsAdrCard>(symbols.Length);
         foreach (var symbol in symbols)
         {
             var snapshot = await opraTasks[symbol];
             var adr = cachedAdr[symbol];
-            var ratio = ComputeImpliedMoveToAdrRatio(snapshot.FrontImpliedMovePct, adr.Adr20Pct);
+            var ratio = ComputeDailyImpliedMoveToAdrRatio(snapshot, adr.Adr20Pct);
 
             cards.Add(new CatalystOptionsAdrCard(
                 Symbol: symbol,
@@ -314,6 +278,48 @@ public static class CatalystOptionsAdrService
         }
 
         return new CatalystOptionsAdrResponse(ContractVersions.VersionOne, now, cards);
+    }
+
+    /// <summary>
+    /// Returns each symbol's completed 20-session ADR%, reusing the bounded 3-minute cache and downloading 65 days of daily
+    /// bars only for symbols not cached. Used by the Catalysts cards and by the Desk's selected-stock options line, so both
+    /// compare the options-implied move with the same ADR value. A failed exchange schedule is reported per symbol and not cached.
+    /// </summary>
+    public static async Task<Dictionary<string, Adr20CalculationResult>> LoadAdrAsync(
+        IReadOnlyList<string> symbols,
+        ConfigCatalogService catalog,
+        PaperRuntimeFactory runtimeFactory,
+        DateTimeOffset now,
+        CancellationToken deadlineToken,
+        CancellationToken callerToken)
+    {
+        var adr = new Dictionary<string, Adr20CalculationResult>(StringComparer.OrdinalIgnoreCase);
+        var uncachedSymbols = new List<string>(symbols.Count);
+        foreach (var symbol in symbols)
+        {
+            if (AdrCache.TryGetValue(symbol, out var hit) && hit.ExpiresAtUtc > now) adr[symbol] = hit.Result;
+            else uncachedSymbols.Add(symbol);
+        }
+
+        if (uncachedSymbols.Count == 0) return adr;
+
+        var (scheduleSucceeded, schedules, barsBySymbol) = await TryLoadDailyBarsAndSchedulesAsync(
+            [.. uncachedSymbols], catalog, runtimeFactory, now, deadlineToken, callerToken);
+        if (!scheduleSucceeded)
+        {
+            foreach (var symbol in uncachedSymbols) adr[symbol] = new Adr20CalculationResult(null, null, "Exchange schedule unavailable");
+            return adr;
+        }
+
+        SweepExpiredCacheEntries(now);
+        foreach (var symbol in uncachedSymbols)
+        {
+            var computed = ComputeAdr20Pct(barsBySymbol.GetValueOrDefault(symbol) ?? [], schedules, now, scheduleSucceeded: true);
+            adr[symbol] = computed;
+            if (AdrCache.Count < MaxCacheEntries || AdrCache.ContainsKey(symbol)) AdrCache[symbol] = new CachedAdrEntry(computed, now.Add(AdrCacheTtl));
+        }
+
+        return adr;
     }
 
     // Evicts expired entries from the bounded in-memory ADR cache before inserting fresh symbol calculations.

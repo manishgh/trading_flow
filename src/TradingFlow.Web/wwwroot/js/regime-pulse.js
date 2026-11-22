@@ -30,37 +30,61 @@
         return el;
     }
 
-    // Describes one benchmark with explicit close price, 50-day context, and gate state so colour is never the only cue.
-    function benchmarkChip(b) {
+    // Describes one benchmark in a few words so the whole strip fits one line. The words name the standard
+    // 50-day rule this strip checks; a strategy with its own regime settings may differ, which the tooltip says.
+    function benchmarkChip(b, checkedAt) {
         if (!b || !b.available) return chip(b ? b.symbol : "?", "— unavailable", "muted", (b && b.summaryLabel) || "No benchmark bars were available.");
         const close = b.lastClose != null ? Number(b.lastClose).toFixed(2) : "—";
         const label = b.symbol + " " + close;
-        const title = [b.summaryLabel, b.lastSessionDate ? "as of " + b.lastSessionDate : ""].filter(Boolean).join(" · ");
-        if (b.longGateOn) return chip(label, "▲ rising 50-day · longs on", "good", title);
-        if (b.shortGateOn) return chip(label, "▼ below 50-day · longs off · shorts on", "bad", title);
-        return chip(label, "◐ 50-day flat · longs off", "warn", title);
+        const detail = b.longGateOn ? "Close above a 50-day average that is rising: the standard rule allows new longs, not shorts."
+            : b.shortGateOn ? "Close below a 50-day average that is falling: the standard rule allows new shorts, not longs."
+            : "Close and 50-day average point different ways (for example above the average while it falls): the standard rule allows neither.";
+        const title = [detail, "Each strategy applies its own regime settings.",
+            b.lastSessionDate ? "Session " + b.lastSessionDate : "", checkedAt].filter(Boolean).join(" · ");
+        if (b.longGateOn) return chip(label, "▲ 50-day: longs", "good", title);
+        if (b.shortGateOn) return chip(label, "▼ 50-day: shorts", "bad", title);
+        return chip(label, "◐ 50-day: neither", "warn", title);
     }
 
-    // Shows the VIX close and what it does to long and short risk size.
-    function vixChip(v) {
-        if (!v || !v.available) return chip("VIX", "— pending", "muted", v ? v.longLabel : "VIX unavailable");
+    // Describes one risk multiplier in two or three words: "full", "off" or "0.5×".
+    function scaleWord(scale) {
+        return scale >= 1 ? "full" : scale > 0 ? Number(scale).toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + "×" : "off";
+    }
+
+    // Shows the previous session's VIX close and the size it allows for new longs and shorts in a few words; the
+    // tooltip spells out the server's labels, the session and the observation time.
+    function vixChip(v, checkedAt) {
+        if (v && !v.available && v.latestPublishedClose != null) {
+            // FRED has not posted the previous session's close yet: show the newest close it has, with its date.
+            return chip("VIX " + Number(v.latestPublishedClose).toFixed(2), v.latestPublishedDate + " · newer close pending", "warn",
+                ["FRED has not published the " + v.sessionDate + " close yet; the latest published close is " +
+                    Number(v.latestPublishedClose).toFixed(2) + " on " + v.latestPublishedDate + ".",
+                 "Strategies that size by VIX wait for the " + v.sessionDate + " close before new entries.", checkedAt].join(" · "));
+        }
+        if (!v || !v.available) return chip("VIX", "— unavailable", "muted", [v ? v.longLabel : "VIX unavailable", checkedAt].join(" · "));
         const tone = v.longRiskScale >= 1 ? "good" : v.longRiskScale > 0 ? "warn" : "bad";
         const glyph = v.longRiskScale >= 1 ? "✓" : v.longRiskScale > 0 ? "◐" : "✕";
-        return chip("VIX " + Number(v.close).toFixed(2), glyph + " " + v.longLabel + " · " + v.shortLabel, tone,
-            "Previous session close " + v.sessionDate + " from FRED VIXCLS.");
+        return chip("VIX " + Number(v.close).toFixed(2), glyph + " longs " + scaleWord(v.longRiskScale) + " · shorts " + scaleWord(v.shortRiskScale), tone,
+            ["Size for new trades: " + v.longLabel + " · " + v.shortLabel, "Previous session close " + v.sessionDate + " from FRED VIXCLS", checkedAt].join(" · "));
     }
 
-    // Renders the server-evaluated regime chips and observation timestamp using text nodes only.
+    // Lists the top six sector funds by symbol; the tooltip names each sector with its 12-1 month return and the session.
+    function sectorChip(p, checkedAt) {
+        const leaders = Array.isArray(p.topSectorLeaders) ? p.topSectorLeaders : [];
+        if (!leaders.length) return chip("Top sectors", "— unavailable", "muted", [p.topSectorsUnavailableReason || "No sector ranking.", checkedAt].join(" · "));
+        const lines = leaders.map(l => l.rank + ". " + l.symbol + " " + l.name + " " + (l.return12Minus1 >= 0 ? "+" : "−") +
+            Math.abs(l.return12Minus1 * 100).toFixed(1) + "%");
+        const title = "Sector funds ranked by 12-1 month return (price change from 12 months ago to 1 month ago) as of " +
+            p.topSectorsAsOfDate + ":\n" + lines.join("\n") + "\n" + checkedAt + ". Context only; strategies apply their own rules.";
+        return chip("Top sectors", leaders.map(l => l.symbol).join(" · "), "good", title);
+    }
+
+    // Renders the server-evaluated regime chips using text nodes only; the observation time goes into each
+    // chip's tooltip rather than taking strip width.
     function render(p) {
+        const checkedAt = "Checked " + new Date(p.observedAtUtc).toLocaleTimeString();
         strip.textContent = "";
-        strip.append(benchmarkChip(p.spy), benchmarkChip(p.qqq), vixChip(p.vix));
-        const sectors = p.topSectors && p.topSectors.length ? p.topSectors.join(" · ") : "— not published";
-        strip.append(chip("Sectors", sectors, p.topSectors && p.topSectors.length ? "good" : "muted",
-            p.topSectorsAsOfDate ? "Top sectors ranked as of " + p.topSectorsAsOfDate : "No sector screen published."));
-        const stamp = document.createElement("span");
-        stamp.className = "regime-pulse-strip__stamp";
-        stamp.textContent = "Checked " + new Date(p.observedAtUtc).toLocaleTimeString();
-        strip.append(stamp);
+        strip.append(benchmarkChip(p.spy, checkedAt), benchmarkChip(p.qqq, checkedAt), vixChip(p.vix, checkedAt), sectorChip(p, checkedAt));
     }
 
     // Fetches the cached server pulse while aborting any superseded in-flight request.

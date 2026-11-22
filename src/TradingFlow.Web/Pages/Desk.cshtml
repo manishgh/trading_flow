@@ -26,12 +26,11 @@
       <button type="button" id="watch-strategy-refresh" class="btn btn-secondary btn-sm watch-inline-btn" title="Refresh strategy checks" hidden>↻ Refresh</button>
       <button type="button" id="watch-strategy-cancel" class="btn btn-secondary btn-sm watch-inline-btn" title="Cancel strategy checks" hidden>Cancel</button>
     </div>
-    <label class="watch-search-label"><span>Find</span><input id="watch-search" type="search" maxlength="80" placeholder="Symbol or company" autocomplete="off" /></label>
-    <label class="watch-sort-label"><span>Sort</span><select id="watch-sort"><option value="symbol">Symbol A–Z</option><option value="held">Held first</option><option value="news">Latest news</option></select></label>
+    <label class="watch-search-label"><span>Find</span><input id="watch-search" type="search" maxlength="80" placeholder="Symbol or name" title="Find by symbol or company name" autocomplete="off" /></label>
+    <label class="watch-sort-label"><span>Sort</span><select id="watch-sort"><option value="symbol">A–Z</option><option value="held">Held first</option><option value="news">Latest news</option></select></label>
     <div class="watch-view-switch" role="group" aria-label="Show stocks"><button type="button" data-view="all" aria-pressed="true">All</button><button type="button" data-view="signals" aria-pressed="false">Signals <span data-view-count="signals"></span></button><button type="button" data-view="held" aria-pressed="false">Held <span data-view-count="held"></span></button><button type="button" data-view="rejected" aria-pressed="false">Rejected <span data-view-count="rejected"></span></button></div>
     <div class="watch-toolbar-tail">
       <span id="watch-count" class="watch-count-pill">— stocks</span>
-      <button type="button" id="watch-density-toggle" class="btn btn-secondary btn-sm" aria-pressed="true" title="Showing fewer columns (keeps News); click for all columns">Fewer columns</button>
       <button type="button" id="watch-add-open" class="btn btn-secondary btn-sm watch-ghost-btn">+ Stock</button>
       <button type="button" id="watch-import-open" class="btn btn-secondary btn-sm watch-ghost-btn">+ Screen</button>
       <a asp-page="/Wishlists" class="watch-manage">Groups ↗</a>
@@ -51,9 +50,9 @@
   <p id="watch-warning" class="watch-warning" role="status" hidden></p>
   <div class="watch-grid" data-active-pane="chart">
     <section class="watch-stocks" aria-label="Followed stocks">
-      <div class="watch-table-scroll" role="region" aria-label="Stock table" tabindex="0"><table class="watch-table" data-scanner-density="compact" data-has-strategy="false"><caption class="sr-only">Stock prices, order actions, news, and completed daily indicators</caption>
-        <colgroup><col class="watch-stock-col" /><col class="watch-price-col" /><col class="watch-trade-col" /><col class="watch-strategy-col" /><col class="watch-position-col" /><col class="watch-news-col" /><col class="watch-technical-col" /><col class="watch-rvol-col" /><col class="watch-volume-col" /></colgroup>
-        <thead><tr><th scope="col">Stock</th><th scope="col" title="Bid/ask midpoint and daily percent change vs previous close (full bid/ask, spread, and quote age in row tooltip)">Mid · Day %</th><th scope="col">Trade</th><th scope="col">Strategy</th><th scope="col">Position</th><th scope="col" title="Stored stories in the last hour (partial coverage)">News</th><th scope="col">Daily technicals</th><th scope="col" title="Completed 1d relative volume and 1d ATR">RVOL · ATR</th><th scope="col">Volume</th></tr></thead>
+      <div class="watch-table-scroll" role="region" aria-label="Stock table" tabindex="0"><table class="watch-table" data-has-strategy="false"><caption class="sr-only">Stock prices: previous close, current midpoint and change, strategy status, relative volume and ATR</caption>
+        <colgroup><col class="watch-col-stock" /><col class="watch-col-close" /><col class="watch-col-now" /><col class="watch-col-change" /><col class="watch-col-strategy" /><col class="watch-col-rvol" /></colgroup>
+        <thead><tr><th scope="col" class="watch-col-stock">Stock</th><th scope="col" class="watch-col-close num" title="Close of the previous completed New York session">Prev close</th><th scope="col" class="watch-col-now num" title="Bid/ask midpoint now (bid, ask, spread and quote age in the cell tooltip)">Now</th><th scope="col" class="watch-col-change num" id="watch-change-head" title="Percent change of the midpoint vs the previous close">Today</th><th scope="col" class="watch-col-strategy">Strategy</th><th scope="col" class="watch-col-rvol num" title="RVOL: completed daily volume vs its usual level · ATR: average true range in dollars">RVOL · ATR</th></tr></thead>
         <tbody id="watch-rows"></tbody>
       </table></div>
       <div id="watch-empty" class="watch-empty"><strong>Loading your stocks…</strong><p>Your stock groups, screeners and holdings come together here.</p></div>
@@ -113,6 +112,8 @@
             <div tabindex="0" title="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair." data-tooltip="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair."><dt title="Downside Put IV minus upside Call IV (~25 delta). Positive (+) = traders paying up for downside protection; Negative (−) = upside call chasing; '—' = no liquid 25-delta pair.">Put vs Call fear</dt><dd data-options-field="skew">—</dd></div>
             <div tabindex="0" title="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market." data-tooltip="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market."><dt title="Near-term implied volatility minus ~30-day implied volatility (vol points). Positive (+) = immediate catalyst/event or gap risk priced in; Negative (−) = calm normal market.">Near vs 30d IV</dt><dd data-options-field="term">—</dd></div>
             <div tabindex="0" title="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls)." data-tooltip="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls)."><dt title="Today's traded Call volume divided by Put volume across liquid strikes (>1.0x = more Calls than Puts; <1.0x = more Puts than Calls).">Call/Put vol</dt><dd data-options-field="cpvol">—</dd></div>
+            <div tabindex="0" title="Implied volatility of the nearest at-the-money options: the yearly price swing option prices assume, in percent."><dt>Implied vol</dt><dd data-options-field="iv">—</dd></div>
+            <div tabindex="0" title="One-day expected move from option prices compared with the stock's 20-day average high-to-low range. About 0.5x is an ordinary day; higher means option prices expect more movement than usual."><dt>vs typical day</dt><dd data-options-field="adr">—</dd></div>
           </dl>
           <p class="watch-fine" data-options-field="note" hidden></p>
         </article>
@@ -133,11 +134,6 @@
           <dl class="watch-metrics"><dt>Shares</dt><dd id="watch-quantity">—</dd><dt>Average entry</dt><dd id="watch-entry">—</dd><dt>Market value</dt><dd id="watch-value">—</dd><dt>Unrealized P&amp;L</dt><dd id="watch-pl">—</dd></dl>
           <a asp-page="/RunningTrades">View positions and protection</a>
         </div>
-        <details id="watch-evidence" class="watch-stock-evidence">
-          <summary>Group &amp; catalyst tools</summary>
-          <form id="watch-follow"><label>Follow in a stock group<select id="watch-follow-list" required></select></label><button class="btn btn-secondary" type="submit">Follow stock</button><p id="watch-follow-status" role="status"></p></form>
-          <p class="watch-context-links"><a id="watch-stock-news" asp-page="/News">Open stock news</a> <a id="watch-stock-earnings" asp-page="/Earnings">Open earnings</a></p>
-        </details>
       </div>
       <section class="watch-news" id="watch-news" aria-label="Relevant news">
         <div class="watch-news-head">
@@ -149,10 +145,6 @@
         <div id="watch-news-list"></div>
       </section>
     </aside>
-  </div>
-  <div class="watch-workflow-tools">
-  @* Paper strategy runs record which stocks qualify and trigger; their signals authorize strategy entries. *@
-  <details class="watch-runs" id="watch-runs"><summary><span class="watch-kicker">STRATEGY RUNS</span><strong>Start or open a paper strategy run</strong></summary><partial name="_CandidateWorkflow" /></details>
   </div>
   <p class="watch-footer" hidden>Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.</p>
 </section>
@@ -167,5 +159,4 @@
     <script src="~/js/watch-desk.js" asp-append-version="true"></script>
     <script src="~/js/desk-options.js" asp-append-version="true"></script>
     <script src="~/js/preparation-summary.js" asp-append-version="true" defer></script>
-    <script src="~/js/candidate-workflow.js" asp-append-version="true" defer></script>
 }

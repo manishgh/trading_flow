@@ -166,6 +166,26 @@
             if (cpBox) { cpBox.title = tips.cpvol; cpBox.dataset.tooltip = tips.cpvol; }
         }
 
+        const ivEl = card.querySelector('[data-options-field="iv"]');
+        if (ivEl) {
+            const iv = snapshot.atmImpliedVolPct;
+            const hasIv = typeof iv === 'number' && Number.isFinite(iv);
+            ivEl.textContent = hasIv ? iv.toFixed(0) + '%' : '—';
+            ivEl.title = hasIv
+                ? 'Options price in a yearly swing of about ' + iv.toFixed(0) + '% (nearest at-the-money call and put).'
+                : 'No liquid at-the-money call and put on the nearest expiry.';
+        }
+
+        const adrEl = card.querySelector('[data-options-field="adr"]');
+        if (adrEl) {
+            const ratio = snapshot.impliedToRealizedAdrRatio;
+            const hasRatio = typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0;
+            adrEl.textContent = hasRatio ? ratio.toFixed(2) + 'x' : '—';
+            adrEl.title = hasRatio
+                ? 'One-day expected move is ' + ratio.toFixed(2) + 'x the 20-day average high-to-low range (about 0.5x is an ordinary day).'
+                : 'Needs an options expected move and 20 completed daily sessions for this stock.';
+        }
+
         const noteEl = card.querySelector('[data-options-field="note"]');
         if (noteEl) noteEl.textContent = snapshot.summaryNote || '';
         const contractDetail = typeof snapshot.liquidContractCount === 'number' && Number.isFinite(snapshot.liquidContractCount)

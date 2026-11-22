@@ -6,7 +6,7 @@ using TradingFlow.Web;
 
 namespace TradingFlow.Tests;
 
-/// <summary>Focused checks for the workspace regime strip: VIX sizing labels, fail-closed regime rules, sector tail read and shell wiring.</summary>
+/// <summary>Focused checks for the workspace regime strip: VIX sizing labels, fail-closed regime rules, live sector ranking and shell wiring.</summary>
 public sealed class WorkspacePulseTests : IDisposable
 {
     private static readonly DateOnly Session = new(2026, 11, 19);
@@ -72,27 +72,44 @@ public sealed class WorkspacePulseTests : IDisposable
     }
 
     [Fact]
-    public void TopSectorsReadsOnlyTheFinalSessionRows()
+    public void SectorLeadersRankBy12Minus1ReturnKeepTopSixAndNameEachSector()
     {
-        var folder = Path.Combine(root, "screens", "sector-funds-top3-test");
-        Directory.CreateDirectory(folder);
-        File.WriteAllLines(Path.Combine(folder, "eligible.csv"),
-        [
-            "session_date,ticker,rank",
-            "2026-11-18,XLK,1", "2026-11-18,XLE,2", "2026-11-18,XLU,3",
-            "2026-11-19,XLI,1", "2026-11-19,XLV,2", "2026-11-19,XLF,3"
-        ]);
-        var (sectors, asOf) = WorkspacePulseEndpoints.TryReadLatestTopSectors(Path.Combine(root, "screens"));
-        Assert.Equal(["XLI", "XLV", "XLF"], sectors);
-        Assert.Equal("2026-11-19", asOf);
+        // Steps give each fund a different 12-1 return; a higher step means a higher return from the same start.
+        var steps = new Dictionary<string, decimal>
+        {
+            ["XLK"] = 0.60m, ["XLF"] = 0.50m, ["XLI"] = 0.40m, ["XLV"] = 0.30m, ["XLY"] = 0.20m,
+            ["XLC"] = 0.10m, ["XLE"] = -0.10m, ["XLU"] = -0.20m
+        };
+        var bars = steps.ToDictionary(pair => pair.Key,
+            pair => BuildDailyBars(pair.Key, 260, Session, 100m, pair.Value).ToList(), StringComparer.OrdinalIgnoreCase);
+        bars["XLB"] = BuildDailyBars("XLB", 100, Session, 100m, 5m).ToList(); // too little history: left out, not ranked
+        var funds = steps.Keys.Append("XLB").ToArray();
+
+        var ranking = TradingFlow.Web.Services.SectorLeadersService.Rank(funds, bars, schedules: null, Now);
+
+        Assert.Null(ranking.UnavailableReason);
+        Assert.Equal(Session, ranking.AsOfSession);
+        Assert.Equal(["XLK", "XLF", "XLI", "XLV", "XLY", "XLC"], ranking.Leaders.Select(leader => leader.Symbol));
+        Assert.Equal([1, 2, 3, 4, 5, 6], ranking.Leaders.Select(leader => leader.Rank));
+        Assert.Equal("Technology", ranking.Leaders[0].Name);
+        Assert.Equal("Communication services", ranking.Leaders[5].Name);
+        // 12-1 return for the leader (shared research-screen formula): the close 22 sessions before the latest completed
+        // session divided by the close 253 sessions before it, minus one.
+        var xlk = bars["XLK"];
+        Assert.Equal(Math.Round(xlk[^23].Close / xlk[^254].Close - 1m, 4), ranking.Leaders[0].Return12Minus1);
     }
 
     [Fact]
-    public void TopSectorsAreEmptyWhenNoScreenIsPublished()
+    public void SectorLeadersAreUnavailableWithAReasonWhenNoFundHasAFullYear()
     {
-        var (sectors, asOf) = WorkspacePulseEndpoints.TryReadLatestTopSectors(Path.Combine(root, "screens"));
-        Assert.Empty(sectors);
-        Assert.Null(asOf);
+        var bars = new Dictionary<string, List<OhlcvBar>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["XLK"] = BuildDailyBars("XLK", 50, Session, 100m, 1m).ToList()
+        };
+        var ranking = TradingFlow.Web.Services.SectorLeadersService.Rank(["XLK"], bars, schedules: null, Now);
+        Assert.Empty(ranking.Leaders);
+        Assert.Null(ranking.AsOfSession);
+        Assert.Contains("full year", ranking.UnavailableReason);
     }
 
     [Fact]
@@ -165,6 +182,10 @@ public sealed class WorkspacePulseTests : IDisposable
         Assert.Equal(Session, missingExpected.SessionDate);
         Assert.Equal(0m, missingExpected.LongRiskScale);
         Assert.Equal(0m, missingExpected.ShortRiskScale);
+        // The newest published close is reported for display only; it never becomes the sizing close.
+        Assert.Null(missingExpected.Close);
+        Assert.Equal(15m, missingExpected.LatestPublishedClose);
+        Assert.Equal(Session.AddDays(-3), missingExpected.LatestPublishedDate);
 
         // When schedule lookup failed, fail closed even if a VIX close exists.
         var failedSchedule = WorkspacePulseEndpoints.BuildVixPulse(Vix(15m), Session, Now, scheduleSucceeded: false, schedules: null);
