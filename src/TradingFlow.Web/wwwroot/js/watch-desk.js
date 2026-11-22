@@ -465,11 +465,14 @@
             const side=button.dataset.rowSide, price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
             const quoted=price>0, name=(side==='buy'?'Buy ':'Sell ')+row.membership.symbol;
             const amount=quoted?money(price):'no current quote', label=name+' at '+(side==='buy'?'ask ':'bid ')+amount;
-            button.querySelector('b').textContent=quoted?tradePrice.format(price):'—';
+            const shown=quoted?tradePrice.format(price):'—', amountNode=button.querySelector('b');
+            if(amountNode.textContent!==shown)amountNode.textContent=shown;
             button.dataset.quoted=String(quoted);
             button.dataset.stale=String(stale);
-            button.title=[label,quoteAge(row),orderRestrictionHint(row,side)].filter(Boolean).join(' · ');
-            button.setAttribute('aria-label',label);
+            // Unchanged texts are left alone, so an open tooltip does not flicker every second.
+            const title=[label,quoteAge(row),orderRestrictionHint(row,side)].filter(Boolean).join(' · ');
+            if(button.title!==title)button.title=title;
+            if(button.getAttribute('aria-label')!==label)button.setAttribute('aria-label',label);
         }
     }
     // Keep the whole workspace in view on desktop and focus the selected stock after explicit navigation.

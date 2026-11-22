@@ -97,7 +97,7 @@ internal static class ChartStudyProjection
 
     // Gives each candle the value of the latest longer candle completed by the candle's own end: one that ended less than one
     // longer interval ago in the same session, or the previous session's closing one until the first of today completes.
-    // A price-basis break between the two, or a missing closing candle, leaves a gap.
+    // A price-basis break between the two, or (regular hours view) a missing closing candle, leaves a gap.
     private static ChartIndicatorSeries JoinLonger(ChartStudy study, ChartBarProjector projector,
         IReadOnlyList<ChartCompletedBar> source, ChartCalculatedIndicator calculated, IReadOnlyList<ChartCompletedBar> visible,
         IReadOnlySet<DateTimeOffset> breaks, int minutes, bool extended, DateTimeOffset evidenceCutoff, string revision)
