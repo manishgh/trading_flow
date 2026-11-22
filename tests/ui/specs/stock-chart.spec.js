@@ -753,11 +753,12 @@ test('keeps daily structure and daily overlay availability on intraday candles a
     expect(wire.history).toHaveLength(1);
 });
 
-test('limits four price studies and two lower panes and switches them with a mobile keyboard', async ({ page }) => {
+test('limits five indicators and two lower panes, edits them in place and switches panes with a mobile keyboard', async ({ page }) => {
     const wire = await chartWire(page);
     await page.setViewportSize({ width: 390, height: 830 });
-    await page.goto('/Chart?symbol=AAPL&indicators=sma20%2Csma50%2Cema9%2Cema20%2Catr14%2Cobv');
+    await page.goto('/Chart?symbol=AAPL&indicators=sma20%2Csma50%2Cema20%2Catr14%2Cobv%2Cema9');
     await expect.poll(() => wire.watches.length).toBe(1);
+    expect(wire.watches[0].key.indicators).toBe('atr14,ema20,obv,sma20,sma50');
     send(wire.watches[0]);
     const chart = page.getByRole('region', { name: 'Stock price chart' });
     const plot = chart.locator('[data-chart-plot]');
@@ -768,34 +769,31 @@ test('limits four price studies and two lower panes and switches them with a mob
     await pane.focus();
     await page.keyboard.press('ArrowDown');
     await expect(pane).toHaveValue('obv');
-    await expect(plot).toHaveCSS('--stock-chart-panes', '1');
     expect(wire.watches).toHaveLength(1);
 
-    await chart.getByText('Indicator library', { exact: true }).click();
-    const indicator = chart.getByRole('combobox', { name: 'Indicator', exact: true });
-    const replacement = chart.getByRole('combobox', { name: 'Replace indicator' });
-    await indicator.selectOption('bb20');
-    await expect(replacement.locator('option')).toHaveCount(4);
-    await replacement.selectOption('sma20');
-    await chart.getByRole('button', { name: 'Replace indicator', exact: true }).click();
+    await chart.locator('.stock-chart-more > summary').click();
+    await expect(chart.locator('[data-chart-study-count]')).toHaveText('5 of 5');
+    await expect(chart.locator('[data-chart-study-add]')).toBeDisabled();
+    const ema = chart.getByRole('spinbutton', { name: 'EMA 20 period' });
+    await ema.fill('21');
+    await ema.press('Enter');
     await expect.poll(() => wire.watches.length).toBe(2);
+    expect(wire.watches[1].key.indicators).toBe('atr14,ema21,obv,sma20,sma50');
     send(wire.watches[1]);
-    expect(wire.watches[1].key.indicators).toBe('atr14,bb20,ema20,ema9,obv,sma50');
-    await indicator.selectOption('rsi14');
-    await expect(replacement.locator('option')).toHaveCount(2);
-    await replacement.selectOption('atr14');
-    await chart.getByRole('button', { name: 'Replace indicator', exact: true }).click();
+    await chart.getByRole('combobox', { name: 'EMA 21 interval' }).selectOption('1h');
     await expect.poll(() => wire.watches.length).toBe(3);
+    expect(wire.watches[2].key.indicators).toBe('atr14,ema21:1h,obv,sma20,sma50');
     send(wire.watches[2]);
-    expect(wire.watches[2].key.indicators).toBe('bb20,ema20,ema9,obv,rsi14,sma50');
-    await expect(chart.getByRole('button', { name: 'Remove ATR 14 · 5m' })).toHaveCount(0);
-    await expect(chart.getByRole('button', { name: 'Remove Bollinger Bands 20/2 · 5m' })).toBeVisible();
+    const refused = chart.getByRole('spinbutton', { name: 'SMA 50 period' });
+    await refused.fill('251');
+    await refused.press('Enter');
+    await expect(chart.locator('[data-chart-study-feedback]')).toHaveText('SMA needs a whole period from 2 to 250.');
+    await expect(refused).toHaveValue('50');
+    expect(wire.watches).toHaveLength(3);
+    await chart.getByRole('button', { name: 'Remove ATR 14 · 5m' }).click();
+    await expect.poll(() => wire.watches.length).toBe(4);
+    expect(wire.watches[3].key.indicators).toBe('ema21:1h,obv,sma20,sma50');
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-
-    await page.setViewportSize({ width: 1440, height: 1050 });
-    await expect(pane).toBeHidden();
-    await expect(plot).toHaveCSS('--stock-chart-panes', '2');
-    await capture(chart, 'indicator-panes');
 });
 
 test('applies named presets, saves browser preferences and resets to the base chart', async ({ page }) => {
