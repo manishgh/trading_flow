@@ -68,6 +68,64 @@ public sealed class SwingLongArchetypesTests
         Assert.True(shockSnapshots[14].Atr > shockSnapshots[14].Mtr14);
     }
 
+    // The two ADR% methods on a falling stock: dividing earlier, higher-priced ranges by the lower latest close overstates
+    // the range; the per-day method measures each day against its own low. Hand-checked: 10 days 110/100 then 10 days 55/50.
+    [Fact]
+    public void AverageRangeMethods_MeasureAFallingStockAsDocumented()
+    {
+        var bars = Enumerable.Range(0, 20)
+            .Select(i => i < 10 ? DailyBar(i, 105m, 110m, 100m, 100m, 1_000_000m) : DailyBar(i, 52m, 55m, 50m, 50m, 1_000_000m))
+            .ToArray();
+
+        Assert.Equal(15m, SignalGenerator.ComputeAverageRangeAndDollarVolume(bars, 19).AverageRangePct);
+        Assert.Equal(15m, SignalGenerator.ComputeAverageRangeAndDollarVolume(bars, 19, 20, AverageRangeMethods.LatestClose).AverageRangePct);
+        var perDay = SignalGenerator.ComputeAverageRangeAndDollarVolume(bars, 19, 20, AverageRangeMethods.PerDay);
+        Assert.Equal(10m, perDay.AverageRangePct);
+        Assert.Equal(75_000_000m, perDay.AverageDollarVolume);
+
+        // A day without a usable low has no per-day range, so the whole measure is unavailable.
+        bars[5] = DailyBar(5, 105m, 110m, 0m, 100m, 1_000_000m);
+        Assert.Null(SignalGenerator.ComputeAverageRangeAndDollarVolume(bars, 19, 20, AverageRangeMethods.PerDay).AverageRangePct);
+        Assert.Throws<ArgumentException>(() => SignalGenerator.ComputeAverageRangeAndDollarVolume(bars, 19, 20, "median"));
+    }
+
+    // The method is opt-in: no catalogued strategy sets it, an unset method leaves the serialized rules unchanged, and a
+    // strategy that sets it uses it for its signal and round-trips through the run writer's YAML setting.
+    [Fact]
+    public void AverageRangeMethod_IsOptInAndAbsentFromExistingStrategies()
+    {
+        var reader = new SimpleYamlReader();
+        foreach (var path in Directory.GetFiles(Path.Combine(Root, "configs", "backtest", "strategies"), "*.yaml"))
+            Assert.Null(reader.ReadStrategy(path).EntryRules.AverageRangeMethod);
+
+        var control = reader.ReadStrategy(Path.Combine(Root, Ema21ControlPath));
+        Assert.DoesNotContain("AverageRangeMethod", System.Text.Json.JsonSerializer.Serialize(control.EntryRules), StringComparison.Ordinal);
+
+        var perDay = control with { EntryRules = control.EntryRules with { AverageRangeMethod = AverageRangeMethods.PerDay } };
+        var bars = Enumerable.Range(0, 20)
+            .Select(i => i < 10 ? DailyBar(i, 105m, 110m, 100m, 100m, 1_000_000m) : DailyBar(i, 52m, 55m, 50m, 50m, 1_000_000m))
+            .ToArray();
+        var snapshots = bars.Select((bar, index) => Snapshot(index, bar.Close, atr: 2m)).ToArray();
+        Assert.Equal(15m, new SignalGenerator().CreateTradeSignal(control, bars, snapshots, 19)!.AverageRangePct);
+        Assert.Equal(10m, new SignalGenerator().CreateTradeSignal(perDay, bars, snapshots, 19)!.AverageRangePct);
+
+        var written = Path.Combine(Path.GetTempPath(), $"tf-adr-{Guid.NewGuid():N}.yaml");
+        try
+        {
+            File.WriteAllText(written, RunConfigWriter.SerializeStrategyYaml(perDay));
+            Assert.Equal(AverageRangeMethods.PerDay, reader.ReadStrategy(written).EntryRules.AverageRangeMethod);
+            File.WriteAllText(written, RunConfigWriter.SerializeStrategyYaml(control));
+            Assert.Null(reader.ReadStrategy(written).EntryRules.AverageRangeMethod);
+        }
+        finally
+        {
+            File.Delete(written);
+        }
+
+        AssertInvalidYamlEdit(Ema21ControlPath, "  min_average_range_pct: 2.5", "  min_average_range_pct: 2.5\n  average_range_method: median");
+        AssertInvalidYamlEdit(Ema21ControlPath, "  min_average_range_pct: 2.5", "  average_range_method: per_day");
+    }
+
     // Verifies that SignalGenerator.ComputeAverageRangeAndDollarVolume matches DailyScreen.Evaluate exactly,
     // fails closed with fewer than 20 completed bars, and BasicStrategyEvaluator enforces both floors.
     [Fact]

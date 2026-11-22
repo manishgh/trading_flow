@@ -17,12 +17,14 @@
         stockSource = Model.StockSource, view = Model.View, pageNumber = 1, pageSize = Model.PageSize, stocksPage = Model.StocksPage })!;
 }
 
-<link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+}
 
 <header class="page-header compact-page-header market-page-header">
     <div>
-        <h1>News</h1>
-        <p>Company news, sector stories and market events.</p>
+        @* The sidebar and sub-tab already name this screen; the heading stays for screen readers only. *@
+        <h1 class="visually-hidden">News</h1>
         <div id="news-live-feed">
         @if (Model.FeedEnabled && Model.RefreshStatus is { } status)
         {
@@ -56,9 +58,33 @@
         </div>
     </div>
     <div class="actions">
-        <a class="button secondary" asp-page="/Desk">Open Desk</a>
+        @if (!String.IsNullOrWhiteSpace(Model.Ticker))
+        {
+            <a class="button secondary" asp-page="/Desk" asp-route-symbol="@Model.Ticker">Open Desk ↗</a>
+        }
+        else
+        {
+            <a class="button secondary" asp-page="/Desk">Open Desk ↗</a>
+        }
     </div>
 </header>
+
+@if (User.Identity?.IsAuthenticated == true)
+{
+    var opraInitialSymbols = !String.IsNullOrWhiteSpace(Model.Ticker)
+        ? $"{Model.Ticker.Trim().ToUpperInvariant()},SPY,QQQ"
+        : "SPY,QQQ";
+    <section class="catalysts-opra-strip" data-catalysts-opra data-catalysts-page="news" data-catalysts-symbols="@opraInitialSymbols" aria-label="OPRA implied move versus 20-day average daily range">
+        <div class="catalysts-opra-head">
+            <div>
+                <span class="watch-kicker">OPRA IMPLIED MOVE VS 20D ADR%</span>
+                <span class="note" data-catalysts-opra-status role="status">Loading OPRA implied-move context…</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" data-catalysts-opra-refresh>Refresh OPRA</button>
+        </div>
+        <div class="catalysts-opra-grid" data-catalysts-opra-grid></div>
+    </section>
+}
 
 <section class="panel market-filter-panel">
     <nav class="tab-strip news-category-nav" aria-label="News categories">
@@ -271,4 +297,8 @@
 @section Scripts {
     <script src="~/js/news-live.js" asp-append-version="true" defer></script>
     <script src="~/js/company-news-assessments.js" asp-append-version="true" defer></script>
+    @if (User.Identity?.IsAuthenticated == true)
+    {
+        <script src="~/js/catalysts-opra.js" asp-append-version="true" defer></script>
+    }
 }

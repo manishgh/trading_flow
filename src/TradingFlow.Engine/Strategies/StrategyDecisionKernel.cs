@@ -113,15 +113,6 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
                     : JsonSerializer.SerializeToElement<object?>(null);
                 semantic = fields;
             }
-            if (request.Strategy.EntryRules.MaxLongPutSkew is not null ||
-                request.Strategy.EntryRules.MinShortPutCallSkew is not null)
-            {
-                // Bind observed live OPRA 25-delta skew only for strategies that declare skew vetoes.
-                var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-                    EvidenceCanonicalJson.SerializeToUtf8Bytes(semantic))!;
-                fields["optionsSkew25Delta"] = JsonSerializer.SerializeToElement(request.OptionsSkew25Delta);
-                semantic = fields;
-            }
             var audit = new
             {
                 schemaVersion = 1,
@@ -288,8 +279,7 @@ public sealed class StrategyDecisionKernel : IStrategyDecisionKernel
             availableCatalystEvents,
             request.SessionSchedules,
             UsesHistoricalReceiptDelayContract(request),
-            fiveMinuteBarsSortedAscending: true,
-            optionsSkew25Delta: request.OptionsSkew25Delta);
+            fiveMinuteBarsSortedAscending: true);
         if (signal is null)
         {
             AddRule(rules, "qualification", "setup_signal_not_available", false, "signal_generator", new

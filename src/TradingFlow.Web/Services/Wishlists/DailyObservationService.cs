@@ -7,12 +7,15 @@ using TradingFlow.Engine.Indicators;
 
 namespace TradingFlow.Web.Services.Wishlists;
 
+public sealed record DeskVolatilitySummary(decimal? DailyRangePct, decimal? WeekRangePct, decimal? MonthRangePct);
+
 public sealed record DailyObservationResult(
     string State,
     string Detail,
     IndicatorSnapshot? Snapshot = null,
     DateTimeOffset? ObservedAtUtc = null,
-    decimal? CompletedSessionGapPercent = null);
+    decimal? CompletedSessionGapPercent = null,
+    DeskVolatilitySummary? Volatility = null);
 
 public interface IDailyObservationService
 {
@@ -199,11 +202,56 @@ public sealed class DailyObservationService : IDailyObservationService, IDisposa
         var snapshots = new IndicatorEngine(profile).Compute(bars);
         var current = snapshots[^1];
         decimal? gap = bars.Length >= 2 ? (bars[^1].Open / bars[^2].Close - 1m) * 100m : null;
+        var volatility = ComputeVolatility(bars);
         if (bars.Length < RequiredSessions)
             return (new("insufficient", $"{bars.Length}/{RequiredSessions} real completed daily sessions; observation is warming. No pre-listing history is synthesized.",
-                current, ObservedAtUtc: observedAt, CompletedSessionGapPercent: gap), nextClose);
+                current, ObservedAtUtc: observedAt, CompletedSessionGapPercent: gap, Volatility: volatility), nextClose);
         return (new("ready", $"Completed SIP/all daily indicators through {completed[^1].Date:yyyy-MM-dd}. Select a strategy to evaluate its conditions.",
-            current, observedAt, gap), nextClose);
+            current, observedAt, gap, volatility), nextClose);
+    }
+
+    /// <summary>
+    /// Computes completed-bar high-low range percentages (1D, 5-session week, 21-session month) relative to the latest
+    /// verified daily close. Returns null horizons when insufficient completed sessions exist and fails closed on non-positive close.
+    /// </summary>
+    public static DeskVolatilitySummary? ComputeVolatility(IReadOnlyList<OhlcvBar> bars)
+    {
+        if (bars is null || bars.Count == 0)
+            return null;
+        var latest = bars[^1];
+        if (latest.Close <= 0m || latest.High < latest.Low)
+            return null;
+
+        var dailyRangePct = Math.Round((latest.High - latest.Low) / latest.Close * 100m, 2);
+        decimal? weekRangePct = null;
+        if (bars.Count >= 5)
+        {
+            var (minLow, maxHigh) = WindowBounds(bars, 5);
+            weekRangePct = Math.Round((maxHigh - minLow) / latest.Close * 100m, 2);
+        }
+
+        decimal? monthRangePct = null;
+        if (bars.Count >= 21)
+        {
+            var (minLow, maxHigh) = WindowBounds(bars, 21);
+            monthRangePct = Math.Round((maxHigh - minLow) / latest.Close * 100m, 2);
+        }
+
+        return new DeskVolatilitySummary(dailyRangePct, weekRangePct, monthRangePct);
+    }
+
+    // Scans the trailing completed-bar window in one pass without slicing allocations.
+    private static (decimal MinLow, decimal MaxHigh) WindowBounds(IReadOnlyList<OhlcvBar> bars, int windowCount)
+    {
+        var start = bars.Count - windowCount;
+        var minLow = bars[start].Low;
+        var maxHigh = bars[start].High;
+        for (var i = start + 1; i < bars.Count; i++)
+        {
+            if (bars[i].Low < minLow) minLow = bars[i].Low;
+            if (bars[i].High > maxHigh) maxHigh = bars[i].High;
+        }
+        return (minLow, maxHigh);
     }
 
     private static Dictionary<DateOnly, PreparationSession> ValidateCalendar(PreparationCalendar calendar,

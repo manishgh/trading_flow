@@ -1,0 +1,806 @@
+/* UI 2.0 Workspace Layouts (3 of 3 consolidated UI 2.0 stylesheets).
+   Desk 3-column zero-scroll workspace, 34px scanner, chart overlay readout, Strategy Lab
+   2-column Long/Short grid + monthly matrix drawer, Catalysts OPRA & Earnings empty state,
+   and Portfolio responsive polish. */
+
+/* ---- Desk: Hide compact paused/expired preparation block (rendered as top-strip chip, G9) ---- */
+.workspace-app .watch-desk [data-preparation-summary][data-compact="true"] {
+  display: none;
+}
+
+/* ---- Desk: 3-Column Zero-Scroll (>= 1440px) & Mid-Width Tabs (720px–1439px) ---- */
+.workspace-app .watch-desk-shell { padding: 8px 16px 12px !important; }
+.watch-mid-tabs { display: none; }
+.watch-inspector {
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow: hidden;
+}
+.watch-inspector-empty {
+  color: var(--color-neutral-700); font-size: 0.78rem; padding: 7px 9px;
+  margin: 0; border-radius: 6px; border: 1px dashed var(--line);
+  background: var(--panel-subtle); text-align: left; flex-shrink: 0;
+}
+#watch-inspector-body {
+  display: flex; flex-direction: column; flex: 0 1 auto; max-height: 46%;
+  min-height: 0; gap: 8px; overflow-y: auto; padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.watch-inspector .watch-detail-block {
+  border-top: 0; margin-top: 0; padding-top: 0;
+}
+.watch-inspector .watch-detail-block + .watch-detail-block {
+  border-top: 1px solid var(--line); padding-top: 8px;
+}
+.watch-inspector h3 { font-size: 0.8125rem; margin: 0 0 6px; color: var(--color-text); }
+html body.workspace-app .watch-desk .watch-inspector .watch-news,
+.workspace-app .watch-desk .watch-inspector .watch-news {
+  grid-column: auto; grid-row: auto; position: static; top: auto;
+  flex: 1 1 auto; min-height: 140px; max-height: none; overflow-y: auto;
+  border: 0; border-radius: 0; background: transparent;
+  padding: 2px 0 0; margin: 0;
+}
+.workspace-app .watch-desk .watch-inspector .watch-news-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+}
+.workspace-app .watch-desk .watch-inspector .watch-news h2 {
+  font-size: 0.8125rem; margin: 0;
+}
+.workspace-app .watch-desk .watch-inspector .watch-news #watch-news-all {
+  margin-left: auto; min-height: 24px; height: 24px; padding: 0 7px; font-size: 0.7rem;
+}
+.workspace-app .watch-desk .watch-inspector .watch-news article {
+  padding: 7px 0;
+}
+.workspace-app .watch-desk .watch-inspector .watch-news article a,
+.workspace-app .watch-desk .watch-inspector .watch-news article strong {
+  font-size: 0.78rem; line-height: 1.35;
+}
+.watch-ticket-plan-summary {
+  margin: 8px 0 0; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-subtle); font-variant-numeric: tabular-nums; font-size: 0.72rem !important;
+  color: var(--color-neutral-800);
+}
+/* Buy/Sell stay on one row. The name/price group (.watch-focus-identity, below) has no min-width: 0, so it
+   cannot shrink under its content; when space runs out the interval controls wrap to a second line instead
+   of sliding underneath the trade buttons. */
+.watch-focus-head .watch-focus-trade {
+  display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; flex: 0 0 auto; flex-wrap: nowrap;
+}
+.watch-focus-head .watch-focus-trade .btn-sm {
+  min-height: 26px; height: 26px; padding: 0 10px; font-size: 0.72rem; line-height: 1;
+}
+
+@media (min-width: 1440px) {
+  html body.workspace-app .watch-desk .watch-grid,
+  .workspace-app .watch-desk .watch-grid,
+  .watch-desk .watch-grid {
+    grid-template-columns: minmax(480px, 36fr) minmax(430px, 42fr) minmax(240px, 22fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 8px;
+    align-items: stretch;
+    width: 100%;
+    max-width: none;
+    /* The grid takes the rest of the screen below its own top edge, measured by watch-desk.js into --desk-grid-top
+       (top bar, status strip, sub-tabs and toolbar vary when the strip wraps); the chart then fills its column
+       instead of stretching to the stock list height. */
+    height: calc(100vh - var(--desk-grid-top, 280px) - 10px);
+    min-height: 540px;
+  }
+  html body.workspace-app .watch-desk .watch-grid .watch-stocks,
+  .workspace-app .watch-desk .watch-grid .watch-stocks,
+  .watch-grid .watch-stocks {
+    grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-height: 520px; overflow: hidden;
+  }
+  html body.workspace-app .watch-desk .watch-grid .watch-detail,
+  .workspace-app .watch-desk .watch-grid .watch-detail,
+  .watch-grid .watch-detail {
+    grid-column: 2; grid-row: 1; position: static; width: 100%; max-width: none; max-height: none; overflow: visible;
+    display: flex; flex-direction: column; min-height: 520px; padding: 0;
+  }
+  html body.workspace-app .watch-desk .watch-detail:has(#watch-focus-content[hidden]) {
+    display: flex;
+  }
+  html body.workspace-app .watch-desk .watch-grid .watch-inspector,
+  .workspace-app .watch-desk .watch-grid .watch-inspector,
+  .watch-grid .watch-inspector {
+    grid-column: 3; grid-row: 1; min-height: 520px;
+  }
+  html body.workspace-app .watch-desk .watch-grid:has(#watch-focus-content:not([hidden])) .watch-table-scroll,
+  html body.workspace-app .watch-desk .watch-grid .watch-table-scroll,
+  .workspace-app .watch-desk .watch-grid .watch-table-scroll {
+    flex: 1 1 auto; min-height: 460px; max-height: calc(100vh - 190px); overflow-y: auto;
+  }
+  html body.workspace-app .watch-desk .watch-detail #watch-focus-content,
+  .workspace-app .watch-desk .watch-detail #watch-focus-content {
+    display: flex; flex-direction: column; flex: 1 1 auto; width: 100%; max-width: none; min-height: 0; padding: 6px 8px 8px;
+  }
+  html body.workspace-app .watch-desk .watch-detail .watch-chart-window,
+  .workspace-app .watch-desk .watch-detail .watch-chart-window {
+    display: flex; flex-direction: column; flex: 1 0 auto; width: 100%; max-width: none; min-height: 0;
+  }
+}
+
+/* Share chart palette tokens on .watch-detail so relocated Studies & settings swatches/session markers retain their colours,
+   and keep .watch-detail overflow visible so the Studies & settings popover never clips. */
+html body.workspace-app .watch-desk .watch-detail {
+  overflow: visible;
+  --stock-chart-up: var(--color-gain);
+  --stock-chart-down: var(--color-loss);
+  --stock-chart-premarket: var(--color-accent);
+  --stock-chart-postmarket: var(--warn-fill);
+  --stock-chart-level-a: var(--color-accent-600);
+  --stock-chart-level-b: var(--warn);
+  --stock-chart-level-c: var(--muted);
+  --stock-chart-study-0: #3b82f6;
+  --stock-chart-study-1: #f59e0b;
+  --stock-chart-study-2: #a855f7;
+  --stock-chart-study-3: var(--color-loss);
+  --stock-chart-study-4: var(--muted);
+}
+
+/* Full-width center chart guards across all desktop/ultrawide widths (720px–2560px+) */
+html body.workspace-app .watch-desk .watch-grid,
+html body.workspace-app .watch-desk .watch-detail,
+html body.workspace-app .watch-desk #watch-focus-content,
+html body.workspace-app .watch-desk .watch-chart-window,
+html body.workspace-app .watch-desk .watch-chart-window .stock-chart,
+html body.workspace-app .watch-desk .watch-chart-window .stock-chart-stage,
+html body.workspace-app .watch-desk .watch-chart-window .stock-chart-plot {
+  width: 100%; max-width: none;
+}
+html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
+  display: flex; flex-direction: column;
+}
+
+@media (min-width: 720px) and (max-width: 1439px) {
+  html body.workspace-app .watch-desk .watch-grid,
+  .workspace-app .watch-desk .watch-grid,
+  .watch-desk .watch-grid {
+    grid-template-columns: minmax(300px, 36fr) minmax(0, 64fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+  html body.workspace-app .watch-desk .watch-grid .watch-stocks,
+  .workspace-app .watch-desk .watch-grid .watch-stocks,
+  .watch-grid .watch-stocks {
+    grid-column: 1; grid-row: 1 / span 2; display: flex; flex-direction: column; min-height: 520px;
+  }
+  html body.workspace-app .watch-desk .watch-grid:has(#watch-focus-content:not([hidden])) .watch-table-scroll,
+  html body.workspace-app .watch-desk .watch-grid .watch-table-scroll {
+    flex: 1 1 auto; min-height: 460px; max-height: calc(100vh - 190px); overflow-y: auto;
+  }
+  .watch-mid-tabs {
+    display: flex; grid-column: 2; grid-row: 1; gap: 4px;
+    padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-subtle);
+    width: max-content;
+  }
+  .watch-mid-tabs button {
+    border: 0; border-radius: 6px; padding: 4px 12px; min-height: 28px;
+    background: transparent; color: var(--muted); font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  }
+  .watch-mid-tabs button[aria-selected="true"] {
+    background: var(--panel); color: var(--color-accent-700); border: 1px solid var(--line);
+  }
+  html body.workspace-app .watch-desk .watch-grid .watch-detail {
+    grid-column: 2; grid-row: 2; position: static; max-height: none;
+    display: flex; flex-direction: column; padding: 0; overflow: visible;
+  }
+  html body.workspace-app .watch-desk .watch-grid .watch-inspector {
+    grid-column: 2; grid-row: 2; position: static; max-height: none;
+  }
+  html body.workspace-app .watch-desk .watch-detail:has(#watch-focus-content[hidden]) {
+    display: flex; flex-direction: column; padding: 0;
+  }
+  html body.workspace-app .watch-desk .watch-grid[data-active-pane="chart"] .watch-inspector { display: none !important; }
+  html body.workspace-app .watch-desk .watch-grid[data-active-pane="inspector"] .watch-detail { display: none !important; }
+}
+
+.watch-strategy-check-item {
+  margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-subtle); padding: 8px 10px;
+}
+.watch-strategy-check-item[data-passed="true"] { border-color: var(--good-border); }
+.watch-strategy-check-item[data-passed="false"] { border-color: var(--bad-border); }
+.watch-strategy-check-summary {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  cursor: pointer; list-style: none; font-size: 0.8125rem; font-weight: 500;
+}
+.watch-strategy-check-summary::-webkit-details-marker { display: none; }
+.watch-check-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  border-radius: 999px; font-size: 0.75rem; font-weight: 700; white-space: nowrap;
+  border: 1px solid var(--line);
+}
+.watch-check-pill[data-passed="true"] {
+  color: var(--color-gain); background: var(--color-gain-surface); border-color: var(--good-border);
+}
+.watch-check-pill[data-passed="false"] {
+  color: var(--color-loss); background: var(--color-loss-surface); border-color: var(--bad-border);
+}
+.watch-check-label { color: var(--color-text); flex: 1 1 180px; min-width: 0; }
+.watch-check-canonical { margin: 8px 0 4px; }
+.watch-check-canonical code {
+  font-size: 0.75rem; padding: 1px 5px; border-radius: 4px; background: var(--panel-inset);
+}
+
+/* ---- Desk: Compact 34px scanner (hides Strategy until chosen, keeps News) ---- */
+#watch-density-toggle {
+  min-height: 28px; height: 28px; padding: 0 9px; font-size: 0.72rem; white-space: nowrap;
+}
+.watch-count-pill {
+  font-size: 0.72rem; color: var(--color-neutral-700); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.watch-day-change {
+  display: inline; font-size: 0.72rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  margin-left: 5px; line-height: 1.2;
+}
+/* One stock table (no column modes): Stock · Price now · Indicators (day) · Strategy · RVOL/ATR · Trade. Columns are sized
+   by class, not by position, and Strategy appears only once a strategy is selected. Rows are one 34 px line. */
+.workspace-app .watch-desk .watch-table { width: 100%; min-width: 0; table-layout: fixed; }
+.workspace-app .watch-desk .watch-table .watch-col-stock { width: 11%; }
+.workspace-app .watch-desk .watch-table .watch-col-price { width: 25%; }
+.workspace-app .watch-desk .watch-table .watch-col-trend { width: 23.5%; }
+.workspace-app .watch-desk .watch-table .watch-col-strategy { width: 13%; }
+.workspace-app .watch-desk .watch-table .watch-col-rvol { width: 17.5%; }
+.workspace-app .watch-desk .watch-table .watch-col-trade { width: 23%; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="true"] .watch-col-price { width: 22%; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="true"] .watch-col-trend { width: 22%; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="true"] .watch-col-rvol { width: 9%; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="true"] .watch-col-trade { width: 24%; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="true"] .watch-rvol small { display: none; }
+.workspace-app .watch-desk .watch-table[data-has-strategy="false"] .watch-col-strategy { display: none; }
+.workspace-app .watch-desk .watch-table th {
+  height: 28px; padding: 0 5px; font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.workspace-app .watch-desk .watch-table tbody tr { height: 34px; }
+.workspace-app .watch-desk .watch-table td {
+  height: 34px; padding: 0 5px; font-size: 0.78rem; line-height: 34px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
+.workspace-app .watch-desk .watch-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.workspace-app .watch-desk .watch-table .watch-symbol-button {
+  display: inline-flex; align-items: center; height: 34px; min-height: 32px;
+  padding: 0; font-size: 0.8125rem; font-weight: 700; line-height: 1;
+}
+.workspace-app .watch-desk .watch-table .watch-row-strategy small { display: none; }
+.workspace-app .watch-desk .watch-table .watch-rvol small { display: inline; white-space: nowrap; margin: 0 0 0 5px; font-size: 0.68rem; color: var(--muted); }
+.workspace-app .watch-desk .watch-table .watch-day-change { margin-left: 2px; font-size: 0.68rem; }
+.watch-trend-chip { margin-right: 3px; font-size: 0.66rem; font-weight: 600; color: var(--muted); }
+.watch-trend-chip:last-child { margin-right: 0; }
+.watch-trend-chip[data-trend="above"] { color: var(--color-gain); }
+.watch-trend-chip[data-trend="below"] { color: var(--color-loss); }
+.workspace-app .watch-desk .watch-table td.watch-col-trade { padding: 0 2px; text-align: right; text-overflow: clip; }
+.workspace-app .watch-desk .watch-table .watch-row-trade {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  width: calc(50% - 2px); height: 30px; min-height: 30px; margin-left: 2px; padding: 0 2px; vertical-align: middle;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-subtle);
+  font-size: 0.6rem; font-weight: 600; line-height: 1.1; color: var(--muted);
+}
+.workspace-app .watch-desk .watch-table .watch-row-trade b { font-size: 0.68rem; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.workspace-app .watch-desk .watch-table .watch-row-trade[data-row-side="buy"][data-quoted="true"] { border-color: var(--good-border); color: var(--color-gain); }
+.workspace-app .watch-desk .watch-table .watch-row-trade[data-row-side="sell"][data-quoted="true"] { border-color: var(--bad-border); color: var(--color-loss); }
+/* A bid and ask older than two minutes, or without a connection, lose their side colour. */
+.workspace-app .watch-desk .watch-table .watch-row-trade[data-row-side][data-stale="true"] { border-color: var(--line); color: var(--muted); }
+.workspace-app .watch-desk .watch-table .watch-row-trade[data-row-side][data-stale="true"] b { color: #aa6d19; font-weight: 600; }
+.workspace-app .watch-desk .watch-table .watch-row-trade:hover { background: var(--panel); }
+/* Narrower than the three-column Desk: each row is two lines, so the indicators stand under the price. */
+@media (max-width: 1439px) {
+  .workspace-app .watch-desk .watch-table, .workspace-app .watch-desk .watch-table tbody { display: block; }
+  .workspace-app .watch-desk .watch-table colgroup { display: none; }
+  .workspace-app .watch-desk .watch-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .workspace-app .watch-desk .watch-table tbody tr {
+    display: grid; grid-template-columns: 56px minmax(0, 1fr) 124px; height: auto; padding: 2px 0; border-bottom: 1px solid var(--line);
+  }
+  .workspace-app .watch-desk .watch-table tbody td { width: auto !important; height: auto; border-bottom: 0; line-height: 20px; }
+  .workspace-app .watch-desk .watch-table td.watch-col-stock { grid-row: 1 / span 2; }
+  .workspace-app .watch-desk .watch-table td.watch-col-price { grid-column: 2; grid-row: 1; }
+  .workspace-app .watch-desk .watch-table td.watch-col-trend { grid-column: 2; grid-row: 2; }
+  .workspace-app .watch-desk .watch-table td.watch-col-trade { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+  .workspace-app .watch-desk .watch-table td.watch-col-strategy { grid-column: 2; grid-row: 3; }
+  .workspace-app .watch-desk .watch-table td.watch-col-rvol { grid-column: 3; grid-row: 3; }
+  .workspace-app .watch-desk .watch-table[data-has-strategy="false"] td.watch-col-rvol { grid-column: 2; text-align: left; }
+}
+@media (max-width: 719px) {
+  .workspace-app .watch-desk .watch-table .watch-row-trade { height: 44px; min-height: 44px; }
+}
+.watch-row-strategy[data-tone="good"] strong { color: var(--color-gain); }
+.watch-row-strategy[data-tone="warn"] strong { color: var(--warn-ink); }
+.watch-row-strategy[data-tone="bad"] strong { color: var(--color-loss); }
+.watch-row-strategy[data-tone="muted"] strong { color: var(--color-neutral-600); }
+
+/* ---- Desk: Compact 1-line focus head, quick intervals & overlay readout ---- */
+.workspace-app .watch-desk .watch-focus-head {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 6px 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); min-height: 38px;
+}
+.watch-focus-identity {
+  display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: nowrap;
+}
+.watch-focus-identity h2 { font-size: 1rem; margin: 0; line-height: 1.2; }
+.watch-focus-identity strong { font-size: 1rem; font-weight: 700; line-height: 1.2; }
+.watch-focus-change { font-size: 0.8125rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.watch-info-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; min-height: 22px; padding: 0;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel-subtle);
+  color: var(--color-neutral-700); font-size: 0.72rem; cursor: help;
+}
+.watch-focus-controls {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap;
+}
+.watch-interval-quick {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel-subtle);
+}
+.watch-interval-btn {
+  border: 0; border-radius: 4px; background: transparent; color: var(--color-neutral-700);
+  min-height: 24px; height: 24px; padding: 0 7px; font-size: 0.72rem; font-weight: 600; cursor: pointer;
+}
+.watch-interval-btn[aria-pressed="true"] {
+  background: var(--color-accent-100); color: var(--color-accent-700);
+}
+.watch-chart-controls-slot { position: relative; display: inline-flex; align-items: center; }
+.watch-chart-controls-slot .stock-chart-more { position: relative; }
+.watch-chart-controls-slot .stock-chart-more[open] { flex: 0 0 auto; }
+.watch-chart-controls-slot .stock-chart-more > summary {
+  min-height: 28px; height: 28px; padding: 0 9px; font-size: 0.72rem;
+}
+.watch-chart-controls-slot .stock-chart-more[open] > .stock-chart-more-body {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 40;
+  width: min(460px, 85vw); max-height: 68vh; overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+.stock-chart-more-controls,
+.stock-chart-more-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+}
+.stock-chart-more-nav button { min-height: 28px; height: 28px; padding: 0 8px; font-size: 0.72rem; }
+.workspace-app .watch-desk .watch-chart-summary {
+  flex: 0 0 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px;
+}
+.workspace-app .watch-desk .watch-chart-summary > div,
+.workspace-app .watch-desk .watch-chart-summary h3,
+.workspace-app .watch-desk .watch-chart-summary .stock-chart-status,
+.workspace-app .watch-desk .watch-chart-summary .stock-chart-note {
+  display: none;
+}
+.workspace-app .watch-desk .watch-chart-summary [data-chart-full] {
+  min-height: 28px; height: 28px; padding: 0 8px; font-size: 0.72rem;
+  display: inline-flex; align-items: center;
+}
+
+.watch-chart-window {
+  border: 1px solid var(--line); border-radius: 8px; overflow: visible; background: var(--panel);
+}
+.watch-chart-window .stock-chart,
+.workspace-app .watch-desk .watch-chart-window .stock-chart {
+  border: 0; border-radius: 0; margin: 0; display: flex; flex-direction: column;
+  flex: 1 1 auto; min-height: 0; padding: 0; overflow: visible;
+}
+.watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-bar {
+  display: none;
+}
+/* The chart takes the height left in its column after the header, the pills and the options line. It is never lower than
+   220 px plus 90 px per indicator pane; a column that needs more grows downwards instead of covering the pills. */
+.watch-chart-window .stock-chart[data-compact-desk="true"] {
+  --desk-chart-height: 220px; flex: 1 0 auto;
+}
+.watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-stage {
+  flex: 1 0 auto; min-height: 0; border: 0; border-radius: 8px 8px 0 0;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-plot {
+  flex: 1 1 0; height: 0; min-height: calc(var(--desk-chart-height) + var(--stock-chart-panes, 0) * 90px); overflow: hidden;
+}
+.watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-navigation {
+  margin: 0; padding: 4px 8px; border-top: 1px solid var(--line);
+}
+.watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-navigation:has(> [data-chart-retry][hidden]) {
+  display: none;
+}
+.watch-chart-window .stock-chart[data-compact-desk="true"] .stock-chart-footer {
+  margin: 0; padding: 2px 8px; font-size: 0.65rem;
+}
+.watch-chart-window .stock-chart-stage .stock-chart-readout {
+  position: absolute; top: 6px; left: 8px; right: 56px; z-index: 6;
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 4px 8px; white-space: nowrap;
+  padding: 4px 8px; margin: 0; border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(4px);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  font-size: 0.72rem; line-height: 1.2; pointer-events: none;
+  overflow: hidden;
+}
+/* On the Desk the moving-average pills under the chart already show these values and toggle the
+   highlight, so the on-chart readout stays one line (date · O H L C · volume) and covers fewer candles. */
+.watch-chart-window .stock-chart-stage .stock-chart-readout .stock-chart-study-legend { display: none; }
+.stock-chart-study-legend {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  pointer-events: auto;
+}
+.stock-chart-study-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--ind-swatch, var(--line)) 55%, var(--line));
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--color-text); font-size: 0.7rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  line-height: 1.3; cursor: pointer; white-space: nowrap;
+}
+.stock-chart-study-chip::before {
+  content: ""; width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto;
+  background: var(--ind-swatch, var(--color-accent));
+}
+.stock-chart-study-chip[data-highlighted="true"] {
+  border-color: var(--ind-swatch, var(--color-accent));
+  background: color-mix(in srgb, var(--ind-swatch, var(--color-accent)) 20%, var(--panel));
+  box-shadow: 0 0 0 1px var(--ind-swatch, var(--color-accent));
+}
+.watch-chart-window .stock-chart-stage .stock-chart-readout-head {
+  display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 6px; flex: 0 0 auto;
+}
+.watch-chart-window .stock-chart-stage .stock-chart-candle-nav {
+  pointer-events: auto; gap: 2px;
+}
+.watch-chart-window .stock-chart-stage .stock-chart-candle-nav button {
+  min-height: 20px; height: 20px; min-width: 20px; padding: 0 4px; font-size: 0.68rem;
+}
+.watch-chart-window .stock-chart-stage .stock-chart-values {
+  display: inline-flex; align-items: center; gap: 8px; margin: 0; flex: 1 1 auto; min-width: 0; overflow: hidden;
+}
+.watch-chart-window .stock-chart-stage .stock-chart-values > div {
+  display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap;
+}
+.watch-chart-window .stock-chart-stage .stock-chart-values dt { font-size: 0.68rem; color: var(--muted); }
+.watch-chart-window .stock-chart-stage .stock-chart-values dd { font-size: 0.72rem; font-weight: 600; }
+
+.stock-chart-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  padding: 4px 0 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px;
+}
+.stock-chart-bar .stock-chart-controls,
+.stock-chart-bar .stock-chart-study-toolbar,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-controls,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-study-toolbar {
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0;
+}
+.stock-chart-bar .stock-chart-controls > label,
+.stock-chart-bar .stock-chart-study-toolbar > label,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-controls > label,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-study-toolbar > label {
+  display: inline-flex; flex-direction: row; align-items: center; gap: 5px; flex: 0 0 auto;
+  flex-basis: auto; font-size: 0.72rem; color: var(--color-neutral-700); font-weight: 600;
+}
+.stock-chart-bar .stock-chart-controls select,
+.stock-chart-bar .stock-chart-study-toolbar > label select,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-controls select,
+.workspace-app .watch-desk .stock-chart-bar .stock-chart-study-toolbar > label select {
+  height: 32px; min-height: 32px; padding: 2px 8px; font-size: 0.75rem; width: auto;
+}
+.stock-chart-more { position: relative; }
+.stock-chart-more[open] { flex: 1 0 100%; }
+.stock-chart-more > summary {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px;
+  border-radius: 6px; border: 1px solid var(--line); background: var(--panel-subtle);
+  font-size: 0.75rem; font-weight: 600; color: var(--color-neutral-800); cursor: pointer; list-style: none;
+}
+.stock-chart-more > summary::-webkit-details-marker { display: none; }
+.stock-chart-more[open] > .stock-chart-more-body {
+  margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-raised); display: flex; flex-direction: column; gap: 10px;
+}
+.stock-chart-more-body .stock-chart-studies { margin: 0; }
+.stock-chart-more-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.stock-chart-more-row select, .stock-chart-more-row button { min-height: 32px; height: 32px; font-size: 0.75rem; }
+.watch-chart-window [data-chart-zone-key] { display: none !important; }
+.watch-chart-window .stock-chart-context,
+.watch-chart-window .stock-chart-source {
+  font-size: 0.72rem; line-height: 1.35; margin: 2px 0; color: var(--color-neutral-700);
+}
+.watch-chart-indicators {
+  border-top: 1px solid var(--line); padding: 6px 10px; background: var(--panel-subtle);
+  flex-shrink: 0; overflow: visible; border-radius: 0 0 8px 8px;
+}
+.watch-chart-indicators-strip {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px 7px; overflow: visible;
+}
+.watch-ind-pill {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+  font-size: 0.78rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--color-text); white-space: nowrap; line-height: 1.3;
+}
+.watch-ind-pill[data-highlight-key] {
+  cursor: pointer; user-select: none; transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.watch-ind-pill[data-highlight-key]::before {
+  content: ""; width: 9px; height: 9px; border-radius: 999px; flex: 0 0 auto;
+  background: var(--ind-swatch, var(--color-accent));
+}
+.watch-study-pills { display: contents; }
+/* An unavailable indicator explains itself in the pill, so that text may wrap. */
+.watch-study-pills .watch-ind-pill { white-space: normal; }
+#watch-today-support { --ind-swatch: var(--stock-chart-up); }
+.watch-ind-pill[data-highlight-key][data-highlighted="true"] {
+  border-color: var(--ind-swatch, var(--color-accent));
+  background: color-mix(in srgb, var(--ind-swatch, var(--color-accent)) 18%, var(--panel));
+  box-shadow: 0 0 0 1px var(--ind-swatch, var(--color-accent)), 0 0 10px color-mix(in srgb, var(--ind-swatch, var(--color-accent)) 35%, transparent);
+}
+.watch-ind-pill[data-role="support"] {
+  border-color: var(--good-border); background: var(--color-gain-surface); color: var(--color-gain);
+}
+/* D7: Neutral/subtle-amber resistance pill — never red/rose (red is reserved for losses, vetoes, and live warnings). */
+.watch-ind-pill[data-role="resistance"] {
+  border-color: color-mix(in srgb, var(--warn-border) 70%, var(--line));
+  background: var(--panel-subtle);
+  color: var(--color-neutral-800);
+}
+
+/* ---- Desk: Single-row toolbar with merged view switch & 1-line options strip ---- */
+.workspace-app .watch-desk .watch-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px;
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-subtle); margin-bottom: 6px;
+}
+.workspace-app .watch-desk .watch-toolbar label {
+  display: inline-flex; flex-direction: row; align-items: center; gap: 5px;
+  font-size: 0.72rem; color: var(--color-neutral-700); font-weight: 600;
+}
+.workspace-app .watch-desk .watch-toolbar .watch-source-label {
+  flex: 0 0 auto; width: 190px; max-width: 210px; min-width: 150px;
+}
+.workspace-app .watch-desk .watch-toolbar #watch-source { width: 100%; max-width: 100%; }
+.workspace-app .watch-desk .watch-toolbar .watch-search-label {
+  flex: 0 0 auto; width: 155px; max-width: 175px; min-width: 120px;
+}
+.workspace-app .watch-desk .watch-toolbar #watch-search { width: 100%; max-width: 100%; }
+.workspace-app .watch-desk .watch-toolbar .watch-sort-label {
+  flex: 0 0 auto; width: 125px; min-width: 110px;
+}
+.workspace-app .watch-desk .watch-toolbar #watch-sort { width: 100%; max-width: 100%; }
+.workspace-app .watch-desk .watch-toolbar select,
+.workspace-app .watch-desk .watch-toolbar input {
+  height: 30px; min-height: 30px; padding: 2px 7px; font-size: 0.78rem; flex: 1 1 auto;
+}
+.workspace-app .watch-desk .watch-toolbar .watch-strategy-group {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 1 1 340px; min-width: 280px; max-width: 460px;
+}
+.workspace-app .watch-desk .watch-toolbar .watch-strategy-group > label,
+.workspace-app .watch-desk .watch-toolbar .watch-strategy-label {
+  flex: 1 1 auto; width: auto; max-width: none; min-width: 0;
+}
+.workspace-app .watch-desk .watch-toolbar #watch-strategy { width: 100%; max-width: 100%; }
+.workspace-app .watch-desk .watch-toolbar .watch-view-switch {
+  margin: 0; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); display: inline-flex; align-items: center;
+}
+.workspace-app .watch-desk .watch-toolbar .watch-view-switch button {
+  min-height: 24px; height: 24px; padding: 0 8px; font-size: 0.72rem; border: 0; border-radius: 4px;
+}
+.watch-inline-btn, .watch-ghost-btn {
+  min-height: 28px; height: 28px; padding: 0 8px; font-size: 0.72rem; white-space: nowrap;
+}
+.watch-ghost-btn {
+  background: transparent; border-color: var(--line); color: var(--color-neutral-800);
+}
+.watch-toolbar-tail {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap;
+}
+.watch-toolbar-tail .watch-manage {
+  padding: 2px 4px; font-size: 0.72rem; white-space: nowrap; margin: 0;
+}
+.watch-strategy-status-line {
+  font-size: 0.72rem !important; margin: 0 2px 4px !important;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Compact options line under the indicator pills: plain "label value" pairs separated by dots instead of
+   boxed cards, so the chart, its pills and this line fit a 900 px-high screen. Tooltips are unchanged. */
+.watch-options-selected-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  padding: 5px 10px; margin: 4px 0 0; background: var(--panel-subtle);
+  border-color: var(--line); flex-shrink: 0; overflow: visible;
+}
+.watch-options-selected-strip .watch-options-card-head {
+  margin: 0; gap: 6px; display: inline-flex; align-items: center;
+}
+.watch-options-prefix { font-size: 0.75rem; font-weight: 700; color: var(--color-neutral-700); }
+.watch-options-selected-strip .watch-options-badge {
+  font-size: 0.75rem; font-weight: 700; padding: 2px 8px; font-variant-numeric: tabular-nums;
+}
+/* The metric list joins the strip flow so the title and values share rows instead of the title taking a row alone. */
+.watch-options-selected-strip .watch-options-metrics { display: contents; }
+.watch-options-selected-strip .watch-options-metrics > div {
+  display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; padding: 0;
+}
+.watch-options-selected-strip .watch-options-metrics > div + div::before {
+  content: "·"; margin: 0 8px; color: var(--muted);
+}
+.watch-options-selected-strip .watch-options-metrics dt { font-size: 0.72rem; color: var(--color-neutral-700); font-weight: 600; }
+.watch-options-selected-strip .watch-options-metrics dd { margin: 0; font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.watch-options-selected-strip [data-options-field="note"] { display: none; }
+
+/* ---- Strategy Lab: 2-column Long/Short list (G12), provenance & monthly matrix drawer ---- */
+.lab-quick-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px;
+}
+.lab-quick-actions .btn-sm { min-height: 32px; padding: 4px 12px; font-size: 0.8125rem; }
+.lab-research-only-note {
+  margin: 0 0 10px; font-size: 0.78rem; color: var(--color-neutral-700);
+}
+@media (min-width: 900px) {
+  .lab-page .lab-strategy-list {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: dense; gap: 8px 12px; align-items: start;
+  }
+  .lab-page .lab-strategy-list > .lab-strategy-option[data-direction="long"] {
+    grid-column: 1;
+    border-left: 3px solid var(--good-border);
+  }
+  .lab-page .lab-strategy-list > .lab-strategy-option[data-direction="short"] {
+    grid-column: 2;
+    border-left: 3px solid var(--warn-border);
+  }
+}
+.lab-page .lab-strategy-details.lab-provenance-popover > summary {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--panel-subtle);
+  color: var(--color-neutral-800); font-size: 0.72rem; font-weight: 600; list-style: none;
+}
+.lab-page .lab-strategy-details.lab-provenance-popover > summary::-webkit-details-marker { display: none; }
+.lab-page .lab-strategy-details.lab-provenance-popover[open] .lab-strategy-exact {
+  margin-top: 8px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel-raised);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.lab-plan-matrix-head {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px;
+}
+.lab-matrix-table th, .lab-matrix-table td { vertical-align: top; }
+.lab-matrix-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lab-matrix-return { font-weight: 700; font-variant-numeric: tabular-nums; }
+.lab-matrix-return[data-tone="up"] { color: var(--color-gain); }
+.lab-matrix-return[data-tone="down"] { color: var(--color-loss); }
+.lab-matrix-return[data-tone="flat"] { color: var(--color-text); }
+.lab-matrix-return[data-tone="muted"] { color: var(--color-neutral-600); font-weight: 500; }
+.lab-matrix-partial { font-size: 0.75rem; color: var(--warn-ink); font-weight: 600; }
+.lab-matrix-basis { display: block; font-size: 0.7rem; color: var(--color-neutral-600); white-space: normal; }
+.lab-matrix-reason { display: block; font-size: 0.7rem; color: var(--warn-ink); white-space: normal; margin-top: 2px; }
+.lab-matrix-rejections summary { cursor: pointer; font-size: 0.75rem; font-weight: 600; color: var(--color-neutral-700); }
+.lab-matrix-rejections ul { margin: 6px 0 0; padding-left: 16px; font-size: 0.75rem; line-height: 1.45; }
+.lab-matrix-cell-btn {
+  display: block; width: 100%; text-align: right; background: transparent; border: 1px solid transparent;
+  border-radius: 6px; padding: 4px 6px; min-height: 36px; cursor: pointer; color: inherit; font: inherit;
+}
+.lab-matrix-cell-btn:hover { background: var(--panel-subtle); border-color: var(--line); }
+.lab-matrix-diag-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.lab-matrix-inspect-btn { min-height: 32px; padding: 3px 10px; font-size: 0.75rem; }
+.lab-matrix-drawer {
+  margin: 0 0 0 auto; width: min(580px, 100vw); max-width: 100vw;
+  height: 100dvh; max-height: 100dvh; padding: 0; border: 0;
+  border-left: 1px solid var(--line); background: var(--panel); color: var(--color-text);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.35);
+}
+.lab-matrix-drawer[open] { display: flex; flex-direction: column; }
+.lab-matrix-drawer::backdrop { background: rgba(6, 10, 18, 0.62); }
+.lab-matrix-drawer-head, .lab-matrix-drawer-foot {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  padding: 14px 18px; background: var(--panel-raised); border-bottom: 1px solid var(--line);
+}
+.lab-matrix-drawer-foot { border-bottom: 0; border-top: 1px solid var(--line); justify-content: flex-end; }
+.lab-matrix-drawer-head h2 { margin: 2px 0 4px; font-size: 1.125rem; }
+.lab-matrix-drawer-body {
+  flex: 1 1 auto; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 18px;
+}
+.lab-drawer-section {
+  border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--panel-subtle);
+}
+.lab-drawer-section h3 { margin: 0 0 8px; font-size: 0.875rem; }
+.lab-drawer-metrics {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.lab-drawer-metrics dt { font-size: 0.7rem; color: var(--color-neutral-700); text-transform: uppercase; letter-spacing: 0.04em; }
+.lab-drawer-metrics dd { margin: 2px 0 0; font-size: 0.875rem; font-weight: 600; }
+.lab-drawer-funnel { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.lab-drawer-funnel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 0.8125rem; }
+.lab-drawer-progress { width: 100%; height: 8px; accent-color: var(--color-accent); margin: 4px 0 2px; }
+.lab-drawer-code { font-size: 0.7rem; color: var(--color-neutral-700); background: var(--panel-inset); padding: 1px 5px; border-radius: 4px; }
+.lab-drawer-trades-table th, .lab-drawer-trades-table td { font-size: 0.75rem; padding: 6px 8px; font-variant-numeric: tabular-nums; }
+
+/* ---- Catalysts & Options: Eyebrow, OPRA ADR% strip & /Earnings empty state (D9) ---- */
+.market-workspace .market-page-header .eyebrow {
+  display: inline-block; margin-bottom: 4px; font-size: 0.6875rem;
+  letter-spacing: 0.12em; font-weight: 700; text-transform: uppercase;
+  color: var(--color-neutral-700);
+}
+.market-workspace .news-timeline article,
+.earnings-page .earnings-event {
+  border-radius: 8px; transition: border-color 0.15s ease;
+}
+.earnings-page .earnings-lane,
+.news-page #news-live-body .panel {
+  border-color: var(--line);
+}
+/* D9: Compact 1-line empty state on /Earnings instead of a hollow bordered box. */
+.earnings-page .earnings-timeline[data-empty="true"] {
+  padding: 12px 14px;
+  border-style: dashed;
+  background: var(--panel-subtle);
+  align-self: start;
+}
+.earnings-page .earnings-empty-line {
+  margin: 0; padding: 0; border: 0; background: transparent;
+  text-align: left; font-size: 0.8125rem; line-height: 1.45; color: var(--color-neutral-700);
+}
+.catalysts-opra-strip {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+  padding: 12px 14px; margin: 0 0 14px;
+}
+.catalysts-opra-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.catalysts-opra-head > div { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.catalysts-opra-head .btn-sm { min-height: 32px; padding: 4px 10px; font-size: 0.75rem; }
+.catalysts-opra-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;
+}
+.catalysts-opra-card {
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel-subtle);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.catalysts-opra-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.catalysts-opra-ratio-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; border: 1px solid var(--line);
+}
+.catalysts-opra-ratio-pill[data-tone="good"] { color: var(--color-gain); background: var(--color-gain-surface); border-color: var(--good-border); }
+.catalysts-opra-ratio-pill[data-tone="warn"] { color: var(--warn-ink); background: var(--warn-surface); border-color: var(--warn-border); }
+.catalysts-opra-ratio-pill[data-tone="bad"] { color: var(--color-loss); background: var(--color-loss-surface); border-color: var(--bad-border); }
+.catalysts-opra-ratio-pill[data-tone="muted"] { color: var(--color-neutral-600); }
+.catalysts-opra-metrics {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; font-variant-numeric: tabular-nums;
+}
+.catalysts-opra-metrics dt { font-size: 0.65rem; color: var(--color-neutral-700); }
+.catalysts-opra-metrics dd { margin: 2px 0 0; font-size: 0.8125rem; font-weight: 600; }
+.catalysts-opra-bar-wrap { display: flex; align-items: center; }
+.catalysts-opra-bar { width: 100%; height: 7px; accent-color: var(--color-accent); }
+.catalysts-opra-bar[data-tone="good"] { accent-color: var(--color-gain); }
+.catalysts-opra-bar[data-tone="warn"] { accent-color: var(--warn-fill); }
+.catalysts-opra-bar[data-tone="bad"] { accent-color: var(--color-loss); }
+.catalysts-opra-note { margin: 0; font-size: 0.7rem; color: var(--color-neutral-700); }
+
+/* ---- Portfolio & Audit responsive table/card polish ---------------------- */
+.positions-page .positions-summary,
+.orders-page .orders-account,
+.orders-page .orders-summary {
+  border-color: var(--line); background: var(--panel); border-radius: 10px;
+}
+.positions-page .trade-table th,
+.positions-page .trade-table td,
+.orders-page .trading-position-table th,
+.orders-page .trading-position-table td,
+.orders-page .orders-table th,
+.orders-page .orders-table td {
+  font-variant-numeric: tabular-nums;
+}
+.positions-page .tag,
+.orders-page .tag,
+.lab-page .tag {
+  border-radius: 999px; font-weight: 600;
+}
+@media (max-width: 720px) {
+  .positions-page .positions-summary {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px;
+  }
+  .positions-page .positions-body,
+  .orders-page .orders-body {
+    min-width: 0;
+  }
+  .lab-page .lab-panel { padding: 14px; }
+}
+
+/* View tabs: a small gap and pill between each label and its count ("Signals 0"). */
+.workspace-app .watch-desk .watch-toolbar .watch-view-switch button { display: inline-flex; align-items: center; gap: 5px; }
+.workspace-app .watch-desk .watch-view-switch [data-view-count] {
+  margin: 0; padding: 0 5px; min-width: 16px; border-radius: 999px; background: var(--panel-subtle); opacity: 1; text-align: center;
+}

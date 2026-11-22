@@ -265,6 +265,19 @@ public sealed class BacktestJobService : IDurableJobHandler
         (await repository.GetJobsAsync(JobType, token)).OrderByDescending(job => job.CreatedAt).Take(count)
             .Select(job => MutableBacktestJob.FromPersisted(job, JsonOptions).ToSnapshot()).ToArray();
 
+    /// <summary>Reads all persisted backtest job snapshots belonging to one saved plan, newest first; the repository does the
+    /// only plan-number match, so unrelated job snapshots are never loaded.</summary>
+    public async Task<IReadOnlyList<BacktestJobSnapshot>> GetSnapshotsForPlanAsync(long planId, CancellationToken token = default)
+    {
+        if (planId <= 0) return [];
+        var persisted = await repository.GetJobsForPlanAsync(JobType, planId, token);
+        return persisted
+            .OrderByDescending(job => job.CreatedAt)
+            .Select(job => MutableBacktestJob.FromPersisted(job, JsonOptions).ToSnapshot())
+            .ToArray();
+    }
+
+
     public Task RecoverAsync(PersistedJob job, CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>Execute frozen inputs under this lease and publish monthly evidence before trimming the persisted UI snapshot.</summary>

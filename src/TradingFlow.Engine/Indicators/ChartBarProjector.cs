@@ -43,12 +43,16 @@ public sealed class ChartBarProjector(IReadOnlyDictionary<DateOnly, MarketSessio
     public static int IndicatorBlock(DateOnly date, bool daily) => date.DayNumber / (daily ? 30 : 3);
 
     // Resolve the scheduled seed before the block starts. Missing calendar coverage cannot establish a new origin.
-    public DateOnly? IndicatorSeed(DateOnly date, bool daily, int warmObservations)
+    // The seed lies far enough back for the formula's own run-in: daily candles plus five sessions, intraday candles counted
+    // in shortened (three and a half hour) sessions plus one, at most the twelve sessions a chart can always load.
+    public DateOnly? IndicatorSeed(DateOnly date, bool daily, int warmObservations, int intervalMinutes = 1)
     {
         var boundary = DateOnly.FromDayNumber(IndicatorBlock(date, daily) * (daily ? 30 : 3));
         var insertion = Array.BinarySearch(tradingDates, boundary);
         if (insertion < 0) insertion = ~insertion;
-        var prior = daily ? Math.Max(365, warmObservations + 5) : 12;
+        var candlesPerShortSession = Math.Max(1, (int)Math.Ceiling(210d / intervalMinutes));
+        var prior = daily ? warmObservations + 5
+            : Math.Min(12, (int)Math.Ceiling((double)warmObservations / candlesPerShortSession) + 1);
         return insertion >= prior ? tradingDates[insertion - prior] : null;
     }
 

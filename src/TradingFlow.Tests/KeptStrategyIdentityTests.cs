@@ -6,9 +6,10 @@ using TradingFlow.Engine.Configuration;
 namespace TradingFlow.Tests;
 
 /// <summary>
-/// Pins the catalog's opening-range breakout versions, and the test-owned copies of the strategies retired on 13 November
-/// 2026 (RetiredStrategyFixtures), to the identities recorded in docs/research/retired-strategy-artifacts-2026-11-07.md and
-/// -2026-11-13.md, so removing strategies or their code can never silently change what a kept or retired version was.
+/// Pins the test-owned copies of retired strategies (RetiredStrategyFixtures: opening-range breakout and ETF versions retired
+/// on 21 November 2026, Connors/snapback/recovery retired on 13 November 2026) to the identities recorded in
+/// docs/research/retired-strategy-artifacts-2026-11-07.md, -2026-11-13.md and -2026-11-21.md, so removing strategies or
+/// their code can never silently change what a kept or retired version was.
 /// </summary>
 public sealed class KeptStrategyIdentityTests
 {

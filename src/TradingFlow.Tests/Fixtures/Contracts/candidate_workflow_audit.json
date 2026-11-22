@@ -93,7 +93,8 @@
         "evaluatedAtUtc": "2026-09-27T12:00:00+00:00",
         "inputs": {
           "spreadBps": "2"
-        }
+        },
+        "explanation": "Passed: spread bps 2"
       }
     ],
     "marketEvidence": {

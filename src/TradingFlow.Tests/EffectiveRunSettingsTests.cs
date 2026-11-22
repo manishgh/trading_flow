@@ -435,7 +435,7 @@ public sealed class EffectiveRunSettingsTests
                 var paths = new ProjectPaths(root);
                 var reader = new SimpleYamlReader();
                 var artifacts = dayStrategy
-                    ? new StrategyArtifactCatalog(repo, TestRepository.SetAsideStrategiesEnabledCatalog(root), reader)
+                    ? RetiredStrategyFixtures.SetAsideEnabledCatalog(root, reader)
                     : RetiredStrategyFixtures.Catalog(reader); // a daily strategy (retired versions, test-owned copies)
                 var store = new StrategyExperimentArtifactStore(Path.Combine(root, "experiments"), artifacts, reader, AtomicFileArtifactWriter.Instance);
                 var authorization = new StrategyAuthorizationTestRegistry();

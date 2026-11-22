@@ -28,8 +28,7 @@ public sealed partial class SignalGenerator
         IReadOnlyList<CatalystEvent>? availableCatalysts = null,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? sessionSchedules = null,
         bool ignoreObservedReceiptForHistoricalResearch = false,
-        bool fiveMinuteBarsSortedAscending = false,
-        decimal? optionsSkew25Delta = null)
+        bool fiveMinuteBarsSortedAscending = false)
     {
         var snapshot = snapshots[index];
         var previous = snapshots[index - 1];
@@ -107,7 +106,7 @@ public sealed partial class SignalGenerator
             bar.Low <= bars[index - 1].Close * 0.90m;
         var needsAdrOrAdv = strategy.EntryRules.MinAverageRangePct is not null || strategy.EntryRules.MinAverageDollarVolume is not null;
         var (averageRangePct, averageDollarVolume) = needsAdrOrAdv
-            ? ComputeAverageRangeAndDollarVolume(bars, index, 20)
+            ? ComputeAverageRangeAndDollarVolume(bars, index, 20, strategy.EntryRules.AverageRangeMethod)
             : (null, null);
         decimal? breakoutVolume50 = index < 50 ? null : bars.Skip(index - 50).Take(50).Average(x => x.Volume);
         breakoutVolume50 = breakoutVolume50 > 0 ? bar.Volume / breakoutVolume50 : null;
@@ -348,8 +347,7 @@ public sealed partial class SignalGenerator
             IsEma21RejectionBreakdown: ema21RejectionContext.IsBreakdown,
             Ema21RejectionDetail: ema21RejectionContext.RejectionDetail,
             IsParabolicShootingStarBreakdown: parabolicContext.IsBreakdown,
-            ParabolicShootingStarRejectionDetail: parabolicContext.RejectionDetail,
-            OptionsSkew25Delta: optionsSkew25Delta);
+            ParabolicShootingStarRejectionDetail: parabolicContext.RejectionDetail);
     }
 
     /// <summary>
@@ -385,35 +383,44 @@ public sealed partial class SignalGenerator
         ComputeGapUpAtr(bars, snapshots, index) is { } gapUp ? -gapUp : null;
 
     /// <summary>
-    /// Computes the strategy-owned 20-session ADR% (mean(High - Low) over the <paramref name="lookbackSessions"/>
-    /// completed bars ending at <paramref name="index"/>, divided by Close[index], times 100) and average dollar volume
-    /// (mean(Close * Volume) over the same window), matching <c>DailyScreen.Evaluate</c>. Fails closed (returns nulls)
-    /// when fewer than <paramref name="lookbackSessions"/> completed bars exist.
+    /// Computes the strategy-owned ADR% and average dollar volume (mean(Close * Volume)) over the
+    /// <paramref name="lookbackSessions"/> completed bars ending at <paramref name="index"/>. ADR% is, by
+    /// <paramref name="method"/>: latest_close (the default, matching <c>DailyScreen.Evaluate</c>), mean(High - Low) divided
+    /// by Close[index]; or per_day, the mean of each bar's own High / Low - 1. Fails closed (returns nulls) when fewer than
+    /// <paramref name="lookbackSessions"/> completed bars exist, and returns no ADR% when a price it divides by is not positive.
     /// </summary>
     public static (decimal? AverageRangePct, decimal? AverageDollarVolume) ComputeAverageRangeAndDollarVolume(
         IReadOnlyList<OhlcvBar> bars,
         int index,
-        int lookbackSessions = 20)
+        int lookbackSessions = 20,
+        string? method = null)
     {
+        if (method is not null && !AverageRangeMethods.IsKnown(method))
+            throw new ArgumentException($"Unknown average range method '{method}'.", nameof(method));
         if (lookbackSessions <= 0 || index < lookbackSessions - 1 || index >= bars.Count)
         {
             return (null, null);
         }
 
+        var perDay = method == AverageRangeMethods.PerDay;
         decimal rangeSum = 0m;
+        decimal? perDaySum = 0m;
         decimal dollarVolumeSum = 0m;
         var start = index - lookbackSessions + 1;
         for (var i = start; i <= index; i++)
         {
             var item = bars[i];
             rangeSum += item.High - item.Low;
+            if (perDay) perDaySum = item.Low > 0m ? perDaySum + (item.High / item.Low - 1m) : null;
             dollarVolumeSum += item.Close * item.Volume;
         }
 
         var latestClose = bars[index].Close;
-        var averageRangePct = latestClose <= 0m
-            ? (decimal?)null
-            : (rangeSum / lookbackSessions) / latestClose * 100m;
+        var averageRangePct = perDay
+            ? perDaySum / lookbackSessions * 100m
+            : latestClose <= 0m
+                ? (decimal?)null
+                : (rangeSum / lookbackSessions) / latestClose * 100m;
         var averageDollarVolume = dollarVolumeSum / lookbackSessions;
         return (averageRangePct, averageDollarVolume);
     }

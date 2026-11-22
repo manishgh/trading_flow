@@ -33,6 +33,19 @@ public static class OptionsSentimentRegime
 }
 
 /// <summary>
+/// Provenance of the exact 25-delta put and call contracts used to compute <see cref="OptionsSentimentSnapshot.Skew25Delta"/>,
+/// so operators can verify the strikes, deltas, implied volatilities, and expiration behind an unusual skew reading.
+/// </summary>
+public sealed record OptionsSkewWingProvenance(
+    DateOnly ExpirationDate,
+    decimal PutStrike,
+    decimal PutDelta,
+    decimal PutIvPct,
+    decimal CallStrike,
+    decimal CallDelta,
+    decimal CallIvPct);
+
+/// <summary>
 /// Read-only options sentiment and implied-volatility summary for a US equity symbol computed from filtered liquid OPRA contracts.
 /// </summary>
 public sealed record OptionsSentimentSnapshot(
@@ -51,7 +64,8 @@ public sealed record OptionsSentimentSnapshot(
     decimal? ImpliedToRealizedAdrRatio,
     int LiquidContractCount,
     string RegimeLabel,
-    string SummaryNote)
+    string SummaryNote,
+    OptionsSkewWingProvenance? SkewProvenance = null)
 {
     /// <summary>
     /// Creates an explicit unavailable snapshot when credentials are missing or the OPRA provider query failed.

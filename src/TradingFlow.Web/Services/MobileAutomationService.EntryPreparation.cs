@@ -235,12 +235,6 @@ public sealed partial class MobileAutomationService
                 ? JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection })
                 : JsonSerializer.Serialize(new { eligible = regimeOn, strategy.Regime, regimeRejection, vix = vixReading, regimeDecision.RiskScale }));
         var setupKey = $"{strategy.StrategyId}:{latest.Timestamp.ToUniversalTime():O}";
-        decimal? optionsSkew25Delta = null;
-        if (strategy.EntryRules.MaxLongPutSkew is not null || strategy.EntryRules.MinShortPutCallSkew is not null)
-        {
-            optionsSkew25Delta = await TryLoadOptionsSkew25DeltaAsync(ticker, latest.CurrentPrice, cancellationToken);
-        }
-
         var request = StrategyDecisionRequestAssembler.Create(
             runtimeStrategy,
             ticker,
@@ -257,8 +251,7 @@ public sealed partial class MobileAutomationService
             setupAvailableAtUtc,
             candidateExpiresAtUtc,
             runConfig.Engine.IndicatorWarmupBars,
-            runContext.RunId,
-            optionsSkew25Delta: optionsSkew25Delta);
+            runContext.RunId);
         var persisted = await candidateDecisions.EvaluateAsync(
             CreateProductionRun(runContext),
             request,
@@ -482,29 +475,6 @@ public sealed partial class MobileAutomationService
             _ => throw new InvalidOperationException(
                 "Entry mode must be validate_strategy or operator_direct.")
         };
-    }
-
-    // Loads 25-delta put-call IV skew for mobile/chart-accepted entries with skew vetoes; failures return null to fail closed.
-    private async Task<decimal?> TryLoadOptionsSkew25DeltaAsync(
-        string ticker,
-        decimal spotPriceHint,
-        CancellationToken cancellationToken)
-    {
-        if (optionsSentiment is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            var snapshot = await optionsSentiment.GetSnapshotAsync(ticker, spotPriceHint, cancellationToken: cancellationToken);
-            return snapshot.Skew25Delta;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "OPRA options skew lookup failed for {Ticker}; mobile strategy skew gate will fail closed.", ticker);
-            return null;
-        }
     }
 
     // Delegates required timeframe resolution to the shared assembler so mobile entry preparation matches backtest/live.

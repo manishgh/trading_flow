@@ -15,13 +15,15 @@
   // Match the persistent workspace destinations; detailed screens remain searchable.
   var SCREENS = [
     { label: "Desk", hint: "Live quotes, signals, holdings and news", path: "/Desk" },
-    { label: "Trading", hint: "Positions, working and completed orders", path: "/Orders" },
-    { label: "Strategies", hint: "Strategy run setup and monitoring", path: "/Paper" },
+    { label: "Portfolio & Audit", hint: "Positions, working and completed orders", path: "/RunningTrades" },
+    { label: "Orders", hint: "Working and completed orders", path: "/Orders" },
+    { label: "Strategy Lab", hint: "Backtests, saved plans and monthly results", path: "/Backtests" },
+    { label: "Strategy runs", hint: "Paper strategy run setup and monitoring", path: "/Paper" },
     { label: "Earnings", hint: "Reporting calendar and surprises", path: "/Earnings" },
-    { label: "News", hint: "Catalyst feed", path: "/News" },
+    { label: "Catalysts & Options", hint: "News feed with sentiment and options context", path: "/News" },
     { label: "Stock groups", hint: "Followed stocks and saved screens", path: "/Wishlists" },
-    { label: "Backtests", hint: "Strategy backtests and optimisation runs", path: "/Backtests" },
-    { label: "Position details", hint: "Running trades and open risk", path: "/RunningTrades" },
+    { label: "Research ledger", hint: "Published research outcomes", path: "/ResearchLedger" },
+    { label: "Audit trail", hint: "Immutable decision and order audit", path: "/Audit" },
     { label: "System health", hint: "Connections and entry restrictions", path: "/Operations" },
     { label: "Morning preparation", hint: "Ready list collected before the open", path: "/Preparation" },
     { label: "Warmup", hint: "Indicator warm-up service", path: "/Warmup" }

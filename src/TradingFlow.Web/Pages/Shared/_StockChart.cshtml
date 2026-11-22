@@ -15,79 +15,70 @@
             <a class="btn btn-secondary" data-chart-full asp-page="/Chart" asp-route-env="@(Context.Request.Query["env"].ToString())">Full chart ↗</a>
         }
     </header>
-    <div class="stock-chart-controls">
-        <label>Candle interval
-            <select class="input" data-chart-interval>
-                <option value="1m">1 minute</option>
-                <option value="5m" selected>5 minutes</option>
-                <option value="15m">15 minutes</option>
-                <option value="1d">1 day</option>
-                <option value="1w">1 week</option>
-            </select>
-        </label>
-        <label>Session
-            <select class="input" data-chart-session>
-                <option value="regular">Regular</option>
-                <option value="extended">Extended</option>
-            </select>
-        </label>
-        <label>Structure source
-            <select class="input" data-chart-structure>
-                <option value="auto">Auto</option>
-                <option value="intraday">Intraday · 15m</option>
-                <option value="daily">Daily · 1d</option>
-            </select>
-        </label>
-        <label data-chart-lookback-control hidden>Daily lookback
-            <select class="input" data-chart-lookback>
-                <option value="swing">64 sessions</option>
-                <option value="week">Week · 5 sessions</option>
-                <option value="month">Month · 21 sessions</option>
-                <option value="year">Year · 252 sessions</option>
-            </select>
-        </label>
-    </div>
-    <div class="stock-chart-study-toolbar">
-        <label>Indicator preset
-            <select class="input" data-chart-preset>
-                <option value="custom">Custom</option>
-                <option value="intraday">Intraday</option>
-                <option value="swing">Swing · 1d</option>
-            </select>
-        </label>
-        <button type="button" class="btn btn-secondary" data-chart-reset>Reset chart settings</button>
-        <details class="stock-chart-library" data-chart-library>
-            <summary>Indicator library</summary>
-            <div class="stock-chart-study-picker">
-                <label>Indicator
-                    <select class="input" data-chart-study-choice></select>
-                </label>
-                <label data-chart-study-source-control hidden>Source interval
-                    <select class="input" data-chart-study-source>
-                        <option value="">Candle interval</option>
-                        <option value="1d">Daily · 1d</option>
-                    </select>
-                </label>
-                <label data-chart-study-display-control hidden>Display
-                    <select class="input" data-chart-study-display>
-                        <option value="readout">Readout</option>
-                        <option value="">Separate pane</option>
-                    </select>
-                </label>
-                <label data-chart-study-replace-control hidden>Replace indicator
-                    <select class="input" data-chart-study-replace></select>
-                </label>
-                <button type="button" class="btn btn-secondary" data-chart-study-add>Add indicator</button>
-            </div>
-            <p class="stock-chart-study-description" data-chart-study-description></p>
-            <p class="stock-chart-study-feedback" data-chart-study-feedback role="status"></p>
-        </details>
+    <div class="stock-chart-bar">
+        <div class="stock-chart-controls">
+            <label><span>Interval</span>
+                <select class="input" data-chart-interval>
+                    <option value="1m">1m</option>
+                    <option value="5m" selected>5m</option>
+                    <option value="15m">15m</option>
+                    <option value="1d">1d</option>
+                    <option value="1w">1w</option>
+                </select>
+            </label>
+            <label><span>Session</span>
+                <select class="input" data-chart-session>
+                    <option value="regular">Regular</option>
+                    <option value="extended">Extended</option>
+                </select>
+            </label>
+        </div>
+        <div class="stock-chart-study-toolbar">
+            <label><span>Preset</span>
+                <select class="input" data-chart-preset>
+                    <option value="custom">Custom</option>
+                    <option value="intraday">Intraday</option>
+                    <option value="swing">Swing · 1d</option>
+                </select>
+            </label>
+            <details class="stock-chart-more">
+                <summary>Studies &amp; settings</summary>
+                <div class="stock-chart-more-body">
+                    <div class="stock-chart-more-row">
+                        <label>Structure source
+                            <select class="input" data-chart-structure>
+                                <option value="auto">Auto</option>
+                                <option value="intraday">Intraday · 15m</option>
+                                <option value="daily">Daily · 1d</option>
+                            </select>
+                        </label>
+                        <label data-chart-lookback-control hidden>Daily lookback
+                            <select class="input" data-chart-lookback>
+                                <option value="swing">64 sessions</option>
+                                <option value="week">Week · 5 sessions</option>
+                                <option value="month">Month · 21 sessions</option>
+                                <option value="year">Year · 252 sessions</option>
+                            </select>
+                        </label>
+                        <button type="button" class="btn btn-secondary" data-chart-reset>Reset chart settings</button>
+                    </div>
+                    <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
+                    <div class="stock-chart-study-picker" data-chart-library>
+                        <label>Add indicator
+                            <select class="input" data-chart-study-choice></select>
+                        </label>
+                        <button type="button" class="btn btn-secondary" data-chart-study-add>Add indicator</button>
+                        <span class="stock-chart-study-count" data-chart-study-count></span>
+                    </div>
+                    <p class="stock-chart-study-feedback" data-chart-study-feedback role="status"></p>
+                    <p class="stock-chart-context" data-chart-context-label></p>
+                    <p class="stock-chart-source" data-chart-source></p>
+                </div>
+            </details>
+        </div>
     </div>
     <p class="visually-hidden" data-chart-settings-announcement role="status"></p>
-    <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
-    <p class="stock-chart-context" data-chart-context-label></p>
     <p class="stock-chart-note" data-chart-weekly-availability hidden>Indicators, price levels and session shading are available on daily or intraday charts.</p>
-    <p class="stock-chart-source" data-chart-source></p>
     <p class="stock-chart-source" data-chart-forming-status role="status" hidden></p>
     <ul class="stock-chart-zone-key" data-chart-zone-key aria-label="Current support and resistance zones" hidden></ul>
     <label class="stock-chart-pane-control" data-chart-pane-control hidden>Visible indicator pane

@@ -17,16 +17,22 @@ namespace TradingFlow.Web.Services;
 /// <param name="StopNote">How the stop was derived, or why there is none.</param>
 /// <param name="TargetNote">How the target was derived, or why there is none.</param>
 /// <param name="RiskBudget">Account equity times the profile's risk budget, or null when either is unknown.</param>
+/// <param name="Direction">"long" (stop below, target above the entry) or "short" (stop above, target below).</param>
 public sealed record DeskTicketPlan(
     decimal? Limit,
     decimal? Stop,
     decimal? Target,
     string StopNote,
     string TargetNote,
-    decimal? RiskBudget)
+    decimal? RiskBudget,
+    string Direction = "long")
 {
-    public static DeskTicketPlan Unavailable(decimal? limit, string reason, decimal? riskBudget) =>
-        new(limit, null, null, reason, reason, riskBudget);
+    /// <summary>A plan with no stop or target and the reason, keeping the entry price and side for display.</summary>
+    public static DeskTicketPlan Unavailable(decimal? limit, string reason, decimal? riskBudget, string direction = "long") =>
+        new(limit, null, null, reason, reason, riskBudget, direction);
+
+    /// <summary>True for a strategy that enters short; such a plan is priced at the bid with the stop above the entry.</summary>
+    public static bool IsShort(StrategyDefinition strategy) => strategy.Direction.Equals("short", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -90,9 +96,12 @@ public sealed class DeskTicketPlanService
             return DeskTicketPlan.Unavailable(limit, "No strategy in context, so no strategy stop or target.", riskBudget);
         }
 
+        // Every answer below carries the strategy's side, so a short ticket never opens as a buy even without levels.
+        var direction = DeskTicketPlan.IsShort(strategy) ? "short" : "long";
+
         if (limit is null)
         {
-            return DeskTicketPlan.Unavailable(null, "No quote and no limit to plan from.", riskBudget);
+            return DeskTicketPlan.Unavailable(null, "No quote and no limit to plan from.", riskBudget, direction);
         }
 
         if (processor is not null &&
@@ -101,7 +110,8 @@ public sealed class DeskTicketPlanService
             return DeskTicketPlan.Unavailable(
                 limit,
                 $"{ticker.ToUpperInvariant()} is not streamed, so there is no live market state to plan a stop from; enter a stop and target.",
-                riskBudget);
+                riskBudget,
+                direction);
         }
 
         TickerMarketState? state;
@@ -125,7 +135,8 @@ public sealed class DeskTicketPlanService
             return DeskTicketPlan.Unavailable(
                 limit,
                 $"No warmed live market state for {ticker.ToUpperInvariant()} on {strategy.Timeframe}/{strategy.Execution.Timeframe}; enter a stop and target.",
-                riskBudget);
+                riskBudget,
+                direction);
         }
 
         return Build(
@@ -147,8 +158,8 @@ public sealed class DeskTicketPlanService
 
     /// <summary>
     /// The planning core, pure over completed bars and their indicator snapshots,
-    /// so the rules are testable without a live stream. Long entries only: the
-    /// ticket's entry side is buy, and a sell closes a position with no bracket.
+    /// so the rules are testable without a live stream. Long strategies plan a stop
+    /// below and a target above the entry, short strategies the mirror image; a strategy that may go either way gets no levels.
     /// Unsupported dynamic protection is reported before any entry prices are planned.
     /// </summary>
     public static DeskTicketPlan Build(
@@ -160,13 +171,20 @@ public sealed class DeskTicketPlanService
         IReadOnlyList<IndicatorSnapshot> executionSnapshots,
         decimal? riskBudget)
     {
+        // Long strategies plan a stop below and a target above the entry; short strategies the mirror image. A strategy
+        // that may go either way has no single side to plan, so it gets no levels.
+        var isShort = DeskTicketPlan.IsShort(strategy);
+        var direction = isShort ? "short" : "long";
         if (strategy.ExitRules.ContinuationProtection is not null)
             return DeskTicketPlan.Unavailable(limit,
-                "Continuation protection requires the day-trading stop and target lifecycle, which is not connected yet.", riskBudget);
+                "Continuation protection requires the day-trading stop and target lifecycle, which is not connected yet.", riskBudget, direction);
+        if (!isShort && !strategy.Direction.Equals("long", StringComparison.OrdinalIgnoreCase))
+            return DeskTicketPlan.Unavailable(limit,
+                "This strategy can enter either way, so there is no single side to plan a stop and target for.", riskBudget);
         if (setupBars.Count < 2 || setupSnapshots.Count != setupBars.Count ||
             executionBars.Count == 0 || executionSnapshots.Count != executionBars.Count)
         {
-            return DeskTicketPlan.Unavailable(limit, "Not enough completed bars to plan a stop.", riskBudget);
+            return DeskTicketPlan.Unavailable(limit, "Not enough completed bars to plan a stop.", riskBudget, direction);
         }
 
         var signal = new SignalGenerator().CreateTradeSignal(
@@ -176,14 +194,14 @@ public sealed class DeskTicketPlanService
             setupSnapshots.Count - 1);
         if (signal is null)
         {
-            return DeskTicketPlan.Unavailable(limit, "The strategy's setup indicators are not available yet.", riskBudget);
+            return DeskTicketPlan.Unavailable(limit, "The strategy's setup indicators are not available yet.", riskBudget, direction);
         }
 
         var stopContextIndex = executionSnapshots.Count - 1;
         var resolved = new StrategyInitialStopResolver().Resolve(new StrategyInitialStopRequest(
             strategy,
             signal,
-            PlannedOrderSide.Long,
+            isShort ? PlannedOrderSide.Short : PlannedOrderSide.Long,
             limit,
             stopContextIndex,
             executionBars,
@@ -194,30 +212,35 @@ public sealed class DeskTicketPlanService
             return DeskTicketPlan.Unavailable(
                 limit,
                 $"The strategy's stop could not be resolved ({reason.Replace('_', ' ')}).",
-                riskBudget);
+                riskBudget,
+                direction);
         }
 
         var stop = Math.Round(stopPrice, 2, MidpointRounding.AwayFromZero);
         var stopNote = $"{strategy.StrategyName} · {strategy.ExitRules.InitialStopMode.Replace('_', ' ')} stop on {strategy.Execution.Timeframe}";
 
-        // The planner's rule: VWAP mode targets the execution VWAP; otherwise the
-        // target is the entry plus the stop distance times the target R multiple.
-        // A target that is non-positive or not above the entry is not offered.
+        // The planner's rule: VWAP mode targets the execution VWAP; otherwise the target is the entry moved by the stop
+        // distance times the target R multiple, in the trade's favour (up for longs, down for shorts). A target that is
+        // non-positive or on the wrong side of the entry is not offered.
         var vwapMode = strategy.ExitRules.ProfitTargetMode.Equals("vwap", StringComparison.OrdinalIgnoreCase);
+        var stopDistance = Math.Abs(limit - stopPrice);
         var target = vwapMode
             ? executionSnapshots[stopContextIndex].Vwap
-            : limit + ((limit - stopPrice) * strategy.ExitRules.TargetRMultiple);
-        if (target is not { } targetPrice || targetPrice <= 0m || targetPrice <= limit)
+            : isShort ? limit - (stopDistance * strategy.ExitRules.TargetRMultiple) : limit + (stopDistance * strategy.ExitRules.TargetRMultiple);
+        var favourable = target is { } candidate && candidate > 0m && (isShort ? candidate < limit : candidate > limit);
+        if (!favourable || target is not { } targetPrice)
         {
+            var side = isShort ? "below" : "above";
             return new DeskTicketPlan(
                 limit,
                 stop,
                 null,
                 stopNote,
                 vwapMode
-                    ? "The strategy targets VWAP, which is not above the entry now; enter a target."
-                    : "The strategy's target is not above the entry; enter a target.",
-                riskBudget);
+                    ? $"The strategy targets VWAP, which is not {side} the entry now; enter a target."
+                    : $"The strategy's target is not {side} the entry; enter a target.",
+                riskBudget,
+                direction);
         }
 
         var targetNote = vwapMode
@@ -229,7 +252,8 @@ public sealed class DeskTicketPlanService
             Math.Round(targetPrice, 2, MidpointRounding.AwayFromZero),
             stopNote,
             targetNote,
-            riskBudget);
+            riskBudget,
+            direction);
     }
 
     /// <summary>

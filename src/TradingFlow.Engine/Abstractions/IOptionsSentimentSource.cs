@@ -3,7 +3,7 @@ using TradingFlow.Domain.Market;
 namespace TradingFlow.Engine.Abstractions;
 
 /// <summary>
-/// Read-only live OPRA options context provider for equity Desk displays and optional strategy skew gates.
+/// Read-only live OPRA options context provider for equity Desk displays.
 /// </summary>
 public interface IOptionsSentimentSource
 {

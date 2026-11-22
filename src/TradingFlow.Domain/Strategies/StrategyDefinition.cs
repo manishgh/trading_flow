@@ -346,7 +346,7 @@ public sealed record EntryRules(
     // highest rank (0-1, share of those widths at or below it) that still counts as a squeeze.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] int BollingerSqueezeLookbackBars = 0,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxBollingerWidthPercentile = null,
-    // Strategy-owned ADR% (20-session mean(high - low) / latest close * 100) and 20-session average dollar volume floor,
+    // Strategy-owned ADR% (by AverageRangeMethod below) and 20-session average dollar volume floor,
     // shared across backtests, paper trading and the Desk. Omitted from serialized definitions when unset.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinAverageRangePct = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinAverageDollarVolume = null,
@@ -386,9 +386,22 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinParabolicAtrAboveEma21 = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinShootingStarWickToBody = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxShootingStarCloseLocation = null,
-    // Optional live OPRA 25-delta put-call skew vetoes (20 Nov 2026 design). Omitted when null so all v1 hashes stay exact.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxLongPutSkew = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinShortPutCallSkew = null);
+    // How ADR% is measured (AverageRangeMethods). Null is latest_close, the original formula; omitted when unset so every
+    // existing strategy keeps its content hash. A new strategy version may choose per_day.
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? AverageRangeMethod = null);
+
+/// <summary>The supported ways to measure a strategy's 20-session average daily range percentage (ADR%).</summary>
+public static class AverageRangeMethods
+{
+    /// <summary>Mean(high − low) ÷ the latest close. The default, and the daily screen's formula.</summary>
+    public const string LatestClose = "latest_close";
+
+    /// <summary>Mean of each day's own high ÷ low − 1, so a price trend over the window does not distort the result.</summary>
+    public const string PerDay = "per_day";
+
+    /// <summary>True for the two supported method names.</summary>
+    public static bool IsKnown(string method) => method is LatestClose or PerDay;
+}
 
 public sealed record ExitRules(
     decimal StopAtrMultiple,

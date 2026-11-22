@@ -43,15 +43,7 @@ public sealed class ConfigCatalogServiceTests
             strategies
                 .Select(item => $"{item.Identity.StrategyId}@{item.Identity.SemanticVersion}")
                 .Order(StringComparer.Ordinal));
-        var disabled = catalog.GetDisabledResearchStrategies()
-            .ToDictionary(item => $"{item.Artifact.Identity.StrategyId}@{item.Artifact.Identity.SemanticVersion}", item => item.Reason);
-        Assert.Equal(new[] { "etf.buy-and-hold-control@1.0.0", "etf.rotation-12-1@1.0.0", "etf.trend-10m@1.0.0",
-            "technical.opening-range-breakout@1.2.0",
-            "technical.opening-range-breakout@2.0.0", "technical.opening-range-breakout@2.1.0" }, disabled.Keys.Order(StringComparer.Ordinal));
-        Assert.Contains("parked for later standalone research", disabled["etf.rotation-12-1@1.0.0"], StringComparison.Ordinal);
-        Assert.Contains("Set aside 18 November 2026", disabled["technical.opening-range-breakout@2.1.0"], StringComparison.Ordinal);
-        Assert.Contains("only to judge the market and sector trend", disabled["etf.trend-10m@1.0.0"], StringComparison.Ordinal);
-        Assert.Contains("only to judge the market and sector trend", disabled["etf.buy-and-hold-control@1.0.0"], StringComparison.Ordinal);
+        Assert.Empty(catalog.GetDisabledResearchStrategies());
     }
 
     [Fact]
@@ -139,12 +131,11 @@ public sealed class ConfigCatalogServiceTests
     {
         var root = TestRepository.FindRoot();
         var reader = new SimpleYamlReader();
-        // Every operator strategy is switched off (18 Nov 2026); a test-owned catalog copy re-enables the set-aside ones so
-        // the resolver is exercised on both day (opening-range) and swing (ETF) identities.
+        // Re-enable the set-aside fixture strategies in a temp copy so the resolver is exercised on both day (ORB) and swing (ETF) identities.
         using var folder = new TemporaryFolder();
-        var artifacts = new StrategyArtifactCatalog(root, TestRepository.SetAsideStrategiesEnabledCatalog(folder.Path), reader);
+        var artifacts = RetiredStrategyFixtures.SetAsideEnabledCatalog(folder.Path, reader);
         var store = new StrategyExperimentArtifactStore(Path.Combine(folder.Path, "experiments"), artifacts, reader, TradingFlow.Engine.Storage.AtomicFileArtifactWriter.Instance);
-        var catalog = new ConfigCatalogService(new ProjectPaths(root), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
+        var catalog = new ConfigCatalogService(new ProjectPaths(RetiredStrategyFixtures.Root), reader, artifacts, store, new StrategyAuthorizationTestRegistry());
         var resolver = new StrategyIdentityResolver(catalog);
         var strategies = await catalog.GetStrategiesAsync(StrategySelectionMode.Backtest);
         Assert.NotEmpty(strategies);

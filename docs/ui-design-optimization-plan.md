@@ -400,7 +400,7 @@ Scope:
 Primary files:
 
 - `src/TradingFlow.Web/Pages/Shared/_Layout.cshtml`
-- `src/TradingFlow.Web/wwwroot/css/site.css`
+- `src/TradingFlow.Web/wwwroot/css/base.css` (formerly `site.css`)
 - `src/TradingFlow.Mobile/AppShell.xaml`
 - `src/TradingFlow.Mobile/Resources/Styles/Colors.xaml`
 - `src/TradingFlow.Mobile/Resources/Styles/Styles.xaml`

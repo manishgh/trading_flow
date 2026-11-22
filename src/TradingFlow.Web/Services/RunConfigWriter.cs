@@ -951,6 +951,8 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  max_bollinger_width_percentile", strategy.EntryRules.MaxBollingerWidthPercentile);
         if (strategy.EntryRules.MinAverageRangePct is { } minAverageRangePct)
             yaml.AppendLine($"  min_average_range_pct: {minAverageRangePct.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.AverageRangeMethod is { } averageRangeMethod)
+            yaml.AppendLine($"  average_range_method: {averageRangeMethod}");
         if (strategy.EntryRules.MinAverageDollarVolume is { } minAverageDollarVolume)
             yaml.AppendLine($"  min_average_dollar_volume: {minAverageDollarVolume.ToString(CultureInfo.InvariantCulture)}");
         if (strategy.EntryRules.Sma50RisingLookbackBars != 0)
@@ -1082,10 +1084,6 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  max_short_entry_rsi", strategy.EntryRules.MaxShortEntryRsi);
         AppendOptionalDecimal(yaml, "  min_short_entry_rsi", strategy.EntryRules.MinShortEntryRsi);
         AppendOptionalDecimal(yaml, "  max_short_close_location_value", strategy.EntryRules.MaxShortCloseLocationValue);
-        if (strategy.EntryRules.MaxLongPutSkew is { } maxLongPutSkew)
-            yaml.AppendLine($"  max_long_put_skew: {maxLongPutSkew.ToString(CultureInfo.InvariantCulture)}");
-        if (strategy.EntryRules.MinShortPutCallSkew is { } minShortPutCallSkew)
-            yaml.AppendLine($"  min_short_put_call_skew: {minShortPutCallSkew.ToString(CultureInfo.InvariantCulture)}");
         yaml.AppendLine("confluence:");
         yaml.AppendLine($"  enabled: {strategy.Confluence.Enabled.ToString().ToLowerInvariant()}");
         yaml.AppendLine($"  timeframe: {strategy.Confluence.Timeframe}");

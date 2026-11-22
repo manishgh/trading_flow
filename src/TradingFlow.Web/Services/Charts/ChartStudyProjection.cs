@@ -28,6 +28,8 @@ internal static class ChartStudyProjection
         var rth = new Lazy<RegularInputs>(() => new RegularInputs(history.Projector, merged, warmHistory,
             visible, cutoff, asOf, studies.Any(study => study.Name == "vwap"),
             studies.Any(study => study.Name == "rvol"), token));
+        // One resampled series per longer interval, shared by every indicator that uses it.
+        var longer = new Dictionary<string, IReadOnlyList<ChartCompletedBar>>(StringComparer.Ordinal);
         var result = new List<ChartIndicatorSeries>(studies.Length);
         foreach (var study in studies)
         {
@@ -36,6 +38,18 @@ internal static class ChartStudyProjection
             {
                 result.Add(isDaily ? study.Unavailable("This study requires completed regular-session intraday minutes.") :
                     ProjectRegular(study, rth.Value, visible, evidenceCutoff, revision));
+                continue;
+            }
+            if (!isDaily && study.SourceInterval != key.Interval && study.SourceInterval != "1d")
+            {
+                if (!longer.TryGetValue(study.SourceInterval, out var longerBars))
+                    longer[study.SourceInterval] = longerBars = history.Projector.Intraday(merged.Bars, merged.Quiet, merged.BasisBreaks,
+                        study.SourceInterval, key.SessionView == "extended", cutoff, asOf);
+                var minutes = ChartIndicatorProfile.Minutes(study.SourceInterval);
+                var values = ChartIndicatorMath.Project(formula, longerBars, history.Projector, history.Sessions[0], false,
+                    first.AddDays(-5), token, minutes);
+                result.Add(JoinLonger(study, history.Projector, longerBars, values, visible, merged.BasisBreaks, minutes,
+                    key.SessionView == "extended", evidenceCutoff, revision));
                 continue;
             }
             var cross = !isDaily && study.SourceInterval == "1d";
@@ -49,13 +63,20 @@ internal static class ChartStudyProjection
             // A daily average can first become eligible during the next displayed exchange session.
             var calculationStart = cross ? first.AddDays(-10) : first;
             var calculated = ChartIndicatorMath.Project(formula, bars, batch.Projector, batch.Sessions[0],
-                isDaily || cross, calculationStart, token);
+                isDaily || cross, calculationStart, token, ChartIndicatorProfile.Minutes(study.SourceInterval),
+                (isDaily || cross) && StartsAtListing(batch, bars));
             result.Add(cross
                 ? JoinDaily(study, batch.Projector, bars, calculated, visible, merged.BasisBreaks, evidenceCutoff, revision)
                 : JoinPrimary(study, bars, calculated, visible, evidenceCutoff, revision));
         }
         return result;
     }
+
+    // True when a completed daily read found no candle on any earlier scheduled date, so the first candle is the stock's first one.
+    // A failed or unfinished read proves nothing: its dates were not answered, and a conflicting date has candles.
+    private static bool StartsAtListing(ChartHistoryBatch batch, IReadOnlyList<ChartCompletedBar> bars) =>
+        bars.Count > 0 && batch.Sessions.TakeWhile(date => date < bars[0].SessionDate).All(date =>
+            batch.RetryUnverifiedAfterUtc.ContainsKey(date) && batch.DailyConflicts?.Contains(date) != true);
 
     // A same-interval value belongs to the completed observation that produced it, with its actual dependency receipt.
     private static ChartIndicatorSeries JoinPrimary(ChartStudy study, IReadOnlyList<ChartCompletedBar> source,
@@ -71,10 +92,47 @@ internal static class ChartStudyProjection
                 calculated.Clocks[input] is { } clock)
                 builder.Add(index, clock, calculated.Columns, input);
         }
-        return builder.Finish(source.LastOrDefault()?.EndUtc, revision, WarmupReason(study));
+        return builder.Finish(source.LastOrDefault()?.EndUtc, revision, WarmupReason(study, source));
     }
 
-    // The latest scheduled daily close governs the join. A late receipt cannot be drawn before its real observation.
+    // Gives each candle the value of the latest longer candle completed by the candle's own end: one that ended less than one
+    // longer interval ago in the same session, or the previous session's closing one until the first of today completes.
+    // A price-basis break between the two, or a missing closing candle, leaves a gap.
+    private static ChartIndicatorSeries JoinLonger(ChartStudy study, ChartBarProjector projector,
+        IReadOnlyList<ChartCompletedBar> source, ChartCalculatedIndicator calculated, IReadOnlyList<ChartCompletedBar> visible,
+        IReadOnlySet<DateTimeOffset> breaks, int minutes, bool extended, DateTimeOffset evidenceCutoff, string revision)
+    {
+        var builder = new SeriesBuilder(study, visible, evidenceCutoff);
+        var length = TimeSpan.FromMinutes(minutes);
+        var latest = -1;
+        for (var index = 0; index < visible.Count; index++)
+        {
+            var candle = visible[index];
+            while (latest + 1 < source.Count && source[latest + 1].EndUtc <= candle.EndUtc) latest++;
+            if (latest < 0 || calculated.Clocks[latest] is not { } clock) continue;
+            var input = source[latest];
+            var isCurrent = input.SessionDate == candle.SessionDate
+                ? candle.EndUtc - input.EndUtc < length
+                : input.SessionDate == projector.PriorTradingDates(candle.SessionDate, 1).LastOrDefault() &&
+                    (extended || input.EndUtc == projector.Regular(input.SessionDate)?.EndUtc) &&
+                    candle.EndUtc - SessionStart(projector, candle.SessionDate, extended) < length;
+            if (isCurrent && !breaks.Any(point => point > input.Bar.Timestamp && point <= candle.Bar.Timestamp) && IsDrawable(clock, candle.AvailableAtUtc))
+                builder.Add(index, clock, calculated.Columns, latest);
+        }
+        return builder.Finish(source.LastOrDefault()?.EndUtc, revision, WarmupReason(study, source));
+    }
+
+    // The first minute of the displayed session: 04:00 New York with extended hours, else the regular open.
+    private static DateTimeOffset SessionStart(ChartBarProjector projector, DateOnly date, bool extended) =>
+        extended ? ChartBarProjector.At(date, new TimeOnly(4, 0)) : projector.Regular(date)?.StartUtc ?? DateTimeOffset.MinValue;
+
+    // A value whose inputs all have recorded receipts cannot be drawn before the last one arrived. One input without a receipt
+    // (history downloaded later) makes the whole value reconstructed: it is drawn at its scheduled completion and marked so,
+    // like same-interval values and the candles themselves.
+    private static bool IsDrawable(ChartIndicatorClock clock, DateTimeOffset drawnAt) =>
+        clock.Reconstructed || clock.AvailableAtUtc <= drawnAt;
+
+    // The latest scheduled daily close governs the join. A recorded late receipt cannot be drawn before its real observation.
     private static ChartIndicatorSeries JoinDaily(ChartStudy study, ChartBarProjector projector,
         IReadOnlyList<ChartCompletedBar> source, ChartCalculatedIndicator calculated,
         IReadOnlyList<ChartCompletedBar> visible, IReadOnlySet<DateTimeOffset> breaks, DateTimeOffset evidenceCutoff, string revision)
@@ -82,11 +140,11 @@ internal static class ChartStudyProjection
         var builder = new SeriesBuilder(study, visible, evidenceCutoff);
         var byDate = source.Select((bar, index) => (bar.SessionDate, index)).ToDictionary(pair => pair.SessionDate, pair => pair.index);
         var previousBreak = breaks.Where(stamp => stamp < visible[^1].EndUtc).DefaultIfEmpty().Min();
-        var reason = WarmupReason(study);
+        var reason = WarmupReason(study, source);
         if (previousBreak != default)
             reason = "The daily price basis could not be joined to the intraday candles across a source break.";
         else if (calculated.Clocks.Any(clock => clock is not null))
-            reason = "Daily values are unavailable on earlier intraday candles until the completed source was actually observed.";
+            reason = "A daily value with a recorded receipt appears only on candles that open after that receipt.";
 
         var previous = default(DateOnly);
         var session = default(DateOnly);
@@ -101,7 +159,7 @@ internal static class ChartStudyProjection
             }
             var date = projector.Regular(session)?.EndUtc <= candle.Bar.Timestamp ? session : previous;
             if (byDate.TryGetValue(date, out var input) && calculated.Clocks[input] is { } clock &&
-                clock.AvailableAtUtc <= candle.Bar.Timestamp)
+                IsDrawable(clock, candle.Bar.Timestamp))
                 builder.Add(index, clock, calculated.Columns, input);
         }
         return builder.Finish(source.LastOrDefault()?.EndUtc, revision, reason);
@@ -137,10 +195,17 @@ internal static class ChartStudyProjection
         return builder.Finish(lastRth, revision, reason, sampleCount);
     }
 
-    // Explain fixed convergence requirements without presenting undefined inputs as zeroes.
-    private static string WarmupReason(ChartStudy study) => study.Name == "adx14"
-        ? "ADX needs 264 covered observations and nonzero directional true-range evidence."
-        : $"This view needs {study.Formula!.WarmObservations} compatible completed source observations from the calculation anchor.";
+    // Says how many unbroken completed candles the indicator needs and how many there are, instead of showing a zero.
+    private static string WarmupReason(ChartStudy study, IReadOnlyList<ChartCompletedBar> source)
+    {
+        var needed = study.Formula!.WarmObservations;
+        var available = 0;
+        for (var index = source.Count - 1; index >= 0 && source[index].Continuity == source[^1].Continuity; index--) available++;
+        var text = available < needed
+            ? $"Needs {needed} completed {study.SourceInterval} candles without a gap; {available} are available."
+            : $"Shown only where the loaded history holds {needed} completed {study.SourceInterval} candles before the candle.";
+        return study.Formula.Family == "adx" ? text + " ADX also needs price movement in one direction." : text;
+    }
 
     private sealed class SeriesBuilder(ChartStudy study, IReadOnlyList<ChartCompletedBar> visible, DateTimeOffset evidenceCutoff)
     {

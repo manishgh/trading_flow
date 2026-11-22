@@ -15,13 +15,25 @@
     window.tradingFlowWorkspaceStatus = unknown;
     let inFlight = false;
     let lastRead;
+    const advisoryNote = 'Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.';
     const time = value => value ? new Date(value).toLocaleString() : 'not observed';
 
-    // Publish one observation for Desk and Preparation and expose the source's own timestamps.
+    // Publish one observation for Desk and Preparation and expose the source's own timestamps and advisory tooltip.
     function show(status, message) {
         window.tradingFlowWorkspaceStatus = status;
-        field('runtime').textContent = status.tradingRuntime;
-        field('market').textContent = status.marketSession;
+        const runtimeEl = field('runtime');
+        const runtimeChip = strip.querySelector('[data-workspace-runtime-chip]');
+        const marketEl = field('market');
+        if (runtimeEl) runtimeEl.textContent = status.tradingRuntime;
+        if (runtimeChip) {
+            const lower = String(status.tradingRuntime || '').toLowerCase();
+            runtimeChip.dataset.tone = lower.includes('paused') || lower.includes('unknown') || lower.includes('unavailable') ? 'warn' : 'good';
+            runtimeChip.title = [status.openingRestriction, advisoryNote].filter(Boolean).join(' · ');
+        }
+        if (marketEl) {
+            marketEl.textContent = status.marketSession;
+            marketEl.title = [status.marketFeeds, advisoryNote].filter(Boolean).join(' · ');
+        }
         field('feeds').textContent = status.marketFeeds;
         field('checked').textContent = message;
         field('orders').textContent = status.openingRestriction || 'Order actions still require the server’s individual authorization and market checks.';

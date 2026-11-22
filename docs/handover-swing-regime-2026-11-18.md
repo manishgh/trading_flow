@@ -1,6 +1,6 @@
 # Handover — swing strategies, market regime and VIX (state at 22 November 2026)
 
-For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
+For the next session. `ui/redesign-v2` was merged into `main` and pushed on 22 November 2026 at the user's request; later syncs need a new request.
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
 
 **Rule (user, 18 Nov):** after every checkpoint, update this file — tick what is done, keep what remains — and commit it.
@@ -82,6 +82,8 @@ Housekeeping
   fail-closed `max_long_put_skew` / `min_short_put_call_skew` Paper/Desk/Mobile vetoes rejected upfront in historical
   backtests and signal studies (`0 warnings / 0 errors` Debug build, `78/78` Round 2 tests green, all 10 `v1` swing
   strategy hashes unchanged, both independent reviewers ACCEPT in Round 2).
+  The two skew vetoes were removed on 22 Nov (commit `35c0148`): no option history is stored, so a
+  backtest could never test them. The options readings stay as display only.
 - `982feda` FRED `VIXCLS` Windows Schannel TLS fix (19 Nov): HTTP/1.1 exact + scoped System32 OpenSSL `curl.exe` fallback
   for `fred.stlouisfed.org` (`33/33` tests green, both reviewers ACCEPT).
 - `6297fc3` Checkpoint 9 (Web UI Research Screen Builder, Two-Step 5-Minute Bar Collector & `Minimum ADR%` Daily Eligibility, 19 Nov):
@@ -166,6 +168,10 @@ Earlier (checkpoint 2): 121/121 affected browser specs with the test catalog.
    May–Oct 2026; report the five-minute bar count/size to the user **before** collecting (`evidence-plan-minute-bars`); run
    the three versions through the normal saved-plan workflow; deliver the full `.log`; report monthly per version; show
    listing coverage and the share of gap-inflated trades (reviewer conditions).
+   **State 22 Nov:** the user chose the top-500 screen (, 874 stocks, 8,785,604 five-minute
+   bars complete). Plan **36306** is saved on the operator site with all 10 strategies, not started: it needs about 4 GB of memory
+   (estimate) and about 0.8 GB was free. It covers only the full SPY+QQQ+VIX gate; the no-gate and SPY+QQQ versions need a design.
+   PSLV (a silver trust) is in the list although funds are excluded; flag its trades.
 2. **Sector-fund rank labels on trades:** report only, in the first run's report (still open in the checklist above).
 
 Swing ORB on news, the 21-EMA pullback long with V2-01, the short mirrors and the web pages for research screens and

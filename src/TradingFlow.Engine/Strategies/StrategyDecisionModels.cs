@@ -90,9 +90,7 @@ public sealed record StrategyDecisionRequest(
     // The exchange calendar's next trading session after the setup bar's session; required by a scheduled entry rule.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateOnly? NextExchangeSessionDate = null,
     // Authoritative exchange session schedules (honoring early closes such as 13:00 NY) for daily sub-session rules.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableDictionary<DateOnly, MarketSessionSchedule>? SessionSchedules = null,
-    // Observed live OPRA 25-delta put-call IV skew (put IV minus call IV) supplied only when a strategy sets skew gates.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? OptionsSkew25Delta = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ImmutableDictionary<DateOnly, MarketSessionSchedule>? SessionSchedules = null);
 
 public sealed record StrategyDecisionRule(
     string Stage,

@@ -76,13 +76,13 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
     {
         var manifestPath = Path.Combine(testRoot, "configs", "strategy-catalog.json");
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!;
-        var rotation = manifest["strategies"]!.AsArray()
-            .Single(item => item!["strategyId"]!.GetValue<string>() == "etf.rotation-12-1")!;
-        rotation["enabled"] = true;
+        var target = manifest["strategies"]!.AsArray()
+            .Single(item => item!["strategyId"]!.GetValue<string>() == "technical.bollinger-squeeze-breakout")!;
+        target["enabled"] = true;
         await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
         var run = (await File.ReadAllTextAsync(configPath))
             .Replace("  provider: alpaca", "  provider: csv", StringComparison.Ordinal)
-            .Replace("strategies:", "strategies:\n  - strategies/etf-rotation-12-1.bt-v1.yaml", StringComparison.Ordinal);
+            .Replace("strategies:", "strategies:\n  - strategies/bollinger-squeeze-breakout.bt-v1.yaml", StringComparison.Ordinal);
         await File.WriteAllTextAsync(configPath, run);
         var reader = new SimpleYamlReader();
         var executor = new ImmediateBacktestExecutor();
@@ -91,7 +91,8 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         var queued = await enabled.StartAsync("queued-before-disable", configPath);
         var captured = await repository.GetJobAsync(queued.JobId, default);
 
-        rotation["enabled"] = false;
+        target["enabled"] = false;
+        target["disabledReason"] = "parked for later standalone research";
         await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
         var parked = new BacktestJobService(executor, repository, reader, BacktestJobServiceOptions.Default,
             new StrategyArtifactCatalog(testRoot, manifestPath, reader), SyntheticResearchQueue.For(repository));

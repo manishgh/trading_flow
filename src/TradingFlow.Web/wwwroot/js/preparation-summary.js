@@ -3,8 +3,48 @@
     const root = document.querySelector('[data-preparation-summary]');
     if (!root) return;
     const find = key => root.querySelector('[data-preparation-' + key + ']');
+    const title = root.querySelector('#preparation-summary-title');
     const action = find('action'), actionUrl = action.href;
     const steps = Array.from(find('steps').children);
+    const prepChip = document.getElementById('desk-preparation-chip');
+    const twelveHoursMs = 12 * 60 * 60 * 1000;
+
+    // Updates the unified top-strip preparation chip when compact mode is active, hiding it for active/failed/unconfigured runs.
+    function syncPreparationChip(mode, summary, href, detailTitle) {
+        if (!prepChip) return;
+        if (!mode?.compact || !summary) {
+            prepChip.hidden = true;
+            return;
+        }
+        prepChip.textContent = !summary.scheduleSavedOn ? 'Preparation paused \u203A' : 'Preparation expired \u203A';
+        prepChip.href = href || actionUrl;
+        prepChip.dataset.tone = !summary.scheduleSavedOn ? 'muted' : 'warn';
+        prepChip.title = detailTitle || mode.heading;
+        prepChip.hidden = false;
+    }
+
+    // Identifies an active or failed preparation step that must never be hidden behind compact mode.
+    function hasActiveOrFailedStep(stepText) {
+        const text = String(stepText || '').toLowerCase();
+        return text.includes('in progress') || text.includes('failed') || text.includes('cancelled') || text.includes('unavailable');
+    }
+
+    // Decides whether the preparation banner should collapse to a calm 1-line bar without hiding unconfigured workflows, active/failed steps, or worker problems.
+    function describeCompactMode(summary, worker, nowMs) {
+        if (!summary) return { compact: false, heading: 'Today\u2019s preparation' };
+        if (!summary.workflowId) return { compact: false, heading: 'Preparation not configured' };
+        if (hasActiveOrFailedStep(summary.eveningState) || hasActiveOrFailedStep(summary.morningState)) {
+            return { compact: false, heading: 'Today\u2019s preparation' };
+        }
+        if (summary.scheduleSavedOn && worker?.state !== 'available') {
+            return { compact: false, heading: 'Today\u2019s preparation' };
+        }
+        const expiryMs = summary.expiresAtUtc ? Date.parse(summary.expiresAtUtc) : NaN;
+        const expiredOver12h = Number.isFinite(expiryMs) && (nowMs - expiryMs) > twelveHoursMs;
+        if (!summary.scheduleSavedOn) return { compact: true, heading: 'Saved preparation (paused)' };
+        if (expiredOver12h) return { compact: true, heading: 'Previous preparation' };
+        return { compact: false, heading: 'Today\u2019s preparation' };
+    }
 
     // Link only to the exact saved revision or accepted review returned for this operator.
     function render(status) {
@@ -14,11 +54,18 @@
         action.href = actionUrl;
         action.textContent = 'Open preparation';
         if (!summary) {
+            delete root.dataset.compact;
+            syncPreparationChip(null, null, actionUrl, '');
+            if (title) title.textContent = 'Today\u2019s preparation';
             find('target').textContent = status.preparationReadError || 'Saved preparation has not been read.';
             for (const [index, text] of ['Evening collection', 'Morning collection', 'Review', 'Open on Desk'].entries())
                 steps[index].textContent = text;
             return;
         }
+        const mode = describeCompactMode(summary, status.preparationWorker, Date.now());
+        if (mode.compact) root.dataset.compact = 'true';
+        else delete root.dataset.compact;
+        if (title) title.textContent = mode.heading;
         const expiry = summary.expiresAtUtc ? new Date(summary.expiresAtUtc) : null;
         const expiryLabel = expiry
             ? ' · evidence ' + (expiry <= new Date() ? 'expired ' : 'valid until ') +
@@ -46,6 +93,7 @@
         } else {
             action.textContent = 'Set up preparation';
         }
+        syncPreparationChip(mode, summary, action.href, [mode.heading, find('target').textContent, status.preparationWorker?.detail].filter(Boolean).join(' · '));
     }
     document.addEventListener('workspace-status-changed', event => render(event.detail));
     render(window.tradingFlowWorkspaceStatus);

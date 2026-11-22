@@ -1,5 +1,11 @@
 <p data-order-status role="status">Loading order context…</p>
 <form id="OrderWorkflowForm" class="candidate-controls" inert>
+    <section class="order-risk-strip" data-order-risk-strip data-entry-only aria-label="Position risk summary">
+        <div><span class="order-risk-label">1R Risk Budget</span><strong data-risk-budget>—</strong></div>
+        <div><span class="order-risk-label">Stop Distance / sh</span><strong data-risk-stop-dist>—</strong></div>
+        <div><span class="order-risk-label">Order Risk ($)</span><strong data-risk-dollar>—</strong></div>
+        <div><span class="order-risk-label">Reward : Risk</span><strong data-risk-rr>—</strong></div>
+    </section>
     <div class="order-primary-fields">
         <label>Symbol <input class="input" name="symbol" required /></label>
         <label>Side <input class="input" name="side" value="Buy" readonly /></label>
@@ -8,7 +14,7 @@
         <label data-exit-trigger hidden>Trigger price <input class="input" name="trigger" type="number" min="0.01" step="0.01" /></label>
         <label>Limit price <input class="input" name="limit" type="number" min="0.01" step="0.01" required /></label>
     </div>
-    <details class="order-options" data-entry-only>
+    <details class="order-options" data-entry-only open>
         <summary>Strategy &amp; protection</summary>
         <div class="order-option-fields">
             <label data-order-source>Discovery stock group <select class="input" name="wishlist"><option value="">Choose a stock group</option></select></label>

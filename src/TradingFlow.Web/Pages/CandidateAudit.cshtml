@@ -37,8 +37,11 @@
         section("Gate evidence", audit.gateEvaluations.length ? "Expand a gate to inspect its recorded inputs." : "No gate evaluation recorded.");
         for (const gate of audit.gateEvaluations) {
             const details = document.createElement("details"), heading = document.createElement("summary"), inputs = document.createElement("p");
-            heading.textContent = gate.gateName + ": " + (gate.passed ? "passed" : gate.rejectionCode);
-            inputs.style.overflowWrap = "anywhere"; inputs.textContent = JSON.stringify(gate.inputs);
+            // A strategy rule's name repeats its code, so only order gates show their name next to the sentence.
+            const label = gate.gateName.startsWith("strategy:") ? (gate.passed ? "Passed" : "Failed") : gate.gateName;
+            heading.textContent = label + ": " + (gate.explanation || gate.rejectionCode || (gate.passed ? "passed" : gate.gateName));
+            inputs.style.overflowWrap = "anywhere"; inputs.style.whiteSpace = "pre-wrap";
+            inputs.textContent = "Recorded code: " + gate.gateName + (gate.rejectionCode ? " · " + gate.rejectionCode : "") + "\n" + JSON.stringify(gate.inputs);
             details.append(heading, inputs); content.append(details);
         }        const market = audit.marketEvidence;
         section("Completed market evidence", market

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using TradingFlow.Domain.Market;
+using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Regime;
 
 namespace TradingFlow.Engine.Market;
@@ -86,7 +87,8 @@ public static partial class OptionsSentimentCalculator
 
     /// <summary>
     /// Computes read-only options sentiment metrics from <paramref name="quotes"/> as of <paramref name="observedAtUtc"/>
-    /// using New York calendar dates for days-to-expiry calculations.
+    /// using New York calendar dates for days-to-expiry calculations. Trading days count weekdays here;
+    /// <see cref="WithMarketContext"/> replaces them with the exchange calendar's days.
     /// </summary>
     public static OptionsSentimentSnapshot Calculate(
         string symbol,
@@ -153,7 +155,8 @@ public static partial class OptionsSentimentCalculator
         }
 
         var frontStraddle = ComputeFrontStraddle(liquid, observedDateNy, spot);
-        var skew25Delta = ComputeSkew25Delta(liquid, observedDateNy);
+        var skewMetrics = ComputeSkew25Delta(liquid, observedDateNy);
+        var skew25Delta = skewMetrics?.Skew;
         var termStructureSpread = ComputeTermStructureSpread(liquid, observedDateNy, spot);
         var callVolume = liquid.Where(q => q.IsCall).Sum(q => Math.Max(0m, q.DailyVolume));
         var putVolume = liquid.Where(q => !q.IsCall).Sum(q => Math.Max(0m, q.DailyVolume));
@@ -190,12 +193,13 @@ public static partial class OptionsSentimentCalculator
             ImpliedToRealizedAdrRatio: impliedToAdrRatio,
             LiquidContractCount: liquid.Count,
             RegimeLabel: regimeLabel,
-            SummaryNote: summaryNote);
+            SummaryNote: summaryNote,
+            SkewProvenance: skewMetrics?.Provenance);
     }
 
     /// <summary>
     /// Recomputes <see cref="OptionsSentimentSnapshot.ImpliedToRealizedAdrRatio"/> when a cached snapshot is reused
-    /// with a caller-supplied 20-day ADR% without repeating an OPRA request.
+    /// with a caller-supplied 20-day ADR% without repeating an OPRA request. Preserves <see cref="OptionsSentimentSnapshot.SkewProvenance"/>.
     /// </summary>
     public static OptionsSentimentSnapshot WithAdr20Pct(OptionsSentimentSnapshot snapshot, decimal? adr20Pct)
     {
@@ -207,6 +211,88 @@ public static partial class OptionsSentimentCalculator
         return ratio == snapshot.ImpliedToRealizedAdrRatio
             ? snapshot
             : snapshot with { ImpliedToRealizedAdrRatio = ratio };
+    }
+
+    /// <summary>
+    /// Enriches a cached snapshot with holiday-aware <see cref="OptionsSentimentSnapshot.TradingDaysToFrontExpiry"/> from
+    /// <paramref name="schedules"/> (when <see cref="OptionsSentimentSnapshot.FrontExpiry"/> and schedules are present) and
+    /// recomputes <see cref="OptionsSentimentSnapshot.ImpliedToRealizedAdrRatio"/> against <paramref name="adr20Pct"/> using
+    /// the holiday-adjusted trading-day count. Keeps <see cref="OptionsSentimentSnapshot.SummaryNote"/> consistent whenever
+    /// either trading days or the implied/ADR ratio changes, and preserves <see cref="OptionsSentimentSnapshot.SkewProvenance"/>.
+    /// </summary>
+    public static OptionsSentimentSnapshot WithMarketContext(
+        OptionsSentimentSnapshot snapshot,
+        decimal? adr20Pct,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var tradingDays = snapshot.FrontExpiry is { } frontExpiry && schedules is { Count: > 0 }
+            ? CountTradingDaysExclusiveInclusive(ToNewYorkDate(snapshot.ObservedAtUtc.ToUniversalTime()), frontExpiry, schedules)
+            : snapshot.TradingDaysToFrontExpiry;
+        var ratio = ComputeImpliedToRealizedAdrRatio(
+            snapshot.FrontImpliedMovePct,
+            tradingDays,
+            adr20Pct);
+        if (tradingDays == snapshot.TradingDaysToFrontExpiry && ratio == snapshot.ImpliedToRealizedAdrRatio)
+        {
+            return snapshot;
+        }
+
+        var summaryNote = snapshot.SummaryNote;
+        if (snapshot.LiquidContractCount > 0 &&
+            snapshot.RegimeLabel is not (OptionsSentimentRegime.Unavailable or OptionsSentimentRegime.NoLiquidOptions))
+        {
+            summaryNote = BuildSummaryNote(
+                snapshot.RegimeLabel,
+                snapshot.FrontImpliedMovePct,
+                tradingDays,
+                snapshot.Skew25Delta,
+                snapshot.TermStructureSpread,
+                snapshot.CallPutVolumeRatio,
+                ratio,
+                snapshot.LiquidContractCount);
+        }
+
+        return snapshot with
+        {
+            TradingDaysToFrontExpiry = tradingDays,
+            ImpliedToRealizedAdrRatio = ratio,
+            SummaryNote = summaryNote
+        };
+    }
+
+    /// <summary>
+    /// Counts trading days strictly after <paramref name="startExclusive"/> through <paramref name="endInclusive"/> (inclusive),
+    /// clamped to at least 1, using explicit <see cref="MarketSessionSchedule.IsTradingDay"/> entries for every covered date
+    /// (accurately excluding interior and trailing holidays) and falling back to weekdays only beyond calendar coverage.
+    /// </summary>
+    public static int CountTradingDaysExclusiveInclusive(
+        DateOnly startExclusive,
+        DateOnly endInclusive,
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules)
+    {
+        if (schedules is null || schedules.Count == 0)
+        {
+            return CountWeekdaysExclusiveInclusive(startExclusive, endInclusive);
+        }
+
+        var count = 0;
+        for (var day = startExclusive.AddDays(1); day <= endInclusive; day = day.AddDays(1))
+        {
+            if (schedules.TryGetValue(day, out var schedule))
+            {
+                if (schedule.IsTradingDay)
+                {
+                    count++;
+                }
+            }
+            else if (day.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+            {
+                count++;
+            }
+        }
+
+        return Math.Max(1, count);
     }
 
     // Converts a UTC observation timestamp into its New York exchange calendar date.
@@ -296,6 +382,10 @@ public static partial class OptionsSentimentCalculator
         decimal ImpliedMovePct,
         decimal? AtmImpliedVolPct);
 
+    private sealed record Skew25DeltaMetrics(
+        decimal Skew,
+        OptionsSkewWingProvenance Provenance);
+
     // Computes ATM straddle implied move % on the nearest liquid 5-14 DTE expiry, falling back to 2-30 DTE when no weekly exists.
     private static FrontStraddleMetrics? ComputeFrontStraddle(
         IReadOnlyList<OptionContractQuote> liquid,
@@ -306,7 +396,8 @@ public static partial class OptionsSentimentCalculator
         return preferred ?? FindStraddleInWindow(liquid, observedDateNy, spot, minDte: 2, maxDte: 30);
     }
 
-    // Finds the nearest expiry inside [minDte, maxDte] that has a strike with both a liquid call and a liquid put.
+    // Finds the nearest expiry inside [minDte, maxDte] that has a strike with both a liquid call and a liquid put, and prices
+    // the expected move from that straddle's time value (intrinsic value of an off-price strike removed).
     private static FrontStraddleMetrics? FindStraddleInWindow(
         IReadOnlyList<OptionContractQuote> liquid,
         DateOnly observedDateNy,
@@ -342,7 +433,11 @@ public static partial class OptionsSentimentCalculator
             }
 
             var straddleMid = MidPrice(atmPair.Call) + MidPrice(atmPair.Put);
-            var impliedMovePct = Math.Round(straddleMid / spot * 100m, 4);
+            // When the nearest strike is not at the price, one leg is in the money by |spot - strike|. That intrinsic value
+            // is not expected movement (it matters most on cheap stocks with wide strike spacing), so it is removed and only
+            // the straddle's time value is compared with the spot price.
+            var timeValue = Math.Max(0m, straddleMid - Math.Abs(spot - atmPair.Strike));
+            var impliedMovePct = Math.Round(timeValue / spot * 100m, 4);
             var tradingDays = CountWeekdaysExclusiveInclusive(observedDateNy, expiryGroup.Key);
             var atmIv = AveragePositiveIv(atmPair.Call.ImpliedVolatility, atmPair.Put.ImpliedVolatility);
             decimal? atmIvPct = atmIv is { } iv ? Math.Round(iv * 100m, 4) : null;
@@ -352,8 +447,8 @@ public static partial class OptionsSentimentCalculator
         return null;
     }
 
-    // Computes 25-delta put IV minus 25-delta call IV on the nearest 20-45 DTE expiry with both wings inside |abs(delta)-0.25| <= 0.12.
-    private static decimal? ComputeSkew25Delta(IReadOnlyList<OptionContractQuote> liquid, DateOnly observedDateNy)
+    // Computes 25-delta put IV minus 25-delta call IV and records the chosen wing contracts on the nearest 20-45 DTE expiry with both wings inside |abs(delta)-0.25| <= 0.12.
+    private static Skew25DeltaMetrics? ComputeSkew25Delta(IReadOnlyList<OptionContractQuote> liquid, DateOnly observedDateNy)
     {
         var minAbs = TargetAbsDelta - MaxDeltaDistance; // 0.13
         var maxAbs = TargetAbsDelta + MaxDeltaDistance; // 0.37
@@ -385,7 +480,16 @@ public static partial class OptionsSentimentCalculator
 
             if (put25 is not null && call25 is not null)
             {
-                return Math.Round(put25.ImpliedVolatility!.Value - call25.ImpliedVolatility!.Value, 6);
+                var skew = Math.Round(put25.ImpliedVolatility!.Value - call25.ImpliedVolatility!.Value, 6);
+                var provenance = new OptionsSkewWingProvenance(
+                    ExpirationDate: expiryGroup.Key,
+                    PutStrike: put25.Strike,
+                    PutDelta: Math.Round(put25.Delta!.Value, 3),
+                    PutIvPct: Math.Round(put25.ImpliedVolatility.Value * 100m, 2),
+                    CallStrike: call25.Strike,
+                    CallDelta: Math.Round(call25.Delta!.Value, 3),
+                    CallIvPct: Math.Round(call25.ImpliedVolatility.Value * 100m, 2));
+                return new Skew25DeltaMetrics(skew, provenance);
             }
         }
 

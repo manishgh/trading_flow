@@ -16,12 +16,7 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(
             new[]
             {
-                // The single-stock swing artifacts were retired on 13 November 2026 (test-owned copies: RetiredStrategyFixtures);
-                // the ETF trend core and its buy-and-hold control were added the same day.
-                "etf.buy-and-hold-control@1.0.0",
-                "etf.rotation-12-1@1.0.0",
-                "etf.trend-10m@1.0.0",
-                // Added 18-19 November 2026 (5 long + 5 short swing research artifacts); the opening-range versions stay registered but disabled.
+                // Active catalog contains only the 10 approved swing research artifacts (5 long + 5 short); retired/set-aside artifacts live under RetiredStrategyFixtures.
                 "technical.bollinger-squeeze-breakdown@1.0.0",
                 "technical.bollinger-squeeze-breakout@1.0.0",
                 "technical.ema21-rejection-short@1.0.0",
@@ -30,9 +25,6 @@ public sealed class StrategyArtifactCatalogTests
                 "technical.ema21-trend-pullback@1.1.0",
                 "technical.news-orb-breakdown@1.0.0",
                 "technical.news-orb-swing@1.0.0",
-                "technical.opening-range-breakout@1.2.0",
-                "technical.opening-range-breakout@2.0.0",
-                "technical.opening-range-breakout@2.1.0",
                 "technical.parabolic-exhaustion-short@1.0.0",
                 "technical.rubber-band-reclaim@1.0.0"
             },
@@ -121,10 +113,7 @@ public sealed class StrategyArtifactCatalogTests
     [Fact]
     public void ChangedResolvedContent_RequiresANewSemanticVersion()
     {
-        // Every operator strategy is switched off (18 Nov 2026); a test-owned copy re-enables the set-aside ones to supply a source.
-        using var folder = new TemporaryFolder();
-        var root = TestRepository.FindRoot();
-        var catalog = new StrategyArtifactCatalog(root, TestRepository.SetAsideStrategiesEnabledCatalog(folder.Path), new SimpleYamlReader());
+        var catalog = CreateCatalog();
         var source = catalog.GetSelectable(StrategySelectionMode.Backtest)[0];
         var changed = source.ResolvedStrategy with
         {

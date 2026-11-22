@@ -109,7 +109,7 @@
     }
 
     // Draw only the part of a price band or level whose underlying data had become available.
-    function drawPriceRange(ctx, width, height, scale, candles, bars, start, end, lower, upper, color) {
+    function drawPriceRange(ctx, width, height, scale, candles, bars, start, end, lower, upper, color, highlighted = false) {
         if (!(end > start)) return;
         const left = Math.max(0, boundary(scale, bars, start));
         const right = Math.min(width, boundary(scale, bars, end));
@@ -119,10 +119,11 @@
         ctx.strokeStyle = color;
         ctx.fillStyle = color;
         if (upper !== lower) {
-            ctx.globalAlpha = .15;
+            ctx.globalAlpha = highlighted ? .48 : .15;
             ctx.fillRect(left, Math.max(0, top), right - left, Math.min(bottom, height) - Math.max(0, top));
         }
-        ctx.globalAlpha = .85;
+        ctx.lineWidth = highlighted ? 2.5 : 1;
+        ctx.globalAlpha = highlighted ? 1 : .85;
         ctx.beginPath();
         ctx.moveTo(left, top);
         ctx.lineTo(right, top);
@@ -131,11 +132,12 @@
             ctx.lineTo(right, bottom);
         }
         ctx.stroke();
+        ctx.lineWidth = 1;
         ctx.globalAlpha = 1;
     }
 
     // Reserve a short price annotation after the last candle for current-only geometry.
-    function drawCurrentBand(ctx, width, height, scale, candles, bars, band, color) {
+    function drawCurrentBand(ctx, width, height, scale, candles, bars, band, color, highlighted = false) {
         const left = boundary(scale, bars, bars.at(-1).endMs);
         const isZone = band.upper > band.lower;
         const right = Math.min(width, left + (isZone ? 40 : 20));
@@ -145,12 +147,13 @@
         const y = Math.max(0, top);
         const bandHeight = Math.max(2, Math.min(bottom, height) - y);
         ctx.fillStyle = color;
-        ctx.globalAlpha = isZone ? .28 : .68;
+        ctx.globalAlpha = isZone ? (highlighted ? .48 : .28) : (highlighted ? .95 : .68);
         ctx.fillRect(left, y, right - left, bandHeight);
         if (isZone) {
-            ctx.globalAlpha = .95;
-            ctx.fillRect(left, y, right - left, 1);
-            ctx.fillRect(left, y + bandHeight - 1, right - left, 1);
+            const border = highlighted ? 2.5 : 1;
+            ctx.globalAlpha = highlighted ? 1 : .95;
+            ctx.fillRect(left, y, right - left, border);
+            ctx.fillRect(left, y + bandHeight - border, right - left, border);
         }
         ctx.globalAlpha = 1;
     }
@@ -246,8 +249,9 @@
                 for (const band of model.zones) {
                     if (!model.layers[band.type] || model.hiddenZones.has(band.id)) continue;
                     const color = colors[band.type === 'support' ? 'up' : 'down'];
-                    if (band.currentOnly) drawCurrentBand(ctx, width, height, scale, candles, bars, band, color);
-                    else drawPriceRange(ctx, width, height, scale, candles, bars, band.start, band.end, band.lower, band.upper, color);
+                    const highlighted = model.highlightedOverlay === 'support' && band.type === 'support';
+                    if (band.currentOnly) drawCurrentBand(ctx, width, height, scale, candles, bars, band, color, highlighted);
+                    else drawPriceRange(ctx, width, height, scale, candles, bars, band.start, band.end, band.lower, band.upper, color, highlighted);
                 }
                 for (const level of model.levels) {
                     if (model.hiddenLevels.has(level.key)) continue;
@@ -291,8 +295,14 @@
         return true;
     }
 
-    // Draw study lines with explicit gaps and resets while the native series owns its autoscale.
+    // Matches an overlay highlight key, which is the exact selection token (e.g. "ema21:1d"), against a study.
+    function matchesHighlightedStudy(study, key) {
+        return Boolean(key && study) && study.token === key;
+    }
+
+    // Draw study lines with explicit gaps, highlight emphasis/dimming, and an immediate redraw trigger.
     function attachStudyLine(component, scale, model, colors) {
+        let refresh;
         const renderer = {
             // Keep the first valid point and avoid connecting across unknown samples or calculation segments.
             draw(target) {
@@ -302,9 +312,13 @@
                     const begin = Math.max(0, Math.floor(range.from) - 1);
                     const end = Math.min(model.timeline.length - 1, Math.ceil(range.to) + 1);
                     const { study, index, series, color, dash } = component;
+                    const highlight = model.highlightedOverlay;
+                    const isMatch = Boolean(highlight) && matchesHighlightedStudy(study, highlight);
+                    const isDimmed = Boolean(highlight) && !isMatch;
                     ctx.save();
-                    ctx.lineWidth = component.index === 0 ? 1.6 : 1.25;
-                    ctx.setLineDash(dash);
+                    ctx.lineWidth = isMatch ? 3.0 : isDimmed ? 1.1 : (component.index === 0 ? 1.6 : 1.25);
+                    ctx.setLineDash(isMatch ? [] : dash);
+                    ctx.globalAlpha = isDimmed ? 0.28 : 1.0;
                     ctx.strokeStyle = colors[color];
                     ctx.beginPath();
                     let lastY;
@@ -321,7 +335,7 @@
                         if (!Number.isFinite(y)) continue;
                         if (lastY === undefined || point.segmentStart) {
                             ctx.moveTo(x - .6, y);
-                        } else if (study.sourceInterval === '1d' && study.chartInterval !== '1d') {
+                        } else if (study.source && study.sourceInterval !== study.chartInterval) {
                             ctx.lineTo(x, lastY);
                         }
                         ctx.lineTo(x, y);
@@ -337,9 +351,12 @@
             renderer() { return renderer; }
         };
         component.series.attachPrimitive({
+            // Capture Lightweight Charts' redraw hook so highlight toggles repaint immediately.
+            attached({ requestUpdate }) { refresh = requestUpdate; },
             // Return the persistent view across native chart redraws.
             paneViews() { return [view]; }
         });
+        return () => refresh?.();
     }
 
     // Name each visible lower pane inside its own canvas, alongside the accessible external readout.
@@ -378,7 +395,7 @@
         const chartRoot = element.closest('[data-stock-chart]');
         const colors = palette(chartRoot);
         const model = { bars: [], timeline: [], zones: [], sessions: [], levels: [], events: [], layers: {},
-            hiddenLevels: new Set(), hiddenZones: new Set(), studies: [], shownPane: null };
+            hiddenLevels: new Set(), hiddenZones: new Set(), studies: [], shownPane: null, highlightedOverlay: null };
         const chart = library.createChart(element, {
             autoSize: true,
             layout: { background: { color: colors.background }, textColor: colors.ink, attributionLogo: false, fontSize: 11 },
@@ -414,8 +431,56 @@
         let privateMarkers;
         let privateEvents = [];
         let plotted = [];
+        let tradePlan = null;
+        let tradePlanLines = [];
         const markers = library.createSeriesMarkers(candles, [], { autoScale: false });
         const refreshShading = attachShading(candles, scale, model, colors);
+
+        // Removes all currently drawn Entry/Stop/Target price lines from the main candlestick series without altering candle data.
+        function clearTradePlanLines() {
+            for (const line of tradePlanLines) {
+                try { candles.removePriceLine(line); } catch { /* Series may already be disposed. */ }
+            }
+            tradePlanLines = [];
+        }
+
+        // Renders native Lightweight Charts reference lines for finite positive server Entry, Stop, and Target levels using theme palette colours.
+        function paintTradePlanLines() {
+            clearTradePlanLines();
+            if (!tradePlan) return;
+            // The first line is the current quote the plan was priced at (the ask for a long, the bid for a short): a
+            // reference, not the strategy's own entry trigger.
+            const definitions = [
+                { price: tradePlan.limit, title: tradePlan.direction === 'short' ? 'Bid' : 'Ask', color: colors.levelA || '#3b82f6', lineStyle: library.LineStyle.Dashed },
+                { price: tradePlan.stop, title: 'Stop', color: colors.down || '#fb7185', lineStyle: library.LineStyle.Solid },
+                { price: tradePlan.target, title: 'Target', color: colors.up || '#2dd4bf', lineStyle: library.LineStyle.Solid }
+            ];
+            for (const item of definitions) {
+                if (typeof item.price !== 'number' || !Number.isFinite(item.price) || item.price <= 0) continue;
+                tradePlanLines.push(candles.createPriceLine({
+                    price: item.price,
+                    color: item.color,
+                    lineWidth: 2,
+                    lineStyle: item.lineStyle,
+                    axisLabelVisible: true,
+                    title: item.title
+                }));
+            }
+        }
+
+        // Accepts advisory server Entry/Stop/Target levels (or null to clear) and updates native chart price lines without performing client math.
+        function setTradePlanLevels(plan) {
+            const toPositive = value => {
+                const parsed = typeof value === 'number' ? value : Number(value);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+            };
+            const limit = plan ? toPositive(plan.limit) : null;
+            const stop = plan ? toPositive(plan.stop) : null;
+            const target = plan ? toPositive(plan.target) : null;
+            tradePlan = (limit !== null || stop !== null || target !== null)
+                ? { limit, stop, target, direction: plan?.direction === 'short' ? 'short' : 'long' } : null;
+            paintTradePlanLines();
+        }
 
         // Drop the native marker when its old coordinates no longer identify the selected candle.
         function clearCrosshair() {
@@ -424,20 +489,32 @@
 
         scale.subscribeSizeChange(clearCrosshair);
 
-        // Plot news and earnings at their matching candle while preserving each event's actual time in details.
+        // Plot at most one grouped news marker and one grouped earnings marker per candle, keeping full details in the dialog.
         function paintMarkers() {
-            const shapes = [];
+            const grouped = new Map();
             for (const event of model.events) {
                 if (!model.layers[event.kind]) continue;
                 const index = eventCandleIndex(model.bars, event, model.interval);
                 if (index < 0) continue;
-                shapes.push({
-                    time: model.bars[index].startMs / 1000, id: event.id, position: 'aboveBar',
-                    shape: event.kind === 'earnings' ? 'square' : 'circle',
-                    color: event.kind === 'earnings' ? colors.levelB : colors.levelA, size: .8
-                });
+                const time = model.bars[index].startMs / 1000;
+                const kind = event.kind === 'earnings' ? 'earnings' : 'news';
+                const key = `${time}:${kind}`;
+                const existing = grouped.get(key);
+                if (existing) existing.count += 1;
+                else grouped.set(key, { time, kind, count: 1 });
             }
-            markers.setMarkers(shapes.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)));
+            const shapes = [...grouped.values()]
+                .sort((a, b) => a.time - b.time || a.kind.localeCompare(b.kind))
+                .map(({ time, kind, count }) => ({
+                    time,
+                    id: `${kind}:${time}`,
+                    position: 'aboveBar',
+                    shape: kind === 'earnings' ? 'square' : 'circle',
+                    color: kind === 'earnings' ? colors.levelB : colors.levelA,
+                    size: .8,
+                    text: count > 1 ? String(count) : ''
+                }));
+            markers.setMarkers(shapes);
         }
 
         // Keep private events in their own marker collection and group only on displayed completed candles.
@@ -518,7 +595,7 @@
                 (study.display === 'pane' && (model.shownPane === null || study.token === model.shownPane))));
         }
 
-        // Add a native scale for a study component, with an explicit renderer for missing line samples.
+        // Add a native scale for a study component; price-pane overlays opt out of autoscaling so distant averages never flatten candles.
         function addComponent(study, index, paneIndex) {
             const column = study.columns[index];
             const histogram = column === 'histogram';
@@ -526,16 +603,33 @@
             const dash = [[], [5, 3], [2, 3], [8, 3, 2, 3]][(study.slot + index) % 4];
             const priceFormat = study.unit === 'shares' ? { type: 'volume' } : { type: 'price', precision: 4, minMove: .0001 };
             const options = { color: colors[color], lastValueVisible: false, priceLineVisible: false, priceFormat };
+            const lineOptions = {
+                ...options,
+                lineVisible: false,
+                crosshairMarkerVisible: false,
+                ...(paneIndex === 0 ? { autoscaleInfoProvider: () => null } : {})
+            };
             const series = histogram ? chart.addSeries(library.HistogramSeries, options, paneIndex) :
-                chart.addSeries(library.LineSeries, { ...options, lineVisible: false, crosshairMarkerVisible: false }, paneIndex);
-            const referencePrices = index === 0 && study.formula === 'rsi14' ? [30, 70] : [];
+                chart.addSeries(library.LineSeries, lineOptions, paneIndex);
+            const referencePrices = index === 0 && study.family === 'rsi' ? [30, 70] : [];
             const referenceLines = referencePrices.map(price => series.createPriceLine({
                 price, color: colors.grid, lineWidth: 1, lineStyle: library.LineStyle.Dashed, axisLabelVisible: false
             }));
-            const component = { study, index, series, color, dash, histogram, referenceLines };
-            if (!histogram) attachStudyLine(component, scale, model, colors);
+            const component = { study, index, series, color, dash, histogram, referenceLines, refresh: null };
+            if (!histogram) component.refresh = attachStudyLine(component, scale, model, colors);
             if (paneIndex && index === 0) attachStudyLabel(component, colors);
             return component;
+        }
+
+        // Highlights a selected study line or support band on the chart and lights up its Y-axis badge, or clears highlight on null.
+        function setHighlightedOverlay(key) {
+            model.highlightedOverlay = key ? String(key).trim().toLowerCase() : null;
+            for (const component of plotted) {
+                const isMatch = Boolean(model.highlightedOverlay) && matchesHighlightedStudy(component.study, model.highlightedOverlay);
+                component.series.applyOptions({ lastValueVisible: isMatch });
+                component.refresh?.();
+            }
+            refreshShading();
         }
 
         // Keep native panes and series across live snapshots unless the visible study layout changes.
@@ -564,12 +658,15 @@
             for (const [offset, component] of plotted.entries()) {
                 component.study = expected[offset].study;
                 const { study, index, histogram } = component;
+                const isMatch = Boolean(model.highlightedOverlay) && matchesHighlightedStudy(study, model.highlightedOverlay);
+                component.series.applyOptions({ lastValueVisible: isMatch });
                 component.series.setData(model.timeline.map(bar => {
                     const value = study.points.get(bar.startMs)?.values[index];
                     if (!Number.isFinite(value)) return { time: bar.time };
                     if (histogram) return { time: bar.time, value, color: value >= 0 ? colors.up : colors.down };
                     return { time: bar.time, value };
                 }));
+                component.refresh?.();
             }
         }
 
@@ -689,6 +786,7 @@
             paintStudies();
             paintMarkers();
             paintPrivateEvents();
+            paintTradePlanLines();
             refreshShading();
         }
 
@@ -700,9 +798,11 @@
         // Pointer inspection updates the shared candle readout using its real interval start.
         chart.subscribeCrosshairMove(({ time }) => { if (typeof time === 'number') onInspect(time * 1000); });
         return {
-            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, visibleBounds,
+            setData, setLayers, latest, reveal, clearStudies, setShownPane, setForming, setPrivateEvents, setTradePlanLevels, setHighlightedOverlay, visibleBounds,
             // Stop observing theme changes and detach pane rendering when the component is removed.
             dispose() {
+                clearTradePlanLines();
+                tradePlan = null;
                 theme.disconnect();
                 media.removeEventListener('change', themeChanged);
                 scale.unsubscribeSizeChange(clearCrosshair);

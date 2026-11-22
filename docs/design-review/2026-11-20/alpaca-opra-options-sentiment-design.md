@@ -1,5 +1,7 @@
 # Design: Alpaca Paid OPRA Options Sentiment Context — 20 November 2026
 
+> **22 November 2026:** the entry vetoes described below (`max_long_put_skew`, `min_short_put_call_skew`) were removed because no backtest can test them. The read-only Desk display remains.
+
 Status: **approved by the user on 20 November 2026.**
 
 Verified on the operator's paid Alpaca account (`2026-11-20`):

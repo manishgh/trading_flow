@@ -28,11 +28,8 @@
 
 <div class="page-head lab-head">
     <div>
-        <span class="eyebrow">Backtesting research</span>
-        <h1>Strategy Lab</h1>
-        <p class="standfirst">
-            Configure a research plan, preview its stock groups, then compare monthly results.
-        </p>
+        @* The sidebar and sub-tab already name this screen; the heading stays for screen readers only. *@
+        <h1 class="visually-hidden">Strategy Lab</h1>
     </div>
     <div class="lab-head-tail">
         @* The integrated decision, not a summary of the return. *@
@@ -70,24 +67,33 @@
                     <p class="note" id="RunNameHelp">Use letters, digits, hyphens or underscores, or leave blank for a generated name.</p>
                 </div>
 
+            <div class="lab-quick-actions" role="group" aria-label="Quick strategy selection">
+                <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="long">Select Long</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="short">Select Short</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-strategy-select="clear">Clear</button>
+            </div>
+            <p class="note lab-research-only-note">All listed strategies are research only.</p>
             <div class="lab-strategy-list">
                 @foreach (var strategy in Model.Strategies)
                 {
-                    <article class="lab-strategy-option">
+                    <article class="lab-strategy-option" data-direction="@strategy.Definition.Direction.ToString().ToLowerInvariant()">
                     <label class="lab-strategy">
                         @* Square, because these are independent multi-select. *@
-                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path"
+                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path" data-strategy-id="@strategy.Identity.StrategyId"
                                checked="@(Model.SelectedStrategyPath == strategy.Path)" />
                         <span class="lab-strategy-body">
                             <span class="lab-strategy-heading"><span class="lab-strategy-name">@StrategyLabel(strategy.Definition.StrategyName)</span><small>v@(strategy.Identity.SemanticVersion)</small></span>
                             <span class="lab-strategy-meta">
                                 @StrategyHorizonResolver.Resolve(strategy.Definition) · @strategy.Definition.Direction · @strategy.Definition.Timeframe / @strategy.Definition.Execution.Timeframe
                             </span>
-                            <span class="tag tag-neutral">@(strategy.Lifecycle == StrategyLifecycleState.Research ? "RESEARCH ONLY" : strategy.Lifecycle.ToString().ToUpperInvariant())</span>
+                            @if (strategy.Lifecycle != StrategyLifecycleState.Research)
+                            {
+                                <span class="tag tag-neutral">@strategy.Lifecycle.ToString().ToUpperInvariant()</span>
+                            }
                         </span>
                     </label>
-                    <details class="lab-strategy-details">
-                        <summary>Identity &amp; assumptions</summary>
+                    <details class="lab-strategy-details lab-provenance-popover">
+                        <summary title="Inspect canonical SHA-256 identity and admission assumptions">ⓘ Provenance</summary>
                         <div class="lab-strategy-exact">
                             <strong>@strategy.Definition.StrategyName</strong>
                             <span class="lab-strategy-meta">Strategy: @strategy.Definition.StrategyId · @strategy.Identity.SemanticVersion</span>
@@ -162,6 +168,11 @@
 
         <fieldset class="lab-block">
             <legend class="section-heading">Test window</legend>
+            <div class="lab-quick-actions" role="group" aria-label="Quick UTC window presets">
+                @* The window comes from the selected backtest profile (its start/end or rolling lookback), never a date written here. *@
+                <button type="button" class="btn btn-secondary btn-sm" data-window-preset="profile" hidden>Profile window</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-window-preset="clear">Clear dates</button>
+            </div>
             <div class="lab-parameters">
                 <div class="field">
                     <label for="TestWindowStartUtc">From UTC</label>
@@ -176,6 +187,25 @@
                     <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" step="1" value="@profile?.TimeWindow.LookbackDays" aria-describedby="TestWindowHelp" />
                 </div>
             </div>
+            <div data-held-back>
+                @if (Model.HeldBackError is { } heldBackError)
+                {
+                    <p class="note" role="status">@heldBackError</p>
+                }
+                else
+                {
+                    <p class="note" data-held-back-none hidden>No held-back test period is registered for the selected strategies.</p>
+                    @foreach (var period in Model.HeldBackPeriods)
+                    {
+                        <p class="note" hidden data-held-back-period data-strategy-id="@period.StrategyId"
+                           data-start="@period.StartUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)"
+                           data-end="@period.EndUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)">
+                            Held-back test period of @period.StrategyId: @period.StartUtc.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) to @period.EndUtc.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) UTC (@period.StateLabel).
+                        </p>
+                    }
+                    <p class="note" role="alert" data-held-back-warning hidden></p>
+                }
+            </div>
             <p class="note" id="TestWindowHelp">Enter both dates in UTC, regardless of your device timezone. Leave both blank to use the lookback ending now. The end must follow the start and cannot be in the future.</p>
         </fieldset>
         <section class="lab-profile-block">
@@ -184,13 +214,16 @@
         <select class="input" id="SelectedConfigPath" name="SelectedConfigPath">
             @foreach (var config in Model.Configs)
             {
+                var window = TradingFlow.Web.Services.BacktestTestWindows.ProfileWindow(config.Config.TimeWindow, DateTimeOffset.UtcNow);
                 <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)"
                         data-starting-capital="@config.Config.Portfolio.StartingCapital.ToString(System.Globalization.CultureInfo.InvariantCulture)"
                         data-account-risk="@config.Config.Portfolio.AccountRiskBudgetPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
                         data-position-notional="@config.Config.Portfolio.MaxPositionNotionalPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
                         data-open-positions="@config.Config.Portfolio.MaxConcurrentPositions"
                         data-lookback-days="@config.Config.TimeWindow.LookbackDays"
-                        data-cache-policy="@config.Config.CachePolicy">@config.FileName</option>
+                        data-cache-policy="@config.Config.CachePolicy"
+                        data-window-start="@(window?.StartUtc.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))"
+                        data-window-end="@(window?.EndUtc.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))">@config.FileName</option>
             }
         </select>
 
@@ -359,6 +392,29 @@
        ======================================================================= *@
     <div class="lab-main">
         <partial name="_ResearchScreensPanel" />
+        <section class="lab-panel lab-plan-matrix" id="saved-plan-matrix-panel" data-current-plan-id="@(job?.Cohort?.PlanId)" hidden aria-live="polite">
+            <div class="lab-plan-matrix-head">
+                <div>
+                    <h2 class="section-heading" id="saved-plan-matrix-title">Saved plan monthly matrix</h2>
+                    <p class="note" id="saved-plan-matrix-subtitle">Monthly New York-session returns per strategy version and cohort on month-opening equity. No accumulated or pooled returns are shown.</p>
+                </div>
+            </div>
+            <div id="saved-plan-matrix-body"></div>
+        </section>
+        <dialog id="lab-matrix-drawer" class="lab-matrix-drawer" aria-labelledby="lab-matrix-drawer-title">
+            <header class="lab-matrix-drawer-head">
+                <div>
+                    <span class="eyebrow">MONTHLY DIAGNOSTICS</span>
+                    <h2 id="lab-matrix-drawer-title">Strategy month inspection</h2>
+                    <p class="note" id="lab-matrix-drawer-identity"></p>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="lab-matrix-drawer-close" aria-label="Close diagnostics drawer">Close</button>
+            </header>
+            <div class="lab-matrix-drawer-body" id="lab-matrix-drawer-body"></div>
+            <footer class="lab-matrix-drawer-foot">
+                <a class="btn btn-primary btn-sm" id="lab-matrix-drawer-report" href="/Backtests">Open full job report ↗</a>
+            </footer>
+        </dialog>
         @if (Model.SelectedJobMissing)
         {
             <section class="lab-panel" role="status">
@@ -489,9 +545,13 @@
     </div>
 </div>
 
-<link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/execution-workspace.css" asp-append-version="true" />
+}
 
 @section Scripts {
+    <script src="~/js/lab-matrix.js" asp-append-version="true" defer></script>
+    <script src="~/js/lab-setup.js" asp-append-version="true" defer></script>
     <script src="~/js/run-workflow.js" asp-append-version="true" defer></script>
     <script src="~/js/research-screens.js" asp-append-version="true" defer></script>
     @if (Model.Phase == "running" && job is not null)

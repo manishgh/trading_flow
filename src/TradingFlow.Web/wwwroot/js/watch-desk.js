@@ -10,12 +10,24 @@
     const isAdministrator = desk.dataset.administrator === "true";
     const operator = desk.dataset.operator;
     let stream, generation = 0, snapshot, selected, newsForAll = true, catalog = [], newsSignature = '', connected = false;
-    // Live display quotes for the visible stocks: socket state, provider (Alpaca SIP) state and the latest item per stock.
-    const quoteSocket = { connection: null, view: null, state: 'idle', upstream: '', reason: '', items: new Map(), attempt: 0, closing: Promise.resolve() };
-    // "Live" needs the open socket, a streamed quote and Alpaca's current confirmation of that stock's subscription.
-    const isStreaming = row => row.quote?.source==='socket'&&quoteSocket.state==='live'&&row.quoteStream==='acknowledged';
     const rowNodes = new Map();
-    const returnKey = 'tradingflow.desk.return.v1';
+    // Display helpers in their own files; each reads the Desk's current state through the functions given here.
+    const { money, number, when } = window.TradingFlowDeskFormat;
+    // Prices on the narrow Sell and Buy buttons: no currency sign, four decimals below one dollar.
+    const tradePrice = { format: value => value.toLocaleString(undefined, { minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }) };
+    const text = (id, value) => { const node = el(id); if (node) node.textContent = value; };
+    const { isStreaming, stopQuoteSocket, onQuoteView, mergeLiveQuote, quoteSocketSummary, resetQuoteView } = window.createDeskQuoteStream({
+        getGeneration: () => generation, getSnapshot: () => snapshot, getSelected: () => selected,
+        patchRow: row => patchRow(row), renderFocus: () => renderFocus(), updateHealth: () => updateHealth()
+    });
+    const { dailyTechnical, dailyTechnicalDetail, showSessionVolume, renderDailyCells, renderTrendCell, formatRowDayChange, renderChangeHeader } =
+        window.createDeskMarketView({ el, getSnapshot: () => snapshot, isConnected: () => connected });
+    const { renderStudyPills, renderTodaySupportPill, renderAtrPill, renderVolatilityPill, toggleDeskHighlight,
+        updateFocusInfoTooltip, syncChart, clearChartTradePlan, syncChartTradePlan, disposeChart } = window.createDeskChartPanel({
+        el, getSelectedRow: () => snapshot?.rows.find(x => x.membership.symbol === selected) || null,
+        selectedStrategyChoice: () => selectedStrategyChoice(), spreadDetail: row => spreadDetail(row)
+    });
+    const returnKey = 'tradingflow.desk.return';
     const incoming = new URLSearchParams(location.search);
     const environment = (incoming.get('env') || 'paper').toLowerCase();
     const strategyKeys = ['strategyId','semanticVersion','contentSha256','runId'];
@@ -31,18 +43,6 @@
     const savedDesk = explicit ? null : readDeskReturn();
     const reviewKey = savedDesk?.preparationKey || incoming.get('preparationKey');
     let started = false, restoredView = false;
-    let deskChart, chartSymbol;
-    const moneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2});
-    const numberFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits:2});
-    const volumeFormat = new Intl.NumberFormat(undefined, {notation:'compact', maximumFractionDigits:2});
-    const exchangeDateFormat = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'});
-    // Format available prices and measures without treating a missing value as zero.
-    const money = value => value == null ? '—' : moneyFormat.format(value);
-    const number = value => value == null ? '—' : numberFormat.format(value);
-    const text = (id, value) => { el(id).textContent = value; };
-    const when = value => value ? new Date(value).toLocaleString(undefined, {timeZone:'America/New_York'}) + ' NY · ' + new Date(value).toISOString() : 'Time unavailable';
-    const safeUrl = value => { try { const u = new URL(value); return ['https:','http:'].includes(u.protocol) ? u.href : null; } catch { return null; } };
-
     // Bound the saved preferences to the same authenticated operator and environment in this tab.
     function readDeskReturn(){
         try{
@@ -76,6 +76,22 @@
             scrollY:window.scrollY,tableLeft:table.scrollLeft,tableTop:table.scrollTop,newsTop:el('news').scrollTop};
     }
 
+    // Mirrors whether a strategy is selected onto .watch-table so the Strategy column stays hidden until chosen.
+    function syncTableStrategyState(){
+        const table = document.querySelector('.watch-table');
+        if (table) table.dataset.hasStrategy = el('strategy').value !== '' ? 'true' : 'false';
+    }
+
+    // Switches the mid-width (720px–1439px) Desk detail pane between the Chart and Why & Ticket views.
+    function setActiveDeskPane(pane){
+        const grid = desk.querySelector('.watch-grid');
+        const next = pane === 'inspector' ? 'inspector' : 'chart';
+        if (grid) grid.dataset.activePane = next;
+        for (const button of desk.querySelectorAll('[data-desk-pane]')) {
+            button.setAttribute('aria-selected', String(button.dataset.deskPane === next));
+        }
+    }
+
     // Write only view state when leaving this document, including links handled before pagehide.
     function saveDeskReturn(){
         if(!started||!operator)return;
@@ -107,22 +123,21 @@
         if (!response.ok) { let message; try { message=(await response.json()).message; } catch {} throw new Error(message || 'Unable to complete this request. Sign in again or retry.'); }
         return response.json();
     }
-    // Load normal sources; expose a separate prepared source only after the owner-scoped read succeeds.
+    // Load normal sources with an explicit optgroup for every item, including any owner-verified prepared list.
     async function sources(chosen, strictPrepared = true) {
         catalog = await api('sources');
-        el('source').replaceChildren();el('follow-list').replaceChildren();el('add-list').replaceChildren();
-        for (const group of [...new Set(catalog.map(x=>x.group))]) {
-            const optgroup=group ? document.createElement('optgroup') : document.createDocumentFragment();if(group)optgroup.label=group;
-            for (const item of catalog.filter(x=>x.group===group)) {
+        el('source').replaceChildren();el('add-list').replaceChildren();
+        const prepared=await readPreparedOption();
+        if(prepared) catalog.push(prepared);
+        const groups=[...new Set(catalog.map(x=>x.group||'Overview'))];
+        for (const group of groups) {
+            const optgroup=document.createElement('optgroup');
+            optgroup.label=group;
+            for (const item of catalog.filter(x=>(x.group||'Overview')===group)) {
                 optgroup.append(new Option(item.name,item.key));
-                if(item.key.startsWith('wishlist:')){el('follow-list').add(new Option(item.name,item.key.slice(9)));el('add-list').add(new Option(item.name,item.key.slice(9)));}
+                if(item.key.startsWith('wishlist:'))el('add-list').add(new Option(item.name,item.key.slice(9)));
             }
             el('source').append(optgroup);
-        }
-        const prepared=await readPreparedOption();
-        if(prepared){
-            catalog.push(prepared);
-            el('source').add(new Option(prepared.name,prepared.key));
         }
         if(chosen==='prepared'&&!prepared&&strictPrepared){
             el('source').selectedIndex=-1;
@@ -138,10 +153,14 @@
                 {signal:AbortSignal.timeout(5000)});
             if(!response.ok)return null;
             const review=await response.json();
-            return {key:'prepared',name:'Reviewed preparation',description:'Saved revision '+review.parentRevisionId,expiresAtUtc:review.expiresAtUtc};
+            return {key:'prepared',name:'Reviewed preparation',group:'Prepared',description:'Saved revision '+review.parentRevisionId,expiresAtUtc:review.expiresAtUtc};
         }catch{return null;}
     }
-    // Load exact current strategies and separately labelled recorded runs.
+    // Trims verbose "RESEARCH " prefixes and parenthetical gate prose for compact strategy picker labels.
+    function shortStrategyName(name) {
+        return String(name || '').replace(/^\s*RESEARCH\s+/i, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || String(name || '');
+    }
+    // Load exact current strategies and recorded runs grouped by trade direction (Long / Short) with full provenance in option titles.
     async function loadStrategies(requested) {
         const response = await window.tradingFlowFetch('/api/v1/desk/strategy-choices');
         if (!response.ok) throw new Error('Strategy list unavailable. Retry to load recorded evaluations.');
@@ -149,13 +168,32 @@
         strategyLoadError = '';
         const picker = el('strategy');
         picker.replaceChildren(new Option('Select a strategy', ''));
+        const buckets = new Map([['Long', []], ['Short', []], ['Other', []]]);
+        let matchedValue = '';
         strategyChoices.forEach((choice, index) => {
-            const context = choice.candidateRunId ? ' · recorded · ' + choice.mode + ' · ' + when(choice.runStartedAtUtc) : ' · current data';
-            const option = new Option(choice.name + ' · ' + choice.strategy.semanticVersion + context, String(index));
-            picker.add(option);
+            const direction = String(choice.direction || '').toLowerCase();
+            const bucketName = direction === 'long' ? 'Long' : direction === 'short' ? 'Short' : 'Other';
+            const shortDisplayName = shortStrategyName(choice.name);
+            const label = `${shortDisplayName} · v${choice.strategy.semanticVersion}${choice.candidateRunId ? ' · recorded' : ''}`;
+            const option = new Option(label, String(index));
+            const runDetail = choice.candidateRunId
+                ? `Run ${choice.candidateRunId} (${choice.mode}, ${when(choice.runStartedAtUtc)})`
+                : 'Current data';
+            option.title = `${choice.name} · ${choice.strategy.strategyId} · v${choice.strategy.semanticVersion} · SHA-256 ${choice.strategy.contentSha256} · ${runDetail}`;
+            buckets.get(bucketName).push(option);
             if (requested.get('strategyId') === choice.strategy.strategyId && requested.get('semanticVersion') === choice.strategy.semanticVersion &&
-                requested.get('contentSha256') === choice.strategy.contentSha256 && (requested.get('runId') || '') === (choice.candidateRunId || '')) picker.value = String(index);
+                requested.get('contentSha256') === choice.strategy.contentSha256 && (requested.get('runId') || '') === (choice.candidateRunId || '')) {
+                matchedValue = String(index);
+            }
         });
+        for (const [label, options] of buckets) {
+            if (!options.length) continue;
+            const group = document.createElement('optgroup');
+            group.label = label;
+            group.append(...options);
+            picker.append(group);
+        }
+        if (matchedValue) picker.value = matchedValue;
     }
     // Preserve the exact selected strategy/run in links and streamed requests.
     function strategyQuery(query) {
@@ -165,10 +203,16 @@
             Object.entries(choice.strategy).forEach(([key, value]) => query.set(key, value));
             if (choice.candidateRunId) query.set('runId', choice.candidateRunId);
         }
-        text('strategy-status', strategyLoadError || (choice ? choice.name + ' · ' + choice.strategy.semanticVersion + ' · ' + choice.strategy.contentSha256 +
-            (choice.candidateRunId ? ' · Run ' + choice.candidateRunId + ' · recorded evaluations, not current recommendations' :
-                restoredView ? ' · Refresh strategy checks to collect current evidence.' : ' · Collecting current strategy evidence for this page.') :
+        const statusNode = el('strategy-status');
+        text('strategy-status', strategyLoadError || (choice ? choice.name + ' · v' + choice.strategy.semanticVersion +
+            (choice.candidateRunId ? ' · Run ' + choice.candidateRunId + ' · recorded evaluations' :
+                restoredView ? ' · Refresh to collect current checks.' : ' · Collecting current checks…') :
             'Select a strategy to collect data and see its checks for each stock.'));
+        if (statusNode) {
+            statusNode.hidden = !choice && !strategyLoadError;
+            statusNode.title = choice ? `${choice.strategy.strategyId} · v${choice.strategy.semanticVersion} · SHA-256 ${choice.strategy.contentSha256}` : '';
+        }
+        syncTableStrategyState();
         return query;
     }
     // Reconnect observations with the selected exact strategy; old rows are cleared before a new response arrives.
@@ -176,9 +220,10 @@
         restoredView=readOnlyReturn;
         if(!restoredView&&currentJob&&['queued','running'].includes(currentJob.status))cancelAssessment(currentJob.jobId).catch(()=>{});
         currentJob=null;currentStocks=new Map();currentSignature='';currentSubmitting=false;currentFailure='';el('strategy-refresh').disabled=false;
-        stream?.close();stopQuoteSocket();quoteSocket.view=null;quoteSocket.items.clear();quoteSocket.reason='';const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
+        stream?.close();stopQuoteSocket();resetQuoteView();const version=++generation;connected=false;snapshot=null;selected=null;newsForAll=true;newsSignature='';strategyCheckSignature='';rowNodes.clear();el('rows').replaceChildren();
+        clearChartTradePlan();
         syncChart(null);
-        el('focus-content').hidden=true;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
+        el('focus-content').hidden=true;if(el('focus-info'))el('focus-info').hidden=true;if(el('focus-trade'))el('focus-trade').hidden=true;if(el('focus-controls'))el('focus-controls').hidden=true;if(el('inspector-body'))el('inspector-body').hidden=true;if(el('inspector-empty'))el('inspector-empty').hidden=false;text('symbol','Choose a stock');text('name','Select a row to inspect its news, technicals and holding.');
         el('retry').hidden=true;text('connection','Connecting · live quotes');el('warning').hidden=true;el('empty').hidden=false;el('empty').querySelector('strong').textContent='Loading stocks…';
         text('count','— stocks');el('news-list').replaceChildren();
         const source=catalog.find(x=>x.key===el('source').value);text('title',source?.name||'All followed stocks');text('description',source?.description||'');
@@ -227,80 +272,7 @@
         const unavailable=()=>{if(version!==generation)return;connected=false;el('retry').hidden=false;text('connection','Disconnected · reconnecting; displayed observations may be stale');if(!snapshot){el('empty').querySelector('strong').textContent='Market view unavailable';el('empty').querySelector('p').textContent='Check your connection or select another source. Reconnecting automatically.';}ageRows();renderFocus();};
         stream.onerror=unavailable;stream.addEventListener('unavailable',unavailable);
     }
-    // Close the quote socket; quotes already shown keep their own time and source labels.
-    // Returns when the old socket has closed, so its server slot is free before another socket asks for one.
-    function stopQuoteSocket(state='idle',reason=''){
-        const active=quoteSocket.connection;quoteSocket.connection=null;
-        quoteSocket.state=state;quoteSocket.reason=reason;
-        const done=active?active.stop().catch(()=>{}):Promise.resolve();
-        quoteSocket.closing=Promise.all([quoteSocket.closing,done]);
-        return quoteSocket.closing;
-    }
-    // A new view (stream reconnect, source, page or search) starts without live quotes; a renewed capability keeps them.
-    function onQuoteView(data,version){
-        if(version!==generation)return;
-        if(data.view!==quoteSocket.view){quoteSocket.view=data.view;quoteSocket.items.clear();quoteSocket.upstream='';}
-        quoteSocket.reason=data.reason||'';
-        if(data.capability)void openQuoteSocket(data.capability,data.view,version);
-        updateHealth();
-    }
-    // Open the Desk quote socket and present the capability once, in the invocation only; it is never stored or reused.
-    async function openQuoteSocket(capability,view,version){
-        const attempt=++quoteSocket.attempt;
-        await stopQuoteSocket('connecting',quoteSocket.reason);
-        if(attempt!==quoteSocket.attempt||version!==generation)return;
-        if(!window.signalR){quoteSocket.state='closed';quoteSocket.reason='Live-quote client unavailable';updateHealth();return;}
-        const active=new window.signalR.HubConnectionBuilder()
-            .withUrl('/api/v1/desk/quotes/hub',{transport:window.signalR.HttpTransportType.WebSockets,skipNegotiation:true})
-            .configureLogging(window.signalR.LogLevel.None).build();
-        quoteSocket.connection=active;
-        const closed=reason=>{if(quoteSocket.connection!==active)return;stopQuoteSocket('closed',reason);refreshLiveRows();};
-        // A server refusal (for example the per-user socket budget) arrives as the close error; show its reason.
-        const serverReason=error=>error?.message?.replace(/^.*HubException: /,'');
-        active.onclose(error=>closed(serverReason(error)||quoteSocket.reason||'Live-quote socket closed'));
-        try{
-            await active.start();
-            if(quoteSocket.connection!==active||version!==generation){void active.stop().catch(()=>{});return;}
-            quoteSocket.state='live';updateHealth();
-            active.stream('WatchQuotes',capability).subscribe({
-                next(frame){if(quoteSocket.connection===active&&version===generation&&frame.view===view)applyQuoteFrame(frame);},
-                complete(){closed(quoteSocket.reason||'Live-quote socket ended');},
-                error(error){closed(serverReason(error)||'Live-quote socket closed');}
-            });
-        }catch(error){closed(serverReason(error)||'Live-quote socket could not connect');}
-    }
-    // Patch only the rows whose quote changed; the table is not rebuilt or re-sorted for a quote tick.
-    function applyQuoteFrame(frame){
-        if(frame.kind==='ended'){quoteSocket.reason=frame.reason||'';return;}
-        quoteSocket.upstream=frame.upstream;
-        for(const symbol of frame.removed||[])quoteSocket.items.delete(symbol);
-        const changed=new Set(frame.removed||[]);
-        for(const item of frame.quotes||[]){
-            if(quoteSocket.items.size>=50&&!quoteSocket.items.has(item.symbol))continue;
-            quoteSocket.items.set(item.symbol,item);changed.add(item.symbol);
-        }
-        if(snapshot)for(const row of snapshot.rows)if(changed.has(row.membership.symbol)&&mergeLiveQuote(row))patchRow(row);
-        if(snapshot&&selected&&changed.has(selected))renderFocus();
-        updateHealth();
-    }
-    // Relabel streamed rows when the socket stops; their prices stay with their own provider times.
-    function refreshLiveRows(){
-        if(snapshot)for(const row of snapshot.rows)if(row.quote?.source==='socket')patchRow(row);
-        if(snapshot&&selected)renderFocus();
-        updateHealth();
-    }
-    function patchRow(row){const node=rowNodes.get(row.membership.symbol);if(node){updateStockRow(node,row);ageStockRow(node,row);updateRowAction(node,row);}}
-    // Use a streamed quote only when it is newer than the row's; a snapshot quote is never relabelled as streamed.
-    function mergeLiveQuote(row){
-        const item=quoteSocket.items.get(row.membership.symbol);
-        row.quoteStream=item?.state||null;
-        if(!item?.timestamp||item.state!=='acknowledged')return !!item;
-        const shown=Date.parse(row.quote?.timestamp||0)||0, offered=Date.parse(item.timestamp);
-        if(row.quote?.source==='socket'?offered<shown:offered<=shown)return true;
-        row.quote={ticker:item.symbol,bidPrice:item.bidPrice,askPrice:item.askPrice,midPrice:item.midPrice,bidSize:item.bidSize,askSize:item.askSize,
-            timestamp:item.timestamp,receivedAtUtc:item.receivedAtUtc,feed:item.feed||'sip',source:'socket'};
-        return true;
-    }
+    function patchRow(row){const node=rowNodes.get(row.membership.symbol);if(node){updateStockRow(node,row);ageStockRow(node,row);}}
     // Keep API errors and durable progress explicit; all decision calculations stay on the server.
     async function assessmentApi(path, body) {
         const response=await window.tradingFlowFetch('/api/v1/desk/strategy-assessments'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -337,7 +309,8 @@
             submission.job=job;
             if(version!==generation){if(job&&['queued','running'].includes(job.status))cancelAssessment(job.jobId).catch(()=>{});return;}
             currentFailure='';currentJob=job;currentStocks=new Map((job.result?.stocks||[]).map(stock=>[stock.symbol,stock]));
-            text('strategy-status',choice.name+' · '+choice.strategy.semanticVersion+' · '+job.status+' · '+job.detail+' · Profile '+job.profileSha256);
+            text('strategy-status',choice.name+' · v'+choice.strategy.semanticVersion+' · '+job.status+' · '+job.detail);
+            el('strategy-status').title=`${choice.strategy.strategyId} · v${choice.strategy.semanticVersion} · SHA-256 ${choice.strategy.contentSha256} · Profile ${job.profileSha256}`;
             el('strategy-refresh').disabled=['queued','running'].includes(job.status);
             el('strategy-cancel').hidden=!['queued','running'].includes(job.status);
             applyCurrentAssessments();render();
@@ -435,87 +408,6 @@
     const matchesSearch=(row,filter)=>(row.membership.symbol+' '+(row.membership.name||'')).toUpperCase().includes(filter);
     for(const side of ['buy','sell'])el(side).addEventListener('click',event=>{event.preventDefault();openOrder(side,event.currentTarget);});
     function tone(node, value) {node.classList.toggle('watch-gain',value>0);node.classList.toggle('watch-loss',value<0);}
-    // Keep freshness visible in a narrow row; its complete wording and timestamp stay in the trade-cell title.
-    function rowQuoteAge(row){
-        return quoteAge(row).replace('Market closed · last ','Closed ').replace('Delayed · ','Delayed ')
-            .replace('Pre-market · ','Pre ').replace('After hours · ','After ').replace('Overnight · ','ON ')
-            .replace('Live · ','Live ').replace(' ago','');
-    }
-    // Use only the server's completed daily observation; never substitute quotes, another ticker or future bars.
-    function dailyTechnical(row){
-        const technical=row.technical,stamp=Date.parse(technical?.timestamp),readAt=Date.parse(snapshot?.readAtUtc);
-        return technical&&['ready','insufficient'].includes(row.observation?.state)&&technical.timeframe==='1d'&&
-            (!technical.ticker||technical.ticker.toUpperCase()===row.membership.symbol.toUpperCase())&&
-            Number.isFinite(stamp)&&Number.isFinite(readAt)&&stamp<=readAt?technical:null;
-    }
-    // Keep the bar/feed source visible in detail and explain retained history when the stream disconnects.
-    function dailyTechnicalDetail(row){
-        const technical=dailyTechnical(row);
-        return technical?(connected?'':'Disconnected · last observed ')+ 'Completed 1d bar · '+when(technical.timestamp)+' · '+(technical.dataFeed||'Feed unavailable'):
-            'Daily indicators unavailable · '+(row.observation?.detail||'No verified completed daily snapshot.');
-    }
-    // Derive New York calendar dates from a verified UTC observation time, independently of the browser timezone.
-    function exchangeDate(value){
-        const stamp=Date.parse(value);if(!Number.isFinite(stamp))return null;
-        const parts=exchangeDateFormat.formatToParts(stamp);
-        const values=Object.fromEntries(parts.map(part=>[part.type,part.value]));
-        return values.year+'-'+values.month+'-'+values.day;
-    }
-    // Accept only the server's matching daily volume receipt; completed technical-bar volume is never a substitute.
-    function sessionVolume(row){
-        const value=row.sessionVolume,readAt=Date.parse(snapshot?.readAtUtc),asOf=Date.parse(value?.asOfUtc),barAt=Date.parse(value?.barTimestamp);
-        const date=value?.sessionDate,today=exchangeDate(snapshot?.readAtUtc);
-        const validDate=typeof date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(Date.parse(date+'T00:00:00Z'))&&new Date(date+'T00:00:00Z').toISOString().slice(0,10)===date;
-        return value&&String(value.ticker||'').toUpperCase()===row.membership.symbol.toUpperCase()&&
-            typeof value.volume==='number'&&Number.isFinite(value.volume)&&value.volume>=0&&
-            Number.isFinite(readAt)&&Number.isFinite(asOf)&&Number.isFinite(barAt)&&barAt<=asOf&&asOf<=readAt&&
-            validDate&&today&&date<=today&&date===exchangeDate(value.barTimestamp)&&String(value.feed||'').toLowerCase()==='sip'?value:null;
-    }
-    // Retain SIP volume and receipt time in the selected stock's daily detail.
-    function showSessionVolume(row){
-        const value=sessionVolume(row);
-        text('sip-volume', value
-            ? new Intl.NumberFormat().format(value.volume)+' SIP shares · '+value.sessionDate+' NY · observed '+when(value.asOfUtc)
-            : 'SIP session volume unavailable.');
-        el('sip-volume').title='Daily aggregate includes regular and extended hours; excludes overnight-feed trades.';
-    }
-    // Display completed 1d values independently of quote freshness, and keep SIP daily volume separate.
-    function renderDailyCells(node,row){
-        const technical=dailyTechnical(row), detail=dailyTechnicalDetail(row);
-        const cell=node.querySelector('.watch-technical'), rvol=node.querySelector('.watch-rvol');
-        for(const value of cell.querySelectorAll('[data-technical]')){
-            const field=value.dataset.technical, observed=technical?.[field];
-            value.textContent=Number.isFinite(observed)?(field==='rsi'?number(observed):money(observed)):'—';
-        }
-        cell.title=detail;
-        const relative=technical?.relativeVolume;
-        rvol.querySelector('strong').textContent=Number.isFinite(relative)&&relative>=0?number(relative)+'×':'—';
-        rvol.title=detail;
-        const volume=node.querySelector('.watch-volume'), observation=sessionVolume(row);
-        volume.querySelector('strong').textContent=observation?volumeFormat.format(observation.volume):'—';
-        volume.querySelector('small').textContent=observation?observation.sessionDate:'Unavailable';
-        volume.title=observation?number(observation.volume)+' SIP shares · '+observation.sessionDate+
-            ' NY · observed '+when(observation.asOfUtc)+' · includes regular and extended hours and excludes overnight feed':
-            'No verified SIP session volume.';
-    }
-
-    // Show the time window of stored counts and distinguish a failed read from a successful zero.
-    function renderNewsSentiment(cell,row){
-        const summary=row.newsSentiment, positive=cell.querySelector('.watch-news-positive');
-        const negative=cell.querySelector('.watch-news-negative'), windowLabel=cell.querySelector('.watch-news-window');
-        const asOf=Date.parse(summary?.asOfUtc), start=Date.parse(summary?.windowStartUtc), now=Date.now();
-        const stale=!connected||!Number.isFinite(asOf)||asOf>now+5000||now-asOf>30000;
-        const available=summary?.available===true;
-        positive.textContent=available?summary.positive+' positive':'Unavailable';
-        negative.textContent=available?summary.negative+' negative':'';
-        negative.hidden=!available;
-        positive.classList.toggle('watch-gain',available&&summary.positive>0);
-        negative.classList.toggle('watch-loss',available&&summary.negative>0);
-        windowLabel.textContent=available?(stale?'Observed 1h · partial':'Last 1h · partial'):'News read unavailable';
-        cell.title=available?'Stored news · '+summary.neutral+' neutral · '+summary.unscored+' unscored · '+
-            when(Number.isFinite(start)?summary.windowStartUtc:null)+' → '+when(Number.isFinite(asOf)?summary.asOfUtc:null):
-            'Stored news counts could not be read.';
-    }
     // Render server-provided facts and recorded checks without introducing client-side strategy thresholds.
     function render() {
         if(!snapshot)return;
@@ -535,45 +427,50 @@
         rows.forEach((row,index)=>{const node=rowNodes.get(row.membership.symbol),at=el('rows').children[index];if(at!==node)el('rows').insertBefore(node,at||null);});
         el('empty').hidden=rows.length>0;
         if(!rows.length){el('empty').querySelector('strong').textContent=snapshot.selection.error?'Screen unavailable':filter?'No matching stocks':'No stocks in this view';el('empty').querySelector('p').textContent=snapshot.selection.error?'The failed screen is not being shown as a successful empty result.':filter?'Try a different symbol or clear the search.':'Add stocks to a stock group or select a screener to discover stocks.';}
-        renderFocus();renderNews();ageRows();updateHealth();
+        renderChangeHeader();renderFocus();renderNews();ageRows();updateHealth();
     }
-    // Stable native buttons preserve keyboard focus while quotes update cell text.
+    // Builds one stock row: symbol, current midpoint with its change, daily indicators, strategy status, RVOL/ATR, Sell and Buy.
+    // The same Sell and Buy stay in the chart header for the selected stock; news is in the right column.
     function createStockRow(symbol){
         const row=document.createElement('tr');
         row.dataset.symbol=symbol;
-        row.innerHTML=`<td><button type="button" class="watch-symbol-button"></button></td>
-            <td class="watch-row-price"><strong></strong><small></small></td>
-            <td><div class="watch-trade-buttons">
-                <button type="button" data-order-side="buy">Buy<span class="watch-order-price"></span></button>
-                <button type="button" data-order-side="sell">Sell<span class="watch-order-price"></span></button>
-            </div></td>
-            <td class="watch-row-strategy"><strong></strong><small></small></td>
-            <td class="watch-row-position"><strong></strong><small></small></td>
-            <td class="watch-news-summary"><span class="watch-news-counts"><span class="watch-news-positive"></span><span class="watch-news-negative"></span></span><small class="watch-news-window"></small></td>
-            <td class="watch-technical">
-                <div>SMA 10/20 <span data-technical="sma10"></span> / <span data-technical="sma20"></span></div>
-                <div>SMA 50/200 <span data-technical="sma50"></span> / <span data-technical="sma200"></span></div>
-                <div>RSI <span data-technical="rsi"></span></div>
-            </td>
-            <td class="watch-rvol"><strong></strong><small>Daily</small></td>
-            <td class="watch-volume"><strong></strong><small></small></td>
-            <td><button type="button" class="watch-row-action"></button></td>`;
-        const stock=row.querySelector('.watch-symbol-button'), action=row.querySelector('.watch-row-action');
+        row.innerHTML=`<td class="watch-col-stock"><button type="button" class="watch-symbol-button"></button></td>
+            <td class="watch-col-price watch-row-price"><strong></strong> <span class="watch-day-change"></span></td>
+            <td class="watch-col-trend watch-row-trend"></td>
+            <td class="watch-col-strategy watch-row-strategy"><strong></strong><small></small></td>
+            <td class="watch-col-rvol num watch-rvol"><strong></strong><small></small></td>
+            <td class="watch-col-trade"><button type="button" class="watch-row-trade" data-row-side="sell">Sell<b>—</b></button><button type="button" class="watch-row-trade" data-row-side="buy">Buy<b>—</b></button></td>`;
+        const stock=row.querySelector('.watch-symbol-button');
         stock.textContent=symbol;
-        action.addEventListener('click',event=>{
-            event.stopPropagation();
-            selectStock(symbol,!action.dataset.side);
-            if(action.dataset.side)openOrder(action.dataset.side,action);
+        row.addEventListener('click',event=>{
+            const button=event.target.closest('[data-row-side]');
+            if(button)openRowOrder(symbol,button.dataset.rowSide,button);
+            else selectStock(symbol,true);
         });
-        for(const button of row.querySelectorAll('[data-order-side]')){
-            button.addEventListener('click',event=>{
-                event.stopPropagation();
-                selectStock(symbol,false);
-                openOrder(button.dataset.orderSide,button);
-            });
-        }
-        row.addEventListener('click',()=>selectStock(symbol,true));
         return row;
+    }
+    // Selects the row's stock and opens the existing order ticket for one side; without a quote it says why instead.
+    // It never sends an order: the ticket keeps every check.
+    function openRowOrder(symbol,side,button){
+        selectStock(symbol,false);
+        const row=snapshot?.rows.find(item=>item.membership.symbol===symbol);
+        if(!row)return;
+        const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
+        if(price>0)openOrder(side,button);
+        else window.tradingFlowOrderPopup.unavailable(orderRestrictionHint(row,side),(side==='buy'?'Buy ':'Sell ')+symbol,button);
+    }
+    // Writes the bid on Sell and the ask on Buy; the tooltip names the price, its age and any current restriction.
+    function updateTradeButtons(node,row,stale){
+        for(const button of node.querySelectorAll('[data-row-side]')){
+            const side=button.dataset.rowSide, price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
+            const quoted=price>0, name=(side==='buy'?'Buy ':'Sell ')+row.membership.symbol;
+            const amount=quoted?money(price):'no current quote', label=name+' at '+(side==='buy'?'ask ':'bid ')+amount;
+            button.querySelector('b').textContent=quoted?tradePrice.format(price):'—';
+            button.dataset.quoted=String(quoted);
+            button.dataset.stale=String(stale);
+            button.title=[label,quoteAge(row),orderRestrictionHint(row,side)].filter(Boolean).join(' · ');
+            button.setAttribute('aria-label',label);
+        }
     }
     // Keep the whole workspace in view on desktop and focus the selected stock after explicit navigation.
     function selectStock(symbol,focus){
@@ -594,33 +491,48 @@
         node.dataset.selected=String(symbol===selected);
         stock.setAttribute('aria-pressed',String(symbol===selected));
         node.querySelector('.watch-row-price strong').textContent=money(row.quote?.midPrice);
-        strategy.querySelector('strong').textContent=signalLabel(row);
+        const dayChange=formatRowDayChange(row), dayNode=node.querySelector('.watch-day-change');
+        if(dayNode){dayNode.textContent=dayChange.text;dayNode.title=dayChange.title;tone(dayNode,dayChange.value);}
+        const outcome=signalOutcome(row);
+        strategy.dataset.tone=outcome.tone;
+        strategy.querySelector('strong').textContent=outcome.text;
         strategy.querySelector('small').textContent=row.strategyAssessment?signalReason(row):'';
         strategy.title=signalReason(row);
         renderDailyCells(node,row);
+        renderTrendCell(node,row);
     }
-    // Keep both review actions available and refresh the shorthand recommendation from current observations.
-    function updateRowAction(node,row){
-        const action=node.querySelector('.watch-row-action'), symbol=row.membership.symbol;
-        const reasons={buy:orderRestrictionHint(row,'buy'),sell:orderRestrictionHint(row,'sell')};
-        for(const button of node.querySelectorAll('[data-order-side]')){
-            const buy=button.dataset.orderSide==='buy', side=button.dataset.orderSide;
-            const price=buy?row.quote?.askPrice:row.quote?.bidPrice;
-            button.title=reasons[side]?'Review order · '+reasons[side]:(buy?'Review buy at the ask':'Review sell at the bid');
-            button.setAttribute('aria-label',(buy?'Buy ':'Sell ')+symbol);
-            button.querySelector('.watch-order-price').textContent=price>0?money(price):'—';
-        }
-        const side=row.holding&&!reasons.sell?'sell':isSignal(row)&&!reasons.buy?'buy':'';
-        action.dataset.side=side;
-        action.textContent=side==='sell'?'Review exit':side==='buy'?'Review entry':'Inspect';
-        action.setAttribute('aria-label',action.textContent+' '+symbol);
-        action.title=side?'Open the server-reviewed ticket':(row.holding?reasons.sell:reasons.buy)||'Open stock detail';
+    // Shows one server check with the server's own sentence; an older record without one shows its readable code.
+    function humanizeCheck(check) {
+        const passed = Boolean(check?.passed);
+        const code = String((!passed && check?.rejectionCode) || check?.gateName || 'strategy check')
+            .replace(/^(strategy|regime|eligibility):/i, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const label = check?.explanation || code.charAt(0).toUpperCase() + code.slice(1);
+        return { passed, glyph: passed ? '✓' : '✕', label };
     }
+
     // Summarize only checks actually recorded by the shared engine; missing and expired evidence stays explicit.
     function observationLabel(row){const assessment=row.strategyAssessment;if(!assessment)return 'Select a strategy';if(assessment.state==='missing')return 'Missing strategy data';if(!['recorded','evaluated'].includes(assessment.state))return assessment.state==='failed'?'Evaluation failed':assessment.state==='cancelled'?'Evaluation cancelled':'Collecting strategy data';return assessment.expired?'Evaluation expired':assessment.checks.some(check=>!check.passed)?'Strategy conditions failed':'Evaluated checks passed';}
-    // Short outcome of the selected strategy for a row and the first failed check behind it.
-    function signalLabel(row){const a=row.strategyAssessment;if(!a)return 'Not selected';if(!['recorded','evaluated'].includes(a.state))return a.state==='missing'?'No data':a.state==='failed'?'Failed':a.state==='cancelled'?'Cancelled':'Warming';return a.expired?'Expired':a.checks.some(c=>!c.passed)?'Rejected':'Passed';}
-    function signalReason(row){const a=row.strategyAssessment;if(!a)return 'Choose a strategy at the top';const failed=a.checks?.find(c=>!c.passed);return failed?(failed.rejectionCode||failed.gateName.replace(/^strategy:/,'').replaceAll('_',' ')):a.detail||'';}
+    // Classifies one stock's strategy assessment into a concise single-line glyph status (✓ Ready / ◐ Near / ✕ Gate) and tone.
+    function signalOutcome(row){
+        const a=row.strategyAssessment;
+        if(!a)return {text:'—',tone:'muted'};
+        if(!['recorded','evaluated'].includes(a.state)){
+            if(a.state==='missing')return {text:'— No data',tone:'muted'};
+            if(a.state==='failed')return {text:'✕ Failed',tone:'bad'};
+            if(a.state==='cancelled')return {text:'— Cancelled',tone:'muted'};
+            return {text:'◐ Warming',tone:'warn'};
+        }
+        if(a.expired)return {text:'◐ Expired',tone:'warn'};
+        const checks=a.checks||[];
+        if(checks.length>0&&checks.every(c=>c.passed))return {text:'✓ Ready',tone:'good'};
+        const failed=checks.filter(c=>!c.passed);
+        const hardGate=/(regime|vix|universe|market_state_not_warm|candidate_expired|candidate_not_persisted|earnings_blackout|insufficient_history|listing_exchange|sector_not_in_top)/i;
+        const passedAdmission=checks.some(c=>c.passed&&(c.gateName==='strategy:strategy_admission_satisfied'||c.gateName==='strategy:market_regime_on'));
+        if(passedAdmission&&failed.length>0&&failed.every(c=>!hardGate.test((c.gateName||'')+' '+(c.rejectionCode||''))))
+            return {text:'◐ Near',tone:'warn'};
+        return {text:'✕ Gate',tone:'bad'};
+    }
+    function signalReason(row){const a=row.strategyAssessment;if(!a)return 'Choose a strategy at the top';const failed=a.checks?.find(c=>!c.passed);return failed?humanizeCheck(failed).label:a.detail||'';}
     // The shown price is the bid/ask midpoint; it can stay unchanged while trades print, so bid, ask and time stay visible.
     function spreadDetail(row){const bid=row.quote?.bidPrice,ask=row.quote?.askPrice;return 'Bid/ask midpoint, not last trade · bid '+money(bid)+' · ask '+money(ask)+(ask>0&&bid>0?' · spread '+number((ask-bid)/((ask+bid)/2)*100)+'%':'')+' · '+(row.quote?.feed==='overnight'?'overnight feed':'SIP')+' · '+quoteAge(row);}
     // Keep the page connection, the quote socket, Alpaca's subscription replies and quote age as separate facts.
@@ -630,19 +542,6 @@
         const current=snapshot.rows.filter(r=>r.quote?.timestamp&&Date.now()-Date.parse(r.quote.timestamp)<=20000&&Date.parse(r.quote.timestamp)<=Date.now()+5000).length;
         const available=snapshot.rows.filter(r=>r.quote?.timestamp).length;
         text('connection',rows?`${current}/${rows} current quotes · ${rows-available} unavailable · ${quoteSocketSummary()}`:'Connected · no stocks in this view');
-    }
-    // Describe the quote socket from its own state and Alpaca's replies, never from silence.
-    function quoteSocketSummary(){
-        const states=[...quoteSocket.items.values()].map(item=>item.state);
-        const count=state=>states.filter(value=>value===state).length;
-        if(quoteSocket.state==='connecting')return 'live-quote socket connecting · snapshot quotes meanwhile';
-        if(quoteSocket.state!=='live')return 'snapshot quotes only'+(quoteSocket.reason?' · '+quoteSocket.reason:'');
-        if(quoteSocket.upstream==='unavailable')return 'live-quote socket open · Alpaca SIP stream unavailable, snapshot quotes only';
-        const parts=['live-quote socket · Alpaca confirmed '+count('acknowledged')+'/'+snapshot.rows.length];
-        if(count('pending'))parts.push(count('pending')+' awaiting Alpaca confirmation');
-        if(count('unacknowledged'))parts.push(count('unacknowledged')+' not confirmed by Alpaca');
-        if(count('refused'))parts.push(count('refused')+' over the shared quote limit');
-        return parts.join(' · ');
     }
     // Use an exact paper candidate when one is present and pass only observed symbol, group and price otherwise.
     function orderReviewUrl(row,side){
@@ -654,59 +553,67 @@
         const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;if(price>0)query.set('limitPrice',price);
         return '/OrderTicket?'+query;
     }
-    // Label the same review URL in the selected stock panel and attach any advisory hint.
+    // Keep compact Buy/Sell labels in the chart header and place ask/bid price, override context, and restriction hints in title.
     function reviewLink(side,reason,row,help){
         const link=el(side);
+        if(!link)return;
         const a=row.strategyAssessment;
         const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
-        const buyLabel=isSignal(row)&&a.candidateId&&a.candidateRunId?'Buy signal':isAdministrator?'Override buy':'Buy';
-        link.textContent=(side==='buy'?buyLabel:'Sell')+(price>0?' '+money(price):'');
+        const buyAction=isSignal(row)&&a.candidateId&&a.candidateRunId?'Buy signal':isAdministrator?'Override buy':'Buy';
+        link.textContent=side==='buy'?'Buy':'Sell';
         link.href=orderReviewUrl(row,side);
+        const priceText=price>0?(side==='buy'?'Ask '+money(price):'Bid '+money(price)):'';
+        const sideNote=side==='buy'?'Buy shows the ask.':'Sell shows the bid.';
+        link.title=[side==='buy'?buyAction:'Sell',priceText,sideNote,reason].filter(Boolean).join(' · ');
         if(reason)link.setAttribute('aria-describedby',help);else link.removeAttribute('aria-describedby');
-    }
-    // Start history only for a selected stock and ignore quote ticks that keep the same selection.
-    function syncChart(symbol) {
-        if (chartSymbol === symbol) return;
-        chartSymbol = symbol;
-        if (symbol && !deskChart) {
-            const root = el('focus-content').querySelector('[data-stock-chart]');
-            if (root) deskChart = window.TradingFlowStockChart?.mount(root, { summaryHost: el('chart-summary') });
-        }
-        deskChart?.setSymbol(symbol);
-        window.dispatchEvent(new CustomEvent('tradingflow:desk-symbol-selected', { detail: { symbol: symbol || null } }));
     }
     // Keep quote/account rendering separate from the selected strategy's recorded evidence.
     function renderFocus(){
         const row=snapshot?.rows.find(x=>x.membership.symbol===selected);
         el('focus-content').hidden=!row;
+        if(el('focus-info'))el('focus-info').hidden=!row;
+        if(el('focus-trade'))el('focus-trade').hidden=!row;
+        if(el('focus-controls'))el('focus-controls').hidden=!row;
+        if(el('inspector-body'))el('inspector-body').hidden=!row;
+        if(el('inspector-empty'))el('inspector-empty').hidden=Boolean(row);
         syncChart(row?.membership.symbol ?? null);
-        if(!row){text('symbol','Choose a stock');text('name','Select a row to see its price, holding and news.');text('mid','—');text('prev-close','');return;}
+        void syncChartTradePlan(row ?? null);
+        if(!row){text('symbol','Choose a stock');text('name','Select a row to see its price, holding and news.');text('mid','—');text('prev-close','');updateFocusInfoTooltip(null);return;}
         text('symbol',row.membership.symbol);text('name',row.membership.name||row.membership.wishlists.map(x=>x.name).join(' · ')||'Finviz discovery');
-        const change=row.previousClose?.close>0&&row.quote?.midPrice!=null?(row.quote.midPrice/row.previousClose.close-1)*100:null;
-        text('mid',money(row.quote?.midPrice));text('prev-close',row.previousClose?'Prev close '+money(row.previousClose.close)+(change==null?'':' · '+(change>0?'+':'')+number(change)+'%'):'');tone(el('prev-close'),change);
-        text('quote-detail','Bid/ask midpoint · '+quoteAge(row)+' · bid '+money(row.quote?.bidPrice)+' · ask '+money(row.quote?.askPrice));el('quote-detail').title='Provider time '+when(row.quote?.timestamp)+(row.quote?.receivedAtUtc?' · received '+when(row.quote.receivedAtUtc):'')+' · '+(row.quote?.feed==='overnight'?'overnight feed':'SIP');
+        const dayChange=formatRowDayChange(row);
+        text('mid',money(row.quote?.midPrice));
+        text('prev-close',dayChange.text==='—'?'':dayChange.text);
+        if(el('prev-close')){
+            el('prev-close').title=dayChange.title;
+            tone(el('prev-close'),dayChange.value);
+        }
+        text('quote-detail','Bid/ask midpoint · '+quoteAge(row)+' · bid '+money(row.quote?.bidPrice)+' · ask '+money(row.quote?.askPrice));
+        el('quote-detail').title='Provider time '+when(row.quote?.timestamp)+(row.quote?.receivedAtUtc?' · received '+when(row.quote.receivedAtUtc):'')+' · '+(row.quote?.feed==='overnight'?'overnight feed':'SIP');
+        updateFocusInfoTooltip(row);
         const buyReason=orderRestrictionHint(row,'buy'),sellReason=orderRestrictionHint(row,'sell');
         reviewLink('buy',buyReason,row,'watch-order-help');
         reviewLink('sell',sellReason,row,sellReason===buyReason?'watch-order-help':'watch-exit-help');
-        text('order-help',buyReason);el('order-help').hidden=!buyReason;
-        text('exit-help',sellReason);el('exit-help').hidden=!sellReason||sellReason===buyReason;
-        const symbol=encodeURIComponent(row.membership.symbol);
-        el('stock-news').href='/News?ticker='+symbol;
-        el('stock-earnings').href='/Earnings?search='+symbol;
-        el('follow').hidden=el('source').value==='prepared'||row.membership.wishlists.length>0||!el('follow-list').options.length;
+        // Restriction reasons (for example "trading is paused") stay in the Buy/Sell tooltips; the hidden text keeps
+        // them available to screen readers through aria-describedby without another visible paragraph.
+        text('order-help',buyReason);text('exit-help',sellReason);
         const accountStale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
-        // Holding appears only for a held stock; account provenance moves into the tooltip.
+        // Holding appears only for a held stock or when holdings could not be read; flat positions stay collapsed.
         el('holding-block').hidden=!row.holding&&row.holdingsKnown;
         text('quantity',accountStale?'Stale snapshot':row.holdingsKnown?row.holding?number(row.holding.quantity):'Not held':'Unknown');
         text('entry',money(row.holding?.averageEntry));text('value',money(row.holding?.marketValue));text('pl',money(row.holding?.unrealizedPl));tone(el('pl'),row.holding?.unrealizedPl);
         el('holding-block').title=(accountStale?'Stale: last observed values. ':'')+snapshot.account.detail+' · cost basis '+money(row.holding?.costBasis)+' · '+when(snapshot.account.readAtUtc);
-        const technical=dailyTechnical(row);text('sma10',money(technical?.sma10));text('sma20',money(technical?.sma20));text('sma50',money(technical?.sma50));text('sma200',money(technical?.sma200));text('tech-time',dailyTechnicalDetail(row));
-        text('rsi',number(technical?.rsi));text('ema',money(technical?.ema20)+' / '+money(technical?.ema50));text('ema200',money(technical?.ema200));text('atr',number(technical?.atr));
+        const technical=dailyTechnical(row), techDetail=dailyTechnicalDetail(row);
+        renderStudyPills(row);
+        renderTodaySupportPill(row);
+        renderAtrPill(technical?.atr,techDetail);
+        renderVolatilityPill(row);
+        text('sma10',money(technical?.sma10));text('tech-time',techDetail);
+        text('rsi',number(technical?.rsi));text('ema',money(technical?.ema20)+' / '+money(technical?.ema50));text('ema200',money(technical?.ema200));
         const relativeVolume=technical?.relativeVolume;
         text('rvol',Number.isFinite(relativeVolume)&&relativeVolume>=0?number(relativeVolume):'—');
-        // Strategy checks appear only once a strategy is chosen at the top.
+        // The Why / why not block appears only once a strategy is selected; without one it would only ask for a choice.
         el('strategy-block').hidden=!selectedStrategyChoice();text('observation',observationLabel(row));renderStrategyChecks(row);
-        el('rsi').parentElement.parentElement.title=dailyTechnicalDetail(row);
+        const techBlock=el('technicals-block');if(techBlock)techBlock.title=techDetail;
         showSessionVolume(row);
     }
     // Display original rule names, outcomes and inputs; unvisited rules are never inferred to have passed.
@@ -716,26 +623,57 @@
         if (signature === strategyCheckSignature) return;
         strategyCheckSignature = signature;
         el('strategy-checks').replaceChildren();
-        if (!assessment) return;
+        if (!assessment) {
+            const prompt = document.createElement('p');
+            prompt.className = 'watch-fine';
+            prompt.textContent = 'Strategy checks for this stock have not been collected yet. Use Refresh in the toolbar.';
+            el('strategy-checks').append(prompt);
+            el('strategy-block').title = '';
+            return;
+        }
         // The evaluation's identity and timing stay available on hover rather than as another paragraph.
         el('strategy-block').title = assessment.strategy.strategyId + ' · ' + assessment.strategy.semanticVersion + ' · ' + assessment.detail +
             (assessment.evaluatedAtUtc ? ' · Evaluated ' + when(assessment.evaluatedAtUtc) : '') +
             (assessment.latestCompletedCandleAtUtc ? ' · Completed candle ' + when(assessment.latestCompletedCandleAtUtc) : '');
         for (const check of assessment.checks) {
+            const human = humanizeCheck(check);
             const entry = document.createElement('details');
+            entry.className = 'watch-strategy-check-item';
+            entry.dataset.passed = String(human.passed);
             const title = document.createElement('summary');
-            title.textContent = check.gateName.replace(/^strategy:/, '').replaceAll('_', ' ') + ': ' + (check.passed ? 'passed' : 'failed');
+            title.className = 'watch-strategy-check-summary';
+            const pill = document.createElement('span');
+            pill.className = 'watch-check-pill';
+            pill.dataset.passed = String(human.passed);
+            pill.textContent = human.glyph + ' ' + (human.passed ? 'Pass' : 'Fail');
+            const label = document.createElement('span');
+            label.className = 'watch-check-label';
+            label.textContent = human.label;
+            title.append(pill, label);
             entry.append(title);
-            if (check.rejectionCode) { const reason = document.createElement('p'); reason.textContent = check.rejectionCode; entry.append(reason); }
+            const canonical = document.createElement('p');
+            canonical.className = 'watch-fine watch-check-canonical';
+            const gateCode = document.createElement('code');
+            gateCode.textContent = check.gateName;
+            canonical.append(gateCode);
+            if (check.rejectionCode) {
+                canonical.append(' · ');
+                const rejectCode = document.createElement('code');
+                rejectCode.textContent = check.rejectionCode;
+                canonical.append(rejectCode);
+            }
+            entry.append(canonical);
             const values = document.createElement('pre');
             values.textContent = JSON.stringify(check.inputs, null, 2);
-            entry.append(values);el('strategy-checks').append(entry);
+            entry.append(values);
+            el('strategy-checks').append(entry);
         }
     }
     // Separate provider attempt status from the retained stories in this view.
     function renderNews(){
         const articles=newsForAll?snapshot.news:snapshot.rows.find(x=>x.membership.symbol===selected)?.news||[];
         text('news-title',newsForAll?'News for this view':selected+' news');el('news-all').hidden=newsForAll;const status=window.tradingFlowWorkspaceStatus?.news;
+        text('news-drawer-count','(' + articles.length + ')');
         const state=status?.state==='failed'?'Latest feed refresh failed. ':status?.state==='pending'?'First refresh has not completed. ':status?.state==='partial'?'Latest feed refresh was partial. ':'';
         text('news-coverage',state+snapshot.newsCoverage);
         const unavailable=!newsForAll&&snapshot.rows.find(row=>row.membership.symbol===selected)?.newsSentiment?.available===false||snapshot.newsCoverage.startsWith('News is unavailable');
@@ -743,19 +681,15 @@
         if(!articles.length){const p=document.createElement('p');p.className='watch-fine';p.textContent=unavailable?'Stored news could not be read. Retry when the connection recovers.':'No matched stories in the stored 72-hour window. This does not establish complete news coverage.';el('news-list').append(p);return;}
         for(const article of articles) el('news-list').append(window.TradingFlowNews.create(article,{allowGroup:false}));
     }
-    // A closed market can have old quotes, and an old holding stays visible with its original observation.
+    // A closed market can have old quotes; mark a price stale when its quote is over two minutes old or the stream is down.
     function ageStockRow(node,row){
-        const price=node.querySelector('.watch-row-price'), position=node.querySelector('.watch-row-position');
-        price.querySelector('small').textContent=rowQuoteAge(row);
+        const price=node.querySelector('.watch-row-price');
         price.title=spreadDetail(row)+' · provider time '+when(row.quote?.timestamp);
         const streaming=isStreaming(row);
-        price.classList.toggle('watch-stale',(!connected&&!streaming)||Date.now()-Date.parse(row.quote?.timestamp)>120000);
-        const stale=!connected||Date.now()-Date.parse(snapshot.account.readAtUtc)>=30000;
-        position.querySelector('strong').textContent=!row.holdingsKnown?'Unknown':row.holding?number(row.holding.quantity)+' sh':'—';
-        const pl=position.querySelector('small');
-        pl.textContent=row.holding?(stale?'Last observed ':'')+money(row.holding.unrealizedPl):'';
-        tone(pl,row.holding?.unrealizedPl);
-        renderNewsSentiment(node.querySelector('.watch-news-summary'),row);
+        const stale=(!connected&&!streaming)||Date.now()-Date.parse(row.quote?.timestamp)>120000;
+        price.classList.toggle('watch-stale',stale);
+        // The bid and ask on the buttons come from the same quote, so they age with it; their tooltip names the age.
+        updateTradeButtons(node,row,stale);
     }
     // Age observations without rebuilding rows or resetting the chart and focus.
     function ageRows(){
@@ -764,7 +698,6 @@
             const node=rowNodes.get(row.membership.symbol);
             if(!node)continue;
             ageStockRow(node,row);
-            updateRowAction(node,row);
         }
     }
     el('source').onchange=()=>{page=0;el('search').value='';connect();};el('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{page=0;connect();},300);};
@@ -774,6 +707,7 @@
         const submission=assessmentSubmissions.get(currentSignature);
         // An explicit refresh starts new collection only after the previous attempt is known to be terminal.
         if(submission?.job&&['completed','failed','cancelled'].includes(submission.job.status))assessmentSubmissions.delete(currentSignature);
+        clearChartTradePlan();
         restoredView=false;currentJob=null;currentStocks=new Map();currentSignature='';currentFailure='';applyCurrentAssessments();render();observeCurrentStrategy(generation);
     };
     el('strategy-cancel').onclick=async()=>{const version=generation,id=currentJob?.jobId;if(!id)return;try{const job=await cancelAssessment(id);if(version===generation){currentJob=job;text('strategy-status',job.detail);applyCurrentAssessments();render();}}catch(error){if(version===generation)text('strategy-status',error.message);}};
@@ -784,7 +718,7 @@
     el('add').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]');button.disabled=true;text('add-status','Checking with Alpaca…');try{const added=await api('stocks',{symbol:form.elements.symbol.value,wishlistId:el('add-list').value});text('add-status',added.message);form.elements.symbol.value='';}catch(e){text('add-status',e.message);}finally{button.disabled=false;form.elements.symbol.focus();}};
     el('import-open').onclick=()=>{el('import').hidden=false;el('import').elements.name.focus();};el('import-close').onclick=()=>{el('import').hidden=true;el('import-open').focus();};
     el('import').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]');button.disabled=true;try{const saved=await api('screens',{name:form.elements.name.value,url:form.elements.url.value});await sources(saved.key);el('import').hidden=true;form.reset();connect();}catch(e){text('import-status',e.message);}finally{button.disabled=false;}};
-    el('follow').onsubmit=async event=>{event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;try{await api('follow',{source:el('source').value,symbol:selected,wishlistId:el('follow-list').value});text('follow-status','Added. Membership refreshes with the next update.');}catch(e){text('follow-status',e.message);}finally{button.disabled=false;}};
+
     document.addEventListener('workspace-status-changed',()=>render());
     document.addEventListener('click',event=>{
         const link=event.target.closest('a[href]');
@@ -793,14 +727,11 @@
     // Save the tab's view and release observations when leaving Desk.
     window.addEventListener('pagehide', () => {
         saveDeskReturn();
+        clearChartTradePlan();
         stream?.close();
         stopQuoteSocket();
         generation++;
-        void deskChart?.dispose();
-        deskChart = null;
-        chartSymbol = null;
-        const root = el('focus-content').querySelector('[data-stock-chart]');
-        if (root) root.dataset.symbol = '';
+        disposeChart();
     });
     // A browser-cached page carries its old authenticated markup; recheck identity before reading saved state.
     window.addEventListener('pageshow',event=>{
@@ -818,6 +749,36 @@
     const initialSort=savedDesk?.sort??incoming.get('sort');
     if([...el('sort').options].some(option=>option.value===initialSort))el('sort').value=initialSort;
     setView(savedDesk?.view??incoming.get('view'));
+    syncTableStrategyState();
+    // Publishes where the three Desk columns start (below the top bar, status strip, sub-tabs and toolbar) as
+    // --desk-grid-top, so the CSS can give the columns and chart exactly the remaining screen height even when the
+    // status strip wraps to a second line. Re-measured when the page or the strip changes size.
+    function syncDeskGridTop(){
+        const grid=desk.querySelector('.watch-grid');
+        if(!grid)return;
+        const top=Math.round(grid.getBoundingClientRect().top+window.scrollY);
+        document.documentElement.style.setProperty('--desk-grid-top',top+'px');
+    }
+    syncDeskGridTop();
+    window.addEventListener('resize',syncDeskGridTop);
+    if(window.ResizeObserver){
+        const observer=new ResizeObserver(syncDeskGridTop);
+        for(const node of [document.querySelector('.regime-pulse-strip'),document.querySelector('.topbar'),desk.querySelector('.watch-toolbar')])if(node)observer.observe(node);
+    }
+    el('technicals-block')?.addEventListener('click', event => {
+        const pill = event.target.closest('[data-highlight-key]');
+        if (pill) toggleDeskHighlight(pill.dataset.highlightKey);
+    });
+    el('technicals-block')?.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const pill = event.target.closest('[data-highlight-key]');
+        if (!pill) return;
+        event.preventDefault();
+        toggleDeskHighlight(pill.dataset.highlightKey);
+    });
+    for (const tab of desk.querySelectorAll('[data-desk-pane]')) {
+        tab.addEventListener('click', () => setActiveDeskPane(tab.dataset.deskPane));
+    }
     const initialPage=Number(savedDesk?.page??incoming.get('page'));
     if(Number.isInteger(initialPage)&&initialPage>=0&&initialPage<=10000)page=initialPage;
 
@@ -841,5 +802,27 @@
             connect(restore,rememberedEntry||!!requested);
         }catch(e){text('connection',e.message);el('empty').querySelector('strong').textContent='Sources unavailable';el('retry').hidden=false;}
     }
+    // Steps through visible stock rows on ArrowDown/ArrowUp without hijacking text inputs or modified keystrokes.
+    function stepWatchRowSelection(event) {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select'))) return;
+        const rows = [...el('rows').querySelectorAll('tr[data-symbol]')];
+        if (!rows.length) return;
+        event.preventDefault();
+        const currentIndex = rows.findIndex(row => row.dataset.symbol === selected);
+        const nextIndex = currentIndex === -1
+            ? (event.key === 'ArrowDown' ? 0 : rows.length - 1)
+            : (event.key === 'ArrowDown' ? Math.min(rows.length - 1, currentIndex + 1) : Math.max(0, currentIndex - 1));
+        const nextRow = rows[nextIndex];
+        if (!nextRow?.dataset.symbol) return;
+        selectStock(nextRow.dataset.symbol, false);
+        nextRow.scrollIntoView({ block: 'nearest' });
+        if (document.activeElement?.closest?.('tr[data-symbol]')) {
+            nextRow.querySelector('.watch-symbol-button')?.focus({ preventScroll: true });
+        }
+    }
+    document.querySelector('.watch-table-scroll')?.addEventListener('keydown', stepWatchRowSelection);
     el('retry').onclick=start;start();
 })();

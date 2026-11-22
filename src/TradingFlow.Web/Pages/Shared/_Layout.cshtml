@@ -12,14 +12,24 @@
     var envSlug = Context.Request.Query["env"].ToString();
     var environment = Environments.GetState(Environments.Parse(envSlug));
     var signedIn = User.Identity?.IsAuthenticated == true;
-    var destination = IsCurrent("/News") ? "News" : IsCurrent("/Earnings") ? "Earnings"
-        : IsCurrent("/RunningTrades", "/Orders", "/OrderTicket") ? "Trading"
-        : IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/CandidateAudit", "/ResearchLedger") ? "Strategies"
-        : IsCurrent("/Preparation") ? "Preparation" : IsCurrent("/Wishlists") ? "Stock groups"
-        : IsCurrent("/Operations", "/Warmup", "/Users") ? "System" : "Desk";
-    var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Preparation", "/Preparation", "calendar"), ("Trading", "/Orders", "trending-up"),
-        ("Strategies", "/Paper", "layers"), ("Earnings", "/Earnings", "calendar"),
-        ("News", "/News", "newspaper"), ("Stock groups", "/Wishlists", "briefcase") };
+    // Four workspaces; every existing route stays reachable as a local sub-tab.
+    var destination = IsCurrent("/Desk", "/Wishlists", "/Preparation") ? "Desk"
+        : IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/ResearchLedger") ? "Strategy Lab"
+        : IsCurrent("/News", "/Earnings") ? "Catalysts & Options"
+        : IsCurrent("/RunningTrades", "/Orders", "/OrderTicket", "/Paper", "/PaperJob", "/Audit", "/CandidateAudit") ? "Portfolio & Audit"
+        : IsCurrent("/Operations", "/Warmup", "/Users", "/AccountLossReview") ? "System" : "Desk";
+    var destinations = new[] { ("Desk", "/Desk", "columns-3"), ("Strategy Lab", "/Backtests", "layers"),
+        ("Catalysts & Options", "/News", "newspaper"), ("Portfolio & Audit", "/RunningTrades", "briefcase") };
+    // Local sub-tabs per workspace: (label, page, pages that mark the tab current).
+    var subTabs = destination switch
+    {
+        "Desk" => new[] { ("Desk", "/Desk", new[] { "/Desk" }), ("Preparation", "/Preparation", new[] { "/Preparation" }), ("Stock groups", "/Wishlists", new[] { "/Wishlists" }) },
+        "Strategy Lab" => new[] { ("Backtests", "/Backtests", new[] { "/Backtests", "/Job", "/OptimizationJob" }), ("Research ledger", "/ResearchLedger", new[] { "/ResearchLedger" }) },
+        "Catalysts & Options" => new[] { ("News", "/News", new[] { "/News" }), ("Earnings", "/Earnings", new[] { "/Earnings" }) },
+        "Portfolio & Audit" => new[] { ("Positions", "/RunningTrades", new[] { "/RunningTrades" }), ("Orders", "/Orders", new[] { "/Orders", "/OrderTicket" }),
+            ("Strategy runs", "/Paper", new[] { "/Paper", "/PaperJob" }), ("Audit", "/Audit", new[] { "/Audit", "/CandidateAudit" }) },
+        _ => Array.Empty<(string, string, string[])>()
+    };
     var systemPages = User.IsInRole(TradingFlow.Data.Identity.TradingFlowRoles.Administrator)
         ? new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup"), ("Users", "/Users") }
         : new[] { ("Health", "/Operations"), ("Warm-up", "/Warmup") };
@@ -37,16 +47,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] - TradingFlow</title>
     <link rel="icon" type="image/svg+xml" href="~/favicon.svg" />
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/modernist.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/desk-grid.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/polish.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/features.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/workspace.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/desk-universe.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/orders-screen.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/order-workflow.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/desk-theme.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/base.css" asp-append-version="true" />
+    @await RenderSectionAsync("Styles", required: false)
+    <link rel="stylesheet" href="~/css/tokens.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/components.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/workspaces.css" asp-append-version="true" />
     <script src="~/js/theme.js" asp-append-version="true"></script>
 </head>
 <body class="workspace-app @(signedIn ? "workspace-authenticated" : "workspace-public")"
@@ -69,11 +74,7 @@
         </aside>
     }
     <header class="topbar">
-        @if (signedIn)
-        {
-            <div class="workspace-location"><span>Workspace</span><span aria-hidden="true">/</span><strong>@destination</strong></div>
-        }
-        else
+        @if (!signedIn)
         {
             <a class="brand" asp-page="/Desk" aria-label="TradingFlow">TradingFlow<span class="brand-dot">.</span></a>
             <nav class="primary-nav" aria-label="Primary navigation">
@@ -112,6 +113,10 @@
 
             @if (signedIn)
             {
+                <button type="button" class="btn btn-secondary btn-md ask-trigger" id="OpenCommandPalette" title="Ask or jump: find a stock, screen or answer">
+                    <span>Ask / Jump</span><kbd>Ctrl K</kbd>
+                </button>
+                <button type="button" class="btn btn-secondary btn-md theme-toggle" id="ThemeToggle" title="Change appearance">Theme</button>
                 <button type="button" class="btn btn-secondary btn-md" id="AlertToggle"
                         aria-pressed="true" title="Mute or unmute signal alerts on this device">
                     <partial name="_Icon" model='new IconModel("bell", 14)' />
@@ -168,29 +173,37 @@
             </div>
         </div>
     </header>
-    <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
-        @if (signedIn)
-        {
-            <div class="workspace-status" data-workspace-status data-trading-paused="@Runtime.TradingMutationsPaused.ToString().ToLowerInvariant()" aria-label="Workspace status">
-                <strong>@environment.Environment</strong>
-                <strong data-workspace-runtime>@(Runtime.TradingMutationsPaused ? "Trading paused" : "Trading state unknown")</strong>
-                <span data-workspace-market>Market session unknown</span>
-                <span data-workspace-feeds>Market feed state unknown</span>
-                <details>
-                    <summary>Source freshness</summary>
-                    <p data-workspace-checked role="status">Reading server status…</p>
-                    <p data-workspace-orders></p>
-                    <ul data-workspace-sources></ul>
+    @if (signedIn)
+    {
+        <div class="regime-pulse-strip" role="region" aria-label="Workspace status and market regime">
+            <div class="workspace-status" data-workspace-status data-trading-paused="@Runtime.TradingMutationsPaused.ToString().ToLowerInvariant()" aria-label="Workspace status" title="Discovery and preparation are advisory. Pre- and post-market monitoring does not enable extended-hours orders.">
+                <span class="regime-chip" data-workspace-runtime-chip data-tone="@(Runtime.TradingMutationsPaused ? "warn" : "muted")"><span class="regime-chip__label">@environment.Environment</span><strong class="regime-chip__value" data-workspace-runtime>@(Runtime.TradingMutationsPaused ? "Trading paused" : "Trading state unknown")</strong></span>
+                <span class="regime-chip" data-tone="muted" data-workspace-market>Market session unknown</span>
+                <span class="sr-only" data-workspace-feeds>Market feed state unknown</span>
+                <details class="workspace-freshness-popover">
+                    <summary class="regime-chip" data-tone="muted" title="When each market, news and broker source last updated">Sources</summary>
+                    <div class="workspace-freshness-body">
+                        <p data-workspace-checked role="status">Reading server status…</p>
+                        <p data-workspace-orders></p>
+                        <ul data-workspace-sources></ul>
+                    </div>
                 </details>
             </div>
-        }
-        @if (signedIn && IsCurrent("/Paper", "/PaperJob", "/Backtests", "/Job", "/OptimizationJob", "/Audit", "/ResearchLedger"))
+            <div class="regime-pulse-chips" data-regime-pulse role="status" aria-label="Market regime">
+                <span class="regime-chip" data-tone="muted"><span class="regime-chip__label">Market regime</span><strong class="regime-chip__value">loading&hellip;</strong></span>
+            </div>
+            <span class="regime-chip" id="desk-options-stress-chip" data-tone="muted" hidden></span>
+            <a class="regime-chip regime-chip--link" id="desk-preparation-chip" asp-page="/Preparation" data-tone="muted" hidden></a>
+        </div>
+    }
+    <main id="main-content" class="shell @ViewData["MainClass"]" tabindex="-1">
+        @if (signedIn && subTabs.Length > 1)
         {
-            @* Strategy runs and their backtests share one destination and two local views. *@
-            <nav class="strategy-local-nav" aria-label="Strategy views">
-                <a asp-page="/Paper" aria-current="@(IsCurrent("/Paper", "/PaperJob") ? "page" : null)">Strategy runs</a>
-                <a asp-page="/Backtests" aria-current="@(IsCurrent("/Backtests", "/Job", "/OptimizationJob", "/Audit") ? "page" : null)">Backtests</a>
-                <a asp-page="/ResearchLedger" aria-current="@(IsCurrent("/ResearchLedger") ? "page" : null)">Research ledger</a>
+            <nav class="workspace-subnav" aria-label="@destination views">
+                @foreach (var tab in subTabs)
+                {
+                    <a asp-page="@tab.Item2" aria-current="@(IsCurrent(tab.Item3) ? "page" : null)">@tab.Item1</a>
+                }
             </nav>
         }
         @RenderBody()
@@ -210,6 +223,7 @@
     {
         <script src="~/js/account-strip.js" asp-append-version="true" defer></script>
         <script src="~/js/workspace-status.js" asp-append-version="true" defer></script>
+        <script src="~/js/regime-pulse.js" asp-append-version="true" defer></script>
     }
     @await RenderSectionAsync("Scripts", required: false)
 </body>

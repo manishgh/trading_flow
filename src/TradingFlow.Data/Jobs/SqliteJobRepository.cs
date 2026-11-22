@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
@@ -112,6 +113,80 @@ public sealed partial class SqliteJobRepository : IDurableJobRepository, IPaperR
             .Where(job => job.JobType == jobType)
             .OrderByDescending(job => job.CreatedAtUtcTicks)
             .ToArrayAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Projects only Id and RequestJson first to locate jobs for <paramref name="planId"/> without reading unrelated
+    /// multi-megabyte SnapshotJson payloads, then fetches full PersistedJob rows only for matching IDs.
+    /// </summary>
+    public async Task<IReadOnlyList<PersistedJob>> GetJobsForPlanAsync(
+        string jobType,
+        long planId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobType);
+        if (planId <= 0) return [];
+        using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        // Request JSON is stored compact, so a text pre-filter in SQL keeps only rows that mention this plan number
+        // ("lanId":42 matches both "planId" and older "PlanId"); the exact parse below removes look-alikes such as 420.
+        var planToken = "lanId\":" + planId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var candidates = await context.Jobs
+            .AsNoTracking()
+            .Where(job => job.JobType == jobType && job.RequestJson != null && job.RequestJson.Contains(planToken))
+            .Select(job => new { job.Id, job.RequestJson })
+            .ToArrayAsync(cancellationToken);
+
+        var matchingIds = candidates
+            .Where(item => TryExtractPlanId(item.RequestJson) == planId)
+            .Select(item => item.Id)
+            .ToArray();
+        if (matchingIds.Length == 0) return [];
+
+        return await context.Jobs
+            .AsNoTracking()
+            .Where(job => matchingIds.Contains(job.Id))
+            .OrderByDescending(job => job.CreatedAtUtcTicks)
+            .ToArrayAsync(cancellationToken);
+    }
+
+    // Extracts workflow.cohort.planId via JsonDocument without allocating full file evidence lists or throwing on malformed legacy JSON.
+    public static long? TryExtractPlanId(string? requestJson)
+    {
+        if (String.IsNullOrWhiteSpace(requestJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(requestJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!TryGetPropertyCaseInsensitive(root, "workflow", out var workflow) || workflow.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!TryGetPropertyCaseInsensitive(workflow, "cohort", out var cohort) || cohort.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!TryGetPropertyCaseInsensitive(cohort, "planId", out var planIdElement) || planIdElement.ValueKind != JsonValueKind.Number)
+                return null;
+            return planIdElement.TryGetInt64(out var planId) ? planId : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // Reads a named JSON object property case-insensitively so camelCase and PascalCase durable payloads both match.
+    private static bool TryGetPropertyCaseInsensitive(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.TryGetProperty(name, out value)) return true;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     public async Task<bool> RequestCancellationAsync(

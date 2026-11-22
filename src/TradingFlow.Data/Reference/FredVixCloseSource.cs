@@ -22,6 +22,9 @@ public static class FredSeriesFile
     private static readonly TimeSpan HttpClientAttemptTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
 
+    // Set once the curl fallback has succeeded in this process, so later downloads try curl first.
+    private static volatile bool systemCurlPreferred;
+
     /// <summary>The graph CSV address of <paramref name="seriesId"/>, optionally starting at <paramref name="from"/> (cosd).</summary>
     public static Uri Url(string seriesId, DateOnly? from = null) => new(
         "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + Uri.EscapeDataString(seriesId) +
@@ -35,9 +38,25 @@ public static class FredSeriesFile
     /// caller cancellations throw immediately.
     /// </summary>
     public static async Task<FredDownload> DownloadAsync(HttpClient http, string seriesId, DateTimeOffset requestedAtUtc,
-        CancellationToken cancellationToken, DateOnly? from = null, bool allowSystemCurlFallback = true)
+        CancellationToken cancellationToken, DateOnly? from = null, bool allowSystemCurlFallback = true, bool preferSystemCurl = false)
     {
+        // On Windows, .NET (Schannel) TLS to FRED can hang without honouring its 10-second cancellation, while Windows'
+        // own curl.exe answers in about half a second. Hosts pass preferSystemCurl to try curl first; if curl fails, the
+        // HttpClient path (with curl as its fallback) is used. Non-Windows hosts never use curl (TryGetSystemCurlPath).
         var url = Url(seriesId, from);
+        if ((preferSystemCurl || systemCurlPreferred) && allowSystemCurlFallback && TryGetSystemCurlPath(url, out var preferredCurl))
+        {
+            try
+            {
+                return await DownloadWithSystemCurlAsync(preferredCurl, url, requestedAtUtc, cancellationToken);
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode is null && !cancellationToken.IsCancellationRequested)
+            {
+                // curl stopped working (for example a missing or blocked binary): forget the preference and use HttpClient.
+                systemCurlPreferred = false;
+            }
+        }
+
         for (var attempt = 1; ; attempt++)
         {
             using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -64,7 +83,7 @@ public static class FredSeriesFile
                 }
 
                 if (ex.StatusCode is null && allowSystemCurlFallback && TryGetSystemCurlPath(url, out var curlPath))
-                    return await DownloadWithSystemCurlAsync(curlPath, url, requestedAtUtc, cancellationToken);
+                    return await DownloadWithCurlAndPreferItAsync(curlPath, url, requestedAtUtc, cancellationToken);
                 throw;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -76,10 +95,19 @@ public static class FredSeriesFile
                 }
 
                 if (allowSystemCurlFallback && TryGetSystemCurlPath(url, out var curlPath))
-                    return await DownloadWithSystemCurlAsync(curlPath, url, requestedAtUtc, cancellationToken);
+                    return await DownloadWithCurlAndPreferItAsync(curlPath, url, requestedAtUtc, cancellationToken);
                 throw;
             }
         }
+    }
+
+    // Runs the curl fallback and, when it succeeds, remembers to try curl first on later downloads in this process.
+    private static async Task<FredDownload> DownloadWithCurlAndPreferItAsync(
+        string curlPath, Uri url, DateTimeOffset requestedAtUtc, CancellationToken cancellationToken)
+    {
+        var download = await DownloadWithSystemCurlAsync(curlPath, url, requestedAtUtc, cancellationToken);
+        systemCurlPreferred = true;
+        return download;
     }
 
     // Classifies transport errors (null HTTP status) and upstream gateway 502/503/504 failures as retryable; 4xx fails fast.
@@ -210,7 +238,8 @@ public static class FredSeriesFile
 public sealed class FredVixCloseSource(
     Func<HttpClient> createClient,
     TimeProvider clock,
-    ILogger<FredVixCloseSource>? logger = null) : IVixCloseSource, IDisposable
+    ILogger<FredVixCloseSource>? logger = null,
+    bool preferSystemCurl = false) : IVixCloseSource, IDisposable
 {
     /// <summary>Name of the configured HTTP client (timeout, user agent) the host registers for FRED.</summary>
     public const string HttpClientName = "fred";
@@ -234,7 +263,8 @@ public sealed class FredVixCloseSource(
             try
             {
                 using var http = createClient();
-                var download = await FredSeriesFile.DownloadAsync(http, RegimeRules.FredVixSeries, now, cancellationToken, from);
+                var download = await FredSeriesFile.DownloadAsync(http, RegimeRules.FredVixSeries, now, cancellationToken, from,
+                    preferSystemCurl: preferSystemCurl);
                 var closes = VixCloseSeries.ParseFredCsv(Encoding.UTF8.GetString(download.Bytes));
                 cached = (closes, now);
                 return closes;

@@ -72,7 +72,7 @@ public sealed class NewsCategoryUiTests
             Assert.DoesNotContain($"name=\"{field}\"", primary);
         }
         Assert.Contains("More filters", advanced); Assert.Contains("@Model.AdvancedFilterCount active", advanced);
-        Assert.Contains(".news-feed-column .section-heading p { font-weight: 400; text-transform: none;", Source("wwwroot/css/site.css"));
+        Assert.Contains(".news-feed-column .section-heading p { font-weight: 400; text-transform: none;", Source("wwwroot/css/base.css"));
     }
 
     [Fact]
@@ -178,7 +178,7 @@ public sealed class NewsCategoryUiTests
         Assert.DoesNotContain("role=\"tab\"", page);
         Assert.Contains("Model.RefreshStatus?.Heading ?? \"No matching stored headlines\"", page);
         Assert.Contains("30000", Source("wwwroot/js/news-live.js"));
-        Assert.Contains(".tab-strip.news-category-nav { flex-wrap: wrap", Source("wwwroot/css/site.css"));
+        Assert.Contains(".tab-strip.news-category-nav { flex-wrap: wrap", Source("wwwroot/css/base.css"));
     }
 
     [Fact]

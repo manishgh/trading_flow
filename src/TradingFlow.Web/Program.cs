@@ -43,7 +43,7 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
     ContentRootPath = webContentRoot,
-    WebRootPath = Path.Combine(webContentRoot, "wwwroot")
+    WebRootPath = ResolveWebRootPath(webContentRoot, Environment.GetEnvironmentVariable("ASPNETCORE_WEBROOT"))
 });
 // Console JSON is the portable production sink for local runs, containers,
 // Azure Monitor, Logstash, and Elastic. The ASP.NET Windows default includes
@@ -249,6 +249,7 @@ builder.Services.AddSingleton(new BacktestJobServiceOptions(
             ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKTEST_SNAPSHOT_INTERVAL_MS"),
         (int)BacktestJobServiceOptions.Default.SnapshotInterval.TotalMilliseconds))));
 builder.Services.AddSingleton<BacktestJobService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.PublishedBacktestTrades>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
     serviceProvider.GetRequiredService<BacktestJobService>());
 builder.Services.AddSingleton<TradingFlow.Data.Evidence.Collection.IEvidenceDatasetCollectionRunner, TradingFlow.Data.Evidence.Collection.EvidenceDatasetCollectionRunner>();
@@ -277,6 +278,8 @@ builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(s
     serviceProvider.GetRequiredService<OptimizationJobService>());
 builder.Services.AddSingleton<AlpacaCredentialProvider>();
 builder.Services.AddSingleton<PaperRuntimeFactory>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.WorkspacePulseService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.CatalystOptionsAdrService>();
 builder.Services.AddSingleton<MobileAutomationSessionStore>();
 builder.Services.AddSingleton<PaperEnvironmentService>();
 builder.Services.AddSingleton(new PaperJobServiceOptions(
@@ -312,9 +315,11 @@ builder.Services.AddSingleton<IVixCloseSource>(serviceProvider =>
     return new FredVixCloseSource(
         () => clients.CreateClient(FredVixCloseSource.HttpClientName),
         serviceProvider.GetRequiredService<TimeProvider>(),
-        serviceProvider.GetRequiredService<ILogger<FredVixCloseSource>>());
+        serviceProvider.GetRequiredService<ILogger<FredVixCloseSource>>(),
+        // Windows .NET TLS to FRED can hang past its timeout; Windows' curl.exe answers in about half a second.
+        preferSystemCurl: OperatingSystem.IsWindows());
 });
-// Read-only Alpaca paid OPRA options sentiment context for Desk display and optional strategy skew gates.
+// Read-only Alpaca paid OPRA options sentiment context for Desk display.
 builder.Services.AddHttpClient(TradingFlow.Alpaca.AlpacaOptionsSnapshotClient.HttpClientName, client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
@@ -1192,6 +1197,14 @@ static string ResolveWebContentRoot(string currentDirectory)
     }
 
     return currentDirectory;
+}
+
+// Honors an explicit ASPNETCORE_WEBROOT override so published hosts serve matched bin\wwwroot assets alongside compiled Razor DLLs.
+static string ResolveWebRootPath(string webContentRoot, string? configuredWebRoot)
+{
+    return String.IsNullOrWhiteSpace(configuredWebRoot)
+        ? Path.Combine(webContentRoot, "wwwroot")
+        : configuredWebRoot.Trim();
 }
 
 

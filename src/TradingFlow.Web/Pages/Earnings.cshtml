@@ -24,12 +24,14 @@
         !String.Equals(pair.Value.ToString(), defaultValue, StringComparison.OrdinalIgnoreCase));
 }
 
-<link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+@section Styles {
+    <link rel="stylesheet" href="~/css/market-workspace.css" asp-append-version="true" />
+}
 
 <header class="page-header market-page-header">
     <div>
-        <h1>Earnings monitor</h1>
-        <p>Reporting calendar, results and breakout evidence.</p>
+        @* The sidebar and sub-tab already name this screen; the heading stays for screen readers only. *@
+        <h1 class="visually-hidden">Earnings monitor</h1>
         <p id="earnings-observation" role="status">First analysis status is being read…</p>
         <p id="earnings-next-action" class="muted"></p>
         <details class="feed-evidence">
@@ -37,6 +39,9 @@
             <p id="earnings-calendar-evidence">Finviz calendar coverage not yet observed.</p>
             <ul id="earnings-news-evidence"></ul>
         </details>
+    </div>
+    <div class="actions">
+        <a class="btn btn-secondary btn-md" asp-page="/Desk">Open Desk ↗</a>
     </div>
 </header>
 
@@ -103,6 +108,20 @@
         <span class="earnings-lane-tickers" data-lane-tickers>None</span>
     </button>
 </div>
+
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <section class="catalysts-opra-strip" data-catalysts-opra data-catalysts-page="earnings" data-catalysts-symbols="SPY,QQQ" aria-label="OPRA implied move versus 20-day average daily range">
+        <div class="catalysts-opra-head">
+            <div>
+                <span class="watch-kicker">OPRA IMPLIED MOVE VS 20D ADR%</span>
+                <span class="note" data-catalysts-opra-status role="status">Loading OPRA implied-move context…</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" data-catalysts-opra-refresh>Refresh OPRA</button>
+        </div>
+        <div class="catalysts-opra-grid" data-catalysts-opra-grid></div>
+    </section>
+}
 
 @* Keep date, search and result assessment visible; essential refinements stay in the disclosure. *@
 <section class="earnings-filters market-filter-panel" aria-label="Earnings filters">
@@ -213,7 +232,9 @@
    Body - timeline and evidence rail
    =========================================================================== *@
 <div class="earnings-body">
-    <section id="earnings-feed" class="earnings-timeline" aria-label="Chronological earnings calendar"></section>
+    <section id="earnings-feed" class="earnings-timeline" data-empty="true" aria-label="Chronological earnings calendar">
+        <p class="empty-state earnings-empty-line">Loading scheduled earnings reports, EPS/revenue results, and breakout checks…</p>
+    </section>
 
     <aside class="earnings-rail" aria-labelledby="earnings-news-title">
         <header class="earnings-rail-head">
@@ -233,7 +254,7 @@
 </div>
 
 <template id="earnings-empty-template">
-    <p class="empty-state">Earnings evidence is being read.</p>
+    <p class="empty-state earnings-empty-line">Earnings evidence is being read.</p>
 </template>
 
 <partial name="_GroupActions" />
@@ -241,4 +262,8 @@
 @section Scripts {
     <script src="~/js/earnings.js" asp-append-version="true"></script>
     <script type="module" src="~/js/group-actions.js" asp-append-version="true"></script>
+    @if (User.Identity?.IsAuthenticated == true)
+    {
+        <script src="~/js/catalysts-opra.js" asp-append-version="true" defer></script>
+    }
 }

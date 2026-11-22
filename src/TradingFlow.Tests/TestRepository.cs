@@ -37,14 +37,14 @@ internal static class TestRepository
         ["technical.opening-range-breakout", "etf.trend-10m", "etf.buy-and-hold-control"];
 
     /// <summary>
-    /// Writes a test-owned copy of the repository strategy catalog into <paramref name="folder"/> with the strategies set
-    /// aside on 18 November 2026 enabled, and returns its path. Tests that exercise the shared opening-range, intraday,
-    /// month-end and research-screen machinery through those recipes read this copy instead of re-enabling the strategies
-    /// for real runs. Every other entry, path and content hash is unchanged.
+    /// Writes a test-owned copy of the retired/set-aside fixture catalog into <paramref name="folder"/> with the strategies
+    /// set aside on 18 November 2026 enabled, and returns its path. Tests that exercise the shared opening-range, intraday,
+    /// month-end and research-screen machinery through those recipes pair this copy with <see cref="RetiredStrategyFixtures.Root"/>
+    /// instead of keeping disabled strategies in the live operator catalog. Every other entry, path and content hash is unchanged.
     /// </summary>
     public static string SetAsideStrategiesEnabledCatalog(string folder)
     {
-        var catalog = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(FindRoot(), "configs", "strategy-catalog.json")))!;
+        var catalog = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(RetiredStrategyFixtures.CatalogPath))!;
         EnableSetAsideStrategies(catalog);
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, "strategy-catalog.json");

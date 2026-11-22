@@ -323,13 +323,15 @@ Paper configs:
 Strategy classification:
 
 - `configs/strategy-catalog.json` is the authority.
-- As verified on 15 November 2026, the catalog holds 6 research artifacts and no
-  archived artifacts. Five are operationally enabled: opening-range breakout
-  1.2.0, 2.0.0 and 2.1.0; `etf.trend-10m@1.0.0`; and
-  `etf.buy-and-hold-control@1.0.0`. `etf.rotation-12-1@1.0.0` remains explicitly
-  disabled for later standalone research. Catalog research availability grants
-  neither paper execution nor live authorization; the buy-and-hold control is a
-  measurement benchmark, not a strategy to trade. Connors RSI-2 (long and short), snapback (long and short) and
+- As verified on 21 November 2026 (branch `ui/redesign-v2`), the catalog holds 10 swing
+  research artifacts, all enabled for research and none archived: Bollinger squeeze breakout
+  and breakdown 1.0.0; 21-EMA trend pullback 1.0.0 and 1.1.0; 21-EMA rejection short 1.0.0 and
+  1.1.0; rubber-band reclaim 1.0.0; news ORB swing and news ORB breakdown 1.0.0; parabolic
+  exhaustion short 1.0.0. Catalog research availability grants neither paper execution nor
+  live authorization. The user retired opening-range breakout 1.2.0, 2.0.0 and 2.1.0 and the
+  ETF strategies (`etf.trend-10m`, `etf.buy-and-hold-control`, `etf.rotation-12-1`) on
+  21 November 2026 (`docs/research/retired-strategy-artifacts-2026-11-21.md`); index and
+  sector funds remain in use only as regime and sector-ranking inputs. Connors RSI-2 (long and short), snapback (long and short) and
   `technical.recovery-sma5-news-avoidance` were retired on 13 November 2026 after the ten-year
   signal study (`docs/research/retired-strategy-artifacts-2026-11-13.md`); earlier removals are in
   `docs/research/retired-strategy-artifacts-2026-11-07.md`. Test-owned copies of the retired files

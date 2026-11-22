@@ -69,8 +69,9 @@ public sealed class DeskReadModelTests
         var sources=new DeskSources(db,repository,presets,screener.Object,cache);
         var catalog=await sources.CatalogAsync(default);
         Assert.Equal("All followed stocks",catalog.Single(source=>source.Key=="all").Name);
-        Assert.Contains(catalog,source=>source.Key=="wishlist:"+first.Id&&source.Group=="My stock groups");
-        Assert.Equal(new[] { "My stock groups", "Finviz lists" }, catalog.Where(x=>x.Group!="").Select(x=>x.Group).Distinct());
+        Assert.Contains(catalog,source=>source.Key=="wishlist:"+first.Id&&source.Group=="My groups");
+        Assert.All(catalog, source => Assert.False(String.IsNullOrWhiteSpace(source.Group)));
+        Assert.Equal(new[] { "Overview", "My groups", "Saved screens", "Finviz signals" }, catalog.Select(x=>x.Group).Distinct());
         Assert.DoesNotContain(await repository.ListAsync(default), x=>x.Id==historical.Id);
         Assert.DoesNotContain(catalog,x=>x.Key.Contains(historical.Id.ToString()));
         Assert.Equal("AAPL",Assert.Single((await sources.ResolveAsync("all",default)).Members).Symbol);

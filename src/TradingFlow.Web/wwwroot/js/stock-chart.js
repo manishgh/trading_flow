@@ -1,7 +1,11 @@
 (() => {
     'use strict';
 
-    const prices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 });
+    const zonePrices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const subDollarPrices = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    // Formats chart prices (readout, levels, zones) with two decimals and up to four only below $1, matching the
+    // dollar format of the study values in stock-chart-indicators.js. The Desk table's own money() keeps two decimals.
+    const prices = { format: value => (Math.abs(Number(value)) < 1 ? subDollarPrices : zonePrices).format(value) };
     const numbers = new Intl.NumberFormat();
     const percents = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, signDisplay: 'exceptZero' });
     const clockFormat = {
@@ -133,19 +137,54 @@
         });
     }
 
-    // Mount one read-only chart instance with scoped controls, data and disposal.
-    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost } = {}) {
+    // Mount one read-only chart instance with scoped controls, data, optional host defaults/zone/highlight callbacks, and disposal.
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones, compactDesk, controlsHost, quickIntervalHost, onSeriesInfo, onHighlightChange, onStudies } = {}) {
         const acceptance = Boolean(acceptanceCorrelation);
         let acceptanceStarted = false;
         const summaryNodes = new Map();
+        const relocatedNodes = [];
         if (summaryHost) {
             const head = root.querySelector('.stock-chart-head');
             for (const name of ['status', 'completed-note', 'full']) summaryNodes.set(name, head.querySelector('[data-chart-' + name + ']'));
             summaryHost.append(...head.childNodes);
             head.hidden = true;
         }
-        // Find the component's elements inside this instance so other hosts remain independent.
-        const get = name => summaryNodes.get(name) || root.querySelector('[data-chart-' + name + ']');
+        // Relocates a chart sub-element into a compact Desk container and records its original slot for clean disposal.
+        function relocateNode(node, destination, prepend = false) {
+            if (!node || !destination) return;
+            relocatedNodes.push({ node, parent: node.parentNode, nextSibling: node.nextSibling });
+            if (prepend) destination.prepend(node);
+            else destination.append(node);
+        }
+        // Moves Desk readout into the chart stage overlay and tucks secondary controls/navigation inside Studies & settings while keeping Retry chart visible.
+        function applyCompactDeskLayout() {
+            if (!compactDesk) return;
+            root.dataset.compactDesk = 'true';
+            const stage = root.querySelector('.stock-chart-stage');
+            const readout = root.querySelector('[data-chart-readout]');
+            relocateNode(readout, stage);
+            const more = root.querySelector('.stock-chart-more');
+            const moreBody = more?.querySelector('.stock-chart-more-body');
+            if (moreBody) {
+                const navRow = element('div', null, 'stock-chart-more-nav');
+                for (const selector of ['[data-chart-older]', '[data-chart-latest]', '[data-chart-history-reload]', '[data-chart-details-open]', '[data-chart-history-status]']) {
+                    relocateNode(root.querySelector(selector), navRow);
+                }
+                const controlsRow = element('div', null, 'stock-chart-more-controls');
+                relocateNode(root.querySelector('.stock-chart-controls'), controlsRow);
+                const presetLabel = root.querySelector('.stock-chart-study-toolbar > label');
+                relocateNode(presetLabel, controlsRow);
+                moreBody.prepend(controlsRow, navRow);
+            }
+            if (more && controlsHost) {
+                relocateNode(more, controlsHost);
+            }
+        }
+        applyCompactDeskLayout();
+        // Find the component's elements inside this instance (and any Desk host slots) so other hosts remain independent.
+        const get = name => summaryNodes.get(name)
+            || root.querySelector('[data-chart-' + name + ']')
+            || controlsHost?.querySelector('[data-chart-' + name + ']');
         const transport = window.TradingFlowStockChartTransport;
         const plotting = window.TradingFlowStockChartPlot;
         const indicatorLibrary = window.TradingFlowStockChartIndicators;
@@ -169,6 +208,9 @@
         let preservedSession;
         let forming;
         let drawnForming;
+        let pendingTradePlan = null;
+        let highlightedOverlay = null;
+        let studyLegendHost = null;
         let privateReady = false;
         let privateLayer = privateContext?.symbol === root.dataset.symbol
             ? window.TradingFlowPrivateChart?.mount(root, privateContext, events => plot?.setPrivateEvents(events), timestamp)
@@ -179,11 +221,23 @@
             node.addEventListener(event, handler, { signal: controller.signal });
         }
 
+        // Forwards compact series status, completed-candle note, and source summary to the Desk info tooltip.
+        function emitSeriesInfo() {
+            if (!onSeriesInfo) return;
+            const parts = [
+                get('status')?.textContent,
+                get('completed-note')?.textContent,
+                get('source')?.textContent
+            ].filter(Boolean);
+            onSeriesInfo(parts.join(' · '));
+        }
+
         // Keep a status transition accessible while preserving the last price data on screen.
         function setStatus(state, text) {
             root.dataset.state = state;
             if (summaryHost) summaryHost.dataset.state = state;
             if (get('status').textContent !== text) get('status').textContent = text;
+            emitSeriesInfo();
         }
 
         // Surface live transport state alongside the source's independently reported status.
@@ -223,6 +277,7 @@
             if (showSessions) source.append(' · Shading: ',
                 element('span', 'Premarket', 'stock-chart-early'), ' / ',
                 element('span', 'Postmarket', 'stock-chart-late'));
+            emitSeriesInfo();
         }
 
         // Present preview evidence independently and never inspect it as a completed candle.
@@ -245,6 +300,7 @@
             if (enabled && status.textContent !== label) status.textContent = label;
             const completedNote = candidate ? 'Readout shows completed candles' : 'Completed candles only';
             if (get('completed-note').textContent !== completedNote) get('completed-note').textContent = completedNote;
+            emitSeriesInfo();
             get('forming-section').hidden = !enabled;
             fields(get('forming-evidence'), !enabled ? [] : [
                 ['Status', label],
@@ -277,20 +333,24 @@
             if (index === -1) return;
             const bar = currentBars[index];
             selected = start;
-            const values = [
+            const fullValues = [
                 ['Open', prices.format(bar.open)], ['High', prices.format(bar.high)], ['Low', prices.format(bar.low)],
                 ['Close', prices.format(bar.close)], ['Volume', numbers.format(bar.volume)]
             ];
+            const values = compactDesk ? [
+                ['O', prices.format(bar.open)], ['H', prices.format(bar.high)], ['L', prices.format(bar.low)],
+                ['C', prices.format(bar.close)], ['Vol', numbers.format(bar.volume)]
+            ] : fullValues;
             const title = candleCaption(bar, key.interval);
             const time = get('candle-time');
             if (time.textContent !== title) time.textContent = title;
             fields(get('values'), values, true);
-            const indicators = studies.readouts(start).map(([label, value, available, anchor, revision, reconstructedStudy, observed, historical]) =>
-                ({ label, value, available, anchor, revision, reconstructedStudy, observed, historical }));
+            const indicators = studies.readouts(start).map(([label, value, available, anchor, revision, reconstructedStudy, observed, historical, formula, slot, token]) =>
+                ({ label, value, available, anchor, revision, reconstructedStudy, observed, historical, formula, slot, token }));
             const studyReadout = get('study-values');
             studyReadout.hidden = !indicators.length;
-            const measurements = indicators.map(({ label, value }) => [label, value]);
-            fields(studyReadout, measurements, true);
+            fields(studyReadout, indicators.map(({ label, value }) => [label, value]), true);
+            renderStudyLegend(indicators);
             const history = get('study-history');
             const notes = [
                 indicators.some(item => item.reconstructedStudy) ? 'Study history includes reconstructed values' : '',
@@ -302,8 +362,60 @@
             get('prev').disabled = index === 0;
             get('next').disabled = index === currentBars.length - 1;
             get('readout').hidden = false;
-            if (announce) get('inspection').textContent = title + '. ' + values
+            if (announce) get('inspection').textContent = title + '. ' + fullValues
                 .map(([label, value]) => label + ' ' + value).join(', ');
+        }
+
+        // Renders clickable colored study legend chips inside the on-chart readout so study colors and hovered values stay visible on the chart.
+        function renderStudyLegend(indicators) {
+            const readout = get('readout');
+            if (!readout) return;
+            if (!studyLegendHost) {
+                studyLegendHost = element('div', null, 'stock-chart-study-legend');
+                studyLegendHost.dataset.chartStudyLegend = '';
+                readout.append(studyLegendHost);
+                on(studyLegendHost, 'click', event => {
+                    const chip = event.target.closest('[data-highlight-key]');
+                    if (!chip) return;
+                    const key = chip.dataset.highlightKey;
+                    setHighlightedOverlay(highlightedOverlay === key ? null : key, true);
+                });
+            }
+            const visible = (indicators || []).filter(item => item.formula && item.value && item.value !== 'Unavailable for this candle');
+            studyLegendHost.hidden = !visible.length;
+            if (!visible.length) {
+                studyLegendHost.replaceChildren();
+                return;
+            }
+            const nodes = visible.map(item => {
+                const highlightKey = item.token;
+                const shortLabel = String(item.label || item.formula).replace(/\s*·.*$/, '');
+                const chip = element('button', `${shortLabel} ${item.value}`, 'stock-chart-study-chip');
+                chip.type = 'button';
+                chip.dataset.highlightKey = highlightKey;
+                const active = highlightedOverlay === highlightKey;
+                chip.dataset.highlighted = String(active);
+                chip.setAttribute('aria-pressed', String(active));
+                const slot = Number.isInteger(item.slot) ? item.slot % 5 : 0;
+                chip.style.setProperty('--ind-swatch', `var(--stock-chart-study-${slot})`);
+                chip.title = `${item.label}: ${item.value} · Click to highlight on chart`;
+                return chip;
+            });
+            studyLegendHost.replaceChildren(...nodes);
+        }
+
+        // Syncs active highlight state on on-chart legend chips and forwards it to the plot and optional host callback.
+        function setHighlightedOverlay(key, notifyHost = false) {
+            highlightedOverlay = key ? String(key).trim().toLowerCase() : null;
+            plot?.setHighlightedOverlay(highlightedOverlay);
+            if (studyLegendHost) {
+                for (const chip of studyLegendHost.querySelectorAll('[data-highlight-key]')) {
+                    const active = chip.dataset.highlightKey === highlightedOverlay;
+                    chip.dataset.highlighted = String(active);
+                    chip.setAttribute('aria-pressed', String(active));
+                }
+            }
+            if (notifyHost) onHighlightChange?.(highlightedOverlay);
         }
 
         // Keep the same selected candle and matched studies in the chart details with their independent clocks.
@@ -399,27 +511,34 @@
             if (focus) [...get('levels').querySelectorAll('input')].find(input => input.dataset.chartLevel === focus)?.focus({ preventScroll: true });
         }
 
-        // Name each support/resistance band consistently in the compact key and the detailed evidence.
+        // Name each support/resistance band consistently in the detailed evidence modal.
         function zoneTitle(zone) {
             const label = zone.type === 'support' ? 'Support' : 'Resistance';
             return label + ' · ' + prices.format(zone.lower) + ' – ' + prices.format(zone.upper);
         }
 
-        // Label every enabled band beside the plot, including bands outside the visible price range.
+        // Format a compact 2-decimal support/resistance label with minimum words for the chart zone key.
+        function compactZoneTitle(zone) {
+            const label = zone.type === 'support' ? 'Support' : 'Resistance';
+            return label + ' ' + zonePrices.format(zone.lower) + '–' + zonePrices.format(zone.upper);
+        }
+
+        // Label visible bands concisely with 2-decimal bounds, keeping pivot/timestamp evidence in tooltips and notifying hosts.
         function renderZoneKey(zones) {
             const keyList = get('zone-key');
-            const visible = zones.filter(zone => layers[zone.type] && !hiddenZones.has(zone.id));
+            const visible = (zones || []).filter(zone => layers[zone.type] && !hiddenZones.has(zone.id));
             keyList.replaceChildren(...visible.map(zone => {
                 const item = element('li');
                 item.dataset.zoneType = zone.type;
                 const evidence = [zone.currentOnly ? 'Current zone' : 'Historical zone', zone.sourceTimeframe + ' pivots'];
                 if (zone.isPriceInBand) evidence.push('Latest close in band');
-                const cutoff = element('small', 'Inputs available ' + zone.effectiveAtUtc);
-                cutoff.title = timestamp(zone.effectiveAtUtc);
-                item.append(element('strong', zoneTitle(zone)), element('small', evidence.join(' · ')), cutoff);
+                if (zone.effectiveAtUtc) evidence.push('Inputs available ' + timestamp(zone.effectiveAtUtc));
+                item.title = evidence.join(' · ');
+                item.append(element('strong', compactZoneTitle(zone)));
                 return item;
             }));
             keyList.hidden = visible.length === 0;
+            onZones?.(visible, root.dataset.symbol || null);
         }
 
         // Show the boundaries and effective clock behind each eligible support or resistance band.
@@ -511,6 +630,13 @@
             get('latest').disabled = currentBars.length === 0;
         }
 
+        // Give the host the selected indicators, and end a highlight whose indicator is no longer selected.
+        function announceStudies() {
+            if (highlightedOverlay && highlightedOverlay !== 'support' && !studies.tokens().includes(highlightedOverlay))
+                setHighlightedOverlay(null, true);
+            onStudies?.(studies.summary(), key?.symbol, get('interval').value);
+        }
+
         // Update the visible baseline, combining only compatible earlier evidence.
         function paint(retainPosition) {
             currentBars = joinedBars(snapshot, olderPages);
@@ -529,6 +655,7 @@
             const selectedStudies = indicatorLibrary.joinedStudies(snapshot, olderPages.slice().reverse(), studies.tokens());
             earlierStudiesChanged = selectedStudies.some(study => study.earlierUnavailable);
             studies.update(selectedStudies);
+            announceStudies();
             pointerMoved = false;
             plot.setData({ bars: currentBars, zones, levels: currentLevels, events, interval: key.interval,
                 basisBreaks: recent.flatMap(page => page.evidence.basisBreaks || []),
@@ -618,6 +745,11 @@
                 ? '1d structure · ' + horizonLabels[context] + ' · Current confirmed zones'
                 : '15m structure · Current confirmed zones';
             get('context-label').hidden = weekly;
+            if (quickIntervalHost) {
+                for (const btn of quickIntervalHost.querySelectorAll('[data-quick-interval]')) {
+                    btn.setAttribute('aria-pressed', String(btn.dataset.quickInterval === interval));
+                }
+            }
             return context;
         }
 
@@ -669,12 +801,16 @@
                 if (acceptance) onAcceptanceEnded?.('Chart assets could not load.');
                 return;
             }
-            if (!plot) plot = plotting.createPlot(get('plot'), start => {
-                // Layout and programmatic crosshair updates must not replace a keyboard or prior selection.
-                if (!pointerMoved) return;
-                pointerMoved = false;
-                if (start !== selected) inspect(start);
-            }, privateLayer ? updatePrivateWindow : undefined);
+            if (!plot) {
+                plot = plotting.createPlot(get('plot'), start => {
+                    // Layout and programmatic crosshair updates must not replace a keyboard or prior selection.
+                    if (!pointerMoved) return;
+                    pointerMoved = false;
+                    if (start !== selected) inspect(start);
+                }, privateLayer ? updatePrivateWindow : undefined);
+                if (pendingTradePlan) plot.setTradePlanLevels(pendingTradePlan);
+                if (highlightedOverlay) plot.setHighlightedOverlay(highlightedOverlay);
+            }
             if (reset) {
                 plot.setData({ bars: [], zones: [], levels: [], events: [], basisBreaks: [], interval });
                 plot.setLayers(layers, hiddenLevels, hiddenZones);
@@ -781,11 +917,19 @@
             }
         }
 
+        // Forwards advisory server Entry/Stop/Target reference levels to the active plot (or queues them until plot creation) and clears on null.
+        function setTradePlanLevels(plan) {
+            pendingTradePlan = plan || null;
+            plot?.setTradePlanLevels(pendingTradePlan);
+        }
+
         // Replace only the symbol, preserving the operator's interval and layer settings.
         function setSymbol(symbol) {
             const normalized = (symbol || '').trim().toUpperCase().replaceAll('.', '-');
             if (root.dataset.symbol === normalized && active) return;
             details.close();
+            setTradePlanLevels(null);
+            setHighlightedOverlay(null, true);
             if (privateLayer && normalized !== privateContext.symbol) {
                 privateLayer.dispose();
                 privateLayer = null;
@@ -818,7 +962,7 @@
             indicatorLibrary.remember({
                 ...Object.fromEntries(Object.keys(defaults).map(name => [name, get(name).value])),
                 session: preservedSession ?? get('session').value,
-                preset: get('preset').value, indicators: studies.tokens(), layers
+                preset: get('preset').value, indicators: studies.chosen(), layers
             });
         }
 
@@ -832,7 +976,8 @@
                 params.structure = 'daily';
                 params.lookback = context;
             } else if (context === 'intraday' || context === 'auto') params.structure = context;
-            for (const [name, fallback] of Object.entries(defaults)) {
+            const effectiveDefaults = defaultInterval ? { ...defaults, interval: defaultInterval } : defaults;
+            for (const [name, fallback] of Object.entries(effectiveDefaults)) {
                 const select = get(name);
                 const value = params[name] ?? settings[name];
                 select.value = [...select.options].some(option => option.value === value) ? value : fallback;
@@ -842,7 +987,11 @@
                 checkbox.checked = typeof settings.layers?.[name] === 'boolean' ? settings.layers[name] : checkbox.defaultChecked;
                 layers[name] = checkbox.checked;
             }
-            const indicators = query.has('indicators') ? query.get('indicators').split(',') : settings.indicators;
+            const indicators = query.has('indicators')
+                ? query.get('indicators').split(',')
+                : Array.isArray(settings.indicators)
+                    ? settings.indicators
+                    : (Array.isArray(defaultStudies) ? defaultStudies : undefined);
             studies.restore(indicators, query.get('preset') ?? settings.preset);
         }
 
@@ -854,6 +1003,7 @@
                 plot?.clearStudies();
                 inspect(selected);
                 startSelection(!snapshot || intervalChanged);
+                announceStudies();
             }
             savePreferences();
         }, pane => {
@@ -870,8 +1020,24 @@
         for (const picker of Object.keys(defaults)) on(get(picker), 'change', () => {
             if (picker === 'interval') studies.intervalChanged();
             startSelection();
+            announceStudies();
             savePreferences();
         });
+        if (quickIntervalHost) {
+            // Syncs compact Desk 1d/1w/5m quick buttons with the canonical interval select and saved preferences.
+            on(quickIntervalHost, 'click', event => {
+                const button = event.target.closest('[data-quick-interval]');
+                if (!button || acceptance) return;
+                const next = button.dataset.quickInterval;
+                const select = get('interval');
+                if (!select || select.value === next) return;
+                select.value = next;
+                studies.intervalChanged();
+                startSelection();
+                announceStudies();
+                savePreferences();
+            });
+        }
         on(get('reset'), 'click', () => {
             if (acceptance) return;
             indicatorLibrary.remember(null);
@@ -947,9 +1113,15 @@
         if (root.dataset.symbol) startSelection();
         return {
             setSymbol,
+            setTradePlanLevels,
+            setHighlightedOverlay,
             // Close the details and release network work and canvases when the chart host is absent.
             dispose() {
                 details.close();
+                pendingTradePlan = null;
+                highlightedOverlay = null;
+                studyLegendHost?.remove();
+                studyLegendHost = null;
                 privateReady = false;
                 privateLayer?.dispose();
                 controller.abort();
@@ -957,6 +1129,13 @@
                 const result = stop();
                 active = null;
                 plot?.dispose();
+                for (let index = relocatedNodes.length - 1; index >= 0; index--) {
+                    const { node, parent, nextSibling } = relocatedNodes[index];
+                    if (parent) parent.insertBefore(node, nextSibling && nextSibling.parentNode === parent ? nextSibling : null);
+                }
+                relocatedNodes.length = 0;
+                for (const wrapper of root.querySelectorAll('.stock-chart-more-nav, .stock-chart-more-controls')) wrapper.remove();
+                delete root.dataset.compactDesk;
                 if (summaryHost) {
                     const head = root.querySelector('.stock-chart-head');
                     head.append(...summaryHost.childNodes);

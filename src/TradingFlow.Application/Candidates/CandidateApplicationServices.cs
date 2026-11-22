@@ -121,13 +121,7 @@ public sealed class CandidateApplicationService(
                 transition.ReasonCode,
                 transition.Source,
                 transition.SemanticDecisionSha256)).ToArray(),
-            decisionRules.Concat(gateRows.Select(gate => new GateEvaluationResponse(
-                gate.GateOrder,
-                gate.GateName,
-                gate.Passed,
-                gate.RejectCode?.ToString(),
-                gate.EvaluatedAtUtc,
-                ReadStringMap(gate.InputsJson)))).ToArray(),
+            decisionRules.Concat(gateRows.Select(ToGateEvaluation)).ToArray(),
             market,
             catalyst is null ? null : new CatalystEvidenceResponse(
                 catalyst.CatalystResultId,
@@ -240,6 +234,15 @@ public sealed class CandidateApplicationService(
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
     }
 
+    // Projects one recorded order gate with a sentence from its reject code and recorded values.
+    private static GateEvaluationResponse ToGateEvaluation(GateEvaluationRecord gate)
+    {
+        var inputs = ReadStringMap(gate.InputsJson);
+        return new GateEvaluationResponse(gate.GateOrder, gate.GateName, gate.Passed, gate.RejectCode?.ToString(),
+            gate.EvaluatedAtUtc, inputs, GateCheckExplanation.DescribeOrderGate(gate.RejectCode?.ToString(), inputs));
+    }
+
+    // Reads the strategy rules recorded with the latest decision, each with a plain explanation of its own numbers.
     private static IReadOnlyList<GateEvaluationResponse> ReadDecisionRules(CandidateTransitionRecord? transition)
     {
         if (transition is null) return [];
@@ -250,8 +253,9 @@ public sealed class CandidateApplicationService(
             return rules.EnumerateArray().Select((rule, index) => {
                 var code = rule.GetProperty("code").GetString() ?? "unknown";
                 var passed = rule.GetProperty("passed").GetBoolean();
+                var inputs = ReadStringMap(rule.GetProperty("evidenceJson").GetString() ?? "{}");
                 return new GateEvaluationResponse(index, "strategy:" + code, passed, passed ? null : code,
-                    transition.OccurredAtUtc, ReadStringMap(rule.GetProperty("evidenceJson").GetString() ?? "{}"));
+                    transition.OccurredAtUtc, inputs, GateCheckExplanation.Describe(code, inputs));
             }).ToArray();
         }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException) { return []; }

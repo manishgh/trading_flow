@@ -101,16 +101,20 @@
     }
 
     const emptyNotes = new Map();
-    // The calendar, news and attention lanes have different evidence and cannot share an unconditional empty claim.
+    // Builds a concise 1-line empty state stating what will appear and the next scheduled reporting day when available.
     function emptyNote(container) {
         if (!emptyNotes.has(container)) emptyNotes.set(container, emptyTemplate.content.firstElementChild.cloneNode(true));
         const note = emptyNotes.get(container);
         const observation = latestPayload?.status;
-        note.textContent = container === newsFeed
-            ? 'No stored news matches this view. See source refresh evidence for coverage.'
-            : observation?.windowCovered
-                ? 'No earnings events match this view in the latest covered Finviz window.'
-                : 'No stored earnings events match this view. Current calendar coverage is unconfirmed.';
+        if (container === newsFeed) {
+            note.textContent = 'No stored news matches this view. See source refresh evidence for coverage.';
+            return note;
+        }
+        const nextLabel = latestPayload?.nextBusinessDateLabel;
+        const nextSuffix = nextLabel ? ` Next scheduled reporting day: ${nextLabel}.` : '';
+        note.textContent = observation?.windowCovered
+            ? `No earnings reports match this view — scheduled reports, EPS/revenue results, and breakout checks appear here.${nextSuffix}`
+            : `No stored earnings reports match this view (calendar coverage unconfirmed) — scheduled reports and results appear here.${nextSuffix}`;
         return note;
     }
 
@@ -552,6 +556,7 @@
 
     // Group the selected dates into New York reporting days while retaining existing card nodes.
     function renderTimeline(items, payload, totalForGroup) {
+        feed.dataset.empty = items.length ? 'false' : 'true';
         if (!items.length) { syncChildren(feed, [emptyNote(feed)]); return []; }
 
         const groups = new Map();
@@ -693,6 +698,13 @@
         countLabel.textContent = filtered.length || latestPayload.status?.windowCovered
             ? `${filtered.length} of ${latestPayload.totalMatching ?? all.length} matching stored events${latestPayload.truncated ? " · first 2000 shown" : ""}`
             : 'Current event count unconfirmed';
+        window.dispatchEvent(new CustomEvent('tradingflow:earnings-symbols-changed', {
+            detail: {
+                symbols: filtered.slice(0, 6).map(item => item.ticker).filter(Boolean),
+                search: searchInput?.value || '',
+                activeLane
+            }
+        }));
     }
 
     // Name the latest analysis result and show separately when Finviz and each news source were read.

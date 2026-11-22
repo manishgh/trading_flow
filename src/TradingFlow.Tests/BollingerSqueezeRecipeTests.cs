@@ -86,9 +86,12 @@ public sealed class BollingerSqueezeRecipeTests
         Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunPaperShadow));
         Assert.Empty(catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.RunLive));
 
-        var openingRange = artifacts.Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
+        Assert.DoesNotContain(artifacts, artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout");
+        var retiredCatalog = RetiredStrategyFixtures.Catalog();
+        var openingRange = retiredCatalog.GetSnapshot().ExecutableArtifacts
+            .Where(artifact => artifact.Identity.StrategyId == "technical.opening-range-breakout").ToArray();
         Assert.Equal(3, openingRange.Length);
-        Assert.All(openingRange, artifact => Assert.Contains("Set aside 18 November 2026", catalog.GetDisabledReason(artifact)));
+        Assert.All(openingRange, artifact => Assert.Contains("Set aside 18 November 2026", retiredCatalog.GetDisabledReason(artifact)));
     }
 
     // A completed daily snapshot whose Bollinger bands have the given width in percent of the middle band (middle 100).

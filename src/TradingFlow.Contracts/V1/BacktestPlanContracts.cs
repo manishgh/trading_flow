@@ -131,3 +131,70 @@ public sealed record MonthlyRunBenchmark(string Ticker, decimal? ReturnPct, stri
     string? UnavailableReason, string? PriceAdjustmentPolicy = null, DateTimeOffset? PeriodStartUtc = null,
     DateTimeOffset? PeriodEndUtc = null, decimal? OpeningPrice = null, decimal? ClosingPrice = null,
     DateTimeOffset? OpeningTimestampUtc = null, DateTimeOffset? ClosingTimestampUtc = null);
+
+/// <summary>
+/// Read-only multi-strategy × NY-session month matrix for one saved backtest plan.
+/// Contains strictly monthly figures per strategy version and cohort on month-opening equity; never exposes accumulated
+/// multi-month or pooled multi-strategy/cohort returns.
+/// </summary>
+public sealed record SavedPlanMonthlyMatrixResponse(
+    string ContractVersion,
+    long PlanId,
+    string RunName,
+    IReadOnlyList<string> Months,
+    IReadOnlyList<SavedPlanMonthlyMatrixRow> Rows);
+
+/// <summary>One job/strategy/cohort/batch row in a saved plan's monthly comparison matrix.</summary>
+public sealed record SavedPlanMonthlyMatrixRow(
+    Guid JobId,
+    string CohortName,
+    string StrategyId,
+    string StrategyName,
+    string SemanticVersion,
+    string ContentSha256,
+    DateTimeOffset CreatedAtUtc,
+    string Status,
+    IReadOnlyList<SavedPlanMonthlyMatrixCell> Cells,
+    IReadOnlyList<SavedPlanRejectionSummary> TopRejections,
+    string? MonthlyUnavailableReason = null,
+    IReadOnlyList<SavedPlanMonthlyTradeSample>? SampleTrades = null);
+
+/// <summary>One immutable NY-session month cell sourced directly from <see cref="MonthlyRunResult"/>.</summary>
+public sealed record SavedPlanMonthlyMatrixCell(
+    string Month,
+    decimal? ReturnPct,
+    decimal? OpeningEquity,
+    decimal? ClosingEquity,
+    decimal? MaxDrawdownPct,
+    int? ClosedTrades,
+    int? OpenPositions,
+    bool PartialMonth,
+    string ValuationBasis,
+    string? UnavailableReason);
+
+/// <summary>Canonical rejection code and recorded count for one strategy job's diagnostics.</summary>
+public sealed record SavedPlanRejectionSummary(string Code, int Count, string? Explanation = null);
+
+/// <summary>
+/// One job's trades that exited in one New York month. From the published result it holds every such trade; otherwise only
+/// those among the trades stored with the job, with the reason the published result could not be used.
+/// </summary>
+public sealed record SavedPlanMonthTradesResponse(
+    string ContractVersion,
+    string Month,
+    IReadOnlyList<SavedPlanMonthlyTradeSample> Trades,
+    bool FromPublishedResult,
+    string? UnavailableReason);
+
+/// <summary>One retained completed-trade sample stamped with its NY exit month for the Strategy Lab slide-over drawer.</summary>
+public sealed record SavedPlanMonthlyTradeSample(
+    string Month,
+    string Ticker,
+    string Direction,
+    decimal EntryPrice,
+    decimal ExitPrice,
+    DateTimeOffset EntryTimestampUtc,
+    DateTimeOffset ExitTimestampUtc,
+    string ExitReason,
+    decimal NetProfit,
+    decimal? RMultiple);

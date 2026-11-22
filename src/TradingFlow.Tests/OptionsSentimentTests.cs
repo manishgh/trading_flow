@@ -19,7 +19,7 @@ namespace TradingFlow.Tests;
 /// <summary>
 /// Offline deterministic verification for Alpaca Paid OPRA Options Sentiment Context (20 Nov 2026 design):
 /// OCC parsing, quote liquidity filtering, front straddle implied move, 25-delta put-call skew, IV term structure,
-/// Alpaca OPRA pagination/caching/archiving, fail-closed skew vetoes, and zero hash drift on all existing strategies.
+/// Alpaca OPRA pagination/caching/archiving, and refusal of removed skew vetoes on all existing strategies.
 /// </summary>
 public sealed class OptionsSentimentTests
 {
@@ -296,116 +296,29 @@ public sealed class OptionsSentimentTests
         }
     }
 
-    [Fact]
-    public void SkewVetoes_RoundTripYamlValidateBoundsEnforceFailClosedAndRejectHistoricalBacktest()
+    /// <summary>
+    /// The options-skew vetoes were removed because no backtest can test them. A strategy file that still sets one is refused
+    /// rather than run without the rule its author expected.
+    /// </summary>
+    [Theory]
+    [InlineData("max_long_put_skew: 0.06")]
+    [InlineData("min_short_put_call_skew: -0.04")]
+    public void StrategyFileWithARemovedSkewVeto_IsRefused(string setting)
     {
         var reader = new SimpleYamlReader();
-        var root = TestRepository.FindRoot();
-        var longBase = reader.ReadStrategy(Path.Combine(root, "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml"));
-        var shortBase = reader.ReadStrategy(Path.Combine(root, "configs/backtest/strategies/bollinger-squeeze-breakdown.bt-v1.yaml"));
-
-        // 1. YAML round-trip for both max_long_put_skew and min_short_put_call_skew.
-        var longWithSkew = longBase with { EntryRules = longBase.EntryRules with { MaxLongPutSkew = 0.06m } };
-        var shortWithSkew = shortBase with { EntryRules = shortBase.EntryRules with { MinShortPutCallSkew = -0.04m } };
-        var tempLong = Path.Combine(Path.GetTempPath(), $"tf-skew-long-{Guid.NewGuid():N}.yaml");
-        var tempShort = Path.Combine(Path.GetTempPath(), $"tf-skew-short-{Guid.NewGuid():N}.yaml");
-        var tempInvalid = Path.Combine(Path.GetTempPath(), $"tf-skew-bad-{Guid.NewGuid():N}.yaml");
+        var yaml = RunConfigWriter.SerializeStrategyYaml(reader.ReadStrategy(
+            Path.Combine(TestRepository.FindRoot(), "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml")));
+        var file = Path.Combine(Path.GetTempPath(), $"tf-skew-removed-{Guid.NewGuid():N}.yaml");
         try
         {
-            var longYaml = RunConfigWriter.SerializeStrategyYaml(longWithSkew);
-            var shortYaml = RunConfigWriter.SerializeStrategyYaml(shortWithSkew);
-            Assert.Contains("max_long_put_skew: 0.06", longYaml, StringComparison.Ordinal);
-            Assert.Contains("min_short_put_call_skew: -0.04", shortYaml, StringComparison.Ordinal);
-            // Strategies without skew vetoes do not emit skew keys.
-            Assert.DoesNotContain("max_long_put_skew", RunConfigWriter.SerializeStrategyYaml(longBase), StringComparison.Ordinal);
-            Assert.DoesNotContain("min_short_put_call_skew", RunConfigWriter.SerializeStrategyYaml(shortBase), StringComparison.Ordinal);
-
-            File.WriteAllText(tempLong, longYaml);
-            File.WriteAllText(tempShort, shortYaml);
-            Assert.Equal(0.06m, reader.ReadStrategy(tempLong).EntryRules.MaxLongPutSkew);
-            Assert.Equal(-0.04m, reader.ReadStrategy(tempShort).EntryRules.MinShortPutCallSkew);
-
-            // Validation rejects out-of-range values, max_long_put_skew on direction: short, and min_short_put_call_skew on direction: long.
-            File.WriteAllText(tempInvalid, longYaml.Replace("max_long_put_skew: 0.06", "max_long_put_skew: 2.5", StringComparison.Ordinal));
-            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(tempInvalid));
-
-            File.WriteAllText(tempInvalid, longYaml.Replace("max_long_put_skew: 0.06", "min_short_put_call_skew: -0.04", StringComparison.Ordinal));
-            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(tempInvalid));
-
-            File.WriteAllText(tempInvalid, shortYaml.Replace("min_short_put_call_skew: -0.04", "max_long_put_skew: 0.06", StringComparison.Ordinal));
-            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(tempInvalid));
+            File.WriteAllText(file, yaml.Replace("confluence:", $"  {setting}\nconfluence:", StringComparison.Ordinal));
+            var refused = Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(file));
+            Assert.Contains(setting.Split(':')[0], refused.Message, StringComparison.Ordinal);
         }
         finally
         {
-            if (File.Exists(tempLong)) File.Delete(tempLong);
-            if (File.Exists(tempShort)) File.Delete(tempShort);
-            if (File.Exists(tempInvalid)) File.Delete(tempInvalid);
+            if (File.Exists(file)) File.Delete(file);
         }
-
-        // 2. Evaluator enforces fail-closed behavior and exact rejection codes for both long and short strategies.
-        var evaluator = new BasicStrategyEvaluator();
-        var longStrategy = StrategyDecisionKernelTests.CreateRequest().Strategy with
-        {
-            Direction = "long",
-            EntryRules = StrategyDecisionKernelTests.CreateRequest().Strategy.EntryRules with
-            {
-                SetupType = "momentum",
-                MinEntryRsi = 0m,
-                MaxEntryRsi = 100m,
-                TrendFilter = "none",
-                MacdFilter = "none",
-                RequirePriceAboveBollingerMiddle = false,
-                RequireMacdHistogramPositive = false,
-                RequirePriceAboveVwap = false,
-                RequirePriceAboveEma20 = false,
-                RequirePriceAboveEma50 = false,
-                RequireEma20AboveEma50 = false,
-                MaxLongPutSkew = 0.06m
-            }
-        };
-        var baseSignal = new TradeSignal(
-            "AAA", ObservedUtc, longStrategy.Timeframe, 100m, 1_000_000m, 55m, 2m,
-            true, false, false, false, false, true, true, false, true, true, true,
-            0.5m, true, true, true);
-
-        Assert.Equal("options_skew_unavailable", evaluator.GetLongEntryRejection(longStrategy, baseSignal, 1.5m));
-        Assert.StartsWith("options_put_skew_above_maximum", evaluator.GetLongEntryRejection(longStrategy, baseSignal with { OptionsSkew25Delta = 0.08m }, 1.5m));
-        Assert.Null(evaluator.GetLongEntryRejection(longStrategy, baseSignal with { OptionsSkew25Delta = 0.06m }, 1.5m));
-
-        var shortStrategy = longStrategy with
-        {
-            Direction = "short",
-            EntryRules = longStrategy.EntryRules with
-            {
-                EnableShort = true,
-                ShortSetupType = "momentum",
-                MaxLongPutSkew = null,
-                MinShortPutCallSkew = -0.04m
-            }
-        };
-        Assert.Equal("options_skew_unavailable", evaluator.GetShortEntryRejection(shortStrategy, baseSignal, 1.5m));
-        Assert.StartsWith("options_call_skew_squeeze_risk", evaluator.GetShortEntryRejection(shortStrategy, baseSignal with { OptionsSkew25Delta = -0.06m }, 1.5m));
-        Assert.Null(evaluator.GetShortEntryRejection(shortStrategy, baseSignal with { OptionsSkew25Delta = -0.04m }, 1.5m));
-
-        // 3. Historical backtest refuses strategies declaring live OPRA skew vetoes with a plain-English explanation.
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
-        var runner = new BacktestRunner(reader, catalog);
-        var baseRun = reader.ReadBacktestRun(Path.Combine(root, "configs/backtest/swing-backtest-profile.yaml"));
-        var tempResultPath = Path.Combine(Path.GetTempPath(), $"tf-skew-bt-{Guid.NewGuid():N}.json");
-        try
-        {
-            var ex = Assert.Throws<InvalidOperationException>(() =>
-                runner.RunAsync(baseRun, [longWithSkew], ObservedUtc, tempResultPath, CancellationToken.None).GetAwaiter().GetResult());
-            Assert.Contains("historical OPRA", ex.Message, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            if (File.Exists(tempResultPath)) File.Delete(tempResultPath);
-        }
-        // 4. SignalStudyOutcomes refuses historical signal studies when live OPRA skew vetoes are configured.
-        var signalStudyEx = Assert.Throws<NotSupportedException>(() =>
-            TradingFlow.Research.Signals.SignalStudyOutcomes.RequireSupported(longWithSkew));
-        Assert.Contains("live OPRA options skew vetoes", signalStudyEx.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -543,26 +456,6 @@ public sealed class OptionsSentimentTests
     }
 
     [Fact]
-    public void ExistingSwingStrategyCatalogHashes_RemainByteForByteUnchanged()
-    {
-        var root = TestRepository.FindRoot();
-        var reader = new SimpleYamlReader();
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
-
-        var strategies = catalog.GetSnapshot().ExecutableArtifacts.ToArray();
-        Assert.True(strategies.Length >= 10, $"Expected at least 10 registered strategies, got {strategies.Length}.");
-
-        foreach (var artifact in strategies)
-        {
-            Assert.Null(artifact.ResolvedStrategy.EntryRules.MaxLongPutSkew);
-            Assert.Null(artifact.ResolvedStrategy.EntryRules.MinShortPutCallSkew);
-            var json = JsonSerializer.Serialize(artifact.ResolvedStrategy.EntryRules);
-            Assert.DoesNotContain("MaxLongPutSkew", json, StringComparison.Ordinal);
-            Assert.DoesNotContain("MinShortPutCallSkew", json, StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
     public void DeskOptionsEndpoints_ValidatesEquitySymbolsStrictly()
     {
         Assert.True(DeskOptionsEndpoints.IsValidEquitySymbol("SPY"));
@@ -572,6 +465,97 @@ public sealed class OptionsSentimentTests
         Assert.False(DeskOptionsEndpoints.IsValidEquitySymbol("TOO_LONG_TICKER_NAME"));
         Assert.False(DeskOptionsEndpoints.IsValidEquitySymbol("../SPY"));
         Assert.False(DeskOptionsEndpoints.IsValidEquitySymbol("SPY QQQ"));
+    }
+
+    [Fact]
+    public void ExpectedMoveRemovesIntrinsicValueWhenTheNearestStrikeIsNotAtThePrice()
+    {
+        // Cheap stock at $6.27 with $1 strikes: the nearest strike is 6, so the 6-strike call is $0.27 in the money.
+        // Call mid 0.50 + put mid 0.25 = 0.75 straddle; removing the 0.27 intrinsic leaves 0.48 of expected movement:
+        // 0.48 / 6.27 = 7.6555% (the old figure, 0.75 / 6.27 = 11.96%, counted the in-the-money amount as movement).
+        var weeklyExpiry = ObservedNy.AddDays(7);
+        var quotes = new[]
+        {
+            Quote("CHEAP", weeklyExpiry, isCall: true, strike: 6m, bid: 0.48m, ask: 0.52m, iv: 0.90m, delta: 0.60m, volume: 100m),
+            Quote("CHEAP", weeklyExpiry, isCall: false, strike: 6m, bid: 0.24m, ask: 0.26m, iv: 0.95m, delta: -0.40m, volume: 100m)
+        };
+
+        var snapshot = OptionsSentimentCalculator.Calculate("CHEAP", ObservedUtc, 6.27m, quotes);
+
+        Assert.Equal(Math.Round(0.48m / 6.27m * 100m, 4), snapshot.FrontImpliedMovePct);
+    }
+
+    [Fact]
+    public void HolidayAwareTradingDays_ExcludesThanksgivingAndScalesImpliedToAdrRatioAndPreservesSkewProvenance()
+    {
+        // Monday 2026-11-23 15:30 UTC (10:30 NY) -> Friday 2026-11-27 expiry:
+        // Weekdays only (Tue/Wed/Thu/Fri) = 4, but Thursday 2026-11-26 is US Thanksgiving (market closed) => 3 trading days!
+        var mondayUtc = new DateTimeOffset(2026, 11, 23, 15, 30, 0, TimeSpan.Zero);
+        var fridayExpiry = new DateOnly(2026, 11, 27);
+        var monthlyExpiry = new DateOnly(2026, 12, 18); // 25 calendar DTE (inside 20-45 DTE skew window)
+        var thanksgiving = new DateOnly(2026, 11, 26);
+
+        var schedules = new Dictionary<DateOnly, MarketSessionSchedule>();
+        for (var d = new DateOnly(2026, 11, 20); d <= new DateOnly(2026, 12, 20); d = d.AddDays(1))
+        {
+            var isOpen = d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday) && d != thanksgiving;
+            schedules[d] = isOpen ? MarketSessionSchedule.RegularDay(d) : MarketSessionSchedule.Closed(d);
+        }
+
+        // Front straddle: call mid 3.00 + put mid 3.00 = 6.00 / 100 = 6.0% implied move; ADR20 = 2.0%.
+        // 25-delta wings on 2026-12-18: Put $92 (delta -0.26, IV 34.25%) vs Call $108 (delta +0.24, IV 24.15%).
+        var quotes = new[]
+        {
+            Quote("SPY", fridayExpiry, isCall: true, strike: 100m, bid: 2.95m, ask: 3.05m, iv: 0.30m, delta: 0.50m, volume: 500m),
+            Quote("SPY", fridayExpiry, isCall: false, strike: 100m, bid: 2.95m, ask: 3.05m, iv: 0.30m, delta: -0.50m, volume: 500m),
+            Quote("SPY", monthlyExpiry, isCall: true, strike: 108m, bid: 1.15m, ask: 1.25m, iv: 0.2415m, delta: 0.2412m, volume: 400m),
+            Quote("SPY", monthlyExpiry, isCall: false, strike: 92m, bid: 1.45m, ask: 1.55m, iv: 0.3425m, delta: -0.2587m, volume: 700m)
+        };
+
+        // 1. Without calendar: 4 weekdays -> ratio = (6.0 / sqrt(4)) / 2.0 = 1.5000.
+        var weekdayOnly = OptionsSentimentCalculator.Calculate("SPY", mondayUtc, 100m, quotes, adr20Pct: 2.0m);
+        Assert.Equal(4, weekdayOnly.TradingDaysToFrontExpiry);
+        Assert.Equal(1.5000m, weekdayOnly.ImpliedToRealizedAdrRatio);
+
+        // 2. Thanksgiving excluded: 3 trading days -> ratio = (6.0 / sqrt(3)) / 2.0 ~= 1.7321.
+        var expectedRatio = Math.Round(6.0m / (decimal)Math.Sqrt(3) / 2.0m, 4);
+
+        // 3. WithMarketContext recomputes holiday-accurate trading days + sqrt(3)-scaled ADR ratio on a cached snapshot.
+        var cachedWithoutContext = OptionsSentimentCalculator.Calculate("SPY", mondayUtc, 100m, quotes);
+        Assert.Equal(4, cachedWithoutContext.TradingDaysToFrontExpiry);
+        Assert.Null(cachedWithoutContext.ImpliedToRealizedAdrRatio);
+
+        var enriched = OptionsSentimentCalculator.WithMarketContext(cachedWithoutContext, adr20Pct: 2.0m, schedules: schedules);
+        Assert.Equal(3, enriched.TradingDaysToFrontExpiry);
+        Assert.Equal(expectedRatio, enriched.ImpliedToRealizedAdrRatio);
+        Assert.Contains("(3d)", enriched.SummaryNote, StringComparison.Ordinal);
+
+        // 4. Trailing holiday boundary: [2026-11-23..2026-11-26] where Thanksgiving 2026-11-26 is closed must return 2 (Tue/Wed), NOT 3!
+        var mondayNy = new DateOnly(2026, 11, 23);
+        Assert.Equal(2, OptionsSentimentCalculator.CountTradingDaysExclusiveInclusive(mondayNy, thanksgiving, schedules));
+
+        // 5. Non-holiday week: when WithMarketContext changes only ImpliedToRealizedAdrRatio (tradingDays unchanged 4 -> 4),
+        //    SummaryNote must still be refreshed to include the updated implied/ADR ratio.
+        var nonHolidaySchedules = schedules.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Key == thanksgiving ? MarketSessionSchedule.RegularDay(pair.Key) : pair.Value);
+        var normalWeekEnriched = OptionsSentimentCalculator.WithMarketContext(cachedWithoutContext, adr20Pct: 2.0m, schedules: nonHolidaySchedules);
+        Assert.Equal(4, normalWeekEnriched.TradingDaysToFrontExpiry);
+        Assert.Equal(1.5000m, normalWeekEnriched.ImpliedToRealizedAdrRatio);
+        Assert.Contains("implied/ADR 1.50x", normalWeekEnriched.SummaryNote, StringComparison.Ordinal);
+
+        // 6. SkewProvenance carries exact Put/Call strikes, deltas (3 dp), IV% (2 dp), and expiry, preserved across enrichment.
+        foreach (var snap in new[] { weekdayOnly, OptionsSentimentCalculator.WithAdr20Pct(cachedWithoutContext, 2.0m), enriched, normalWeekEnriched })
+        {
+            Assert.NotNull(snap.SkewProvenance);
+            Assert.Equal(monthlyExpiry, snap.SkewProvenance!.ExpirationDate);
+            Assert.Equal(92m, snap.SkewProvenance.PutStrike);
+            Assert.Equal(-0.259m, snap.SkewProvenance.PutDelta);
+            Assert.Equal(34.25m, snap.SkewProvenance.PutIvPct);
+            Assert.Equal(108m, snap.SkewProvenance.CallStrike);
+            Assert.Equal(0.241m, snap.SkewProvenance.CallDelta);
+            Assert.Equal(24.15m, snap.SkewProvenance.CallIvPct);
+        }
     }
 
     // Helper constructing a synthetic OPRA OptionContractQuote with standard OCC formatting.

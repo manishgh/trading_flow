@@ -19,6 +19,9 @@
     const evidenceSummary = form.querySelector('[data-evidence-summary]');
     const evidenceAvailability = form.querySelector('[data-evidence-availability]');
     let evidenceChoices = [];
+    // The saved plan's monthly matrix, and the helpers that fill the backtest form (lab-matrix.js, lab-setup.js).
+    const matrix = window.createLabMatrix({ api: path => api(path) });
+    const setup = window.createLabSetup({ form });
     const lifetime = new AbortController();
     // Discards backend-bound choices on departure, including documents retained by browser history.
     function leavePage() {
@@ -28,6 +31,7 @@
         if (startPlanButton) startPlanButton.disabled = true;
         if (savePlanButton) savePlanButton.disabled = true;
         planPreview?.replaceChildren(); evidenceSummary?.replaceChildren();
+        matrix.discard();
         clearPaperStockReview();
     }
     window.addEventListener('pagehide', leavePage);
@@ -113,50 +117,27 @@
         pending = undefined; savedPlan = undefined; previewed = false;
         if (startPlanButton) startPlanButton.disabled = true;
         if (savePlanButton) savePlanButton.disabled = true;
-        if (planPicker) planPicker.value = '';
+        if (planPicker && planPicker.value) {
+            planPicker.value = '';
+            matrix.showCurrentPlan();
+        }
         planPreview?.replaceChildren();
         clearPaperStockReview();
         clearValidation();
     }
     form.addEventListener("input", edited);
     form.addEventListener("change", edited);
-    // A profile change displays that server profile's settings before the operator previews or saves them.
-    function applyBacktestProfile(event) {
-        const option = event.target.selectedOptions[0];
-        if (!option) return;
-        for (const [name, key] of [['StartingCapital', 'startingCapital'], ['AccountRiskBudgetPct', 'accountRisk'],
-            ['MaxPositionNotionalPct', 'positionNotional'], ['MaxConcurrentPositions', 'openPositions'],
-            ['LookbackDays', 'lookbackDays'], ['CachePolicy', 'cachePolicy']]) {
-            const field = form.elements.namedItem(name);
-            if (field && option.dataset[key] !== undefined) field.value = option.dataset[key];
-        }
+
+    if (kind === 'backtest') {
+        setup.start();
+        if (matrix.currentPlanId()) void matrix.load(matrix.currentPlanId());
     }
-    if (kind === 'backtest') form.querySelector('#SelectedConfigPath')?.addEventListener('change', applyBacktestProfile);
-    function utcInput(value) {
-        const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
-        if (!parts) return null;
-        const [year, month, day, hour, minute, second] = parts.slice(1).map(part => Number(part || 0));
-        const result = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-        return result.getUTCFullYear() === year && result.getUTCMonth() === month - 1 && result.getUTCDate() === day && result.getUTCHours() === hour && result.getUTCMinutes() === minute && result.getUTCSeconds() === second ? result : null;
-    }
+    // Validates the whole backtest form, shows any errors, and returns the window to run, or null.
     function backtestWindow(data) {
         const get = name => String(data.get(name) || '').trim();
-        const errors = [];
+        const { start, end, errors } = setup.chosenTestWindow(data);
         if (get('RunName') && !/^[A-Za-z0-9_-]{1,100}$/.test(get('RunName')))
             errors.push(['RunName', 'Run name must use at most 100 letters, digits, hyphens or underscores.']);
-        const from = get('TestWindowStartUtc'), to = get('TestWindowEndUtc');
-        let start, end;
-        if (from || to) {
-            start = utcInput(from); end = utcInput(to);
-            if (!start) errors.push(['TestWindowStartUtc', 'Enter a valid From UTC date and time.']);
-            if (!end) errors.push(['TestWindowEndUtc', 'Enter a valid To UTC date and time.']);
-            if (start && end && end <= start) errors.push(['TestWindowEndUtc', 'To UTC must be later than From UTC.']);
-            if (end && end > new Date()) errors.push(['TestWindowEndUtc', 'To UTC cannot be in the future.']);
-        } else {
-            const days = Number(get('LookbackDays'));
-            if (!Number.isInteger(days) || days < 5 || days > 1825) errors.push(['LookbackDays', 'Fallback lookback must be a whole number from 5 to 1825 days.']);
-            else { end = new Date(); start = new Date(end.getTime() - days * 86400000); }
-        }
         for (const [name, label, maximum, whole] of [
             ['StartingCapital', 'Starting capital in USD', Infinity, false],
             ['AccountRiskBudgetPct', 'Account risk as a percentage of equity', 100, false],
@@ -407,7 +388,14 @@
         if (savePlanButton) savePlanButton.disabled = true;
         savedPlan = savedPlans.find(plan => String(plan.planId) === planPicker.value);
         startPlanButton.disabled = !savedPlan;
-        if (savedPlan) showPlan(savedPlan);
+        if (savedPlan) {
+            showPlan(savedPlan);
+            void matrix.load(savedPlan.planId);
+        } else if (matrix.currentPlanId()) {
+            void matrix.load(matrix.currentPlanId());
+        } else {
+            matrix.hide();
+        }
     });
     // A stable retry key prevents transport retries from creating duplicate portfolios.
     startPlanButton?.addEventListener('click', async () => {
@@ -423,6 +411,7 @@
                 link.textContent = ` ${job.cohort.cohortName} · ${job.cohort.strategy.strategyId} · ${job.status}`;
                 status.append(document.createElement('br'), link);
             }
+            void matrix.load(id);
         } catch (error) { status.textContent = error.message; }
         finally { busy = false; startPlanButton.disabled = !savedPlan; }
     });

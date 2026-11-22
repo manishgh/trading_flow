@@ -32,10 +32,12 @@ public sealed class OrderTicketPlanService(ConfigCatalogService catalog, AlpacaQ
         var quote = (await quotes.GetLatestQuotesAsync([symbol], "sip", ct, allowStreamed: false)).GetValueOrDefault(symbol);
         var profile = catalog.DefaultPaperConfig();
         var operational = await status.GetAsync("sip", [quote?.Timestamp], ct);
-        var plan = await planner.PlanAsync(definition, symbol, quote?.AskPrice, quote?.MidPrice,
+        // A short entry sells, so its plan is priced at the bid; a long entry buys at the ask.
+        var entryQuote = definition is not null && DeskTicketPlan.IsShort(definition) ? quote?.BidPrice : quote?.AskPrice;
+        var plan = await planner.PlanAsync(definition, symbol, entryQuote, quote?.MidPrice,
             request.LimitPrice, profile?.Config.Engine.IndicatorWarmupBars ?? 0,
             DeskTicketPlanService.RiskBudget(operational.Equity, profile?.Config.Portfolio.AccountRiskBudgetPct), ct);
         return new(ContractVersions.VersionOne, symbol, request.Strategy, plan.Limit, plan.Stop,
-            plan.Target, plan.StopNote, plan.TargetNote, plan.RiskBudget);
+            plan.Target, plan.StopNote, plan.TargetNote, plan.RiskBudget, plan.Direction);
     }
 }

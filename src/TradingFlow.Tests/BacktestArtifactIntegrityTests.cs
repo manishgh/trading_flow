@@ -415,8 +415,9 @@ public sealed class BacktestArtifactIntegrityTests
         return root;
     }
 
-    private static async Task<(string ManifestPath, BacktestArtifactReference[] References)>
-        WriteValidManifestAsync(string root)
+    // Writes the smallest complete published artifact set and its manifest; also used by the published-trades tests.
+    internal static async Task<(string ManifestPath, BacktestArtifactReference[] References)>
+        WriteValidManifestAsync(string root, string unifiedCompletedTrades = "[]")
     {
         var definitions = new[]
         {
@@ -424,7 +425,7 @@ public sealed class BacktestArtifactIntegrityTests
             ("candidate_decisions", "candidate-decisions.json", """[{"Candidate":{"CandidateId":"candidate-1"}},{"Candidate":{"CandidateId":"candidate-2"}}]"""),
             ("candidate_hypotheses", "candidate-hypotheses.json", """[{"EvidenceScope":"candidate_hypothesis","ReferenceId":"candidate-1"}]"""),
             ("unified_portfolio_execution", "portfolio-execution.json", """[{"EvidenceScope":"portfolio_execution","ReferenceId":"candidate-1"}]"""),
-            ("unified_completed_trades", "unified-completed-trades.json", "[]")
+            ("unified_completed_trades", "unified-completed-trades.json", unifiedCompletedTrades)
         };
         var references = new List<BacktestArtifactReference>();
         foreach (var (kind, fileName, content) in definitions)

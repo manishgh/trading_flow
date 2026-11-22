@@ -18,9 +18,9 @@ public sealed class ChartIndicatorTests
         for (var index = 9; index < bars.Length; index++)
         {
             expected = 0.2 * (double)bars[index].Bar.Close + 0.8 * expected;
-            if (index >= 258) Assert.Equal(expected, output[index]!.Value, 10);
+            if (index >= 31) Assert.Equal(expected, output[index]!.Value, 10);
         }
-        Assert.All(output.Take(258), value => Assert.Null(value));
+        Assert.All(output.Take(31), value => Assert.Null(value));
     }
 
     // The width of the Bollinger fixture distinguishes population deviation from sample deviation.
@@ -101,7 +101,7 @@ public sealed class ChartIndicatorTests
         Assert.NotEqual(complete.Columns[0][index], correction.Columns[0][index]);
         Assert.Equal(revised[index].AvailableAtUtc, correction.Clocks[index + 1]!.Value.AvailableAtUtc);
 
-        var clipped = daily[^100..];
+        var clipped = daily[^60..];
         var noAnchor = Project(clipped, clipped[0].SessionDate, displayed);
         Assert.All(noAnchor.Columns[0], value => Assert.Null(value));
 
@@ -163,11 +163,22 @@ public sealed class ChartIndicatorTests
     // A chart profile has fixed presets, source constraints and two lower-pane slots even when an ATR readout is selected.
     [Theory]
     [InlineData("obv,atr14,macd")]
-    [InlineData("sma20,sma50,sma200,ema20,bb20")]
-    [InlineData("ema9:5m")]
+    [InlineData("sma20,sma50,sma200,ema20,bb20,vwap")]
+    [InlineData("ema9:7m")]
+    [InlineData("ema9:15m:1h")]
+    [InlineData("ema21:15m,ema21:15m:readout")]
     [InlineData("atr14,atr14:readout")]
-    [InlineData("macd:1d")]
-    [InlineData("atr17")]
+    [InlineData("ema9:5m,ema9")]
+    [InlineData("vwap:1d")]
+    [InlineData("obv:1d")]
+    [InlineData("ema1")]
+    [InlineData("ema251")]
+    [InlineData("ema021")]
+    [InlineData("rsi51")]
+    [InlineData("adx41")]
+    [InlineData("bb4")]
+    [InlineData("macd14")]
+    [InlineData("wma20")]
     public void InvalidProfileCannotReachSource(string value) =>
         Assert.Throws<ArgumentException>(() => ChartSeriesService.Normalize(new("AAPL", "5m", "regular", "year", value)));
 
@@ -178,6 +189,95 @@ public sealed class ChartIndicatorTests
         var key = ChartSeriesService.Normalize(new("AAPL", "5m", "regular", "year", " RSI14, sma50:1D,ATR14:Readout,rsi14 "));
         Assert.Equal("atr14:readout,rsi14,sma50:1d", key.Indicators);
         Assert.Equal("1d", ChartIndicatorProfile.Read(key)[^1].SourceInterval);
+    }
+
+    // Any period inside the bounds is accepted and calculated on its own interval; an interval below the candles follows them.
+    [Fact]
+    public void PeriodsAndIntervalsAreEditableWithinBounds()
+    {
+        var key = ChartSeriesService.Normalize(new("AAPL", "5m", "regular", "year", "ema21:1h,SMA33:1d,rsi7:15m,atr10:1h:readout,ema9:5m"));
+        var studies = ChartIndicatorProfile.Read(key).ToDictionary(study => study.Id);
+        Assert.Equal("1h", studies["ema21:1h"].SourceInterval);
+        Assert.Equal("1d", studies["sma33:1d"].SourceInterval);
+        Assert.Equal("15m", studies["rsi7:15m"].SourceInterval);
+        Assert.Equal("1h", studies["atr10:1h:readout"].SourceInterval);
+        Assert.Equal("5m", studies["ema9:5m"].SourceInterval);
+        Assert.Equal(33, studies["sma33:1d"].Formula!.Period);
+        var daily = ChartSeriesService.Normalize(new("AAPL", "1d", "regular", "year", "ema21:1h"));
+        Assert.Equal("1d", Assert.Single(ChartIndicatorProfile.Read(daily)).SourceInterval);
+    }
+
+    // The run-in is as long as the smoothing needs, not a fixed 250 candles, and never exceeds the loaded daily history.
+    [Theory]
+    [InlineData("sma200", 200)]
+    [InlineData("ema9", 32)]
+    [InlineData("ema20", 69)]
+    [InlineData("ema21", 72)]
+    [InlineData("ema50", 168)]
+    [InlineData("ema200", 450)]
+    [InlineData("ema250", 470)]
+    [InlineData("rsi14", 80)]
+    [InlineData("atr14", 80)]
+    [InlineData("adx14", 158)]
+    [InlineData("macd", 285)]
+    public void FirstShownCandleFollowsThePeriod(string id, int observations) =>
+        Assert.Equal(observations, ChartIndicatorMath.Find(id)!.WarmObservations);
+
+    // The browser offers exactly the periods and intervals the server accepts.
+    [Fact]
+    public void BrowserLimitsMatchTheServer()
+    {
+        var script = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "wwwroot", "js", "stock-chart-indicators.js"));
+        var families = System.Text.RegularExpressions.Regex.Matches(script, @"(\w+): \{ label: '[^']+'[^\n]*?period: \[(\d+), (\d+), (\d+)\]");
+        Assert.Equal(["adx", "atr", "atrpct", "bb", "ema", "rsi", "sma"], families.Select(match => match.Groups[1].Value).Order());
+        foreach (var match in families.ToArray())
+        {
+            var (family, low, high) = (match.Groups[1].Value, Int32.Parse(match.Groups[2].Value), Int32.Parse(match.Groups[3].Value));
+            Assert.NotNull(ChartIndicatorMath.Find(family + low));
+            Assert.NotNull(ChartIndicatorMath.Find(family + high));
+            Assert.Null(ChartIndicatorMath.Find(family + (low - 1)));
+            Assert.Null(ChartIndicatorMath.Find(family + (high + 1)));
+            Assert.InRange(ChartIndicatorMath.Find(family + high)!.WarmObservations, 1, 470);
+        }
+        foreach (var interval in System.Text.RegularExpressions.Regex.Matches(script, @"'(\w+)': \[(\d+), '").ToArray())
+            Assert.Equal(Int32.Parse(interval.Groups[2].Value), ChartIndicatorProfile.Minutes(interval.Groups[1].Value));
+    }
+
+    // At the first shown EMA candle, less than one percent of a completely wrong starting average is left.
+    [Theory]
+    [InlineData(2)]
+    [InlineData(9)]
+    [InlineData(21)]
+    [InlineData(50)]
+    [InlineData(100)]
+    public void FirstShownEmaKeepsLessThanOnePercentOfItsStart(int period)
+    {
+        var formula = ChartIndicatorMath.Find("ema" + period)!;
+        var bars = Enumerable.Range(0, formula.WarmObservations).Select(index => Bar(index, index < period ? 200 : 100)).ToArray();
+        var first = ChartIndicatorMath.Calculate(formula, bars, 0, bars.Length)[0][^1]!.Value;
+        Assert.InRange(first, 100, 101);
+    }
+
+    // A stock listed after the scheduled start begins at its first candle when the source covers the earlier dates; a history
+    // that is merely cut off still shows nothing.
+    [Fact]
+    public void YoungStockStartsAtItsFirstCandleButClippedHistoryDoesNot()
+    {
+        var (daily, calendar) = CalendarFixture();
+        var formula = ChartIndicatorMath.Find("ema21")!;
+        var young = daily[^74..];
+        var listed = ChartIndicatorMath.Project(formula, young, new ChartBarProjector(calendar), daily[0].SessionDate, true,
+            young[^1].EndUtc, default, startsAtListing: true);
+        Assert.NotNull(listed.Columns[0][^1]);
+        Assert.Equal(young[0].Bar.Timestamp, listed.Clocks[^1]!.Value.AnchorUtc);
+        Assert.Null(listed.Columns[0][formula.WarmObservations - 2]);
+        // The same candles without proof of absence are partly loaded history: a value would move when the older candles arrive.
+        var partlyLoaded = ChartIndicatorMath.Project(formula, young, new ChartBarProjector(calendar), daily[0].SessionDate, true,
+            young[^1].EndUtc, default);
+        Assert.All(partlyLoaded.Columns[0], value => Assert.Null(value));
+        var clipped = ChartIndicatorMath.Project(formula, young[^73..], new ChartBarProjector(calendar), young[^73].SessionDate, true,
+            young[^1].EndUtc, default, startsAtListing: true);
+        Assert.All(clipped.Columns[0], value => Assert.Null(value));
     }
 
     // Make one positive-price, completed minute observation for independent numerical examples.
