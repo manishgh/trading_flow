@@ -175,6 +175,17 @@ public sealed record SavedPlanMonthlyMatrixCell(
 /// <summary>Canonical rejection code and recorded count for one strategy job's diagnostics.</summary>
 public sealed record SavedPlanRejectionSummary(string Code, int Count);
 
+/// <summary>
+/// One job's trades that exited in one New York month. From the published result it holds every such trade; otherwise only
+/// those among the trades stored with the job, with the reason the published result could not be used.
+/// </summary>
+public sealed record SavedPlanMonthTradesResponse(
+    string ContractVersion,
+    string Month,
+    IReadOnlyList<SavedPlanMonthlyTradeSample> Trades,
+    bool FromPublishedResult,
+    string? UnavailableReason);
+
 /// <summary>One retained completed-trade sample stamped with its NY exit month for the Strategy Lab slide-over drawer.</summary>
 public sealed record SavedPlanMonthlyTradeSample(
     string Month,

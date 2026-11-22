@@ -210,7 +210,8 @@ public sealed class SimpleYamlReader
                 MinShootingStarWickToBody: OptionalDecimal(map, "entry_rules.min_shooting_star_wick_to_body"),
                 MaxShootingStarCloseLocation: OptionalDecimal(map, "entry_rules.max_shooting_star_close_location"),
                 MaxLongPutSkew: OptionalDecimal(map, "entry_rules.max_long_put_skew"),
-                MinShortPutCallSkew: OptionalDecimal(map, "entry_rules.min_short_put_call_skew")),
+                MinShortPutCallSkew: OptionalDecimal(map, "entry_rules.min_short_put_call_skew"),
+                AverageRangeMethod: OptionalNullableString(map, "entry_rules.average_range_method")),
             new ConfluenceRules(
                 OptionalBool(map, "confluence.enabled", false),
                 OptionalString(map, "confluence.timeframe", RequireString(map, "timeframe")),
@@ -938,6 +939,11 @@ public sealed class SimpleYamlReader
             throw new InvalidOperationException("entry_rules.recent_low_lookback_bars must be nonnegative.");
         if (rules.MinAverageRangePct is <= 0m)
             throw new InvalidOperationException("entry_rules.min_average_range_pct must be positive when specified.");
+        if (rules.AverageRangeMethod is { } method && !AverageRangeMethods.IsKnown(method))
+            throw new InvalidOperationException(
+                $"entry_rules.average_range_method must be {AverageRangeMethods.LatestClose} or {AverageRangeMethods.PerDay}.");
+        if (rules.AverageRangeMethod is not null && rules.MinAverageRangePct is null)
+            throw new InvalidOperationException("entry_rules.average_range_method has no effect without min_average_range_pct.");
         if (rules.MinAverageDollarVolume is <= 0m)
             throw new InvalidOperationException("entry_rules.min_average_dollar_volume must be positive when specified.");
     }

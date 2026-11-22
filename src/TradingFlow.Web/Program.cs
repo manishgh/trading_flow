@@ -249,6 +249,7 @@ builder.Services.AddSingleton(new BacktestJobServiceOptions(
             ?? Environment.GetEnvironmentVariable("TRADINGFLOW_BACKTEST_SNAPSHOT_INTERVAL_MS"),
         (int)BacktestJobServiceOptions.Default.SnapshotInterval.TotalMilliseconds))));
 builder.Services.AddSingleton<BacktestJobService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.PublishedBacktestTrades>();
 builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(serviceProvider =>
     serviceProvider.GetRequiredService<BacktestJobService>());
 builder.Services.AddSingleton<TradingFlow.Data.Evidence.Collection.IEvidenceDatasetCollectionRunner, TradingFlow.Data.Evidence.Collection.EvidenceDatasetCollectionRunner>();

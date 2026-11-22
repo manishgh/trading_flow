@@ -17,7 +17,8 @@ public sealed record GateEvaluationResponse(
     bool Passed,
     string? RejectionCode,
     DateTimeOffset EvaluatedAtUtc,
-    IReadOnlyDictionary<string, string?> Inputs);
+    IReadOnlyDictionary<string, string?> Inputs,
+    string? Explanation = null);
 
 public sealed record MarketEvidenceResponse(
     DateTimeOffset AsOfUtc,

@@ -152,7 +152,7 @@
         }
         syncProfileWindowPreset(option);
     }
-    // Shows the "Profile window" preset only when the selected profile configures a start and end, labelled with its dates.
+    // Shows the "Profile window" preset only when the selected profile has a window, labelled with its dates.
     function syncProfileWindowPreset(option) {
         const button = form.querySelector('[data-window-preset="profile"]');
         if (!button) return;
@@ -161,7 +161,31 @@
         button.dataset.windowStart = start;
         button.dataset.windowEnd = end;
         button.textContent = start && end ? 'Profile window ' + start.slice(0, 10) + ' – ' + end.slice(0, 10) : 'Profile window';
-        button.title = 'Test window configured in the selected backtest profile (UTC).';
+        button.title = 'Test window of the selected backtest profile: its own dates, or its rolling number of New York calendar days up to today.';
+    }
+    // Lists the registered held-back test periods of the selected strategies and warns when the chosen dates overlap one.
+    // A warning only: it does not stop the run.
+    function syncHeldBackPeriods() {
+        const block = form.querySelector('[data-held-back]');
+        const warning = block?.querySelector('[data-held-back-warning]');
+        if (!warning) return;
+        const selected = new Set([...form.querySelectorAll('input[name="StrategyPaths"]:checked')].map(box => box.dataset.strategyId));
+        const { start, end } = chosenTestWindow(new FormData(form));
+        const overlapping = [];
+        let shown = 0;
+        for (const period of block.querySelectorAll('[data-held-back-period]')) {
+            period.hidden = !selected.has(period.dataset.strategyId);
+            if (period.hidden) continue;
+            shown++;
+            if (start && end && start < new Date(period.dataset.end) && end > new Date(period.dataset.start)) overlapping.push(period.dataset.strategyId);
+        }
+        block.querySelector('[data-held-back-none]').hidden = shown > 0 || selected.size === 0;
+        warning.hidden = overlapping.length === 0;
+        const message = overlapping.length
+            ? 'The chosen dates overlap the held-back test period of ' + [...new Set(overlapping)].join(', ') + '. Results seen there can no longer serve as an untouched test.'
+            : '';
+        // Rewriting an unchanged alert would make screen readers repeat it on every keystroke.
+        if (warning.textContent !== message) warning.textContent = message;
     }
     if (kind === 'backtest') form.querySelector('#SelectedConfigPath')?.addEventListener('change', applyBacktestProfile);
 
@@ -321,9 +345,8 @@
         return section;
     }
 
-    // Renders retained sample trades for the inspected NY month while clarifying that monthly % comes exclusively from MonthlyRunResult.
     // Builds the drawer's trade section for one month and fills it from GET .../jobs/{jobId}/trades?month=yyyy-MM, so every
-    // month shows its own trades (up to 100, newest first). A reply for an older drawer opening is ignored.
+    // month shows its own trades, newest first; monthly % comes only from the stored MonthlyRunResult records. A reply for an older drawer opening is ignored.
     function renderDrawerSampleTrades(row, selectedMonth, selectedCell) {
         const section = document.createElement('section');
         section.className = 'lab-drawer-section';
@@ -331,7 +354,7 @@
         heading.textContent = selectedMonth ? `Trades that exited in ${selectedMonth}` : 'Trades';
         const caveat = document.createElement('p');
         caveat.className = 'note';
-        caveat.textContent = 'Up to 100 trades, newest first. Monthly % returns above come only from the stored monthly records.';
+        caveat.textContent = 'Newest first. Monthly % returns above come only from the stored monthly records.';
         const status = document.createElement('p');
         status.className = 'note';
         status.textContent = selectedMonth ? 'Loading trades…' : 'Choose a month to see its trades.';
@@ -342,16 +365,16 @@
         void window.tradingFlowFetch(`/api/v1/backtests/plans/${encodeURIComponent(planId)}/jobs/${encodeURIComponent(row.jobId)}/trades?month=${encodeURIComponent(selectedMonth)}`,
             { credentials: 'same-origin', cache: 'no-store' })
             .then(response => response.ok ? response.json() : Promise.reject(new Error('HTTP ' + response.status)))
-            .then(trades => {
+            .then(answer => {
                 if (seq !== drawerTradesSeq) return;
                 status.remove();
-                const list = trades || [];
-                // A job's stored view keeps only the run's most recent trades; say so when the month had more than are shown.
+                const list = answer?.trades || [];
                 const closed = Number(selectedCell?.closedTrades);
-                if (Number.isFinite(closed) && closed > list.length) {
+                const mismatch = describeTradeCountMismatch(answer, list.length, closed, selectedMonth);
+                if (mismatch) {
                     const note = document.createElement('p');
                     note.className = 'note';
-                    note.textContent = `Showing ${list.length} of ${closed} trades closed in ${selectedMonth}. The job's stored view keeps only the run's most recent trades; open the full report for the rest.`;
+                    note.textContent = mismatch;
                     section.append(note);
                 }
                 section.append(renderDrawerTradeTable(list, selectedMonth, closed));
@@ -363,12 +386,22 @@
         return section;
     }
 
+    // Explains a list that differs from the monthly record's closed-trade count: the published result should match it, while
+    // the job's stored view keeps only the run's most recent trades. Empty when they agree.
+    function describeTradeCountMismatch(answer, listed, closed, month) {
+        if (!Number.isFinite(closed) || closed === listed) return '';
+        return answer?.fromPublishedResult
+            ? `The published result lists ${listed} trades that exited in ${month}; the monthly record counts ${closed}.`
+            : `Showing ${listed} of ${closed} trades closed in ${month}. Only the run's most recent trades are stored with the job, and its full result could not be used: ${answer?.unavailableReason || 'reason not given'}`;
+    }
+
     // Renders the month's trades as a table, or a plain note when none exited that month.
     function renderDrawerTradeTable(samples, selectedMonth, closedInMonth) {
+        if (!samples.length && closedInMonth > 0) return document.createDocumentFragment();
         if (!samples.length) {
             const empty = document.createElement('p');
             empty.className = 'note';
-            empty.textContent = closedInMonth > 0 ? `None of the ${closedInMonth} trades closed in ${selectedMonth} are in the job's stored view.` : `No completed trades exited in ${selectedMonth}.`;
+            empty.textContent = `No completed trades exited in ${selectedMonth}.`;
             return empty;
         }
 
@@ -732,6 +765,9 @@
         wireStrategyDirectionHelpers();
         wireWindowPresetHelpers();
         syncProfileWindowPreset(form.querySelector('#SelectedConfigPath')?.selectedOptions[0]);
+        form.addEventListener('input', syncHeldBackPeriods);
+        form.addEventListener('change', syncHeldBackPeriods);
+        syncHeldBackPeriods();
         form.querySelector('#StockSource')?.addEventListener('change', applyResearchScreenGroupDefault);
         applyResearchScreenGroupDefault();
         if (matrixPanel?.dataset.currentPlanId) {
@@ -745,12 +781,10 @@
         const result = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
         return result.getUTCFullYear() === year && result.getUTCMonth() === month - 1 && result.getUTCDate() === day && result.getUTCHours() === hour && result.getUTCMinutes() === minute && result.getUTCSeconds() === second ? result : null;
     }
-    function backtestWindow(data) {
+    // Reads the chosen test window without showing anything: both dates, or the lookback ending now, with any entry errors.
+    function chosenTestWindow(data) {
         const get = name => String(data.get(name) || '').trim();
-        const errors = [];
-        if (get('RunName') && !/^[A-Za-z0-9_-]{1,100}$/.test(get('RunName')))
-            errors.push(['RunName', 'Run name must use at most 100 letters, digits, hyphens or underscores.']);
-        const from = get('TestWindowStartUtc'), to = get('TestWindowEndUtc');
+        const errors = [], from = get('TestWindowStartUtc'), to = get('TestWindowEndUtc');
         let start, end;
         if (from || to) {
             start = utcInput(from); end = utcInput(to);
@@ -763,6 +797,14 @@
             if (!Number.isInteger(days) || days < 5 || days > 1825) errors.push(['LookbackDays', 'Fallback lookback must be a whole number from 5 to 1825 days.']);
             else { end = new Date(); start = new Date(end.getTime() - days * 86400000); }
         }
+        return { start, end, errors };
+    }
+    // Validates the whole backtest form, shows any errors, and returns the window to run, or null.
+    function backtestWindow(data) {
+        const get = name => String(data.get(name) || '').trim();
+        const { start, end, errors } = chosenTestWindow(data);
+        if (get('RunName') && !/^[A-Za-z0-9_-]{1,100}$/.test(get('RunName')))
+            errors.push(['RunName', 'Run name must use at most 100 letters, digits, hyphens or underscores.']);
         for (const [name, label, maximum, whole] of [
             ['StartingCapital', 'Starting capital in USD', Infinity, false],
             ['AccountRiskBudgetPct', 'Account risk as a percentage of equity', 100, false],

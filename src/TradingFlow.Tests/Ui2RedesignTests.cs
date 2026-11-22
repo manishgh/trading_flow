@@ -343,14 +343,14 @@ public sealed class Ui2RedesignTests
         var deskJs = WebFile("wwwroot/js/watch-desk.js");
         foreach (var token in new[]
                  {
-                     "function humanizeCheck(", "(!passed && (checkLabels[normalizedCode] || checkLabels[normalizedGate]))",
-                     "min_average_range_pct_not_met", "regime_price_below_sma",
-                     "vix_above_long_limit", "sector_not_in_top_n", "earnings_blackout", "insufficient_history",
-                     "check.gateName", "check.rejectionCode", "check.inputs", "ArrowDown", "ArrowUp", "selectStock("
+                     "function humanizeCheck(", "check?.explanation ||", "check.gateName", "check.rejectionCode", "check.inputs", "ArrowDown", "ArrowUp", "selectStock("
                  })
         {
             Assert.Contains(token, deskJs);
         }
+
+        // The wording comes from the server; the script must not carry its own copy of the check labels.
+        Assert.DoesNotContain("checkLabels", deskJs);
 
         var css = Ui2CssBundle();
         foreach (var token in new[]
@@ -373,7 +373,7 @@ public sealed class Ui2RedesignTests
                      "data-direction=\"@strategy.Definition.Direction.ToString().ToLowerInvariant()\"",
                      "data-strategy-select=\"long\"", "data-strategy-select=\"short\"", "data-strategy-select=\"clear\"",
                      // The test-window preset comes from the selected profile's time_window, never a date written in the page.
-                     "data-window-preset=\"profile\"", "data-window-start=\"@(config.Config.TimeWindow.Start", "Clear dates",
+                     "data-window-preset=\"profile\"", "BacktestTestWindows.ProfileWindow(config.Config.TimeWindow", "data-held-back-period", "data-held-back-warning", "Clear dates",
                      "id=\"saved-plan-matrix-panel\"", "data-current-plan-id=\"@(job?.Cohort?.PlanId)\"",
                      "@section Styles"
                  })
@@ -385,7 +385,7 @@ public sealed class Ui2RedesignTests
         foreach (var token in new[]
                  {
                      "/monthly-matrix", "research_screen", "groupSize.value = '1000'",
-                     "▲ +", "(partial)", "/Backtests?jobId=", "wireStrategyDirectionHelpers", "wireWindowPresetHelpers", "function syncProfileWindowPreset(", "/trades?month=",
+                     "▲ +", "(partial)", "/Backtests?jobId=", "wireStrategyDirectionHelpers", "wireWindowPresetHelpers", "function syncProfileWindowPreset(", "function syncHeldBackPeriods(", "/trades?month=",
                      "hideSavedPlanMatrix", "row.contentSha256", "row.createdAtUtc", "row.monthlyUnavailableReason",
                      "lab-matrix-reason"
                  })
@@ -597,12 +597,26 @@ public sealed class Ui2RedesignTests
         // The matrix no longer carries trades; the drawer loads them per month.
         var matrix = SavedPlanMonthlyMatrixBuilder.Build(plan, [job]);
         Assert.Null(Assert.Single(matrix.Rows).SampleTrades);
-        var june = SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job, "2026-06");
+        var noPublishedResult = new PublishedTrades(null, "The original result file is not accessible.");
+        var storedJune = SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job, "2026-06", noPublishedResult);
+        Assert.False(storedJune.FromPublishedResult);
+        Assert.Equal("The original result file is not accessible.", storedJune.UnavailableReason);
+        var june = storedJune.Trades;
         Assert.Equal(30, june.Count);
         Assert.DoesNotContain(june, t => t.Ticker == "OTHER");
         Assert.True(june.Zip(june.Skip(1)).All(pair => pair.First.ExitTimestampUtc >= pair.Second.ExitTimestampUtc));
         Assert.All(june, t => Assert.Equal(2.0m, t.RMultiple));
-        Assert.Equal(10, SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job, "2026-06", max: 10).Count);
+        // Stored trades carry the strategy document's own ID while the job carries the catalog ID; they must still be listed.
+        const string documentId = "research.long-breakout.bt-v1";
+        var documentTrades = trades.Select(trade => trade.StrategyId == strategyRef.StrategyId ? trade with { StrategyId = documentId } : trade).ToArray();
+        var documentJob = job with { Result = result with { StrategyResults = [strategyResult with { StrategyId = documentId }], CompletedTrades = documentTrades } };
+        Assert.Equal(june, SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(documentJob, "2026-06", noPublishedResult).Trades);
+
+        // The published result wins over the job's stored, shortened trade list.
+        var shortened = job with { Result = result with { CompletedTrades = trades.Take(5).ToArray() } };
+        var publishedJune = SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(shortened, "2026-06", new PublishedTrades(trades, null));
+        Assert.True(publishedJune.FromPublishedResult);
+        Assert.Equal(june, publishedJune.Trades);
         // The trades endpoint accepts only real "yyyy-MM" month keys.
         Assert.True(SavedPlanMonthlyMatrixBuilder.IsMonthKey("2017-01"));
         Assert.True(SavedPlanMonthlyMatrixBuilder.IsMonthKey("2026-12"));
@@ -611,7 +625,7 @@ public sealed class Ui2RedesignTests
 
         // Verify NY boundary trade stamps 2026-05 when included as newest trade.
         var boundaryOnlyResult = result with { CompletedTrades = [trades.Single(t => t.Ticker == "NVDA")] };
-        var boundarySample = Assert.Single(SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job with { Result = boundaryOnlyResult }, "2026-05"));
+        var boundarySample = Assert.Single(SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job with { Result = boundaryOnlyResult }, "2026-05", noPublishedResult).Trades);
         Assert.Equal("2026-05", boundarySample.Month);
         Assert.Equal(2.0m, boundarySample.RMultiple);
 
@@ -699,7 +713,7 @@ public sealed class Ui2RedesignTests
         Assert.DoesNotContain("get('inline-studies')", chartJs);
 
         var watchDeskJs = WebFile("wwwroot/js/watch-desk.js");
-        foreach (var token in new[] { "function formatRowDayChange(", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
+        foreach (var token in new[] { "function formatRowDayChange(", "deskDefaultChartStudies", "defaultStudies: deskDefaultChartStudies", "ATR ", "function clearChartTradePlan(", "async function syncChartTradePlan(", "function tradePlanOutdated(", "tradePlanMoveShare = 0.005, tradePlanMinimumGapMs = 30000", "/api/v1/orders/plan", "plan?.stop == null && plan?.target == null", "setTradePlanLevels(" })
         {
             Assert.Contains(token, watchDeskJs);
         }

@@ -761,6 +761,3 @@ html body.workspace-app .watch-desk .watch-detail #watch-focus-content {
 .workspace-app .watch-desk .watch-view-switch [data-view-count] {
   margin: 0; padding: 0 5px; min-width: 16px; border-radius: 999px; background: var(--panel-subtle); opacity: 1; text-align: center;
 }
-
-/* The numbers a strategy check used (from the server's inputs), shown after its plain label in a muted style. */
-.workspace-app .watch-desk .watch-check-values { margin-left: 6px; font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }

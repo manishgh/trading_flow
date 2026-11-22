@@ -18,6 +18,14 @@ public sealed class BacktestsModel : PageModel
     private readonly IWishlistRepository wishlists;
     private readonly TradingFlow.Web.Services.Desk.DeskSources stockSources;
     private readonly TradingFlow.Web.Services.ProjectPaths paths;
+    private readonly TradingFlow.Domain.Research.IResearchStartRegistry registry;
+    private readonly ILogger<BacktestsModel> logger;
+
+    /// <summary>Held-back test periods registered for any strategy; the page shows those of the selected strategies.</summary>
+    public IReadOnlyList<HeldBackTestPeriod> HeldBackPeriods { get; private set; } = [];
+
+    /// <summary>Why held-back periods could not be read, or null.</summary>
+    public string? HeldBackError { get; private set; }
     public IReadOnlyList<TradingFlow.Contracts.V1.BacktestStockSource> StockSources { get; private set; } = [];
 
     // Supplies the read-only list without making disabled paths available for selection.
@@ -29,7 +37,8 @@ public sealed class BacktestsModel : PageModel
         OptimizationJobService optJobs,
         BacktestJobService backtestJobs,
         IWishlistRepository wishlists, TradingFlow.Web.Services.Desk.DeskSources stockSources,
-        TradingFlow.Web.Services.ProjectPaths paths)
+        TradingFlow.Web.Services.ProjectPaths paths,
+        TradingFlow.Domain.Research.IResearchStartRegistry registry, ILogger<BacktestsModel> logger)
     {
         this.catalog = catalog;
         this.optJobs = optJobs;
@@ -37,6 +46,8 @@ public sealed class BacktestsModel : PageModel
         this.wishlists = wishlists;
         this.stockSources = stockSources;
         this.paths = paths;
+        this.registry = registry;
+        this.logger = logger;
     }
 
     [BindProperty] public string SelectedConfigPath { get; set; } = String.Empty;
@@ -204,6 +215,7 @@ public sealed class BacktestsModel : PageModel
         BacktestJobs = await backtestJobs.RecentSnapshotsAsync(5, cancellationToken);
         RecentResultAvailability = BacktestJobs.ToDictionary(job => job.JobId, job => BacktestResultAvailability.Observe(job, paths));
         ResearchSnapshots = LoadResearchSnapshots();
+        await LoadHeldBackPeriodsAsync(cancellationToken);
 
         SelectedConfigPath = configPath ?? (Configs.FirstOrDefault()?.Path ?? String.Empty);
         SelectedStrategyPath = strategyPath ?? (Strategies.FirstOrDefault()?.Path ?? String.Empty);
@@ -211,6 +223,20 @@ public sealed class BacktestsModel : PageModel
         SelectedWishlist = WishlistId is { } id
             ? Wishlists.FirstOrDefault(wishlist => wishlist.Id == id)
             : null;
+    }
+
+    // Reads registered held-back test periods; an unreadable registry is shown as such, never as "none registered".
+    private async Task LoadHeldBackPeriodsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            HeldBackPeriods = BacktestTestWindows.HeldBackPeriods(await registry.ReadLedgerAsync(cancellationToken));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Held-back test periods could not be read from the research trial registry.");
+            HeldBackError = "The research trial registry could not be read, so held-back test periods are unknown.";
+        }
     }
 
     private static IReadOnlyList<ResearchSnapshot> LoadResearchSnapshots()

@@ -32,7 +32,9 @@
     const reviewKey = savedDesk?.preparationKey || incoming.get('preparationKey');
     let started = false, restoredView = false;
     let deskChart, chartSymbol, deskChartZones = [], deskChartZonesSymbol = null, deskChartSeriesInfo = '', deskHighlightedOverlay = null;
-    let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '';
+    let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '', tradePlanPrice = null, tradePlanRequestedAt = 0;
+    // The chart's plan is requested again when the quote has moved this far from its price, at most this often.
+    const tradePlanMoveShare = 0.005, tradePlanMinimumGapMs = 30000;
     const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];
     const moneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', maximumFractionDigits:2});
     const fixedMoneyFormat = new Intl.NumberFormat(undefined, {style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:2});
@@ -656,57 +658,13 @@
         strategy.title=signalReason(row);
         renderDailyCells(node,row);
     }
-    // Maps canonical engine gate/rejection codes to plain-English labels while preserving exact audit codes for disclosure.
-    const checkLabels = {
-        min_average_range_pct_not_met: '20-day ADR% below minimum threshold',
-        regime_price_below_sma: 'Benchmark close below its moving average',
-        regime_sma_not_rising: 'Benchmark moving average is not rising',
-        regime_sma_not_falling: 'Benchmark moving average is not falling',
-        market_regime_off_on_entry_day: 'Market regime gate is off',
-        nasdaq_market_regime_off_on_entry_day: 'Nasdaq home-market gate is off',
-        vix_above_long_limit: 'VIX above the long-entry limit',
-        vix_regime_off_on_entry_day: 'VIX above the long-entry limit',
-        vix_below_short_limit: 'VIX below the short-entry floor',
-        vix_short_regime_off_on_entry_day: 'VIX below the short-entry floor',
-        vix_close_unknown_for_previous_session: 'Previous-session VIX close not yet published',
-        vix_lookup_failed: 'VIX data source unavailable',
-        sector_not_in_top_n: 'Stock sector is outside the Top-N leaders',
-        earnings_blackout: 'Inside pre-earnings blackout window',
-        insufficient_history: 'Insufficient completed bar history',
-        listing_exchange_unknown: 'Listing exchange is unknown',
-        listing_exchange_lookup_failed: 'Listing exchange lookup failed',
-        min_price_not_met: 'Price below minimum eligibility floor',
-        min_average_volume_not_met: 'Average share volume below minimum',
-        min_average_dollar_volume_not_met: 'Average dollar volume below minimum',
-        min_atr_not_met: 'ATR below minimum volatility floor',
-        cooldown_active: 'Post-exit cooldown is active',
-        max_positions_reached: 'Maximum concurrent positions reached'
-    };
-
-    // Converts one server strategy check into a plain-English label and non-colour glyph without altering server facts.
+    // Shows one server check with the server's own sentence; an older record without one shows its readable code.
     function humanizeCheck(check) {
         const passed = Boolean(check?.passed);
-        const rawCode = String(check?.rejectionCode || '').trim();
-        const rawGate = String(check?.gateName || '').trim();
-        const normalizedCode = rawCode.toLowerCase();
-        const normalizedGate = rawGate.replace(/^(strategy|regime|eligibility):/i, '').toLowerCase();
-        const prettify = value => {
-            const cleaned = String(value || '').replace(/^(strategy|regime|eligibility):/i, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-            return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : 'Strategy check';
-        };
-        const label = (!passed && (checkLabels[normalizedCode] || checkLabels[normalizedGate]))
-            || (!passed && rawCode ? prettify(rawCode) : prettify(rawGate));
-        return { passed, glyph: passed ? '✓' : '✕', label, values: checkValues(check) };
-    }
-
-    // Lists up to three of the check's own server inputs ("vix_close 28.44 · limit 22") so the numbers shown are the ones
-    // the engine used, never thresholds copied into this script.
-    function checkValues(check) {
-        const inputs = check?.inputs && typeof check.inputs === 'object' ? Object.entries(check.inputs) : [];
-        return inputs.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
-            .slice(0, 3)
-            .map(([key, value]) => key.replace(/[_-]+/g, ' ') + ' ' + String(value).slice(0, 24))
-            .join(' · ');
+        const code = String((!passed && check?.rejectionCode) || check?.gateName || 'strategy check')
+            .replace(/^(strategy|regime|eligibility):/i, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const label = check?.explanation || code.charAt(0).toUpperCase() + code.slice(1);
+        return { passed, glyph: passed ? '✓' : '✕', label };
     }
 
     // Summarize only checks actually recorded by the shared engine; missing and expired evidence stays explicit.
@@ -978,6 +936,8 @@
     function clearChartTradePlan() {
         tradePlanSeq++;
         tradePlanKey = '';
+        tradePlanPrice = null;
+        tradePlanRequestedAt = 0;
         if (tradePlanController) {
             tradePlanController.abort();
             tradePlanController = null;
@@ -986,7 +946,25 @@
         renderTicketPlanSummary(null);
     }
 
-    // Requests read-only server strategy reference levels (Entry/Stop/Target) for the selected stock and strategy; fails closed on change or error with zero client math.
+    // The price a plan would be made at now: a short strategy sells to enter, so the bid; a long strategy buys at the ask.
+    function tradePlanReferencePrice(row, choice) {
+        const isShort = String(choice.direction || '').toLowerCase() === 'short';
+        const price = isShort ? row?.quote?.bidPrice : row?.quote?.askPrice;
+        return typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+    }
+    // Removes a plan that could not be renewed and forgets its price, so the next quote after the minimum gap asks again.
+    function dropTradePlan() {
+        tradePlanPrice = null;
+        deskChart?.setTradePlanLevels(null);
+        renderTicketPlanSummary(null);
+    }
+    // True when the quote has moved far enough from the planned price, and long enough after the last request, to plan again.
+    function tradePlanOutdated(price) {
+        if (price === null || Date.now() - tradePlanRequestedAt < tradePlanMinimumGapMs) return false;
+        return tradePlanPrice === null || Math.abs(price - tradePlanPrice) / tradePlanPrice >= tradePlanMoveShare;
+    }
+    // Requests read-only server strategy reference levels (Entry/Stop/Target) for the selected stock and strategy, and again
+    // as the quote moves; the old lines stay until the new plan arrives. Fails closed on change or error with zero client math.
     async function syncChartTradePlan(row) {
         const choice = selectedStrategyChoice();
         const symbol = row?.membership?.symbol || null;
@@ -995,17 +973,17 @@
             return;
         }
         const nextKey = JSON.stringify({ symbol, strategy: choice.strategy });
-        if (nextKey === tradePlanKey) return;
-        clearChartTradePlan();
+        const price = tradePlanReferencePrice(row, choice);
+        if (nextKey !== tradePlanKey) clearChartTradePlan();
+        else if (!tradePlanOutdated(price)) return;
+        else tradePlanController?.abort();
         tradePlanKey = nextKey;
+        tradePlanPrice = price;
+        tradePlanRequestedAt = Date.now();
         const controller = new AbortController();
         tradePlanController = controller;
         const seq = ++tradePlanSeq;
         try {
-            // A short strategy sells to enter, so its reference price is the bid; a long strategy buys at the ask.
-            const isShort = String(choice.direction || '').toLowerCase() === 'short';
-            const quotePrice = isShort ? row?.quote?.bidPrice : row?.quote?.askPrice;
-            const askPrice = typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0 ? quotePrice : null;
             const response = await window.tradingFlowFetch('/api/v1/orders/plan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1013,13 +991,13 @@
                     contractVersion: '1.0',
                     symbol,
                     strategy: choice.strategy,
-                    limitPrice: askPrice
+                    limitPrice: price
                 }),
                 signal: controller.signal
             });
             if (seq !== tradePlanSeq || controller.signal.aborted) return;
             if (!response.ok) {
-                deskChart?.setTradePlanLevels(null);
+                dropTradePlan();
                 return;
             }
             const plan = await response.json();
@@ -1038,7 +1016,7 @@
             renderTicketPlanSummary(plan);
         } catch (error) {
             if (error?.name === 'AbortError') return;
-            if (seq === tradePlanSeq) deskChart?.setTradePlanLevels(null);
+            if (seq === tradePlanSeq) dropTradePlan();
         } finally {
             if (tradePlanController === controller) tradePlanController = null;
         }
@@ -1129,12 +1107,6 @@
             label.className = 'watch-check-label';
             label.textContent = human.label;
             title.append(pill, label);
-            if (human.values) {
-                const values = document.createElement('span');
-                values.className = 'watch-check-values';
-                values.textContent = human.values;
-                title.append(values);
-            }
             entry.append(title);
             const canonical = document.createElement('p');
             canonical.className = 'watch-fine watch-check-canonical';

@@ -110,9 +110,9 @@
                 hasMove ? `Expected ±${card.frontImpliedMovePct.toFixed(1)}% swing priced from the nearest ATM Call + Put straddle.` : 'No liquid at-the-money Call + Put straddle met liquidity filters (<=35% bid-ask spread, 2–60 DTE, 80%–120% moneyness) on the nearest expiry.'
             ],
             [
-                '20d ADR%',
+                '20d ADR ÷ latest close',
                 formatAdr(card.adr20Pct),
-                'Average daily high-low range over the last 20 completed trading sessions relative to latest close.',
+                'Average daily high−low range over the last 20 completed sessions, divided by the latest close (method latest_close).',
                 card.adrAsOfSessionDate ? `Completed 20d ADR as of ${card.adrAsOfSessionDate} NY` : (card.adrUnavailableReason || 'Completed 20d ADR unavailable')
             ],
             [

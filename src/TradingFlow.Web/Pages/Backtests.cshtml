@@ -79,7 +79,7 @@
                     <article class="lab-strategy-option" data-direction="@strategy.Definition.Direction.ToString().ToLowerInvariant()">
                     <label class="lab-strategy">
                         @* Square, because these are independent multi-select. *@
-                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path"
+                        <input type="checkbox" name="StrategyPaths" value="@strategy.Path" data-strategy-id="@strategy.Identity.StrategyId"
                                checked="@(Model.SelectedStrategyPath == strategy.Path)" />
                         <span class="lab-strategy-body">
                             <span class="lab-strategy-heading"><span class="lab-strategy-name">@StrategyLabel(strategy.Definition.StrategyName)</span><small>v@(strategy.Identity.SemanticVersion)</small></span>
@@ -169,7 +169,7 @@
         <fieldset class="lab-block">
             <legend class="section-heading">Test window</legend>
             <div class="lab-quick-actions" role="group" aria-label="Quick UTC window presets">
-                @* The window comes from the selected backtest profile (time_window.start/end), never a date written here. *@
+                @* The window comes from the selected backtest profile (its start/end or rolling lookback), never a date written here. *@
                 <button type="button" class="btn btn-secondary btn-sm" data-window-preset="profile" hidden>Profile window</button>
                 <button type="button" class="btn btn-secondary btn-sm" data-window-preset="clear">Clear dates</button>
             </div>
@@ -187,6 +187,25 @@
                     <input class="input" id="LookbackDays" name="LookbackDays" type="number" min="5" max="1825" step="1" value="@profile?.TimeWindow.LookbackDays" aria-describedby="TestWindowHelp" />
                 </div>
             </div>
+            <div data-held-back>
+                @if (Model.HeldBackError is { } heldBackError)
+                {
+                    <p class="note" role="status">@heldBackError</p>
+                }
+                else
+                {
+                    <p class="note" data-held-back-none hidden>No held-back test period is registered for the selected strategies.</p>
+                    @foreach (var period in Model.HeldBackPeriods)
+                    {
+                        <p class="note" hidden data-held-back-period data-strategy-id="@period.StrategyId"
+                           data-start="@period.StartUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)"
+                           data-end="@period.EndUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)">
+                            Held-back test period of @period.StrategyId: @period.StartUtc.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) to @period.EndUtc.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) UTC (@period.StateLabel).
+                        </p>
+                    }
+                    <p class="note" role="alert" data-held-back-warning hidden></p>
+                }
+            </div>
             <p class="note" id="TestWindowHelp">Enter both dates in UTC, regardless of your device timezone. Leave both blank to use the lookback ending now. The end must follow the start and cannot be in the future.</p>
         </fieldset>
         <section class="lab-profile-block">
@@ -195,6 +214,7 @@
         <select class="input" id="SelectedConfigPath" name="SelectedConfigPath">
             @foreach (var config in Model.Configs)
             {
+                var window = TradingFlow.Web.Services.BacktestTestWindows.ProfileWindow(config.Config.TimeWindow, DateTimeOffset.UtcNow);
                 <option value="@config.Path" selected="@(config.Path == Model.SelectedConfigPath)"
                         data-starting-capital="@config.Config.Portfolio.StartingCapital.ToString(System.Globalization.CultureInfo.InvariantCulture)"
                         data-account-risk="@config.Config.Portfolio.AccountRiskBudgetPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
@@ -202,8 +222,8 @@
                         data-open-positions="@config.Config.Portfolio.MaxConcurrentPositions"
                         data-lookback-days="@config.Config.TimeWindow.LookbackDays"
                         data-cache-policy="@config.Config.CachePolicy"
-                        data-window-start="@(config.Config.TimeWindow.Start?.UtcDateTime.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))"
-                        data-window-end="@(config.Config.TimeWindow.End?.UtcDateTime.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))">@config.FileName</option>
+                        data-window-start="@(window?.StartUtc.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))"
+                        data-window-end="@(window?.EndUtc.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))">@config.FileName</option>
             }
         </select>
 

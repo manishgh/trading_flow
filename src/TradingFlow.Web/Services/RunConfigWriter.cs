@@ -951,6 +951,8 @@ public sealed class RunConfigWriter
         AppendOptionalDecimal(yaml, "  max_bollinger_width_percentile", strategy.EntryRules.MaxBollingerWidthPercentile);
         if (strategy.EntryRules.MinAverageRangePct is { } minAverageRangePct)
             yaml.AppendLine($"  min_average_range_pct: {minAverageRangePct.ToString(CultureInfo.InvariantCulture)}");
+        if (strategy.EntryRules.AverageRangeMethod is { } averageRangeMethod)
+            yaml.AppendLine($"  average_range_method: {averageRangeMethod}");
         if (strategy.EntryRules.MinAverageDollarVolume is { } minAverageDollarVolume)
             yaml.AppendLine($"  min_average_dollar_volume: {minAverageDollarVolume.ToString(CultureInfo.InvariantCulture)}");
         if (strategy.EntryRules.Sma50RisingLookbackBars != 0)
