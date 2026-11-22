@@ -169,7 +169,8 @@
         <fieldset class="lab-block">
             <legend class="section-heading">Test window</legend>
             <div class="lab-quick-actions" role="group" aria-label="Quick UTC window presets">
-                <button type="button" class="btn btn-secondary btn-sm" data-window-preset="may-oct-2026" data-window-start="2026-05-01T00:00" data-window-end="2026-10-30T21:00">May–Oct 2026</button>
+                @* The window comes from the selected backtest profile (time_window.start/end), never a date written here. *@
+                <button type="button" class="btn btn-secondary btn-sm" data-window-preset="profile" hidden>Profile window</button>
                 <button type="button" class="btn btn-secondary btn-sm" data-window-preset="clear">Clear dates</button>
             </div>
             <div class="lab-parameters">
@@ -200,7 +201,9 @@
                         data-position-notional="@config.Config.Portfolio.MaxPositionNotionalPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
                         data-open-positions="@config.Config.Portfolio.MaxConcurrentPositions"
                         data-lookback-days="@config.Config.TimeWindow.LookbackDays"
-                        data-cache-policy="@config.Config.CachePolicy">@config.FileName</option>
+                        data-cache-policy="@config.Config.CachePolicy"
+                        data-window-start="@(config.Config.TimeWindow.Start?.UtcDateTime.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))"
+                        data-window-end="@(config.Config.TimeWindow.End?.UtcDateTime.ToString("yyyy-MM-ddTHH:mm", System.Globalization.CultureInfo.InvariantCulture))">@config.FileName</option>
             }
         </select>
 

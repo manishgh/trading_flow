@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using TradingFlow.Data.Evidence.Screens;
 using TradingFlow.Domain.Market;
 using TradingFlow.Engine.Abstractions;
@@ -28,8 +29,6 @@ public static class SectorLeadersService
 
     private const int RequiredSessions = 254;
     private static readonly TimeSpan HistoryWindow = TimeSpan.FromDays(400);
-    private static readonly object CacheLock = new();
-    private static SectorLeaderRanking? cachedRanking;
 
     // Plain sector names for the Select Sector SPDR funds, used only for the strip tooltip.
     private static readonly IReadOnlyDictionary<string, string> SectorNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -50,12 +49,11 @@ public static class SectorLeadersService
         DateOnly? latestSession,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
         DateTimeOffset now,
+        IMemoryCache cache,
         CancellationToken cancellationToken)
     {
-        lock (CacheLock)
-        {
-            if (cachedRanking is { } hit && latestSession is not null && hit.AsOfSession == latestSession) return hit;
-        }
+        var key = $"sector-leaders:{latestSession:yyyy-MM-dd}";
+        if (latestSession is not null && cache.TryGetValue(key, out SectorLeaderRanking? hit) && hit is not null) return hit;
 
         var funds = ReadFunds(sectorFundsFile);
         if (funds.Count == 0) return new SectorLeaderRanking(null, [], "No sector funds are configured.");
@@ -70,7 +68,7 @@ public static class SectorLeadersService
         var ranking = Rank(funds, barsBySymbol, schedules, now);
         if (ranking.UnavailableReason is null && latestSession is not null && ranking.AsOfSession == latestSession)
         {
-            lock (CacheLock) cachedRanking = ranking;
+            cache.Set(key, ranking, TimeSpan.FromHours(20));
         }
 
         return ranking;
@@ -92,7 +90,7 @@ public static class SectorLeadersService
         {
             if (!barsBySymbol.TryGetValue(symbol, out var bars)) continue;
             var completed = VixRegime.FilterTradingDayBars(bars, schedules)
-                .Where(bar => bar.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) && WorkspacePulseEndpoints.IsCompletedBar(bar, now))
+                .Where(bar => bar.Timeframe.Equals("1d", StringComparison.OrdinalIgnoreCase) && DeskMarketData.IsCompletedBar(bar, now))
                 .OrderBy(bar => bar.Timestamp)
                 .ToArray();
             if (completed.Length < RequiredSessions) continue;

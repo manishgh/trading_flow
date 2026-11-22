@@ -574,6 +574,24 @@ public sealed class OptionsSentimentTests
         Assert.False(DeskOptionsEndpoints.IsValidEquitySymbol("SPY QQQ"));
     }
 
+    [Fact]
+    public void ExpectedMoveRemovesIntrinsicValueWhenTheNearestStrikeIsNotAtThePrice()
+    {
+        // Cheap stock at $6.27 with $1 strikes: the nearest strike is 6, so the 6-strike call is $0.27 in the money.
+        // Call mid 0.50 + put mid 0.25 = 0.75 straddle; removing the 0.27 intrinsic leaves 0.48 of expected movement:
+        // 0.48 / 6.27 = 7.6555% (the old figure, 0.75 / 6.27 = 11.96%, counted the in-the-money amount as movement).
+        var weeklyExpiry = ObservedNy.AddDays(7);
+        var quotes = new[]
+        {
+            Quote("CHEAP", weeklyExpiry, isCall: true, strike: 6m, bid: 0.48m, ask: 0.52m, iv: 0.90m, delta: 0.60m, volume: 100m),
+            Quote("CHEAP", weeklyExpiry, isCall: false, strike: 6m, bid: 0.24m, ask: 0.26m, iv: 0.95m, delta: -0.40m, volume: 100m)
+        };
+
+        var snapshot = OptionsSentimentCalculator.Calculate("CHEAP", ObservedUtc, 6.27m, quotes);
+
+        Assert.Equal(Math.Round(0.48m / 6.27m * 100m, 4), snapshot.FrontImpliedMovePct);
+    }
+
     // Helper constructing a synthetic OPRA OptionContractQuote with standard OCC formatting.
     private static OptionContractQuote Quote(
         string underlying,

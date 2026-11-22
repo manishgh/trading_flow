@@ -659,15 +659,15 @@
     // Maps canonical engine gate/rejection codes to plain-English labels while preserving exact audit codes for disclosure.
     const checkLabels = {
         min_average_range_pct_not_met: '20-day ADR% below minimum threshold',
-        regime_price_below_sma: 'Benchmark close below 50-day SMA',
-        regime_sma_not_rising: 'Benchmark 50-day SMA is not rising',
-        regime_sma_not_falling: 'Benchmark 50-day SMA is not falling',
-        market_regime_off_on_entry_day: 'Market regime gate is OFF (SPY)',
-        nasdaq_market_regime_off_on_entry_day: 'Nasdaq home-market gate is OFF (QQQ)',
-        vix_above_long_limit: 'VIX above long-entry limit (>22)',
-        vix_regime_off_on_entry_day: 'VIX above long-entry limit (>22)',
-        vix_below_short_limit: 'VIX below short-entry floor (<18)',
-        vix_short_regime_off_on_entry_day: 'VIX below short-entry floor (<18)',
+        regime_price_below_sma: 'Benchmark close below its moving average',
+        regime_sma_not_rising: 'Benchmark moving average is not rising',
+        regime_sma_not_falling: 'Benchmark moving average is not falling',
+        market_regime_off_on_entry_day: 'Market regime gate is off',
+        nasdaq_market_regime_off_on_entry_day: 'Nasdaq home-market gate is off',
+        vix_above_long_limit: 'VIX above the long-entry limit',
+        vix_regime_off_on_entry_day: 'VIX above the long-entry limit',
+        vix_below_short_limit: 'VIX below the short-entry floor',
+        vix_short_regime_off_on_entry_day: 'VIX below the short-entry floor',
         vix_close_unknown_for_previous_session: 'Previous-session VIX close not yet published',
         vix_lookup_failed: 'VIX data source unavailable',
         sector_not_in_top_n: 'Stock sector is outside the Top-N leaders',
@@ -696,7 +696,17 @@
         };
         const label = (!passed && (checkLabels[normalizedCode] || checkLabels[normalizedGate]))
             || (!passed && rawCode ? prettify(rawCode) : prettify(rawGate));
-        return { passed, glyph: passed ? '✓' : '✕', label };
+        return { passed, glyph: passed ? '✓' : '✕', label, values: checkValues(check) };
+    }
+
+    // Lists up to three of the check's own server inputs ("vix_close 28.44 · limit 22") so the numbers shown are the ones
+    // the engine used, never thresholds copied into this script.
+    function checkValues(check) {
+        const inputs = check?.inputs && typeof check.inputs === 'object' ? Object.entries(check.inputs) : [];
+        return inputs.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+            .slice(0, 3)
+            .map(([key, value]) => key.replace(/[_-]+/g, ' ') + ' ' + String(value).slice(0, 24))
+            .join(' · ');
     }
 
     // Summarize only checks actually recorded by the shared engine; missing and expired evidence stays explicit.
@@ -869,8 +879,8 @@
         const pct = value => typeof value === 'number' && Number.isFinite(value) && value >= 0
             ? value.toFixed(1) + '%'
             : '—';
-        node.textContent = 'Vol 1D ' + pct(vol?.dailyRangePct) + ' · 1W ' + pct(vol?.weekRangePct) + ' · 1M ' + pct(vol?.monthRangePct);
-        const volTip = 'Stock price swing range (High − Low ÷ Close): 1D = last completed session, 1W = 5 sessions, 1M = 21 sessions';
+        node.textContent = 'Range 1D ' + pct(vol?.dailyRangePct) + ' · 1W ' + pct(vol?.weekRangePct) + ' · 1M ' + pct(vol?.monthRangePct);
+        const volTip = 'Price range as a share of the close, (high − low) ÷ close: 1D = last completed session, 1W = last 5 sessions, 1M = last 21 sessions';
         node.title = volTip;
         node.dataset.tooltip = volTip;
     }
@@ -956,7 +966,7 @@
         }
         const parts = [
             typeof plan.riskBudget === 'number' && Number.isFinite(plan.riskBudget) ? '1R budget ' + money(plan.riskBudget) : '',
-            typeof plan.limit === 'number' && Number.isFinite(plan.limit) ? 'Entry ' + fixedMoney(plan.limit) : '',
+            typeof plan.limit === 'number' && Number.isFinite(plan.limit) ? (plan.direction === 'short' ? 'Short at bid ' : 'Buy at ask ') + fixedMoney(plan.limit) : '',
             typeof plan.stop === 'number' && Number.isFinite(plan.stop) ? 'Stop ' + fixedMoney(plan.stop) : '',
             typeof plan.target === 'number' && Number.isFinite(plan.target) ? 'Target ' + fixedMoney(plan.target) : ''
         ].filter(Boolean);
@@ -992,9 +1002,10 @@
         tradePlanController = controller;
         const seq = ++tradePlanSeq;
         try {
-            const askPrice = typeof row?.quote?.askPrice === 'number' && Number.isFinite(row.quote.askPrice) && row.quote.askPrice > 0
-                ? row.quote.askPrice
-                : null;
+            // A short strategy sells to enter, so its reference price is the bid; a long strategy buys at the ask.
+            const isShort = String(choice.direction || '').toLowerCase() === 'short';
+            const quotePrice = isShort ? row?.quote?.bidPrice : row?.quote?.askPrice;
+            const askPrice = typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0 ? quotePrice : null;
             const response = await window.tradingFlowFetch('/api/v1/orders/plan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1021,7 +1032,8 @@
             deskChart?.setTradePlanLevels({
                 limit: plan?.limit ?? null,
                 stop: plan?.stop ?? null,
-                target: plan?.target ?? null
+                target: plan?.target ?? null,
+                direction: plan?.direction === 'short' ? 'short' : 'long'
             });
             renderTicketPlanSummary(plan);
         } catch (error) {
@@ -1117,6 +1129,12 @@
             label.className = 'watch-check-label';
             label.textContent = human.label;
             title.append(pill, label);
+            if (human.values) {
+                const values = document.createElement('span');
+                values.className = 'watch-check-values';
+                values.textContent = human.values;
+                title.append(values);
+            }
             entry.append(title);
             const canonical = document.createElement('p');
             canonical.className = 'watch-fine watch-check-canonical';

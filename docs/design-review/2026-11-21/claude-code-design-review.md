@@ -131,3 +131,37 @@ standing check on every UI checkpoint:
 3. R4 + M8 (server sends human wording and risk figures), B1, R1/C4.
 4. S1–S3 structure, T1 tests, then the Low items.
 5. Separately, outside this branch: decide on M4–M7 for the shared engine maths when strategy work resumes.
+
+---
+
+## Status after the fixes of 22 November 2026 (approved by the user: "all approved")
+
+| Item | Status | What changed |
+|---|---|---|
+| M1 | Fixed | Ratio uses the shared calculator (move ÷ √days ÷ ADR); bands 0.75× / 1.25× assigned on the server (`CatalystOptionsAdrService.ClassifyImpliedMoveBand`), labelled as a display guide. |
+| M2 | Fixed | Change column reads "Today" in the regular session and "Since close" otherwise; tooltips name the quote session and the close date. |
+| M3 | Fixed | Pills renamed "Range 1D / 1W / 1M" with a tooltip saying it is a price range, not volatility. |
+| M4 | Not changed | Engine ADR definition affects strategy admission and content hashes; left for a strategy decision. |
+| M5 | Fixed | Straddle expected move removes the in-the-money leg's intrinsic value (`OptionsSentimentCalculator.FindStraddleInWindow`); test with a $6.27 stock and $1 strikes. |
+| M6 | Not changed | Comparing skew with each symbol's own history needs stored skew history; no store exists yet. |
+| M7 | Not changed | Holiday-aware trading days need the exchange calendar inside the options client; not plumbed yet. |
+| M8 | Kept | The ticket's risk strip still recomputes from the operator's edited prices and quantity (that is its purpose); the server preview remains the authority. |
+| M9 | Fixed by Gemini | Moving-average pills show ↑/↓ and neutral colours. |
+| M10 | Partly | Chart line labelled "Ask" (long) or "Bid" (short): the quote the plan was priced at, not the strategy trigger. The plan is still cached without the price, so the line does not follow the quote, and the strategy's own entry trigger is not returned yet. |
+| P1 | Partly | Status strip and ADR still read the provider directly, but now through one service each with per-session caching. A move to `ICandleStore` remains open. |
+| P2 | Fixed | SPY/QQQ bars cached per completed session; ADR cached per symbol per New York day; sector ranking per session; the exchange calendar is cached per New York day (a failed calendar read is retried, not cached). The strip no longer makes archived provider calls every minute; the strip and ADR builds each run once per key even when many pages ask at the same time. |
+| P3 | Fixed | Regime rules come from the enabled strategy configurations (`WorkspacePulseService.SelectRules`); the tooltip says how many strategies share the rule. |
+| P4 | Fixed | Frozen CSV reader removed; live top-6 ranking with the research screens' own 12-1 formula. |
+| R1 / S5 | Fixed | One plan-ID parser (`SqliteJobRepository.TryExtractPlanId`) with a SQL text pre-filter; the interface's silent "load all jobs" fallback removed. |
+| R2 | Fixed | `DeskMarketData.IsCompletedBar` and `DeskMarketData.TryLoadSchedulesAsync` shared by the strip, ADR loader and sector ranking. |
+| R3 | Fixed | Failures in the strip, ADR loader, sector ranking and calendar loader are logged with a reason. |
+| R4 | Partly | Gate wording in `watch-desk.js` no longer contains thresholds; each check shows up to three of its own server inputs. The short check labels are still written in JavaScript rather than sent as a full sentence by the server. |
+| R5 | Fixed | See M1. |
+| R6 | Fixed | Unused `_OptionsSentimentPanel.cshtml` removed (third copy of the options tooltips). |
+| R7 / C1 / C2 / C3 | Fixed | `WorkspacePulseService` and `CatalystOptionsAdrService` are injected singletons using `IMemoryCache`; one shared build/download per key; a disconnecting browser cannot cancel a shared build. |
+| C4 / B1 | Partly | The matrix no longer carries trades; the drawer loads the clicked month's trades (`GET /api/v1/backtests/plans/{id}/jobs/{jobId}/trades?month=yyyy-MM`, up to 100). A job's stored view keeps only the run's latest 80 trades (`RetainedRecentTrades`), so for older months the drawer now says "Showing N of M trades" and points to the full report instead of claiming there were none. Reading trades from the full result file remains open. |
+| B2 | Fixed | Short strategies get short plans (stop above, target below, priced at the bid); the long-only order ticket refuses to copy a short plan into a buy form. |
+| B3 | Partly | A "Profile window" preset takes its dates from the selected backtest profile and stays hidden when the profile sets none; neither current profile sets a start and end, so it is hidden today. The fixed "May–Oct 2026" preset was removed; no period is marked as reserved test data yet. The 1000 group size is documented as a "whole screen" marker. |
+| S1 | Fixed | Endpoint is a one-line mapping; logic lives in `WorkspacePulseService`. |
+| S2 / S3 / S4 | Not changed | Splitting the large scripts, merging the older stylesheets and renaming versioned storage keys are larger refactors left for a separate pass. |
+| T1 / T3 | Partly | New behaviour tests for rule selection, sector ranking, VIX latest close, short plans, month trades and the straddle fix; the browser scripts still have only text checks. |

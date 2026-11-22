@@ -306,7 +306,8 @@ public static partial class OptionsSentimentCalculator
         return preferred ?? FindStraddleInWindow(liquid, observedDateNy, spot, minDte: 2, maxDte: 30);
     }
 
-    // Finds the nearest expiry inside [minDte, maxDte] that has a strike with both a liquid call and a liquid put.
+    // Finds the nearest expiry inside [minDte, maxDte] that has a strike with both a liquid call and a liquid put, and prices
+    // the expected move from that straddle's time value (intrinsic value of an off-price strike removed).
     private static FrontStraddleMetrics? FindStraddleInWindow(
         IReadOnlyList<OptionContractQuote> liquid,
         DateOnly observedDateNy,
@@ -342,7 +343,11 @@ public static partial class OptionsSentimentCalculator
             }
 
             var straddleMid = MidPrice(atmPair.Call) + MidPrice(atmPair.Put);
-            var impliedMovePct = Math.Round(straddleMid / spot * 100m, 4);
+            // When the nearest strike is not at the price, one leg is in the money by |spot - strike|. That intrinsic value
+            // is not expected movement (it matters most on cheap stocks with wide strike spacing), so it is removed and only
+            // the straddle's time value is compared with the spot price.
+            var timeValue = Math.Max(0m, straddleMid - Math.Abs(spot - atmPair.Strike));
+            var impliedMovePct = Math.Round(timeValue / spot * 100m, 4);
             var tradingDays = CountWeekdaysExclusiveInclusive(observedDateNy, expiryGroup.Key);
             var atmIv = AveragePositiveIv(atmPair.Call.ImpliedVolatility, atmPair.Put.ImpliedVolatility);
             decimal? atmIvPct = atmIv is { } iv ? Math.Round(iv * 100m, 4) : null;

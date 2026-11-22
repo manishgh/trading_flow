@@ -12,7 +12,6 @@ namespace TradingFlow.Web.Services;
 public static class SavedPlanMonthlyMatrixBuilder
 {
     private const int MaxTopRejections = 8;
-    private const int MaxSampleTrades = 25;
 
     /// <summary>Projects all jobs belonging to <paramref name="plan"/> into distinct sorted months and per-job strategy/batch rows.</summary>
     public static SavedPlanMonthlyMatrixResponse Build(BacktestPlanResponse plan, IReadOnlyList<BacktestJobSnapshot> jobs)
@@ -45,15 +44,34 @@ public static class SavedPlanMonthlyMatrixBuilder
             rows);
     }
 
+    /// <summary>True for a calendar month key "yyyy-MM" (month 01-12), the form the monthly records use.</summary>
+    public static bool IsMonthKey([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? month) =>
+        month is { Length: 7 } && DateOnly.TryParseExact(month + "-01", "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
+
+    /// <summary>The strategy a job ran, from its cohort, its monthly records, its results, or (last) its run name.</summary>
+    public static string ResolveStrategyId(BacktestJobSnapshot job) =>
+        job.Cohort?.Strategy.StrategyId
+        ?? job.MonthlyResults?.FirstOrDefault()?.Strategy.StrategyId
+        ?? job.Result?.StrategyResults?.FirstOrDefault()?.StrategyId
+        ?? job.RunName;
+
+    /// <summary>
+    /// Lists one job's completed trades that exited in New York month <paramref name="month"/> (yyyy-MM), newest first,
+    /// up to <paramref name="max"/>, for the drawer opened on that month. Loaded on demand so the matrix stays small;
+    /// monthly % returns still come only from the stored monthly records.
+    /// </summary>
+    public static IReadOnlyList<SavedPlanMonthlyTradeSample> BuildMonthTrades(BacktestJobSnapshot job, string month, int max = 100) =>
+        BuildSampleTrades(job, ResolveStrategyId(job), int.MaxValue)
+            .Where(trade => trade.Month == month)
+            .Take(max)
+            .ToArray();
+
     // Projects one cohort/strategy/batch job into a matrix row with immutable monthly cells, canonical hash, and diagnostics.
     private static SavedPlanMonthlyMatrixRow BuildRow(BacktestPlanResponse plan, BacktestJobSnapshot job)
     {
         var firstMonthly = job.MonthlyResults?.FirstOrDefault();
         var cohortName = job.Cohort?.CohortName ?? firstMonthly?.CohortName ?? job.RunName;
-        var strategyId = job.Cohort?.Strategy.StrategyId
-            ?? firstMonthly?.Strategy.StrategyId
-            ?? job.Result?.StrategyResults?.FirstOrDefault()?.StrategyId
-            ?? job.RunName;
+        var strategyId = ResolveStrategyId(job);
         var semanticVersion = job.Cohort?.Strategy.SemanticVersion
             ?? firstMonthly?.Strategy.SemanticVersion
             ?? String.Empty;
@@ -63,7 +81,6 @@ public static class SavedPlanMonthlyMatrixBuilder
         var strategyName = ResolveStrategyName(plan, job, strategyId, semanticVersion);
         var cells = BuildCells(job);
         var topRejections = BuildTopRejections(job, strategyId);
-        var sampleTrades = BuildSampleTrades(job, strategyId);
         var unavailableReason = ResolveMonthlyUnavailableReason(job, cells);
 
         return new SavedPlanMonthlyMatrixRow(
@@ -78,7 +95,7 @@ public static class SavedPlanMonthlyMatrixBuilder
             cells,
             topRejections,
             unavailableReason,
-            sampleTrades);
+            SampleTrades: null);
     }
 
     // Surfaces a concrete explanation whenever a job has no monthly cells (failed, cancelled, pending, or writer rejected).
@@ -143,8 +160,8 @@ public static class SavedPlanMonthlyMatrixBuilder
             .ToArray();
     }
 
-    // Projects up to 25 newest retained completed trades for this strategy stamped with NY exit month and realised R-multiple; never pools or aggregates returns.
-    private static IReadOnlyList<SavedPlanMonthlyTradeSample> BuildSampleTrades(BacktestJobSnapshot job, string strategyId)
+    // Projects this strategy's completed trades, newest first and up to max, stamped with NY exit month and realised R-multiple; never pools or aggregates returns.
+    private static IReadOnlyList<SavedPlanMonthlyTradeSample> BuildSampleTrades(BacktestJobSnapshot job, string strategyId, int max)
     {
         var completedTrades = job.Result?.CompletedTrades;
         if (completedTrades is not { Count: > 0 }) return [];
@@ -162,7 +179,7 @@ public static class SavedPlanMonthlyMatrixBuilder
                 (String.IsNullOrEmpty(trade.StrategyId) && singleStrategyJob))
             .OrderByDescending(trade => trade.ExitTimestamp)
             .ThenBy(trade => trade.Ticker, StringComparer.OrdinalIgnoreCase)
-            .Take(MaxSampleTrades)
+            .Take(max)
             .Select(trade => new SavedPlanMonthlyTradeSample(
                 MonthlyBacktestPresentation.ExitSessionDate(trade, valuationBasis)
                     .ToString("yyyy-MM", CultureInfo.InvariantCulture),

@@ -1,8 +1,10 @@
 using TradingFlow.Domain.Market;
+using TradingFlow.Domain.Strategies;
 using TradingFlow.Engine.Abstractions;
 using TradingFlow.Engine.Indicators;
 using TradingFlow.Engine.Regime;
 using TradingFlow.Web;
+using TradingFlow.Web.Services;
 
 namespace TradingFlow.Tests;
 
@@ -11,6 +13,16 @@ public sealed class WorkspacePulseTests : IDisposable
 {
     private static readonly DateOnly Session = new(2026, 11, 19);
     private static readonly DateTimeOffset Now = new(2026, 11, 20, 15, 0, 0, TimeSpan.Zero);
+    // The regime rules the ten swing configs use today (50-day average with a 20-session slope; VIX 18 / 22 with half
+    // size between), resolved through the same selection the strip uses.
+    private static readonly WorkspaceRegimeRules Rules = WorkspacePulseService.SelectRules(
+    [
+        new RegimeRules("SPY", RegimeRules.PriceAboveSma, 50, SmaRisingLookbackBars: 20, NasdaqListingBenchmark: "QQQ", VixSeries: "VIXCLS",
+            VixFullRiskBelow: 18m, VixNoLongsAbove: 22m, VixReducedRiskScale: 0.5m),
+        new RegimeRules("SPY", RegimeRules.PriceBelowFallingSma, 50, VixSeries: "VIXCLS", VixReducedRiskScale: 0.5m,
+            SmaFallingLookbackBars: 20, VixNoShortsBelow: 18m, VixShortFullRiskAbove: 22m)
+    ]);
+
     private readonly string root = Path.Combine(Path.GetTempPath(), "tf-pulse-" + Guid.NewGuid().ToString("N"));
 
     // Builds a one-day VIX series for the previous session.
@@ -56,7 +68,7 @@ public sealed class WorkspacePulseTests : IDisposable
     [InlineData(25.0, 0.0, 1.0)]
     public void VixPulseScalesLongAndShortRisk(double close, double longScale, double shortScale)
     {
-        var pulse = WorkspacePulseEndpoints.BuildVixPulse(Vix((decimal)close), Session, Now);
+        var pulse = WorkspacePulseService.BuildVixPulse(Vix((decimal)close), Session, Now, scheduleSucceeded: true, schedules: null, rules: Rules);
         Assert.True(pulse.Available);
         Assert.Equal((decimal)longScale, pulse.LongRiskScale);
         Assert.Equal((decimal)shortScale, pulse.ShortRiskScale);
@@ -65,10 +77,28 @@ public sealed class WorkspacePulseTests : IDisposable
     [Fact]
     public void MissingVixSeriesFailsClosedWithZeroScales()
     {
-        var pulse = WorkspacePulseEndpoints.BuildVixPulse(null, Session, Now);
+        var pulse = WorkspacePulseService.BuildVixPulse(null, Session, Now, scheduleSucceeded: true, schedules: null, rules: Rules);
         Assert.False(pulse.Available);
         Assert.Equal(0m, pulse.LongRiskScale);
         Assert.Equal(0m, pulse.ShortRiskScale);
+    }
+
+    [Fact]
+    public void RegimeRulesComeFromTheMostCommonConfiguredRuleAndSayWhenStrategiesDiffer()
+    {
+        var common = new RegimeRules("SPY", RegimeRules.PriceAboveSma, 50, SmaRisingLookbackBars: 20);
+        var other = new RegimeRules("SPY", RegimeRules.PriceAboveSma, 100, SmaRisingLookbackBars: 10);
+        var rules = WorkspacePulseService.SelectRules([common, common with { NasdaqListingBenchmark = "QQQ" }, other]);
+        // The Nasdaq home-market link applies per stock, so the first two count as one rule (2 of 3).
+        Assert.Equal(50, rules.Long!.SmaPeriod);
+        Assert.Contains("2 of 3", rules.LongSource);
+        Assert.Null(rules.Short);
+        Assert.Contains("No enabled short strategy", rules.ShortSource);
+
+        var none = WorkspacePulseService.SelectRules([]);
+        var unavailable = WorkspacePulseService.EvaluateBenchmark("SPY", [], null, Now, none);
+        Assert.False(unavailable.Available);
+        Assert.Equal("No strategy uses a regime rule", unavailable.SummaryLabel);
     }
 
     [Fact]
@@ -119,7 +149,7 @@ public sealed class WorkspacePulseTests : IDisposable
         var risingBars = BuildDailyBars("SPY", 75, Session, startClose: 500m, step: 1m);
         var expectedClose = risingBars[^1].Close;
 
-        var evaluated = WorkspacePulseEndpoints.EvaluateBenchmark("SPY", risingBars, schedules, Now);
+        var evaluated = WorkspacePulseService.EvaluateBenchmark("SPY", risingBars, schedules, Now, Rules);
         Assert.True(evaluated.Available);
         Assert.True(evaluated.LongGateOn);
         Assert.False(evaluated.ShortGateOn);
@@ -128,7 +158,7 @@ public sealed class WorkspacePulseTests : IDisposable
 
         // Fewer than 70 completed bars (50-SMA + 20-bar slope) must fail closed, never show Neutral / Gate OFF.
         var shortHistory = BuildDailyBars("SPY", 60, Session, startClose: 500m, step: 1m);
-        var insufficient = WorkspacePulseEndpoints.EvaluateBenchmark("SPY", shortHistory, schedules, Now);
+        var insufficient = WorkspacePulseService.EvaluateBenchmark("SPY", shortHistory, schedules, Now, Rules);
         Assert.False(insufficient.Available);
         Assert.Null(insufficient.LastClose);
 
@@ -137,13 +167,13 @@ public sealed class WorkspacePulseTests : IDisposable
         {
             new OhlcvBar("SPY", new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), "1d", 580m, 585m, 579m, 584m, 100m)
         };
-        var uncompleted = WorkspacePulseEndpoints.EvaluateBenchmark("SPY", uncompletedOnly, schedules, Now);
+        var uncompleted = WorkspacePulseService.EvaluateBenchmark("SPY", uncompletedOnly, schedules, Now, Rules);
         Assert.False(uncompleted.Available);
         Assert.Null(uncompleted.LastClose);
 
         // Stale benchmark ending D-2 against authoritative schedule expecting D-1 must fail closed.
         var staleBars = BuildDailyBars("SPY", 75, Session.AddDays(-1), startClose: 500m, step: 1m);
-        var stale = WorkspacePulseEndpoints.EvaluateBenchmark("SPY", staleBars, schedules, Now);
+        var stale = WorkspacePulseService.EvaluateBenchmark("SPY", staleBars, schedules, Now, Rules);
         Assert.False(stale.Available);
         Assert.False(stale.LongGateOn);
     }
@@ -151,17 +181,61 @@ public sealed class WorkspacePulseTests : IDisposable
     [Fact]
     public async Task TryLoadSchedulesFailsClosedWhenScheduleProviderReturnsEmptyOrThrows()
     {
-        var emptyResult = await WorkspacePulseEndpoints.TryLoadSchedulesAsync(new FakeScheduleProvider(returnEmpty: true), Now, CancellationToken.None);
+        var emptyResult = await DeskMarketData.TryLoadSchedulesAsync(new FakeScheduleProvider(returnEmpty: true), Now, 15, CancellationToken.None);
         Assert.False(emptyResult.Succeeded);
         Assert.Null(emptyResult.Schedules);
 
-        var throwResult = await WorkspacePulseEndpoints.TryLoadSchedulesAsync(new FakeScheduleProvider(throwOnLoad: true), Now, CancellationToken.None);
+        var throwResult = await DeskMarketData.TryLoadSchedulesAsync(new FakeScheduleProvider(throwOnLoad: true), Now, 15, CancellationToken.None);
         Assert.False(throwResult.Succeeded);
         Assert.Null(throwResult.Schedules);
 
-        var calendarlessResult = await WorkspacePulseEndpoints.TryLoadSchedulesAsync(new FakeCalendarlessProvider(), Now, CancellationToken.None);
+        var calendarlessResult = await DeskMarketData.TryLoadSchedulesAsync(new FakeCalendarlessProvider(), Now, 15, CancellationToken.None);
         Assert.True(calendarlessResult.Succeeded);
         Assert.Null(calendarlessResult.Schedules);
+    }
+
+    [Fact]
+    public async Task CachedScheduleLoadCallsTheProviderOncePerNewYorkDayAndNeverCachesAFailure()
+    {
+        using var cache = new Microsoft.Extensions.Caching.Memory.MemoryCache(new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions());
+        var provider = new FakeScheduleProvider();
+        var first = await DeskMarketData.TryLoadSchedulesCachedAsync(provider, Now, 15, cache, CancellationToken.None);
+        var second = await DeskMarketData.TryLoadSchedulesCachedAsync(provider, Now.AddMinutes(5), 15, cache, CancellationToken.None);
+        Assert.True(first.Succeeded);
+        Assert.Same(first.Schedules, second.Schedules);
+        Assert.Equal(1, provider.Loads);
+
+        var failing = new FakeScheduleProvider(throwOnLoad: true);
+        Assert.False((await DeskMarketData.TryLoadSchedulesCachedAsync(failing, Now.AddDays(1), 15, cache, CancellationToken.None)).Succeeded);
+        Assert.False((await DeskMarketData.TryLoadSchedulesCachedAsync(failing, Now.AddDays(1), 15, cache, CancellationToken.None)).Succeeded);
+        Assert.Equal(2, failing.Loads);
+    }
+
+    [Fact]
+    public async Task SingleFlightJoinsConcurrentCallersAndRestartsAfterAFailure()
+    {
+        var flight = new SingleFlight<string, int>(StringComparer.Ordinal);
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var starts = 0;
+        var first = flight.RunAsync("k", () => { Interlocked.Increment(ref starts); return gate.Task; });
+        var joined = flight.RunAsync("k", () => { Interlocked.Increment(ref starts); return Task.FromResult(-1); });
+        Assert.Same(first, joined);
+        gate.SetResult(7);
+        Assert.Equal(7, await joined);
+        Assert.Equal(1, starts);
+        await WaitUntilAsync(() => flight.RunningCount == 0);
+
+        var failed = flight.RunAsync("k", () => Task.FromException<int>(new InvalidOperationException("boom")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => failed);
+        await WaitUntilAsync(() => flight.RunningCount == 0);
+        Assert.Equal(3, await flight.RunAsync("k", () => Task.FromResult(3)));
+    }
+
+    // Polls a condition for up to two seconds; the helper removes finished entries on a continuation.
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 200 && !condition(); attempt++) await Task.Delay(10);
+        Assert.True(condition());
     }
 
     [Fact]
@@ -171,13 +245,13 @@ public sealed class WorkspacePulseTests : IDisposable
         var schedules = BuildWeekdaySchedules(Session.AddDays(-14), Session.AddDays(2));
 
         // Without benchmark session or schedules, never walk back to an older FRED close.
-        var noSession = WorkspacePulseEndpoints.BuildVixPulse(olderCloseOnly, benchmarkPreviousSession: null, Now);
+        var noSession = WorkspacePulseService.BuildVixPulse(olderCloseOnly, benchmarkPreviousSession: null, Now, scheduleSucceeded: true, schedules: null, rules: Rules);
         Assert.False(noSession.Available);
         Assert.Equal(0m, noSession.LongRiskScale);
         Assert.Equal(0m, noSession.ShortRiskScale);
 
         // With authoritative schedules expecting 2026-11-19, missing 2026-11-19 close must fail closed rather than use 2026-11-16.
-        var missingExpected = WorkspacePulseEndpoints.BuildVixPulse(olderCloseOnly, benchmarkPreviousSession: null, Now, scheduleSucceeded: true, schedules: schedules);
+        var missingExpected = WorkspacePulseService.BuildVixPulse(olderCloseOnly, benchmarkPreviousSession: null, Now, scheduleSucceeded: true, schedules: schedules, rules: Rules);
         Assert.False(missingExpected.Available);
         Assert.Equal(Session, missingExpected.SessionDate);
         Assert.Equal(0m, missingExpected.LongRiskScale);
@@ -188,13 +262,13 @@ public sealed class WorkspacePulseTests : IDisposable
         Assert.Equal(Session.AddDays(-3), missingExpected.LatestPublishedDate);
 
         // When schedule lookup failed, fail closed even if a VIX close exists.
-        var failedSchedule = WorkspacePulseEndpoints.BuildVixPulse(Vix(15m), Session, Now, scheduleSucceeded: false, schedules: null);
+        var failedSchedule = WorkspacePulseService.BuildVixPulse(Vix(15m), Session, Now, scheduleSucceeded: false, schedules: null, rules: Rules);
         Assert.False(failedSchedule.Available);
         Assert.Equal(0m, failedSchedule.LongRiskScale);
         Assert.Equal(0m, failedSchedule.ShortRiskScale);
 
         // With authoritative schedules and exact expected previous session published, evaluate normally.
-        var exactExpected = WorkspacePulseEndpoints.BuildVixPulse(Vix(15m), benchmarkPreviousSession: null, Now, scheduleSucceeded: true, schedules: schedules);
+        var exactExpected = WorkspacePulseService.BuildVixPulse(Vix(15m), benchmarkPreviousSession: null, Now, scheduleSucceeded: true, schedules: schedules, rules: Rules);
         Assert.True(exactExpected.Available);
         Assert.Equal(Session, exactExpected.SessionDate);
         Assert.Equal(1.0m, exactExpected.LongRiskScale);
@@ -240,9 +314,12 @@ public sealed class WorkspacePulseTests : IDisposable
             yield break;
         }
 
+        public int Loads { get; private set; }
+
         public Task<IReadOnlyDictionary<DateOnly, MarketSessionSchedule>> LoadMarketSessionSchedulesAsync(
             DateOnly startDateInclusive, DateOnly endDateInclusive, CancellationToken cancellationToken)
         {
+            Loads++;
             if (throwOnLoad) throw new InvalidOperationException("Simulated calendar outage.");
             IReadOnlyDictionary<DateOnly, MarketSessionSchedule> result = returnEmpty
                 ? new Dictionary<DateOnly, MarketSessionSchedule>()

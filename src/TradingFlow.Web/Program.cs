@@ -277,6 +277,8 @@ builder.Services.AddSingleton<TradingFlow.Application.Jobs.IDurableJobHandler>(s
     serviceProvider.GetRequiredService<OptimizationJobService>());
 builder.Services.AddSingleton<AlpacaCredentialProvider>();
 builder.Services.AddSingleton<PaperRuntimeFactory>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.WorkspacePulseService>();
+builder.Services.AddSingleton<TradingFlow.Web.Services.CatalystOptionsAdrService>();
 builder.Services.AddSingleton<MobileAutomationSessionStore>();
 builder.Services.AddSingleton<PaperEnvironmentService>();
 builder.Services.AddSingleton(new PaperJobServiceOptions(

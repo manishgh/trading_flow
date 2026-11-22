@@ -29,6 +29,7 @@
     const matrixDrawerClose = document.getElementById('lab-matrix-drawer-close');
     const currencyFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
     let matrixRequestId = 0;
+    let drawerTradesSeq = 0;
     let evidenceChoices = [];
     const lifetime = new AbortController();
     // Discards backend-bound choices on departure, including documents retained by browser history.
@@ -149,6 +150,18 @@
             const field = form.elements.namedItem(name);
             if (field && option.dataset[key] !== undefined) field.value = option.dataset[key];
         }
+        syncProfileWindowPreset(option);
+    }
+    // Shows the "Profile window" preset only when the selected profile configures a start and end, labelled with its dates.
+    function syncProfileWindowPreset(option) {
+        const button = form.querySelector('[data-window-preset="profile"]');
+        if (!button) return;
+        const start = option?.dataset.windowStart || '', end = option?.dataset.windowEnd || '';
+        button.hidden = !(start && end);
+        button.dataset.windowStart = start;
+        button.dataset.windowEnd = end;
+        button.textContent = start && end ? 'Profile window ' + start.slice(0, 10) + ' – ' + end.slice(0, 10) : 'Profile window';
+        button.title = 'Test window configured in the selected backtest profile (UTC).';
     }
     if (kind === 'backtest') form.querySelector('#SelectedConfigPath')?.addEventListener('change', applyBacktestProfile);
 
@@ -195,6 +208,7 @@
 
     // Closes the Strategy Lab slide-over diagnostics drawer and clears its rendered DOM nodes.
     function closeMatrixDrawer() {
+        drawerTradesSeq++;
         if (!matrixDrawer) return;
         if (matrixDrawer.open) matrixDrawer.close();
         matrixDrawerBody?.replaceChildren();
@@ -308,26 +322,54 @@
     }
 
     // Renders retained sample trades for the inspected NY month while clarifying that monthly % comes exclusively from MonthlyRunResult.
-    function renderDrawerSampleTrades(row, selectedMonth) {
+    // Builds the drawer's trade section for one month and fills it from GET .../jobs/{jobId}/trades?month=yyyy-MM, so every
+    // month shows its own trades (up to 100, newest first). A reply for an older drawer opening is ignored.
+    function renderDrawerSampleTrades(row, selectedMonth, selectedCell) {
         const section = document.createElement('section');
         section.className = 'lab-drawer-section';
         const heading = document.createElement('h3');
-        heading.textContent = selectedMonth ? `Retained trade sample · ${selectedMonth}` : 'Retained trade sample';
+        heading.textContent = selectedMonth ? `Trades that exited in ${selectedMonth}` : 'Trades';
         const caveat = document.createElement('p');
         caveat.className = 'note';
-        caveat.textContent = 'Retained sample of up to 25 newest completed trades. Monthly % returns above come exclusively from immutable MonthlyRunResult records.';
-        section.append(heading, caveat);
+        caveat.textContent = 'Up to 100 trades, newest first. Monthly % returns above come only from the stored monthly records.';
+        const status = document.createElement('p');
+        status.className = 'note';
+        status.textContent = selectedMonth ? 'Loading trades…' : 'Choose a month to see its trades.';
+        section.append(heading, caveat, status);
+        const planId = matrixPanel?.dataset.currentPlanId;
+        if (!selectedMonth || !planId || !row.jobId) return section;
+        const seq = ++drawerTradesSeq;
+        void window.tradingFlowFetch(`/api/v1/backtests/plans/${encodeURIComponent(planId)}/jobs/${encodeURIComponent(row.jobId)}/trades?month=${encodeURIComponent(selectedMonth)}`,
+            { credentials: 'same-origin', cache: 'no-store' })
+            .then(response => response.ok ? response.json() : Promise.reject(new Error('HTTP ' + response.status)))
+            .then(trades => {
+                if (seq !== drawerTradesSeq) return;
+                status.remove();
+                const list = trades || [];
+                // A job's stored view keeps only the run's most recent trades; say so when the month had more than are shown.
+                const closed = Number(selectedCell?.closedTrades);
+                if (Number.isFinite(closed) && closed > list.length) {
+                    const note = document.createElement('p');
+                    note.className = 'note';
+                    note.textContent = `Showing ${list.length} of ${closed} trades closed in ${selectedMonth}. The job's stored view keeps only the run's most recent trades; open the full report for the rest.`;
+                    section.append(note);
+                }
+                section.append(renderDrawerTradeTable(list, selectedMonth, closed));
+            })
+            .catch(error => {
+                if (seq !== drawerTradesSeq) return;
+                status.textContent = 'Trades could not be loaded (' + (error?.message || 'request failed') + ').';
+            });
+        return section;
+    }
 
-        const allSamples = row.sampleTrades || [];
-        const samples = selectedMonth ? allSamples.filter(item => item.month === selectedMonth) : allSamples;
+    // Renders the month's trades as a table, or a plain note when none exited that month.
+    function renderDrawerTradeTable(samples, selectedMonth, closedInMonth) {
         if (!samples.length) {
             const empty = document.createElement('p');
             empty.className = 'note';
-            empty.textContent = selectedMonth
-                ? `No retained completed trades exited in ${selectedMonth} within the 25-trade sample.`
-                : 'No retained completed trade samples are available for this job.';
-            section.append(empty);
-            return section;
+            empty.textContent = closedInMonth > 0 ? `None of the ${closedInMonth} trades closed in ${selectedMonth} are in the job's stored view.` : `No completed trades exited in ${selectedMonth}.`;
+            return empty;
         }
 
         const scroller = document.createElement('div');
@@ -377,8 +419,7 @@
         }
         table.append(thead, tbody);
         scroller.append(table);
-        section.append(scroller);
-        return section;
+        return scroller;
     }
 
     // Opens the Strategy Lab slide-over diagnostics drawer for one strategy/cohort/batch row and optional NY month.
@@ -411,7 +452,7 @@
         matrixDrawerBody.replaceChildren(
             renderDrawerMonthMetrics(row, selectedCell, selectedMonth),
             renderDrawerRejections(row),
-            renderDrawerSampleTrades(row, selectedMonth)
+            renderDrawerSampleTrades(row, selectedMonth, selectedCell)
         );
         if (!matrixDrawer.open) matrixDrawer.showModal();
     }
@@ -655,7 +696,7 @@
         }
     }
 
-    // Wires quick UTC test-window preset buttons (e.g. May–Oct 2026 and Clear dates) and notifies validation/form state.
+    // Wires the quick UTC test-window buttons (the selected profile's own window and Clear dates) and notifies validation/form state.
     function wireWindowPresetHelpers() {
         const startInput = form.elements.namedItem('TestWindowStartUtc');
         const endInput = form.elements.namedItem('TestWindowEndUtc');
@@ -671,7 +712,8 @@
         }
     }
 
-    // Pre-fills GroupSize to 1000 when selecting a research_screen stock source and both cohort inputs are blank.
+    // Pre-fills 1000 stocks per group, more than any published research screen holds, so a research screen runs as one
+    // group unless the operator types a size or manual groups. A "whole screen" marker, not a tuning number.
     function applyResearchScreenGroupDefault() {
         const sourceSelect = form.querySelector('#StockSource');
         const groupSize = form.elements.namedItem('GroupSize');
@@ -689,6 +731,7 @@
     if (kind === 'backtest') {
         wireStrategyDirectionHelpers();
         wireWindowPresetHelpers();
+        syncProfileWindowPreset(form.querySelector('#SelectedConfigPath')?.selectedOptions[0]);
         form.querySelector('#StockSource')?.addEventListener('change', applyResearchScreenGroupDefault);
         applyResearchScreenGroupDefault();
         if (matrixPanel?.dataset.currentPlanId) {

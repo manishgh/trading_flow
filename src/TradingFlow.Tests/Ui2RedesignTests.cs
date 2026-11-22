@@ -283,10 +283,10 @@ public sealed class Ui2RedesignTests
             Assert.Equal([newerPlan42Id, olderPlan42Id], plan42Jobs.Select(job => job.Id));
 
             // Light JsonDocument parser also isolates malformed / legacy / null payloads without throwing.
-            Assert.Equal(42L, BacktestJobService.TryReadPlanId("""{"workflow":{"cohort":{"planId":42}}}"""));
-            Assert.Null(BacktestJobService.TryReadPlanId("{not-valid-json"));
-            Assert.Null(BacktestJobService.TryReadPlanId("null"));
-            Assert.Null(BacktestJobService.TryReadPlanId("""{"schemaVersion":1,"files":[]}"""));
+            Assert.Equal(42L, TradingFlow.Data.Jobs.SqliteJobRepository.TryExtractPlanId("""{"workflow":{"cohort":{"planId":42}}}"""));
+            Assert.Null(TradingFlow.Data.Jobs.SqliteJobRepository.TryExtractPlanId("{not-valid-json"));
+            Assert.Null(TradingFlow.Data.Jobs.SqliteJobRepository.TryExtractPlanId("null"));
+            Assert.Null(TradingFlow.Data.Jobs.SqliteJobRepository.TryExtractPlanId("""{"schemaVersion":1,"files":[]}"""));
         }
         finally
         {
@@ -372,7 +372,8 @@ public sealed class Ui2RedesignTests
                  {
                      "data-direction=\"@strategy.Definition.Direction.ToString().ToLowerInvariant()\"",
                      "data-strategy-select=\"long\"", "data-strategy-select=\"short\"", "data-strategy-select=\"clear\"",
-                     "2026-05-01T00:00", "2026-10-30T21:00", "Clear dates",
+                     // The test-window preset comes from the selected profile's time_window, never a date written in the page.
+                     "data-window-preset=\"profile\"", "data-window-start=\"@(config.Config.TimeWindow.Start", "Clear dates",
                      "id=\"saved-plan-matrix-panel\"", "data-current-plan-id=\"@(job?.Cohort?.PlanId)\"",
                      "@section Styles"
                  })
@@ -384,7 +385,7 @@ public sealed class Ui2RedesignTests
         foreach (var token in new[]
                  {
                      "/monthly-matrix", "research_screen", "groupSize.value = '1000'",
-                     "▲ +", "(partial)", "/Backtests?jobId=", "wireStrategyDirectionHelpers", "wireWindowPresetHelpers",
+                     "▲ +", "(partial)", "/Backtests?jobId=", "wireStrategyDirectionHelpers", "wireWindowPresetHelpers", "function syncProfileWindowPreset(", "/trades?month=",
                      "hideSavedPlanMatrix", "row.contentSha256", "row.createdAtUtc", "row.monthlyUnavailableReason",
                      "lab-matrix-reason"
                  })
@@ -483,8 +484,8 @@ public sealed class Ui2RedesignTests
         Assert.Null(stale.Adr20Pct);
 
         // Schedule loader fails closed on empty or throwing IMarketSessionScheduleProvider.
-        Assert.False((await CatalystOptionsAdrService.TryLoadAdrSchedulesAsync(new FakeAdrScheduleProvider(returnEmpty: true), now, CancellationToken.None)).Succeeded);
-        Assert.False((await CatalystOptionsAdrService.TryLoadAdrSchedulesAsync(new FakeAdrScheduleProvider(throwOnLoad: true), now, CancellationToken.None)).Succeeded);
+        Assert.False((await DeskMarketData.TryLoadSchedulesAsync(new FakeAdrScheduleProvider(returnEmpty: true), now, 65, CancellationToken.None)).Succeeded);
+        Assert.False((await DeskMarketData.TryLoadSchedulesAsync(new FakeAdrScheduleProvider(throwOnLoad: true), now, 65, CancellationToken.None)).Succeeded);
 
         // Symbol parser defaults to SPY,QQQ and enforces 1-6 valid US equity tokens.
         Assert.True(CatalystOptionsAdrService.TryParseSymbols(null, out var defaults, out _));
@@ -496,12 +497,12 @@ public sealed class Ui2RedesignTests
     }
 
     [Fact]
-    public void SavedPlanMatrixProjectsCappedSampleTradesWithNyExitMonthAndRMultiple()
+    public void SavedPlanMonthTradesListEveryTradeOfTheClickedMonthWithNyExitMonthAndRMultiple()
     {
         var strategyRef = new StrategyReference("swing_long_v1", "1.0.0", "aaaa1111bbbb2222cccc3333dddd4444");
         var plan = CreatePlan(77, "drawer-sample-check", strategyRef);
         var trades = new List<BacktestTrade>();
-        // Add 30 trades for swing_long_v1 plus 1 unrelated strategy trade to verify strategy filter, NY month tagging, and 25-trade cap.
+        // 30 June trades for swing_long_v1 plus 1 unrelated strategy trade: the June drawer lists all 30 (no 25-trade cap), only this strategy's, newest first.
         for (var i = 0; i < 30; i++)
         {
             var exitDate = new DateOnly(2026, 6, 1).AddDays(i % 20);
@@ -593,18 +594,24 @@ public sealed class Ui2RedesignTests
             MonthlyResults: [new MonthlyRunResult(strategyRef, "Group 1", "2026-06", 100_000m, 101_000m, 1.0m, 30, portfolioState.ValuationBasis, false, null)],
             Cohort: new BacktestCohortExecution(77, "Group 1", ["NVDA"], 100_000m, strategyRef));
 
+        // The matrix no longer carries trades; the drawer loads them per month.
         var matrix = SavedPlanMonthlyMatrixBuilder.Build(plan, [job]);
-        var row = Assert.Single(matrix.Rows);
-        Assert.NotNull(row.SampleTrades);
-        Assert.Equal(25, row.SampleTrades!.Count);
-        Assert.DoesNotContain(row.SampleTrades, t => t.Ticker == "OTHER");
-        Assert.True(row.SampleTrades.Zip(row.SampleTrades.Skip(1)).All(pair => pair.First.ExitTimestampUtc >= pair.Second.ExitTimestampUtc));
-        Assert.All(row.SampleTrades, t => Assert.Equal(2.0m, t.RMultiple));
+        Assert.Null(Assert.Single(matrix.Rows).SampleTrades);
+        var june = SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job, "2026-06");
+        Assert.Equal(30, june.Count);
+        Assert.DoesNotContain(june, t => t.Ticker == "OTHER");
+        Assert.True(june.Zip(june.Skip(1)).All(pair => pair.First.ExitTimestampUtc >= pair.Second.ExitTimestampUtc));
+        Assert.All(june, t => Assert.Equal(2.0m, t.RMultiple));
+        Assert.Equal(10, SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job, "2026-06", max: 10).Count);
+        // The trades endpoint accepts only real "yyyy-MM" month keys.
+        Assert.True(SavedPlanMonthlyMatrixBuilder.IsMonthKey("2017-01"));
+        Assert.True(SavedPlanMonthlyMatrixBuilder.IsMonthKey("2026-12"));
+        foreach (var bad in new[] { null, "", "2026-13", "2026-1", "26-01", "2026-01-01", "abcd-ef" })
+            Assert.False(SavedPlanMonthlyMatrixBuilder.IsMonthKey(bad));
 
         // Verify NY boundary trade stamps 2026-05 when included as newest trade.
         var boundaryOnlyResult = result with { CompletedTrades = [trades.Single(t => t.Ticker == "NVDA")] };
-        var boundaryMatrix = SavedPlanMonthlyMatrixBuilder.Build(plan, [job with { Result = boundaryOnlyResult }]);
-        var boundarySample = Assert.Single(boundaryMatrix.Rows[0].SampleTrades!);
+        var boundarySample = Assert.Single(SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job with { Result = boundaryOnlyResult }, "2026-05"));
         Assert.Equal("2026-05", boundarySample.Month);
         Assert.Equal(2.0m, boundarySample.RMultiple);
 
@@ -617,7 +624,7 @@ public sealed class Ui2RedesignTests
     }
 
     [Fact]
-    public void DeskTicketPlanRefusesShortStrategiesInsteadOfInvertingToLong()
+    public void DeskTicketPlanKeepsAShortStrategyOnItsOwnSideAndRefusesEitherWayStrategies()
     {
         var shortStrategy = new TradingFlow.Domain.Strategies.StrategyDefinition(
             StrategyId: "short_breakdown_v1",
@@ -631,11 +638,17 @@ public sealed class Ui2RedesignTests
             ExitRules: new TradingFlow.Domain.Strategies.ExitRules(1m, 2.5m, 120m, false, 1m, 1m, false, false, false, 0),
             Execution: null!,
             Session: null!);
+        // Without bars a short plan has no levels yet, but it is still labelled short (never inverted to a long plan).
         var plan = DeskTicketPlanService.Build(shortStrategy, 150m, [], [], [], [], 250m);
         Assert.Null(plan.Stop);
         Assert.Null(plan.Target);
-        Assert.Equal("Order ticket planning supports long entries only.", plan.StopNote);
+        Assert.Equal("short", plan.Direction);
         Assert.Equal(250m, plan.RiskBudget);
+
+        // A strategy that may enter either way has no single side to plan.
+        var either = DeskTicketPlanService.Build(shortStrategy with { Direction = "both" }, 150m, [], [], [], [], 250m);
+        Assert.Null(either.Stop);
+        Assert.Contains("either way", either.StopNote);
     }
 
     [Fact]
@@ -643,7 +656,8 @@ public sealed class Ui2RedesignTests
     {
         // 1. 40% left compact 6-col Desk scanner (keeps News col 6!) + 60% right chart window with embedded basic indicators & pinned OPRA
         var desk = WebFile("Pages/Desk.cshtml");
-        var optionsPartial = WebFile("Pages/Shared/_OptionsSentimentPanel.cshtml");
+        // The SPY/QQQ options panel partial was removed: the strip chip and the selected-stock line replaced it.
+        Assert.False(File.Exists(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "Pages", "Shared", "_OptionsSentimentPanel.cshtml")));
         var chartPartial = WebFile("Pages/Shared/_StockChart.cshtml");
         // One fixed stock table: Stock · Prev close · Now · Today · Strategy · RVOL/ATR, no column modes and no News column.
         Assert.DoesNotContain("watch-density-toggle", desk);
@@ -662,7 +676,6 @@ public sealed class Ui2RedesignTests
         Assert.Contains("id=\"watch-strategy-refresh\"", desk);
         Assert.DoesNotContain("data-chart-inline-studies", chartPartial);
         Assert.Contains("class=\"stock-chart-more\"", chartPartial);
-        Assert.DoesNotContain("id=\"desk-options-selected\"", optionsPartial);
         var chartIdx = desk.IndexOf("<partial name=\"_StockChart\"", StringComparison.Ordinal);
         var selectedOpraIdx = desk.IndexOf("id=\"desk-options-selected\"", StringComparison.Ordinal);
         var orderHelpIdx = desk.IndexOf("id=\"watch-order-help\"", StringComparison.Ordinal);
@@ -674,7 +687,7 @@ public sealed class Ui2RedesignTests
 
         // 2. Chart Entry / Stop / Target reference lines + Desk defaultStudies
         var plotJs = WebFile("wwwroot/js/stock-chart-plot.js");
-        foreach (var token in new[] { "function setTradePlanLevels(", "createPriceLine(", "removePriceLine(", "title: 'Entry'", "title: 'Stop'", "title: 'Target'", "paintTradePlanLines()" })
+        foreach (var token in new[] { "function setTradePlanLevels(", "createPriceLine(", "removePriceLine(", "title: tradePlan.direction === 'short' ? 'Bid' : 'Ask'", "title: 'Stop'", "title: 'Target'", "paintTradePlanLines()" })
         {
             Assert.Contains(token, plotJs);
         }
@@ -898,10 +911,12 @@ public sealed class Ui2RedesignTests
         }
 
         var regimeJs = WebFile("wwwroot/js/regime-pulse.js");
-        // Short chip words keep the whole strip on one line; the 50-day detail moves into the tooltip.
-        Assert.Contains("▲ 50-day: longs", regimeJs);
-        Assert.Contains("▼ 50-day: shorts", regimeJs);
-        Assert.Contains("◐ 50-day: neither", regimeJs);
+        // Short chip words keep the whole strip on one line; the rule name (for example "50-day") comes from the server,
+        // which reads it from the strategy configurations, and the explanation sits in the tooltip.
+        Assert.Contains("\"▲ \" + rule + \": longs\"", regimeJs);
+        Assert.Contains("\"▼ \" + rule + \": shorts\"", regimeJs);
+        Assert.Contains("b.ruleLabel", regimeJs);
+        Assert.DoesNotContain("50-day", regimeJs);
         Assert.Contains("Each strategy applies its own regime settings.", regimeJs);
 
         var prepJs = WebFile("wwwroot/js/preparation-summary.js");
@@ -1015,9 +1030,8 @@ public sealed class Ui2RedesignTests
     [Fact]
     public void OpraPlainEnglishLabelsAndTooltipsCoverDeskAndCatalystsWithoutBreakingFields()
     {
-        var optionsPartial = WebFile("Pages/Shared/_OptionsSentimentPanel.cshtml");
         var desk = WebFile("Pages/Desk.cshtml");
-        foreach (var html in new[] { optionsPartial, desk })
+        foreach (var html in new[] { desk })
         {
             foreach (var token in new[]
                      {
@@ -1102,7 +1116,7 @@ public sealed class Ui2RedesignTests
                  {
                      "function shortStrategyName(", "['Long', []]", "['Short', []]", "['Other', []]",
                      "option.title =", "group:'Prepared'", "function syncDeskHighlightUi(", "function toggleDeskHighlight(",
-                     "onHighlightChange: syncDeskHighlightUi", "Stock price swing range (High − Low ÷ Close)"
+                     "onHighlightChange: syncDeskHighlightUi", "Price range as a share of the close, (high − low) ÷ close"
                  })
         {
             Assert.Contains(token, watchDeskJs);
@@ -1131,7 +1145,7 @@ public sealed class Ui2RedesignTests
         Assert.Contains("Next scheduled reporting day:", earningsJs);
 
         // 5. #266 & #267: Distinct study color swatches, interactive click-to-highlight, and instant [data-tooltip] on Options + pills.
-        foreach (var key in new[] { "data-highlight-key=\"sma20\"", "data-highlight-key=\"sma50\"", "data-highlight-key=\"sma200\"", "data-highlight-key=\"support\"", "data-tooltip=\"Stock price swing range" })
+        foreach (var key in new[] { "data-highlight-key=\"sma20\"", "data-highlight-key=\"sma50\"", "data-highlight-key=\"sma200\"", "data-highlight-key=\"support\"", "data-tooltip=\"Price range, not volatility" })
         {
             Assert.Contains(key, desk);
         }

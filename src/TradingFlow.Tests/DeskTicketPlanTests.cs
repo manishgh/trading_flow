@@ -29,6 +29,19 @@ public sealed class DeskTicketPlanTests
     }
 
     [Fact]
+    public void ShortStrategy_PlansTheStopAboveAndTheTargetBelowTheEntry()
+    {
+        // Mirror image of the long case: a 2 ATR stop above a 100 entry (ATR 2) and a 3R target below it.
+        var strategy = Strategy(stopMode: "atr", stopAtrMultiple: 2m, targetR: 3m, direction: "short");
+
+        var plan = Plan(strategy, limit: 100m, setupAtr: 2m, executionVwap: 100m);
+
+        Assert.Equal("short", plan.Direction);
+        Assert.Equal(104m, plan.Stop);
+        Assert.Equal(88m, plan.Target);
+    }
+
+    [Fact]
     public void VwapTarget_UsesExecutionVwapOnlyWhenAboveTheEntry()
     {
         var strategy = Strategy(stopMode: "atr", stopAtrMultiple: 1m, targetR: 3m, targetMode: "vwap");
@@ -109,6 +122,22 @@ public sealed class DeskTicketPlanTests
         Assert.Contains("No warmed live market state", noState.StopNote);
         Assert.Equal(1, provider.Calls);
         Assert.Equal(260, provider.LastMinimumBars);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ShortStrategyWithoutQuoteOrState_StillReportsTheShortSide()
+    {
+        // A short ticket must never fall back to "long" just because no stop or target could be planned.
+        var service = new DeskTicketPlanService(new CountingProvider(), TimeProvider.System, NullLogger<DeskTicketPlanService>.Instance);
+        var shortStrategy = Strategy("atr", 2m, 3m, direction: "short");
+
+        var noQuote = await service.PlanAsync(shortStrategy, "MU", null, null, null, 260, null, CancellationToken.None);
+        Assert.Equal("short", noQuote.Direction);
+        Assert.Null(noQuote.Stop);
+
+        var noState = await service.PlanAsync(shortStrategy, "MU", 101m, 100.5m, null, 260, null, CancellationToken.None);
+        Assert.Equal("short", noState.Direction);
+        Assert.Null(noState.Stop);
     }
 
     [Fact]
@@ -201,14 +230,15 @@ public sealed class DeskTicketPlanTests
         string stopMode,
         decimal stopAtrMultiple,
         decimal targetR,
-        string targetMode = "r_multiple") =>
+        string targetMode = "r_multiple",
+        string direction = "long") =>
         new(
             "strategy.ticket-plan-test",
             "Ticket Plan Test",
             "unit-test",
             1,
             "1d",
-            "long",
+            direction,
             new EntryRules(
                 SetupType: "momentum",
                 MinVolumeSpike: 1m,

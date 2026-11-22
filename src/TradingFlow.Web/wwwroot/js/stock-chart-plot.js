@@ -449,8 +449,10 @@
         function paintTradePlanLines() {
             clearTradePlanLines();
             if (!tradePlan) return;
+            // The first line is the current quote the plan was priced at (the ask for a long, the bid for a short): a
+            // reference, not the strategy's own entry trigger.
             const definitions = [
-                { price: tradePlan.limit, title: 'Entry', color: colors.levelA || '#3b82f6', lineStyle: library.LineStyle.Dashed },
+                { price: tradePlan.limit, title: tradePlan.direction === 'short' ? 'Bid' : 'Ask', color: colors.levelA || '#3b82f6', lineStyle: library.LineStyle.Dashed },
                 { price: tradePlan.stop, title: 'Stop', color: colors.down || '#fb7185', lineStyle: library.LineStyle.Solid },
                 { price: tradePlan.target, title: 'Target', color: colors.up || '#2dd4bf', lineStyle: library.LineStyle.Solid }
             ];
@@ -476,7 +478,8 @@
             const limit = plan ? toPositive(plan.limit) : null;
             const stop = plan ? toPositive(plan.stop) : null;
             const target = plan ? toPositive(plan.target) : null;
-            tradePlan = (limit !== null || stop !== null || target !== null) ? { limit, stop, target } : null;
+            tradePlan = (limit !== null || stop !== null || target !== null)
+                ? { limit, stop, target, direction: plan?.direction === 'short' ? 'short' : 'long' } : null;
             paintTradePlanLines();
         }
 

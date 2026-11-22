@@ -28,8 +28,7 @@ public static class DeskOptionsEndpoints
             string? symbol,
             IOptionsSentimentSource optionsSource,
             AlpacaQuoteService quotes,
-            ConfigCatalogService catalog,
-            PaperRuntimeFactory runtimeFactory,
+            CatalystOptionsAdrService adrService,
             TimeProvider clock,
             CancellationToken cancellationToken) =>
         {
@@ -58,8 +57,7 @@ public static class DeskOptionsEndpoints
             adrDeadline.CancelAfter(TimeSpan.FromSeconds(6));
             var adrTask = selectedSymbol is null
                 ? Task.FromResult(new Dictionary<string, Adr20CalculationResult>(StringComparer.OrdinalIgnoreCase))
-                : CatalystOptionsAdrService.LoadAdrAsync([selectedSymbol], catalog, runtimeFactory,
-                    clock.GetUtcNow().ToUniversalTime(), adrDeadline.Token, cancellationToken);
+                : adrService.LoadAdrAsync([selectedSymbol], adrDeadline.Token);
             var spotHints = await TryLoadSpotHintsAsync(quotes, requestedSymbols, cancellationToken, cancellationToken);
 
             var spyTask = optionsSource.GetSnapshotAsync("SPY", spotHints.GetValueOrDefault("SPY"), cancellationToken: cancellationToken);
@@ -100,11 +98,7 @@ public static class DeskOptionsEndpoints
         // Read-only Catalysts endpoint comparing OPRA front-expiry implied move against completed 20-session ADR%.
         group.MapGet("/catalysts/options-adr", async (
             string? symbols,
-            IOptionsSentimentSource optionsSource,
-            AlpacaQuoteService quotes,
-            ConfigCatalogService catalog,
-            PaperRuntimeFactory runtimeFactory,
-            TimeProvider clock,
+            CatalystOptionsAdrService adrService,
             CancellationToken cancellationToken) =>
         {
             if (!CatalystOptionsAdrService.TryParseSymbols(symbols, out var parsedSymbols, out var error))
@@ -115,14 +109,7 @@ public static class DeskOptionsEndpoints
                     error ?? "Invalid symbols query."));
             }
 
-            var response = await CatalystOptionsAdrService.LoadAsync(
-                parsedSymbols,
-                optionsSource,
-                quotes,
-                catalog,
-                runtimeFactory,
-                clock,
-                cancellationToken);
+            var response = await adrService.LoadAsync(parsedSymbols, cancellationToken);
             return Results.Ok(response);
         });
     }

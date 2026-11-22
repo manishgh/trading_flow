@@ -26,6 +26,16 @@ public static class BacktestPlanEndpoints
             var snapshots = await jobs.GetSnapshotsForPlanAsync(id, token);
             return Results.Ok(TradingFlow.Web.Services.SavedPlanMonthlyMatrixBuilder.Build(plan, snapshots));
         });
+        // Trades of one job in one New York month, loaded when the Strategy Lab drawer opens on that month.
+        group.MapGet("/backtests/plans/{id:long}/jobs/{jobId:guid}/trades", async (long id, Guid jobId, string? month,
+            [Microsoft.AspNetCore.Mvc.FromServices] TradingFlow.Web.Services.BacktestJobService jobs, CancellationToken token) =>
+        {
+            if (!TradingFlow.Web.Services.SavedPlanMonthlyMatrixBuilder.IsMonthKey(month))
+                return Results.BadRequest(new { error = "month must be yyyy-MM." });
+            var job = await jobs.GetSnapshotAsync(jobId, token);
+            if (job is null || job.Cohort?.PlanId != id) return Results.NotFound();
+            return Results.Ok(TradingFlow.Web.Services.SavedPlanMonthlyMatrixBuilder.BuildMonthTrades(job, month));
+        });
         group.MapPost("/backtests/plans/{id:long}/start", (long id, StartBacktestPlanRequest request, BacktestPlanService service, CancellationToken token) =>
             Execute(() => service.StartAsync(id, request, token)));
         return group;

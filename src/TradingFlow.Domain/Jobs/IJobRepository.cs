@@ -44,8 +44,7 @@ public interface IDurableJobRepository : IJobRepository
     Task<IReadOnlyList<PersistedJob>> GetJobsForPlanAsync(
         string jobType,
         long planId,
-        CancellationToken cancellationToken) =>
-        GetJobsAsync(jobType, cancellationToken);
+        CancellationToken cancellationToken);
 
     Task<bool> RequestCancellationAsync(
         Guid id,

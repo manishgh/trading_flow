@@ -133,6 +133,19 @@
         try {
             plan = await api("orders/plan", {contractVersion:"1.0",symbol:form.elements.symbol.value.trim().toUpperCase(),strategy:identity(),limitPrice:Number(form.elements.limit.value)||null});
             if (lifetime.signal.aborted) return;
+            // This ticket places long entries; a short strategy's plan (stop above, target below) must not fill a buy form.
+            if (plan.direction === "short") {
+                plan = undefined;
+                form.elements.stop.value = "";
+                form.elements.target.value = "";
+                document.querySelector("[data-order-stop-note]").textContent = "";
+                document.querySelector("[data-order-target-note]").textContent = "";
+                riskButton.disabled = true;
+                lastRiskBudget = null;
+                refreshRiskStrip();
+                status.textContent = "This strategy enters short. The order ticket places long entries only, so no stop or target was filled.";
+                return;
+            }
             form.elements.limit.value = plan.limit ?? "";
             form.elements.stop.value = plan.stop ?? "";
             form.elements.target.value = plan.target ?? "";

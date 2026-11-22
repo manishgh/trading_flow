@@ -127,9 +127,12 @@ public sealed partial class SqliteJobRepository : IDurableJobRepository, IPaperR
         ArgumentException.ThrowIfNullOrWhiteSpace(jobType);
         if (planId <= 0) return [];
         using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        // Request JSON is stored compact, so a text pre-filter in SQL keeps only rows that mention this plan number
+        // ("lanId":42 matches both "planId" and older "PlanId"); the exact parse below removes look-alikes such as 420.
+        var planToken = "lanId\":" + planId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var candidates = await context.Jobs
             .AsNoTracking()
-            .Where(job => job.JobType == jobType)
+            .Where(job => job.JobType == jobType && job.RequestJson != null && job.RequestJson.Contains(planToken))
             .Select(job => new { job.Id, job.RequestJson })
             .ToArrayAsync(cancellationToken);
 
@@ -147,7 +150,7 @@ public sealed partial class SqliteJobRepository : IDurableJobRepository, IPaperR
     }
 
     // Extracts workflow.cohort.planId via JsonDocument without allocating full file evidence lists or throwing on malformed legacy JSON.
-    internal static long? TryExtractPlanId(string? requestJson)
+    public static long? TryExtractPlanId(string? requestJson)
     {
         if (String.IsNullOrWhiteSpace(requestJson)) return null;
         try

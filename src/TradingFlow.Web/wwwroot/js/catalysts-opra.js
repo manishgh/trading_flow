@@ -36,21 +36,18 @@
         return result.length ? result : ['SPY', 'QQQ'];
     }
 
-    // Classifies the server's one-day expected move ÷ 20d ADR ratio into a glyph, badge text and tone.
-    // Scale: a day's expected close-to-close move is roughly half a day's high-to-low range, so about 0.5x means
-    // option prices expect an ordinary day. Bands: under 0.75x normal, 0.75x–1.25x elevated (about 1.5–2.5 times the
-    // usual movement), over 1.25x extreme. These are display bands from that rule of thumb, not calibrated on history
-    // and not trading rules.
-    function formatRatioPill(ratio) {
-        if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) {
+    // Shows the server's one-day expected move ÷ 20d ADR ratio with the band the server assigned (normal, elevated,
+    // extreme), so the bands live in one place (CatalystOptionsAdrService.ClassifyImpliedMoveBand).
+    function formatRatioPill(ratio, band) {
+        if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0 || !band || band === 'unavailable') {
             return { text: '—', tone: 'muted', title: 'Ratio unavailable (needs an options expected move, its days to expiry and 20 completed daily sessions)' };
         }
         const label = ratio.toFixed(2) + 'x';
         const basis = 'How much movement option prices expect for one day, compared with the stock’s 20-day average high-to-low range. ' +
             'The expected move is the price of the nearest at-the-money call plus put, spread evenly over the trading days to expiry ' +
             '(divided by the square root of the number of days). About 0.5x is an ordinary day. Display guide only, not a trading rule';
-        if (ratio < 0.75) return { text: '✓ ' + label, tone: 'good', title: basis + ': normal (under 0.75x).' };
-        if (ratio <= 1.25) return { text: '◐ ' + label, tone: 'warn', title: basis + ': elevated (0.75x–1.25x).' };
+        if (band === 'normal') return { text: '✓ ' + label, tone: 'good', title: basis + ': normal (under 0.75x).' };
+        if (band === 'elevated') return { text: '◐ ' + label, tone: 'warn', title: basis + ': elevated (0.75x–1.25x).' };
         return { text: '▲ ' + label, tone: 'bad', title: basis + ': extreme (over 1.25x).' };
     }
 
@@ -94,7 +91,7 @@
         const sym = document.createElement('strong');
         sym.textContent = card.symbol || '—';
 
-        const ratioInfo = formatRatioPill(card.impliedMoveToAdrRatio);
+        const ratioInfo = formatRatioPill(card.impliedMoveToAdrRatio, card.impliedMoveBand);
         const pill = document.createElement('span');
         pill.className = 'catalysts-opra-ratio-pill';
         pill.dataset.tone = ratioInfo.tone;

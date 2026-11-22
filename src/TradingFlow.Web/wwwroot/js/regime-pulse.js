@@ -30,20 +30,18 @@
         return el;
     }
 
-    // Describes one benchmark in a few words so the whole strip fits one line. The words name the standard
-    // 50-day rule this strip checks; a strategy with its own regime settings may differ, which the tooltip says.
-    function benchmarkChip(b, checkedAt) {
+    // Describes one benchmark in a few words so the whole strip fits one line. The rule name (for example the average length) and its
+    // explanation come from the server, which reads them from the enabled strategy configurations; the tooltip names them.
+    function benchmarkChip(b, checkedAt, ruleSources) {
         if (!b || !b.available) return chip(b ? b.symbol : "?", "— unavailable", "muted", (b && b.summaryLabel) || "No benchmark bars were available.");
         const close = b.lastClose != null ? Number(b.lastClose).toFixed(2) : "—";
         const label = b.symbol + " " + close;
-        const detail = b.longGateOn ? "Close above a 50-day average that is rising: the standard rule allows new longs, not shorts."
-            : b.shortGateOn ? "Close below a 50-day average that is falling: the standard rule allows new shorts, not longs."
-            : "Close and 50-day average point different ways (for example above the average while it falls): the standard rule allows neither.";
-        const title = [detail, "Each strategy applies its own regime settings.",
+        const rule = b.ruleLabel || "regime";
+        const title = [b.summaryLabel, ruleSources, "Each strategy applies its own regime settings.",
             b.lastSessionDate ? "Session " + b.lastSessionDate : "", checkedAt].filter(Boolean).join(" · ");
-        if (b.longGateOn) return chip(label, "▲ 50-day: longs", "good", title);
-        if (b.shortGateOn) return chip(label, "▼ 50-day: shorts", "bad", title);
-        return chip(label, "◐ 50-day: neither", "warn", title);
+        if (b.longGateOn) return chip(label, "▲ " + rule + ": longs", "good", title);
+        if (b.shortGateOn) return chip(label, "▼ " + rule + ": shorts", "bad", title);
+        return chip(label, "◐ " + rule + ": neither", "warn", title);
     }
 
     // Describes one risk multiplier in two or three words: "full", "off" or "0.5×".
@@ -84,7 +82,8 @@
     function render(p) {
         const checkedAt = "Checked " + new Date(p.observedAtUtc).toLocaleTimeString();
         strip.textContent = "";
-        strip.append(benchmarkChip(p.spy, checkedAt), benchmarkChip(p.qqq, checkedAt), vixChip(p.vix, checkedAt), sectorChip(p, checkedAt));
+        const ruleSources = [p.longRuleSource, p.shortRuleSource].filter(Boolean).join(" ");
+        strip.append(benchmarkChip(p.spy, checkedAt, ruleSources), benchmarkChip(p.qqq, checkedAt, ruleSources), vixChip(p.vix, checkedAt), sectorChip(p, checkedAt));
     }
 
     // Fetches the cached server pulse while aborting any superseded in-flight request.
