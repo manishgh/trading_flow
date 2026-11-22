@@ -1,4 +1,4 @@
-# Handover — swing strategies, market regime and VIX (state at 19 November 2026, ~21:35 UTC)
+# Handover — swing strategies, market regime and VIX (state at 22 November 2026)
 
 For the next session. Everything below is committed on local `main` (not pushed; no GitHub sync without the user asking).
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
@@ -166,9 +166,10 @@ Earlier (checkpoint 2): 121/121 affected browser specs with the test catalog.
    May–Oct 2026; report the five-minute bar count/size to the user **before** collecting (`evidence-plan-minute-bars`); run
    the three versions through the normal saved-plan workflow; deliver the full `.log`; report monthly per version; show
    listing coverage and the share of gap-inflated trades (reviewer conditions).
-2. **Build Swing ORB on news (Option B, approved):** decide after close, enter next open (`technical.news-orb-swing@1.0.0`).
-3. **Design (each needs written approval):** 21-EMA pullback long (+ registered experiment V2-01 MTR-14), short mirrors
-   (reversed regime, borrowing rule, SEC Rule 201), and web pages to build research screens / collect five-minute bars.
+2. **Sector-fund rank labels on trades:** report only, in the first run's report (still open in the checklist above).
+
+Swing ORB on news, the 21-EMA pullback long with V2-01, the short mirrors and the web pages for research screens and
+five-minute collection were listed here earlier; they are done (checklist above).
 
 ## Facts checked today (do not re-derive)
 
