@@ -230,7 +230,7 @@ public static class DeskMarketData
         foreach (var symbol in missing) result[symbol] = fetched[symbol].Bars;
         if (candleStore is not null)
         {
-            StartStoring(candleStore, context, SelectStorable(fetched.Values.Select(item => item.NativeDaily), stored, schedules, now, sessions), logger);
+            StartStoring(candleStore, context, SelectStorable(fetched, stored, schedules, now, sessions), logger);
         }
 
         return result;
@@ -254,7 +254,10 @@ public static class DeskMarketData
         try
         {
             await Parallel.ForEachAsync(symbols, new ParallelOptions { MaxDegreeOfParallelism = StoreReadParallelism, CancellationToken = limit.Token },
-                async (symbol, token) => stored[symbol] = await TryReadStoreBarsAsync(candleStore, context, symbol, start, now, logger, token));
+                async (symbol, token) =>
+                {
+                    if (await TryReadStoreBarsAsync(candleStore, context, symbol, start, now, logger, token) is { } bars) stored[symbol] = bars;
+                });
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -297,19 +300,20 @@ public static class DeskMarketData
         return fetched;
     }
 
-    // Chooses what to store: only symbols whose fetched bars are themselves complete (a short provider answer is never stored),
-    // and of those only bars that are new or differ from the stored ones.
+    // Chooses what to store: only symbols whose stored set could be read (a blind rewrite of an unread set could be interrupted
+    // half way without anyone noticing) and whose fetched bars are complete, and of those only new or differing bars.
     private static IReadOnlyList<OhlcvBar> SelectStorable(
-        IEnumerable<IReadOnlyList<OhlcvBar>> fetchedBySymbol,
+        IReadOnlyDictionary<string, (List<OhlcvBar> Bars, IReadOnlyList<OhlcvBar> NativeDaily)> fetchedBySymbol,
         IReadOnlyDictionary<string, IReadOnlyList<OhlcvBar>> stored,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? schedules,
         DateTimeOffset now,
         int sessions)
     {
         var storable = new List<OhlcvBar>();
-        foreach (var fetched in fetchedBySymbol)
+        foreach (var (symbol, fetched) in fetchedBySymbol)
         {
-            if (TryValidateDailyBars(fetched, schedules, now, sessions, out var complete)) storable.AddRange(ChangedBars(complete, stored));
+            if (stored.ContainsKey(symbol) && TryValidateDailyBars(fetched.NativeDaily, schedules, now, sessions, out var complete))
+                storable.AddRange(ChangedBars(complete, stored));
         }
 
         return storable;
@@ -350,8 +354,8 @@ public static class DeskMarketData
             (bar.Open, bar.High, bar.Low, bar.Close, bar.Volume, bar.DataFeed, bar.AdjustmentPolicy)).ToArray();
     }
 
-    // Reads stored provider 1d bars for one symbol up to AsOfUtc = now, logging and degrading to empty on I/O errors.
-    private static async Task<IReadOnlyList<OhlcvBar>> TryReadStoreBarsAsync(
+    // Reads stored provider 1d bars for one symbol up to AsOfUtc = now; null (logged) when the store could not be read.
+    private static async Task<IReadOnlyList<OhlcvBar>?> TryReadStoreBarsAsync(
         ICandleStore candleStore,
         CandleStoreContext context,
         string symbol,
@@ -379,7 +383,7 @@ public static class DeskMarketData
         {
             logger?.LogWarning(ex, "Candle store read failed for {Symbol} ({ErrorType}); falling back to provider.",
                 symbol, ex.GetType().Name);
-            return [];
+            return null;
         }
     }
 

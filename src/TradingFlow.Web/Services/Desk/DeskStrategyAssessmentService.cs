@@ -275,7 +275,9 @@ public sealed class DeskStrategyAssessmentService(
         var choices = new List<StockStrategyChoice>();
         // Memoize immutable older-version directions by exact (StrategyId, SemanticVersion, ContentSha256) across rows and requests.
         var memoizedOlderDirections = new Dictionary<StrategyReference, string?>();
-        var lookups = new Dictionary<StrategyReference, int>();
+        var runsByIdentity = recorded
+            .GroupBy(item => new StrategyReference(item.SelectedStrategy!, item.StrategySemanticVersion, item.StrategyContentSha256))
+            .ToDictionary(group => group.Key, group => group.Select(item => item.RunId).Distinct().Take(MaximumDirectionLookups).ToArray());
         foreach (var item in recorded)
         {
             var identity = new StrategyReference(item.SelectedStrategy!, item.StrategySemanticVersion, item.StrategyContentSha256);
@@ -296,16 +298,17 @@ public sealed class DeskStrategyAssessmentService(
                 }
                 else
                 {
-                    // A run whose candidates all failed early records no direction, so a few later runs are tried before the
-                    // answer "none recorded" (kept as an empty text) is remembered for a short while.
-                    recordedDirection = await ResolveOlderVersionRecordedDirectionAsync(db, item.RunId, identity, token);
-                    lookups[identity] = lookups.GetValueOrDefault(identity) + 1;
-                    if (recordedDirection is not null || lookups[identity] >= MaximumDirectionLookups)
+                    // Resolved once per version from its first few runs, so every row of one version shows the same direction; a
+                    // run whose candidates all failed early records none. "None" (an empty text) is remembered briefly.
+                    foreach (var runId in runsByIdentity[identity])
                     {
-                        memoizedOlderDirections[identity] = recordedDirection;
-                        cache.Set(directionCacheKey, recordedDirection ?? String.Empty,
-                            recordedDirection is null ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1));
+                        recordedDirection = await ResolveOlderVersionRecordedDirectionAsync(db, runId, identity, token);
+                        if (recordedDirection is not null) break;
                     }
+
+                    memoizedOlderDirections[identity] = recordedDirection;
+                    cache.Set(directionCacheKey, recordedDirection ?? String.Empty,
+                        recordedDirection is null ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(1));
                 }
             }
             var direction = ResolveStrategyDirection(exactArtifact, recordedDirection);

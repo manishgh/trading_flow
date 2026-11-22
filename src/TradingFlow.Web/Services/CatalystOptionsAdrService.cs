@@ -371,7 +371,7 @@ public sealed class CatalystOptionsAdrService(
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var providerLock = new object();
         IMarketDataProvider? lazyProvider = null;
-        // Creates the provider at most once per ADR download batch, only when calendar cache or ICandleStore actually misses.
+        // Creates the provider at most once per ADR download batch, only when the candle store lacks bars; the calendar load owns its provider.
         IMarketDataProvider GetOrCreateProvider()
         {
             lock (providerLock)

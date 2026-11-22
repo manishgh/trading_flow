@@ -90,7 +90,7 @@ public sealed class WorkspacePulseService(
             var calendarDaysBack = Math.Max(420, requiredCloses * 2 + 45);
             var providerLock = new object();
             IMarketDataProvider? lazyProvider = null;
-            // Creates the provider at most once per strip build, only when a calendar or candle-store miss actually requires it.
+            // Creates the provider at most once per strip build, only when the candle store lacks bars; the calendar load owns its provider.
             IMarketDataProvider GetOrCreateProvider()
             {
                 lock (providerLock)

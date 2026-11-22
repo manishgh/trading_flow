@@ -202,12 +202,27 @@ public sealed class DeskCandleStoreIntegrationTests : IDisposable
     public async Task DeskMarketData_InterruptedWriteIsNeverAcceptedAsComplete()
     {
         var inner = new LocalFileCandleStore(Path.Combine(tempRoot, "candles"));
-        var schedules = BuildWeekdaySchedules(LatestSession.AddDays(-120), LatestSession.AddDays(2));
-        var provider = new CountingMarketDataProvider(Only("MU", BuildDailyBars("MU", 40, LatestSession, 100m, 0m)));
-        await DeskMarketData.LoadDailyBarsWithStoreAsync(() => provider, ["MU"], Now.AddDays(-65), Now, 20, schedules, new FailingFirstWriteStore(inner), "alpaca", CancellationToken.None);
+        var schedules = BuildWeekdaySchedules(LatestSession.AddDays(-120), LatestSession.AddDays(8));
+        await DeskMarketData.LoadDailyBarsWithStoreAsync(() => new CountingMarketDataProvider(Only("MU", BuildDailyBars("MU", 45, LatestSession, 400m, 0m))),
+            ["MU"], Now.AddDays(-65), Now, 20, schedules, inner, "alpaca", CancellationToken.None);
         await DeskMarketData.WhenStoreWritesFinishAsync();
-        await DeskMarketData.LoadDailyBarsWithStoreAsync(() => provider, ["MU"], Now.AddDays(-65), Now, 20, schedules, inner, "alpaca", CancellationToken.None);
+
+        // A split re-prices everything and the write of the older bars stops half way.
+        var later = new DateTimeOffset(2026, 11, 23, 15, 0, 0, TimeSpan.Zero);
+        var provider = new CountingMarketDataProvider(Only("MU", BuildDailyBars("MU", 46, new DateOnly(2026, 11, 20), 200m, 0m)));
+        await DeskMarketData.LoadDailyBarsWithStoreAsync(() => provider, ["MU"], later.AddDays(-65), later, 20, schedules, new HalfFirstWriteStore(inner), "alpaca", CancellationToken.None);
         await DeskMarketData.WhenStoreWritesFinishAsync();
+        var partly = await inner.ReadBarsAsync(new CandleStoreReadRequest("desk", "daily-bars-65d", "alpaca", "MU", "1d", later.AddDays(-65), later, Source: "provider", AsOfUtc: null), CancellationToken.None);
+        Assert.Equal(2, partly.Select(bar => bar.Close).Distinct().Count());
+        Assert.DoesNotContain(partly, bar => DateOnly.FromDateTime(bar.Timestamp.UtcDateTime) == new DateOnly(2026, 11, 20));
+
+        // The half-written set is not taken as complete: the next load fetches again and leaves one price basis.
+        var repaired = await DeskMarketData.LoadDailyBarsWithStoreAsync(() => provider, ["MU"], later.AddDays(-65), later, 20, schedules, inner, "alpaca", CancellationToken.None);
+        await DeskMarketData.WhenStoreWritesFinishAsync();
+        Assert.Equal(2, provider.BarRequestCount);
+        Assert.Equal(200m, Assert.Single(repaired["MU"].Select(bar => bar.Close).Distinct()));
+        var fromStore = await DeskMarketData.LoadDailyBarsWithStoreAsync(() => provider, ["MU"], later.AddDays(-65), later, 20, schedules, inner, "alpaca", CancellationToken.None);
+        Assert.Equal(200m, Assert.Single(fromStore["MU"].Select(bar => bar.Close).Distinct()));
         Assert.Equal(2, provider.BarRequestCount);
     }
 
@@ -712,13 +727,22 @@ public sealed class DeskCandleStoreIntegrationTests : IDisposable
         }
     }
 
-    // Fails its first write.
-    private sealed class FailingFirstWriteStore(ICandleStore inner) : ICandleStore
+    // Stores half of its first write and then fails, as an interrupted process would.
+    private sealed class HalfFirstWriteStore(ICandleStore inner) : ICandleStore
     {
         private int writes;
 
-        public Task UpsertBarsAsync(CandleStoreWriteRequest request, CancellationToken cancellationToken) =>
-            Interlocked.Increment(ref writes) == 1 ? Task.FromException(new IOException("Simulated interruption.")) : inner.UpsertBarsAsync(request, cancellationToken);
+        public async Task UpsertBarsAsync(CandleStoreWriteRequest request, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref writes) != 1)
+            {
+                await inner.UpsertBarsAsync(request, cancellationToken);
+                return;
+            }
+
+            await inner.UpsertBarsAsync(request with { Bars = request.Bars.Take(request.Bars.Count / 2).ToArray() }, cancellationToken);
+            throw new IOException("Simulated interruption.");
+        }
 
         public Task<IReadOnlyList<OhlcvBar>> ReadBarsAsync(CandleStoreReadRequest request, CancellationToken cancellationToken) =>
             inner.ReadBarsAsync(request, cancellationToken);
