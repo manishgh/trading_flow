@@ -3,9 +3,11 @@
 Requested by the user on 22 November 2026. Read `AGENTS.md` first; its rules apply in full (design shown to the user and
 approved before code, purpose comments, focused tests, two independent reviewers, no GitHub push, no data deletion).
 
-- Work in `C:\project\trading_flow-ui2`, branch `ui/redesign-v2`. Do not create a worktree or a new branch.
-- Another session changes the Desk table and the chart on the same branch. **Touch only the files named below** and stage
-  them by name. Do not edit `workspaces.css`, `watch-desk.css`, `watch-desk.js`, `desk-*.js`, `stock-chart*.js` or `Desk.cshtml`.
+- Work in `C:\project\trading_flow`, branch `main` (`ui/redesign-v2` was merged into it on 22 November 2026). Do not create a
+  worktree or a new branch. The user's uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` stays untouched and unstaged.
+- **Touch only the files named below** and stage them by name. Do not edit `workspaces.css`, `watch-desk.css`, `watch-desk.js`,
+  `desk-*.js`, `stock-chart*.js` or `Desk.cshtml`, and nothing under `configs`: the operator site reads that folder.
+- Do not build or test while the VIX backtest (plan 36306) runs on the operator site; it needs the memory. Design and reading are fine.
 - Do not change, re-score or delete stored news rows. Do not write to the operator database
   (`V:\trading_flow\data\tradingflow.db`); tests use their own temporary database.
 - Do not start a site. Build and test with `--disable-build-servers -m:1 /nr:false -p:UseSharedCompilation=false` and
