@@ -49,8 +49,7 @@ public static class StrategyDecisionRequestAssembler
         HistoricalNewsPresenceContext? historicalNewsPresence = null,
         IntradayBreakoutContext? previousSessionContext = null,
         ProvisionalSetupObservation? provisionalSetup = null,
-        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? sessionSchedules = null,
-        decimal? optionsSkew25Delta = null)
+        IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? sessionSchedules = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeStrategy);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -206,10 +205,6 @@ public static class StrategyDecisionRequestAssembler
             previousSessionContext,
             SessionSchedules: runtimeStrategy.Definition.EntryRules.OpeningRangeMinutes > 0 && sessionSchedules is not null
                 ? sessionSchedules.ToImmutableDictionary()
-                : null,
-            OptionsSkew25Delta: runtimeStrategy.Definition.EntryRules.MaxLongPutSkew is not null ||
-                                runtimeStrategy.Definition.EntryRules.MinShortPutCallSkew is not null
-                ? optionsSkew25Delta
                 : null);
     }
 

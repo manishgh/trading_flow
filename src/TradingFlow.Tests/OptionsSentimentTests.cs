@@ -19,7 +19,7 @@ namespace TradingFlow.Tests;
 /// <summary>
 /// Offline deterministic verification for Alpaca Paid OPRA Options Sentiment Context (20 Nov 2026 design):
 /// OCC parsing, quote liquidity filtering, front straddle implied move, 25-delta put-call skew, IV term structure,
-/// Alpaca OPRA pagination/caching/archiving, fail-closed skew vetoes, and zero hash drift on all existing strategies.
+/// Alpaca OPRA pagination/caching/archiving, refusal of removed skew vetoes, and zero hash drift on all existing strategies.
 /// </summary>
 public sealed class OptionsSentimentTests
 {
@@ -296,116 +296,29 @@ public sealed class OptionsSentimentTests
         }
     }
 
-    [Fact]
-    public void SkewVetoes_RoundTripYamlValidateBoundsEnforceFailClosedAndRejectHistoricalBacktest()
+    /// <summary>
+    /// The options-skew vetoes were removed because no backtest can test them. A strategy file that still sets one is refused
+    /// rather than run without the rule its author expected.
+    /// </summary>
+    [Theory]
+    [InlineData("max_long_put_skew: 0.06")]
+    [InlineData("min_short_put_call_skew: -0.04")]
+    public void StrategyFileWithARemovedSkewVeto_IsRefused(string setting)
     {
         var reader = new SimpleYamlReader();
-        var root = TestRepository.FindRoot();
-        var longBase = reader.ReadStrategy(Path.Combine(root, "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml"));
-        var shortBase = reader.ReadStrategy(Path.Combine(root, "configs/backtest/strategies/bollinger-squeeze-breakdown.bt-v1.yaml"));
-
-        // 1. YAML round-trip for both max_long_put_skew and min_short_put_call_skew.
-        var longWithSkew = longBase with { EntryRules = longBase.EntryRules with { MaxLongPutSkew = 0.06m } };
-        var shortWithSkew = shortBase with { EntryRules = shortBase.EntryRules with { MinShortPutCallSkew = -0.04m } };
-        var tempLong = Path.Combine(Path.GetTempPath(), $"tf-skew-long-{Guid.NewGuid():N}.yaml");
-        var tempShort = Path.Combine(Path.GetTempPath(), $"tf-skew-short-{Guid.NewGuid():N}.yaml");
-        var tempInvalid = Path.Combine(Path.GetTempPath(), $"tf-skew-bad-{Guid.NewGuid():N}.yaml");
+        var yaml = RunConfigWriter.SerializeStrategyYaml(reader.ReadStrategy(
+            Path.Combine(TestRepository.FindRoot(), "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.yaml")));
+        var file = Path.Combine(Path.GetTempPath(), $"tf-skew-removed-{Guid.NewGuid():N}.yaml");
         try
         {
-            var longYaml = RunConfigWriter.SerializeStrategyYaml(longWithSkew);
-            var shortYaml = RunConfigWriter.SerializeStrategyYaml(shortWithSkew);
-            Assert.Contains("max_long_put_skew: 0.06", longYaml, StringComparison.Ordinal);
-            Assert.Contains("min_short_put_call_skew: -0.04", shortYaml, StringComparison.Ordinal);
-            // Strategies without skew vetoes do not emit skew keys.
-            Assert.DoesNotContain("max_long_put_skew", RunConfigWriter.SerializeStrategyYaml(longBase), StringComparison.Ordinal);
-            Assert.DoesNotContain("min_short_put_call_skew", RunConfigWriter.SerializeStrategyYaml(shortBase), StringComparison.Ordinal);
-
-            File.WriteAllText(tempLong, longYaml);
-            File.WriteAllText(tempShort, shortYaml);
-            Assert.Equal(0.06m, reader.ReadStrategy(tempLong).EntryRules.MaxLongPutSkew);
-            Assert.Equal(-0.04m, reader.ReadStrategy(tempShort).EntryRules.MinShortPutCallSkew);
-
-            // Validation rejects out-of-range values, max_long_put_skew on direction: short, and min_short_put_call_skew on direction: long.
-            File.WriteAllText(tempInvalid, longYaml.Replace("max_long_put_skew: 0.06", "max_long_put_skew: 2.5", StringComparison.Ordinal));
-            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(tempInvalid));
-
-            File.WriteAllText(tempInvalid, longYaml.Replace("max_long_put_skew: 0.06", "min_short_put_call_skew: -0.04", StringComparison.Ordinal));
-            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(tempInvalid));
-
-            File.WriteAllText(tempInvalid, shortYaml.Replace("min_short_put_call_skew: -0.04", "max_long_put_skew: 0.06", StringComparison.Ordinal));
-            Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(tempInvalid));
+            File.WriteAllText(file, yaml.Replace("confluence:", $"  {setting}\nconfluence:", StringComparison.Ordinal));
+            var refused = Assert.Throws<InvalidOperationException>(() => reader.ReadStrategy(file));
+            Assert.Contains(setting.Split(':')[0], refused.Message, StringComparison.Ordinal);
         }
         finally
         {
-            if (File.Exists(tempLong)) File.Delete(tempLong);
-            if (File.Exists(tempShort)) File.Delete(tempShort);
-            if (File.Exists(tempInvalid)) File.Delete(tempInvalid);
+            if (File.Exists(file)) File.Delete(file);
         }
-
-        // 2. Evaluator enforces fail-closed behavior and exact rejection codes for both long and short strategies.
-        var evaluator = new BasicStrategyEvaluator();
-        var longStrategy = StrategyDecisionKernelTests.CreateRequest().Strategy with
-        {
-            Direction = "long",
-            EntryRules = StrategyDecisionKernelTests.CreateRequest().Strategy.EntryRules with
-            {
-                SetupType = "momentum",
-                MinEntryRsi = 0m,
-                MaxEntryRsi = 100m,
-                TrendFilter = "none",
-                MacdFilter = "none",
-                RequirePriceAboveBollingerMiddle = false,
-                RequireMacdHistogramPositive = false,
-                RequirePriceAboveVwap = false,
-                RequirePriceAboveEma20 = false,
-                RequirePriceAboveEma50 = false,
-                RequireEma20AboveEma50 = false,
-                MaxLongPutSkew = 0.06m
-            }
-        };
-        var baseSignal = new TradeSignal(
-            "AAA", ObservedUtc, longStrategy.Timeframe, 100m, 1_000_000m, 55m, 2m,
-            true, false, false, false, false, true, true, false, true, true, true,
-            0.5m, true, true, true);
-
-        Assert.Equal("options_skew_unavailable", evaluator.GetLongEntryRejection(longStrategy, baseSignal, 1.5m));
-        Assert.StartsWith("options_put_skew_above_maximum", evaluator.GetLongEntryRejection(longStrategy, baseSignal with { OptionsSkew25Delta = 0.08m }, 1.5m));
-        Assert.Null(evaluator.GetLongEntryRejection(longStrategy, baseSignal with { OptionsSkew25Delta = 0.06m }, 1.5m));
-
-        var shortStrategy = longStrategy with
-        {
-            Direction = "short",
-            EntryRules = longStrategy.EntryRules with
-            {
-                EnableShort = true,
-                ShortSetupType = "momentum",
-                MaxLongPutSkew = null,
-                MinShortPutCallSkew = -0.04m
-            }
-        };
-        Assert.Equal("options_skew_unavailable", evaluator.GetShortEntryRejection(shortStrategy, baseSignal, 1.5m));
-        Assert.StartsWith("options_call_skew_squeeze_risk", evaluator.GetShortEntryRejection(shortStrategy, baseSignal with { OptionsSkew25Delta = -0.06m }, 1.5m));
-        Assert.Null(evaluator.GetShortEntryRejection(shortStrategy, baseSignal with { OptionsSkew25Delta = -0.04m }, 1.5m));
-
-        // 3. Historical backtest refuses strategies declaring live OPRA skew vetoes with a plain-English explanation.
-        var catalog = new StrategyArtifactCatalog(root, Path.Combine(root, "configs", "strategy-catalog.json"), reader);
-        var runner = new BacktestRunner(reader, catalog);
-        var baseRun = reader.ReadBacktestRun(Path.Combine(root, "configs/backtest/swing-backtest-profile.yaml"));
-        var tempResultPath = Path.Combine(Path.GetTempPath(), $"tf-skew-bt-{Guid.NewGuid():N}.json");
-        try
-        {
-            var ex = Assert.Throws<InvalidOperationException>(() =>
-                runner.RunAsync(baseRun, [longWithSkew], ObservedUtc, tempResultPath, CancellationToken.None).GetAwaiter().GetResult());
-            Assert.Contains("historical OPRA", ex.Message, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            if (File.Exists(tempResultPath)) File.Delete(tempResultPath);
-        }
-        // 4. SignalStudyOutcomes refuses historical signal studies when live OPRA skew vetoes are configured.
-        var signalStudyEx = Assert.Throws<NotSupportedException>(() =>
-            TradingFlow.Research.Signals.SignalStudyOutcomes.RequireSupported(longWithSkew));
-        Assert.Contains("live OPRA options skew vetoes", signalStudyEx.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -554,8 +467,6 @@ public sealed class OptionsSentimentTests
 
         foreach (var artifact in strategies)
         {
-            Assert.Null(artifact.ResolvedStrategy.EntryRules.MaxLongPutSkew);
-            Assert.Null(artifact.ResolvedStrategy.EntryRules.MinShortPutCallSkew);
             var json = JsonSerializer.Serialize(artifact.ResolvedStrategy.EntryRules);
             Assert.DoesNotContain("MaxLongPutSkew", json, StringComparison.Ordinal);
             Assert.DoesNotContain("MinShortPutCallSkew", json, StringComparison.Ordinal);

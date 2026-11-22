@@ -386,9 +386,6 @@ public sealed record EntryRules(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinParabolicAtrAboveEma21 = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinShootingStarWickToBody = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxShootingStarCloseLocation = null,
-    // Optional live OPRA 25-delta put-call skew vetoes (20 Nov 2026 design). Omitted when null so all v1 hashes stay exact.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MaxLongPutSkew = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? MinShortPutCallSkew = null,
     // How ADR% is measured (AverageRangeMethods). Null is latest_close, the original formula; omitted when unset so every
     // existing strategy keeps its content hash. A new strategy version may choose per_day.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? AverageRangeMethod = null);

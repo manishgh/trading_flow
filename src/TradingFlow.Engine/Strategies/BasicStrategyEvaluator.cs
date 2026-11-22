@@ -222,20 +222,6 @@ public sealed class BasicStrategyEvaluator
             return "macd_bearish";
         }
 
-        if (strategy.EntryRules.MaxLongPutSkew is { } maxLongPutSkew)
-        {
-            if (signal.OptionsSkew25Delta is not { } skew)
-            {
-                return "options_skew_unavailable";
-            }
-
-            if (skew > maxLongPutSkew)
-            {
-                return FormattableString.Invariant(
-                    $"options_put_skew_above_maximum (Actual: {skew:F4}, RequiredMax: {maxLongPutSkew:F4})");
-            }
-        }
-
         return null;
     }
 
@@ -319,20 +305,6 @@ public sealed class BasicStrategyEvaluator
             (signal.CloseAboveSmaPct is null || signal.CloseAboveSmaPct < minStretch))
         {
             return $"close_not_far_enough_above_sma{rules.CloseAboveSmaPeriod} (Actual: {signal.CloseAboveSmaPct?.ToString("F2") ?? "n/a"}, Required: {minStretch:F2})";
-        }
-
-        if (rules.MinShortPutCallSkew is { } minShortSkew)
-        {
-            if (signal.OptionsSkew25Delta is not { } skew)
-            {
-                return "options_skew_unavailable";
-            }
-
-            if (skew < minShortSkew)
-            {
-                return FormattableString.Invariant(
-                    $"options_call_skew_squeeze_risk (Actual: {skew:F4}, RequiredMin: {minShortSkew:F4})");
-            }
         }
 
         return null;

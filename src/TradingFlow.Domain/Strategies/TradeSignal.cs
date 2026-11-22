@@ -125,6 +125,4 @@ public sealed record TradeSignal(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Ema21RejectionDetail = null,
     // True when short_setup_type parabolic_shooting_star_breakdown triggered on bar D; omitted when false.
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsParabolicShootingStarBreakdown = false,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ParabolicShootingStarRejectionDetail = null,
-    // Observed live OPRA 25-delta put-call IV skew (put IV minus call IV) when options skew gates are enabled; omitted when null.
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] decimal? OptionsSkew25Delta = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ParabolicShootingStarRejectionDetail = null);

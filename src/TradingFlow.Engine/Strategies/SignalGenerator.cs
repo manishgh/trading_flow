@@ -28,8 +28,7 @@ public sealed partial class SignalGenerator
         IReadOnlyList<CatalystEvent>? availableCatalysts = null,
         IReadOnlyDictionary<DateOnly, MarketSessionSchedule>? sessionSchedules = null,
         bool ignoreObservedReceiptForHistoricalResearch = false,
-        bool fiveMinuteBarsSortedAscending = false,
-        decimal? optionsSkew25Delta = null)
+        bool fiveMinuteBarsSortedAscending = false)
     {
         var snapshot = snapshots[index];
         var previous = snapshots[index - 1];
@@ -348,8 +347,7 @@ public sealed partial class SignalGenerator
             IsEma21RejectionBreakdown: ema21RejectionContext.IsBreakdown,
             Ema21RejectionDetail: ema21RejectionContext.RejectionDetail,
             IsParabolicShootingStarBreakdown: parabolicContext.IsBreakdown,
-            ParabolicShootingStarRejectionDetail: parabolicContext.RejectionDetail,
-            OptionsSkew25Delta: optionsSkew25Delta);
+            ParabolicShootingStarRejectionDetail: parabolicContext.RejectionDetail);
     }
 
     /// <summary>

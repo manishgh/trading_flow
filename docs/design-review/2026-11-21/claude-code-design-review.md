@@ -165,5 +165,6 @@ standing check on every UI checkpoint:
 | S1 | Fixed | Endpoint is a one-line mapping; logic lives in `WorkspacePulseService`. |
 | S2 / S3 | Open | Splitting the large scripts and merging the older stylesheets follow as separate changes after publication. |
 | S4 | Fixed | Storage keys and test names say what they are for; a chart setting saved under the old key is read once and moved. |
+| O1 | Removed | (OPRA review) The options-skew vetoes are removed from the strategy rules and every run path because no backtest can test them; the Desk keeps its options display. A strategy file that still sets one is refused. |
 | O8 / K3 | Fixed | (OPRA and UI-9 reviews) The call/put volume tooltip says what it covers outside regular hours; an older recorded strategy version is labelled "older version" and shows only the direction its own run recorded, or none. |
 | T1 / T3 | Partly | New behaviour tests for rule selection, sector ranking, VIX latest close, short plans, month trades and the straddle fix; the browser scripts still have only text checks. |

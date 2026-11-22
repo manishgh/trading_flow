@@ -176,8 +176,7 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
                 market.SnapshotsByTimeframe, stock.News, cutoff, source, universe, stock.Regime!, StrategyCandidateState.Discovered,
                 0, StrategyDecisionRequestAssembler.CreateSetupKey(strategy.Identity.StrategyId, strategy.Definition.Timeframe, latest.Timestamp),
                 source.ObservedAtUtc, source.ExpiresAtUtc, profile.Engine.IndicatorWarmupBars, run.RunId,
-                stock.ReferenceBars, stock.ReferenceSessions, stock.DrawdownContext, sessionSchedules: calendar,
-                optionsSkew25Delta: stock.OptionsSkew25Delta);
+                stock.ReferenceBars, stock.ReferenceSessions, stock.DrawdownContext, sessionSchedules: calendar);
             var evaluation = await decisions.EvaluateAsync(run, request, token);
             var response = await recorded.ReadAsync(run.RunId, ToReference(strategy), [member.Symbol], token);
             var projection = response.Stocks.Single();

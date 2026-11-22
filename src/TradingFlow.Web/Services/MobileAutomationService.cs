@@ -44,7 +44,6 @@ public sealed partial class MobileAutomationService
     private readonly ManualEntryOptions manualEntryOptions;
     private readonly TimeProvider timeProvider;
     private readonly RegimeGateService regimeGate;
-    private readonly IOptionsSentimentSource? optionsSentiment;
 
     public MobileAutomationService(
         SimpleYamlReader yamlReader,
@@ -62,9 +61,7 @@ public sealed partial class MobileAutomationService
         ManualEntryOptions? manualEntryOptions = null,
         TimeProvider? timeProvider = null,
         // FRED's latest VIX closes for strategies with VIX sizing; without it their entries are refused as vix_lookup_failed.
-        IVixCloseSource? vixCloses = null,
-        // Live OPRA options sentiment source, queried only for strategies that declare skew vetoes.
-        IOptionsSentimentSource? optionsSentiment = null)
+        IVixCloseSource? vixCloses = null)
     {
         this.yamlReader = yamlReader;
         this.runtimeFactory = runtimeFactory;
@@ -83,7 +80,6 @@ public sealed partial class MobileAutomationService
         this.manualEntryOptions = manualEntryOptions ?? new ManualEntryOptions(ManualEntryPolicy.StrategyGated);
         this.timeProvider = timeProvider ?? TimeProvider.System;
         regimeGate = new(vixCloses);
-        this.optionsSentiment = optionsSentiment;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
