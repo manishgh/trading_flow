@@ -100,7 +100,7 @@ public sealed class ChartIndicatorResourceTests
         Assert.All(frames, frame => Assert.InRange(frame.Length, 1, 8000));
         var reconstructed = JsonSerializer.Deserialize<ChartSeriesSnapshot>(String.Concat(frames), StockChartHub.Json)!;
         Assert.Equal(500, reconstructed.Bars.Count);
-        Assert.Equal(9, reconstructed.Indicators!.Count);
+        Assert.Equal(5, reconstructed.Indicators!.Count);
         Assert.Equal(snapshot.Markers[0], reconstructed.Markers[0]);
     }
 
@@ -108,7 +108,7 @@ public sealed class ChartIndicatorResourceTests
     internal static ChartSeriesSnapshot MaximumBaseline(DateTimeOffset now)
     {
         var key = ChartSeriesService.Normalize(new("AAPL", "5m", "regular", "year",
-            "bb20,sma50,ema9,ema50,macd,adx14,atr14:readout,atrpct14:readout,rvol"));
+            "bb20,bb21,bb22,macd,adx14"));
         var bars = Enumerable.Range(0, 500).Select(index =>
         {
             var start = now.AddMinutes(5 * (index - 500));

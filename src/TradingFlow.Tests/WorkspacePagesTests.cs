@@ -364,7 +364,7 @@ public sealed class WorkspacePagesTests
                  {
                      ".preparation-steps li", "white-space: normal", "[data-preparation-summary][data-compact=\"true\"]",
                      "@media (min-width: 1440px)", "html body.workspace-app .watch-desk .watch-grid",
-                     "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)", ".watch-strategy-check-item"
+                     "minmax(480px, 36fr) minmax(430px, 42fr) minmax(240px, 22fr)", ".watch-strategy-check-item"
                  })
         {
             Assert.Contains(token, css);
@@ -680,15 +680,15 @@ public sealed class WorkspacePagesTests
         // The SPY/QQQ options panel partial was removed: the strip chip and the selected-stock line replaced it.
         Assert.False(File.Exists(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "Pages", "Shared", "_OptionsSentimentPanel.cshtml")));
         var chartPartial = WebFile("Pages/Shared/_StockChart.cshtml");
-        // One fixed stock table: Stock · Prev close · Now · Today · Strategy · RVOL/ATR, no column modes and no News column.
+        // One fixed stock table: Stock · Price now · Indicators (day) · Strategy · RVOL/ATR · Trade, no column modes and no News column.
         Assert.DoesNotContain("watch-density-toggle", desk);
         Assert.DoesNotContain("data-scanner-density", desk);
-        foreach (var column in new[] { ">Prev close</th>", ">Now</th>", ">Today</th>", ">Strategy</th>" }) Assert.Contains(column, desk);
+        foreach (var column in new[] { ">Price now</th>", ">Indicators (day)</th>", ">Strategy</th>", ">Trade</th>" }) Assert.Contains(column, desk);
         Assert.DoesNotContain(">News</th>", desk);
         // Outside regular hours the column is relabelled so an after-hours move is never called "Day %".
         Assert.Contains("id=\"watch-change-head\"", desk);
         var deskJs = DeskScripts();
-        Assert.Contains("'Since close'", deskJs);
+        Assert.Contains("'Price · since close'", deskJs);
         Assert.Contains("Latest quote (session unknown)", deskJs);
         Assert.Contains("function changeBasisTitle(row)", deskJs);
         Assert.Contains("RVOL · ATR", desk);
@@ -773,7 +773,7 @@ public sealed class WorkspacePagesTests
 
         // CSS rules for the Desk, Lab and Catalysts features (3-column Desk; compact scanner must NEVER hide News col 6)
         var css = CssBundle();
-        foreach (var token in new[] { "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)", ".watch-col-close", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
+        foreach (var token in new[] { "minmax(480px, 36fr) minmax(430px, 42fr) minmax(240px, 22fr)", ".watch-col-trend", ".watch-chart-window", ".stock-chart-bar", ".order-risk-strip", ".lab-provenance-popover", ".lab-matrix-drawer", ".catalysts-opra-strip", ".catalysts-opra-ratio-pill" })
         {
             Assert.Contains(token, css);
         }
@@ -843,7 +843,7 @@ public sealed class WorkspacePagesTests
         var indicatorsJs = WebFile("wwwroot/js/stock-chart-indicators.js");
         Assert.Contains("const preferenceKey = 'tradingflow.stock-chart';", indicatorsJs);
         Assert.Contains("localStorage.getItem(preferenceKey) ?? localStorage.getItem(earlierPreferenceKey)", indicatorsJs);
-        Assert.Contains("row.title = item.reason;", indicatorsJs);
+        Assert.Contains("row.title = item.reason ||", indicatorsJs);
         Assert.DoesNotContain("[reason, item.reason]", indicatorsJs);
 
         var chartJs = WebFile("wwwroot/js/stock-chart.js");
@@ -861,26 +861,26 @@ public sealed class WorkspacePagesTests
 
         var desk = WebFile("Pages/Desk.cshtml");
         var stripStart = desk.IndexOf("class=\"watch-chart-indicators-strip\"", StringComparison.Ordinal);
-        var sma20Idx = desk.IndexOf("id=\"watch-sma20\"", StringComparison.Ordinal);
-        var sma50Idx = desk.IndexOf("id=\"watch-sma50\"", StringComparison.Ordinal);
-        var sma200Idx = desk.IndexOf("id=\"watch-sma200\"", StringComparison.Ordinal);
+        var studyIdx = desk.IndexOf("id=\"watch-study-pills\"", StringComparison.Ordinal);
         var todaySupportIdx = desk.IndexOf("id=\"watch-today-support\"", StringComparison.Ordinal);
         var atrIdx = desk.IndexOf("id=\"watch-atr\"", StringComparison.Ordinal);
         var volIdx = desk.IndexOf("id=\"watch-volatility\"", StringComparison.Ordinal);
-        Assert.True(stripStart >= 0 && stripStart < sma20Idx && sma20Idx < sma50Idx && sma50Idx < sma200Idx &&
-                    sma200Idx < todaySupportIdx && todaySupportIdx < atrIdx && atrIdx < volIdx,
-            "Desk chart strip must present SMA20, SMA50, SMA200, Today support, ATR, and Vol 1D/1W/1M on one unified line.");
+        Assert.True(stripStart >= 0 && stripStart < studyIdx && studyIdx < todaySupportIdx && todaySupportIdx < atrIdx && atrIdx < volIdx,
+            "Desk chart strip must present the selected indicators, Today support, ATR, and Vol 1D/1W/1M on one unified line.");
         Assert.DoesNotContain("watch-chart-ind-more", desk);
         Assert.DoesNotContain("watch-tech-more", desk);
 
         var watchDeskJs = DeskScripts();
         foreach (var token in new[]
                  {
-                     "const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];",
+                     "const deskDefaultChartStudies = ['ema21:1d', 'sma50:1d', 'sma200:1d'];",
                      "defaultInterval: '1d'",
                      "onZones: handleDeskChartZones",
                      "function deskReferencePrice(",
-                     "function renderSmaPill(",
+                     "function renderStudyPills(",
+                     "onStudies: handleDeskStudies",
+                     "function openRowOrder(",
+                     "function renderTrendCell(",
                      "function selectTodaySupportZone(",
                      "function renderTodaySupportPill(",
                      "function renderAtrPill(",
@@ -896,10 +896,10 @@ public sealed class WorkspacePagesTests
         var css = CssBundle();
         foreach (var token in new[]
                  {
-                     "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)",
-                     ".watch-table .watch-col-stock { width: 15%; }",
-                     ".watch-table .watch-col-close { width: 19%; }",
-                     ".watch-table .watch-col-change { width: 21%; }",
+                     "minmax(480px, 36fr) minmax(430px, 42fr) minmax(240px, 22fr)",
+                     ".watch-table .watch-col-stock { width: 11%; }",
+                     ".watch-table .watch-col-price { width: 25%; }",
+                     ".watch-table .watch-col-trade { width: 23%; }",
                      ".watch-table[data-has-strategy=\"false\"] .watch-col-strategy { display: none; }",
                      ".watch-chart-window [data-chart-zone-key]",
                      ".watch-chart-indicators-strip",
@@ -1013,7 +1013,7 @@ public sealed class WorkspacePagesTests
                      "display: contents;",
                      "details.workspace-freshness-popover[open]",
                      ".workspace-app .watch-desk [data-preparation-summary][data-compact=\"true\"]",
-                     "minmax(300px, 30fr) minmax(460px, 44fr) minmax(260px, 26fr)",
+                     "minmax(480px, 36fr) minmax(430px, 42fr) minmax(240px, 22fr)",
                      "[data-has-strategy=\"false\"] .watch-col-strategy",
                      "height: 34px;",
                      ".watch-chart-window .stock-chart-stage .stock-chart-readout",
@@ -1167,7 +1167,7 @@ public sealed class WorkspacePagesTests
         Assert.Contains("Next scheduled reporting day:", earningsJs);
 
         // 5. #266 & #267: Distinct study color swatches, interactive click-to-highlight, and instant [data-tooltip] on Options + pills.
-        foreach (var key in new[] { "data-highlight-key=\"sma20\"", "data-highlight-key=\"sma50\"", "data-highlight-key=\"sma200\"", "data-highlight-key=\"support\"", "data-tooltip=\"Price range, not volatility" })
+        foreach (var key in new[] { "id=\"watch-study-pills\"", "data-highlight-key=\"support\"", "data-tooltip=\"Price range, not volatility" })
         {
             Assert.Contains(key, desk);
         }

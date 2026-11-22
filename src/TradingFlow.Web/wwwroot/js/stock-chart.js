@@ -138,7 +138,7 @@
     }
 
     // Mount one read-only chart instance with scoped controls, data, optional host defaults/zone/highlight callbacks, and disposal.
-    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones, compactDesk, controlsHost, quickIntervalHost, onSeriesInfo, onHighlightChange } = {}) {
+    function mount(root, { privateContext, acceptanceCorrelation, onAcceptanceEnded, summaryHost, defaultInterval, defaultStudies, onZones, compactDesk, controlsHost, quickIntervalHost, onSeriesInfo, onHighlightChange, onStudies } = {}) {
         const acceptance = Boolean(acceptanceCorrelation);
         let acceptanceStarted = false;
         const summaryNodes = new Map();
@@ -388,7 +388,7 @@
                 return;
             }
             const nodes = visible.map(item => {
-                const highlightKey = String(item.formula || item.token || '').toLowerCase();
+                const highlightKey = item.token;
                 const shortLabel = String(item.label || item.formula).replace(/\s*·.*$/, '');
                 const chip = element('button', `${shortLabel} ${item.value}`, 'stock-chart-study-chip');
                 chip.type = 'button';
@@ -648,6 +648,7 @@
             const selectedStudies = indicatorLibrary.joinedStudies(snapshot, olderPages.slice().reverse(), studies.tokens());
             earlierStudiesChanged = selectedStudies.some(study => study.earlierUnavailable);
             studies.update(selectedStudies);
+            onStudies?.(studies.summary(), snapshot.seriesKey.symbol, key.interval);
             pointerMoved = false;
             plot.setData({ bars: currentBars, zones, levels: currentLevels, events, interval: key.interval,
                 basisBreaks: recent.flatMap(page => page.evidence.basisBreaks || []),
@@ -995,6 +996,7 @@
                 plot?.clearStudies();
                 inspect(selected);
                 startSelection(!snapshot || intervalChanged);
+                onStudies?.(studies.summary(), key?.symbol, get('interval').value);
             }
             savePreferences();
         }, pane => {

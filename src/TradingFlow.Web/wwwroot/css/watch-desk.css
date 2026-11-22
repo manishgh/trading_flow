@@ -84,7 +84,7 @@
   .workspace-app .watch-desk .stock-chart-study-toolbar{grid-column:2;margin-top:5px;gap:5px}
   .workspace-app .watch-desk .stock-chart-controls label,.workspace-app .watch-desk .stock-chart-study-toolbar>label{flex-basis:85px;gap:2px}
   .workspace-app .watch-desk .stock-chart-controls select,.workspace-app .watch-desk .stock-chart-study-toolbar select{height:34px;min-height:34px;padding:4px 6px}
-  .workspace-app .watch-desk .stock-chart-study-toolbar>button,.workspace-app .watch-desk .stock-chart-library>summary{min-height:34px;padding:6px 8px}
+  .workspace-app .watch-desk .stock-chart-study-toolbar>button{min-height:34px;padding:6px 8px}
   .workspace-app .watch-desk .stock-chart-plot{height:calc(270px + var(--stock-chart-panes,0) * 100px)}
 }
 @media(max-width:1150px){

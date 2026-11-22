@@ -63,32 +63,14 @@
                         <button type="button" class="btn btn-secondary" data-chart-reset>Reset chart settings</button>
                     </div>
                     <ul class="stock-chart-studies" data-chart-studies aria-label="Selected indicators" hidden></ul>
-                    <details class="stock-chart-library" data-chart-library open>
-                        <summary>Indicator library</summary>
-                        <div class="stock-chart-study-picker">
-                            <label>Indicator
-                                <select class="input" data-chart-study-choice></select>
-                            </label>
-                            <label data-chart-study-source-control hidden>Source interval
-                                <select class="input" data-chart-study-source>
-                                    <option value="">Candle interval</option>
-                                    <option value="1d">Daily · 1d</option>
-                                </select>
-                            </label>
-                            <label data-chart-study-display-control hidden>Display
-                                <select class="input" data-chart-study-display>
-                                    <option value="readout">Readout</option>
-                                    <option value="">Separate pane</option>
-                                </select>
-                            </label>
-                            <label data-chart-study-replace-control hidden>Replace indicator
-                                <select class="input" data-chart-study-replace></select>
-                            </label>
-                            <button type="button" class="btn btn-secondary" data-chart-study-add>Add indicator</button>
-                        </div>
-                        <p class="stock-chart-study-description" data-chart-study-description></p>
-                        <p class="stock-chart-study-feedback" data-chart-study-feedback role="status"></p>
-                    </details>
+                    <div class="stock-chart-study-picker" data-chart-library>
+                        <label>Add indicator
+                            <select class="input" data-chart-study-choice></select>
+                        </label>
+                        <button type="button" class="btn btn-secondary" data-chart-study-add>Add indicator</button>
+                        <span class="stock-chart-study-count" data-chart-study-count></span>
+                    </div>
+                    <p class="stock-chart-study-feedback" data-chart-study-feedback role="status"></p>
                     <p class="stock-chart-context" data-chart-context-label></p>
                     <p class="stock-chart-source" data-chart-source></p>
                 </div>

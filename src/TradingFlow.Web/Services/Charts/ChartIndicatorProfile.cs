@@ -6,6 +6,7 @@ namespace TradingFlow.Web.Services.Charts;
 internal sealed record ChartStudy(string Id, string SourceInterval, string Session, ChartFormula? Formula)
 {
     public string Name => Id.Split(':')[0];
+    public bool IsReadout => Id.EndsWith(":readout", StringComparison.Ordinal);
     public string[] Columns => Formula?.Columns ?? ["value"];
     public string Parameters => Formula?.Parameters ?? (Name == "rvol" ? "20 regular sessions; cumulative same-time median" : "HLC3; regular session reset");
     public string Version => Formula is not null ? ChartFormula.PackageVersion
@@ -21,6 +22,8 @@ internal sealed record ChartStudy(string Id, string SourceInterval, string Sessi
 internal static class ChartIndicatorProfile
 {
     private const int MaximumLength = 128;
+    private const int MaximumStudies = 5;
+    private const int MaximumPanes = 2;
 
     // Bound and canonicalize the key before cursor signing, cache access or source acquisition.
     public static string Normalize(string? value, string interval, string session)
@@ -30,10 +33,10 @@ internal static class ChartIndicatorProfile
         var ids = value.Split(',', StringSplitOptions.TrimEntries)
             .Select(id => id.ToLowerInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var studies = ids.Select(id => Resolve(id, interval, session)).ToArray();
-        if (studies.Count(study => IsPrice(study.Name)) > 4 || studies.Count(IsPane) > 2 ||
+        if (studies.Length > MaximumStudies || studies.Count(IsPane) > MaximumPanes ||
             studies.GroupBy(study => (study.Name, study.SourceInterval)).Any(group => group.Count() > 1))
         {
-            throw new ArgumentException("Choose up to four price studies and two additional panes, with one display per study and source.");
+            throw new ArgumentException("Choose up to five indicators, at most two of them in their own pane, each once per interval.");
         }
         return String.Join(',', ids);
     }
@@ -42,31 +45,38 @@ internal static class ChartIndicatorProfile
     public static ChartStudy[] Read(ChartSeriesKey key) => key.Indicators.Length == 0
         ? [] : key.Indicators.Split(',').Select(id => Resolve(id, key.Interval, key.SessionView)).ToArray();
 
-    // Daily-cross intervals are restricted to trend overlays; readout placement applies only to ATR.
+    // Reads "name[:interval][:readout]". Session studies have no interval of their own, OBV follows the candles, and only ATR
+    // values can be shown as a number without a pane. An interval below the candle interval follows the candles.
     private static ChartStudy Resolve(string id, string interval, string session)
     {
         var parts = id.Split(':');
         var name = parts[0];
         var formula = ChartIndicatorMath.Find(name);
-        if (formula is null && name is not ("vwap" or "rvol") || parts.Length > 2 ||
-            parts.Length == 2 && !(parts[1] == "1d" && IsTrend(name) ||
-                parts[1] == "readout" && name is ("atr14" or "atrpct14")))
+        var options = parts[1..];
+        var readout = options.Length > 0 && options[^1] == "readout";
+        if (readout) options = options[..^1];
+        var isSession = name is "vwap" or "rvol";
+        if (formula is null && !isSession || options.Length > 1 ||
+            readout && formula?.Family is not ("atr" or "atrpct") ||
+            options.Length == 1 && (isSession || formula!.Family == "obv" || !IntervalMinutes.ContainsKey(options[0])))
         {
             throw new ArgumentException("Unsupported chart indicator or source.");
         }
-        if (name is "rvol" or "vwap") return new ChartStudy(id, "1m", "regular", null);
-        var sourceInterval = parts.Length == 2 && parts[1] == "1d" ? "1d" : interval;
+        if (isSession) return new ChartStudy(id, "1m", "regular", null);
+        var sourceInterval = options.Length == 1 && Minutes(options[0]) > Minutes(interval) ? options[0] : interval;
         return new ChartStudy(id, sourceInterval, sourceInterval == "1d" ? "regular" : session, formula);
     }
 
-    // Only the fixed SMA/EMA choices support a distinct daily source.
-    private static bool IsTrend(string name) =>
-        name.StartsWith("sma", StringComparison.Ordinal) || name.StartsWith("ema", StringComparison.Ordinal);
+    // The intervals an indicator may have of its own. The longest is one daily candle.
+    private static readonly Dictionary<string, int> IntervalMinutes = new(StringComparer.Ordinal)
+    {
+        ["5m"] = 5, ["15m"] = 15, ["1h"] = 60, ["1d"] = 1_440
+    };
 
-    // Bands with three lines are one price study.
-    private static bool IsPrice(string name) => IsTrend(name) || name is "bb20" or "vwap";
+    /// <summary>Length of one candle in minutes; a one-minute candle is the shortest.</summary>
+    internal static int Minutes(string interval) => IntervalMinutes.GetValueOrDefault(interval, 1);
 
-    // Volume already has a base pane and RVOL is a readout. Each optional lower study uses one pane.
+    // Averages, bands and VWAP share the price scale; RVOL and readouts show only a number. Everything else needs a pane.
     private static bool IsPane(ChartStudy study) =>
-        !IsPrice(study.Name) && study.Name != "rvol" && !study.Id.EndsWith(":readout", StringComparison.Ordinal);
+        study.Name is not ("vwap" or "rvol") && study.Formula?.Family is not ("sma" or "ema" or "bb") && !study.IsReadout;
 }

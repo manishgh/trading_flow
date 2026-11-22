@@ -295,10 +295,9 @@
         return true;
     }
 
-    // Matches an overlay highlight key (e.g. "sma20") against a study's formula or token prefix.
+    // Matches an overlay highlight key, which is the exact selection token (e.g. "ema21:1d"), against a study.
     function matchesHighlightedStudy(study, key) {
-        if (!key || !study) return false;
-        return study.formula === key || String(study.token || '').startsWith(key);
+        return Boolean(key && study) && study.token === key;
     }
 
     // Draw study lines with explicit gaps, highlight emphasis/dimming, and an immediate redraw trigger.
@@ -336,7 +335,7 @@
                         if (!Number.isFinite(y)) continue;
                         if (lastY === undefined || point.segmentStart) {
                             ctx.moveTo(x - .6, y);
-                        } else if (study.sourceInterval === '1d' && study.chartInterval !== '1d') {
+                        } else if (study.source && study.sourceInterval !== study.chartInterval) {
                             ctx.lineTo(x, lastY);
                         }
                         ctx.lineTo(x, y);
@@ -612,7 +611,7 @@
             };
             const series = histogram ? chart.addSeries(library.HistogramSeries, options, paneIndex) :
                 chart.addSeries(library.LineSeries, lineOptions, paneIndex);
-            const referencePrices = index === 0 && study.formula === 'rsi14' ? [30, 70] : [];
+            const referencePrices = index === 0 && study.family === 'rsi' ? [30, 70] : [];
             const referenceLines = referencePrices.map(price => series.createPriceLine({
                 price, color: colors.grid, lineWidth: 1, lineStyle: library.LineStyle.Dashed, axisLabelVisible: false
             }));

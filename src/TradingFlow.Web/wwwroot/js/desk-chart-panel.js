@@ -3,10 +3,11 @@
 window.createDeskChartPanel = ({ el, getSelectedRow, selectedStrategyChoice, spreadDetail }) => {
     const { money, fixedMoney, when, normalizeChartSymbol } = window.TradingFlowDeskFormat;
     let deskChart, chartSymbol, deskChartZones = [], deskChartZonesSymbol = null, deskChartSeriesInfo = '', deskHighlightedOverlay = null;
+    let deskStudies = [], deskStudyInterval = '1d';
     let tradePlanController = null, tradePlanSeq = 0, tradePlanKey = '', tradePlanPrice = null, tradePlanRequestedAt = 0;
     // The chart's plan is requested again when the quote has moved this far from its price, at most this often.
     const tradePlanMoveShare = 0.005, tradePlanMinimumGapMs = 30000;
-    const deskDefaultChartStudies = ['sma20', 'sma50', 'sma200'];
+    const deskDefaultChartStudies = ['ema21:1d', 'sma50:1d', 'sma200:1d'];
 
     // Returns the current server-observed reference price (quote midpoint or previous close) for support/resistance labeling.
     function deskReferencePrice(row) {
@@ -15,35 +16,59 @@ window.createDeskChartPanel = ({ el, getSelectedRow, selectedStrategyChoice, spr
         const prev = row?.previousClose?.close;
         return typeof prev === 'number' && Number.isFinite(prev) && prev > 0 ? prev : null;
     }
-    // Formats one completed daily SMA pill with ↑/↓ directional arrows, neutral resistance semantics, and instant hover tooltip.
-    function renderSmaPill(id, label, value, refPrice, detail) {
-        const node = el(id);
-        if (!node) return;
-        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-            node.textContent = label + ' —';
-            delete node.dataset.role;
-            const emptyTip = [detail || `${label} unavailable`, 'Click to highlight on chart'].filter(Boolean).join(' · ');
-            node.title = emptyTip;
-            node.dataset.tooltip = emptyTip;
-            return;
+    // Receives the chart's selected indicators with their latest values; other symbols' late answers are ignored.
+    function handleDeskStudies(studies, symbol, interval) {
+        if (normalizeChartSymbol(symbol) !== normalizeChartSymbol(chartSymbol)) return;
+        deskStudies = studies;
+        deskStudyInterval = interval;
+        renderStudyPills(getSelectedRow());
+    }
+    // Shows one pill per indicator selected in the chart, in its line colour; pills keep their focus while values change.
+    function renderStudyPills(row) {
+        const host = el('study-pills');
+        if (!host) return;
+        const signature = deskStudyInterval + '|' + deskStudies.map(item => item.token).join(',');
+        if (host.dataset.signature !== signature) {
+            host.dataset.signature = signature;
+            host.replaceChildren(...(deskStudyInterval === '1w' ? [weeklyNote()] : deskStudies.map(createStudyPill)));
         }
-        const formatted = fixedMoney(value);
-        if (refPrice == null) {
-            node.textContent = label + ' ' + formatted;
-            delete node.dataset.role;
-            const plainTip = [label + ' ' + formatted, detail, 'Click to highlight on chart'].filter(Boolean).join(' · ');
-            node.title = plainTip;
-            node.dataset.tooltip = plainTip;
-            return;
-        }
-        const role = refPrice >= value ? 'support' : 'resistance';
-        const arrow = role === 'resistance' ? '↑' : '↓';
-        const roleDetail = role === 'resistance' ? 'resistance (above price)' : 'support (below price)';
-        node.dataset.role = role;
-        node.textContent = label + ' ' + arrow + ' ' + formatted;
-        const tip = [label + ' ' + formatted + ' · ' + roleDetail, detail, 'Click to highlight on chart'].filter(Boolean).join(' · ');
-        node.title = tip;
-        node.dataset.tooltip = tip;
+        if (deskStudyInterval === '1w') return;
+        const reference = deskReferencePrice(row);
+        deskStudies.forEach((item, index) => updateStudyPill(host.children[index], item, reference));
+    }
+    // Says why no indicator is shown on weekly candles.
+    function weeklyNote() {
+        const note = document.createElement('span');
+        note.className = 'watch-fine';
+        note.textContent = 'Indicators are shown on daily and intraday candles.';
+        return note;
+    }
+    // Builds a focusable pill whose key is the selection token used for highlighting on the chart.
+    function createStudyPill(item) {
+        const pill = document.createElement('span');
+        pill.className = 'watch-ind-pill';
+        pill.setAttribute('role', 'button');
+        pill.tabIndex = 0;
+        pill.dataset.highlightKey = item.token;
+        pill.setAttribute('aria-pressed', String(deskHighlightedOverlay === item.token));
+        pill.dataset.highlighted = String(deskHighlightedOverlay === item.token);
+        pill.style.setProperty('--ind-swatch', 'var(--stock-chart-study-' + item.slot % 5 + ')');
+        return pill;
+    }
+    // Writes the value and, for a line on the price scale, whether it lies below (support) or above (resistance) the price.
+    function updateStudyPill(pill, item, reference) {
+        const name = item.label + (item.interval === '1d' ? ' day' : ' ' + item.interval);
+        const onPrice = item.onPrice && typeof item.value === 'number' && reference != null;
+        const role = onPrice ? (reference >= item.value ? 'support' : 'resistance') : '';
+        if (role) pill.dataset.role = role; else delete pill.dataset.role;
+        const missing = item.reason || item.state || 'no value';
+        pill.textContent = item.text
+            ? name + ' ' + (role === 'resistance' ? '↑ ' : role === 'support' ? '↓ ' : '') + item.text
+            : name + ' — ' + missing;
+        const tip = [name + ' ' + (item.text ? item.text + ' at the latest candle' : missing), role === 'resistance' ? 'resistance (above price)' : role === 'support' ? 'support (below price)' : '',
+            item.text && item.reason ? item.reason : '', 'Click to highlight on chart'].filter(Boolean).join(' · ');
+        pill.title = tip;
+        pill.dataset.tooltip = tip;
     }
     // Selects the nearest confirmed server support zone (preferring currentOnly and zones at or below the reference price).
     function selectTodaySupportZone(zones, refPrice) {
@@ -165,6 +190,8 @@ window.createDeskChartPanel = ({ el, getSelectedRow, selectedStrategyChoice, spr
         deskChartZonesSymbol = null;
         deskChartSeriesInfo = '';
         syncDeskHighlightUi(null);
+        deskStudies = [];
+        renderStudyPills(null);
         renderTodaySupportPill(null);
         if (symbol && !deskChart) {
             const root = el('focus-content').querySelector('[data-stock-chart]');
@@ -177,7 +204,8 @@ window.createDeskChartPanel = ({ el, getSelectedRow, selectedStrategyChoice, spr
                 controlsHost: el('chart-controls-slot'),
                 quickIntervalHost: el('interval-quick'),
                 onSeriesInfo: handleDeskChartSeriesInfo,
-                onHighlightChange: syncDeskHighlightUi
+                onHighlightChange: syncDeskHighlightUi,
+                onStudies: handleDeskStudies
             });
         }
         deskChart?.setSymbol(symbol);
@@ -304,6 +332,6 @@ window.createDeskChartPanel = ({ el, getSelectedRow, selectedStrategyChoice, spr
         if (root) root.dataset.symbol = '';
     }
 
-    return { deskReferencePrice, renderSmaPill, renderTodaySupportPill, renderAtrPill, renderVolatilityPill, toggleDeskHighlight,
+    return { renderStudyPills, renderTodaySupportPill, renderAtrPill, renderVolatilityPill, toggleDeskHighlight,
         updateFocusInfoTooltip, syncChart, clearChartTradePlan, syncChartTradePlan, disposeChart };
 };

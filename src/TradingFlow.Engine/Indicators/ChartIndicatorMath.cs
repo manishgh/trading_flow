@@ -1,10 +1,11 @@
+using System.Globalization;
 using Skender.Stock.Indicators;
 using TradingFlow.Domain.Market;
 
 namespace TradingFlow.Engine.Indicators;
 
 public sealed record ChartFormula(
-    string Id, string Parameters, int SeedObservations, int WarmObservations, bool Recursive, string[] Columns)
+    string Id, string Family, int Period, string Parameters, int SeedObservations, int WarmObservations, bool Recursive, string[] Columns)
 {
     public const string PackageVersion = "skender-2.7.1-chart-v1";
 }
@@ -17,32 +18,52 @@ public static class ChartIndicatorMath
 {
     private static readonly string[] Value = ["value"];
 
-    // Separate the first package output from the conservative threshold at which charts expose it.
-    private static readonly Dictionary<string, ChartFormula> Formulas = new(StringComparer.Ordinal)
+    // Period bounds a chart accepts.
+    private static readonly Dictionary<string, (int Minimum, int Maximum)> Periods = new(StringComparer.Ordinal)
     {
-        ["sma20"] = new("sma20", "20", 20, 20, false, Value),
-        ["sma50"] = new("sma50", "50", 50, 50, false, Value),
-        ["sma200"] = new("sma200", "200", 200, 200, false, Value),
-        ["ema9"] = new("ema9", "9", 9, 259, true, Value),
-        ["ema20"] = new("ema20", "20", 20, 270, true, Value),
-        ["ema50"] = new("ema50", "50", 50, 300, true, Value),
-        ["ema200"] = new("ema200", "200", 200, 450, true, Value),
-        ["rsi14"] = new("rsi14", "14", 15, 140, true, Value),
-        ["macd"] = new("macd", "12,26,9", 34, 285, true, ["macd", "signal", "histogram"]),
-        ["adx14"] = new("adx14", "14", 28, 264, true, ["adx", "pdi", "mdi"]),
-        ["atr14"] = new("atr14", "14", 15, 264, true, Value),
-        ["atrpct14"] = new("atrpct14", "14", 15, 264, true, Value),
-        ["bb20"] = new("bb20", "20,2", 20, 20, false, ["lower", "middle", "upper"]),
-        ["obv"] = new("obv", "close change; zero origin", 1, 1, true, Value)
+        ["sma"] = (2, 250), ["ema"] = (2, 250), ["bb"] = (5, 100),
+        ["rsi"] = (2, 50), ["atr"] = (2, 50), ["atrpct"] = (2, 50), ["adx"] = (2, 50)
     };
 
-    // A finite formula catalog keeps parameter selection out of strategy configuration.
-    public static ChartFormula? Find(string id) => Formulas.GetValueOrDefault(id);
+    private static readonly Dictionary<string, ChartFormula> Fixed = new(StringComparer.Ordinal)
+    {
+        ["macd"] = new("macd", "macd", 0, "12,26,9", 34, 285, true, ["macd", "signal", "histogram"]),
+        ["obv"] = new("obv", "obv", 0, "close change; zero origin", 1, 1, true, Value)
+    };
+
+    /// <summary>Reads an ID such as "ema21" into its formula; null when the family is unknown or the period is out of bounds.</summary>
+    public static ChartFormula? Find(string id)
+    {
+        if (Fixed.TryGetValue(id, out var formula)) return formula;
+        var family = id.TrimEnd("0123456789".ToCharArray());
+        var digits = id[family.Length..];
+        if (!Periods.TryGetValue(family, out var bounds) || digits.Length is 0 or > 3 || digits[0] == '0' ||
+            !Int32.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var period) ||
+            period < bounds.Minimum || period > bounds.Maximum) return null;
+        return Build(id, family, period);
+    }
+
+    // States the first package output and the later candle from which the chart shows the value (see RunIn and WilderRunIn).
+    private static ChartFormula Build(string id, string family, int period) => family switch
+    {
+        "sma" => new(id, family, period, $"{period}", period, period, false, Value),
+        "ema" => new(id, family, period, $"{period}", period, period + RunIn(period), true, Value),
+        "bb" => new(id, family, period, $"{period},2", period, period, false, ["lower", "middle", "upper"]),
+        "adx" => new(id, family, period, $"{period}", 2 * period, 2 * period + 2 * WilderRunIn(period), true, ["adx", "pdi", "mdi"]),
+        _ => new(id, family, period, $"{period}", period + 1, period + 1 + WilderRunIn(period), true, Value)
+    };
+
+    // Candles after which less than 1% of an EMA still comes from its starting average: (1 - 2/(n+1))^k < 0.01. At most 250, and
+    // at most 470 candles in total, so the longest averages still fit the 500 daily candles a chart loads.
+    private static int RunIn(int period) => Math.Min(Math.Min(250, 470 - period), (int)Math.Ceiling(2.3 * (period + 1)));
+
+    // The same 1% for Wilder smoothing, which keeps (1 - 1/n) of the old value per candle.
+    private static int WilderRunIn(int period) => (int)Math.Ceiling(4.6 * period);
 
     // Calculate invariant source points, including the full warm-up receipt and each independently anchored segment.
     public static ChartCalculatedIndicator Project(ChartFormula formula, IReadOnlyList<ChartCompletedBar> bars,
         ChartBarProjector calendar, DateOnly firstCoveredDate, bool daily, DateTimeOffset visibleFrom,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int intervalMinutes = 1)
     {
         var values = formula.Columns.Select(_ => new double?[bars.Count]).ToArray();
         var clocks = new ChartIndicatorClock?[bars.Count];
@@ -53,7 +74,7 @@ public static class ChartIndicatorMath
             var publishEnd = PublishEnd(formula, bars, publishStart, daily);
             if (bars[publishEnd - 1].EndUtc >= visibleFrom)
             {
-                var inputStart = InputStart(formula, bars, publishStart, firstCoveredDate, calendar, daily);
+                var inputStart = InputStart(formula, bars, publishStart, firstCoveredDate, calendar, daily, intervalMinutes);
                 if (inputStart is { } start)
                     PublishSegment(formula, bars, start, publishStart, publishEnd, values, clocks);
             }
@@ -76,12 +97,15 @@ public static class ChartIndicatorMath
     }
 
     // A left-clipped recursive seed is unavailable; an observed coverage break inside the bounded source can restart it.
+    // A stock whose first candle lies after the seed, although the source covers the seed date, starts at its first candle.
     private static int? InputStart(ChartFormula formula, IReadOnlyList<ChartCompletedBar> bars, int publishStart,
-        DateOnly firstCoveredDate, ChartBarProjector calendar, bool daily)
+        DateOnly firstCoveredDate, ChartBarProjector calendar, bool daily, int intervalMinutes)
     {
         if (!formula.Recursive) return publishStart;
         var current = bars[publishStart];
-        var seed = calendar.IndicatorSeed(current.SessionDate, daily, formula.WarmObservations);
+        // OBV has no run-in; it accumulates from as far back as before so its shape does not restart every block.
+        var reach = formula.Family == "obv" ? 360 : formula.WarmObservations;
+        var seed = calendar.IndicatorSeed(current.SessionDate, daily, reach, intervalMinutes);
         if (seed is null) return null;
         var start = publishStart;
         while (start > 0 && bars[start - 1].Continuity == current.Continuity && bars[start - 1].SessionDate >= seed)
@@ -89,7 +113,8 @@ public static class ChartIndicatorMath
         var verifiedSeed = firstCoveredDate <= seed && bars[start].SessionDate == seed;
         var coveredRestart = start > 0 && bars[start - 1].SessionDate >= seed &&
             bars[start - 1].Continuity != current.Continuity;
-        return verifiedSeed || coveredRestart ? start : null;
+        var firstCandle = start == 0 && firstCoveredDate <= seed && bars[0].SessionDate > seed;
+        return verifiedSeed || coveredRestart || firstCandle ? start : null;
     }
 
     // Track dependencies with a descending receipt deque for fixed windows and a prefix maximum for recursive series.
@@ -148,34 +173,34 @@ public static class ChartIndicatorMath
                 Close = bar.Close, Volume = bar.Volume
             };
         }
-        switch (formula.Id)
+        switch (formula.Family)
         {
-            case "sma20" or "sma50" or "sma200":
-                Copy(quotes.GetSma(formula.SeedObservations), formula, values, static (row, _, _) => row.Sma);
+            case "sma":
+                Copy(quotes.GetSma(formula.Period), formula, values, static (row, _, _) => row.Sma);
                 break;
-            case "ema9" or "ema20" or "ema50" or "ema200":
-                Copy(quotes.GetEma(formula.SeedObservations), formula, values, static (row, _, _) => row.Ema);
+            case "ema":
+                Copy(quotes.GetEma(formula.Period), formula, values, static (row, _, _) => row.Ema);
                 break;
-            case "rsi14":
-                Copy(quotes.GetRsi(14), formula, values, static (row, _, _) => row.Rsi);
+            case "rsi":
+                Copy(quotes.GetRsi(formula.Period), formula, values, static (row, _, _) => row.Rsi);
                 break;
             case "macd":
                 Copy(quotes.GetMacd(12, 26, 9), formula, values,
                     static (row, _, column) => column == 0 ? row.Macd : column == 1 ? row.Signal : row.Histogram);
                 break;
-            case "adx14":
-                Copy(quotes.GetAdx(14), formula, values,
+            case "adx":
+                Copy(quotes.GetAdx(formula.Period), formula, values,
                     static (row, _, column) => column == 0 ? row.Adx : column == 1 ? row.Pdi : row.Mdi);
                 break;
-            case "atr14":
-                Copy(quotes.GetAtr(14), formula, values, static (row, _, _) => row.Atr);
+            case "atr":
+                Copy(quotes.GetAtr(formula.Period), formula, values, static (row, _, _) => row.Atr);
                 break;
-            case "atrpct14":
-                Copy(quotes.GetAtr(14), formula, values, (row, index, _) =>
+            case "atrpct":
+                Copy(quotes.GetAtr(formula.Period), formula, values, (row, index, _) =>
                     quotes[index].Close > 0 ? 100 * row.Atr / (double)quotes[index].Close : null);
                 break;
-            case "bb20":
-                Copy(quotes.GetBollingerBands(20, 2), formula, values,
+            case "bb":
+                Copy(quotes.GetBollingerBands(formula.Period, 2), formula, values,
                     static (row, _, column) => column == 0 ? row.LowerBand : column == 1 ? row.Sma : row.UpperBand);
                 break;
             case "obv":

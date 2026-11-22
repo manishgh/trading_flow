@@ -46,6 +46,23 @@ window.createDeskMarketView = ({ el, getSnapshot, isConnected }) => {
         rvol.title='RVOL '+(Number.isFinite(relative)?number(relative)+'×':'—')+' · ATR '+money(atr)+' · '+detail;
     }
 
+    // The daily indicators of a Desk row, in column order.
+    const rowTrends=[['ema21','E21','EMA 21'],['sma50','S50','SMA 50'],['sma200','S200','SMA 200']];
+    // Shows for each daily indicator whether the current price is above (▲) or below (▼) it; "—" when it has no value yet.
+    function renderTrendCell(node,row){
+        const cell=node.querySelector('.watch-row-trend'), technical=dailyTechnical(row);
+        const price=row.quote?.midPrice>0?row.quote.midPrice:row.previousClose?.close;
+        if(!cell.childElementCount)cell.append(...rowTrends.map(()=>{const chip=document.createElement('span');chip.className='watch-trend-chip';return chip;}));
+        rowTrends.forEach(([key,short,name],index)=>{
+            const chip=cell.children[index], value=technical?.[key];
+            const known=Number.isFinite(value)&&value>0&&price>0, above=known&&price>=value;
+            chip.textContent=short+(known?above?'▲':'▼':'—');
+            chip.dataset.trend=known?above?'above':'below':'none';
+            chip.title=known?name+' (day) '+money(value)+' · price '+money(price)+' is '+number(Math.abs(price/value-1)*100)+'% '+(above?'above':'below')+' · '+dailyTechnicalDetail(row)
+                :name+' (day) has no value yet · '+dailyTechnicalDetail(row);
+        });
+    }
+
     // True only during the regular New York session, when "mid vs previous close" really is today's change.
     // The server sends the session as Closed, Overnight, Premarket, Regular, AfterHours or Unknown.
     function isRegularSession(){
@@ -92,11 +109,11 @@ window.createDeskMarketView = ({ el, getSnapshot, isConnected }) => {
         const head=el('change-head');
         if(!head)return;
         const regular=isRegularSession();
-        head.textContent=regular?'Today':'Since close';
+        head.textContent=regular?'Price · today':'Price · since close';
         head.title=regular
-            ?'Percent change of the bid/ask midpoint since the previous close'
-            :'Percent change of the latest midpoint since the previous completed session\u2019s close; outside regular hours this includes every move since that close';
+            ?'Bid/ask midpoint now and its percent change since the previous close'
+            :'Latest bid/ask midpoint and its percent change since the previous completed session\u2019s close; outside regular hours this includes every move since that close';
     }
 
-    return { dailyTechnical, dailyTechnicalDetail, showSessionVolume, renderDailyCells, formatRowDayChange, renderChangeHeader };
+    return { dailyTechnical, dailyTechnicalDetail, showSessionVolume, renderDailyCells, renderTrendCell, formatRowDayChange, renderChangeHeader };
 };

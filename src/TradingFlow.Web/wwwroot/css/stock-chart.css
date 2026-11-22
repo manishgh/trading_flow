@@ -102,22 +102,6 @@
     margin-top: 10px;
 }
 
-.stock-chart-library { min-width: 0; }
-.stock-chart-library[open] { flex: 1 0 100%; }
-
-.stock-chart-library > summary {
-    box-sizing: border-box;
-    min-height: 38px;
-    padding: 8px 12px;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    background: var(--panel-subtle);
-    color: var(--ink);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-}
-
 .stock-chart-study-toolbar > button { min-height: 38px; }
 
 .stock-chart-study-picker {
@@ -131,8 +115,8 @@
 
 .stock-chart-study-picker > label:first-child { flex-basis: 180px; max-width: 245px; }
 .stock-chart-study-picker .btn { min-height: 38px; }
+.stock-chart-study-count { color: var(--muted); font-size: 12px; align-self: center; }
 
-.stock-chart-study-description,
 .stock-chart-study-feedback {
     padding-top: 4px;
     color: var(--muted);
@@ -143,8 +127,7 @@
 
 .stock-chart-studies {
     display: flex;
-    flex-wrap: wrap;
-    align-items: start;
+    flex-direction: column;
     gap: 6px;
     padding: 0;
     margin: 10px 0;
@@ -154,8 +137,11 @@
 .stock-chart-studies li {
     --study-color: var(--stock-chart-study-4);
     position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
     min-width: 0;
-    max-width: min(100%, 29rem);
     padding: 4px 38px 4px 8px;
     border: 1px solid var(--line);
     border-inline-start: 3px solid var(--study-color);
@@ -178,6 +164,11 @@
 .stock-chart-study-state { display: block; color: var(--muted); }
 .stock-chart-study-state { color: var(--warn-ink); }
 .stock-chart-studies details { min-height: 20px; }
+.stock-chart-studies details[open] { flex-basis: 100%; }
+.stock-chart-studies [data-study-edit] { height: 32px; min-height: 32px; padding: 2px 6px; font-size: 12px; width: auto; }
+.stock-chart-studies input[data-study-edit] { width: 66px; }
+.stock-chart-studies [data-study-edit][hidden] { display: none; }
+.stock-chart-study-value { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .stock-chart-study-remove {
     position: absolute;
@@ -443,7 +434,6 @@ p.stock-chart-context, p.stock-chart-source, p.stock-chart-note {
     .stock-chart-controls select,
     .stock-chart-study-toolbar select,
     .stock-chart-study-toolbar .btn,
-    .stock-chart-library > summary,
     .stock-chart-pane-control select,
     .stock-chart-navigation .btn,
     .stock-chart-candle-nav .btn,

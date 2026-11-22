@@ -13,14 +13,16 @@
     const rowNodes = new Map();
     // Display helpers in their own files; each reads the Desk's current state through the functions given here.
     const { money, number, when } = window.TradingFlowDeskFormat;
+    // Prices on the narrow Sell and Buy buttons: no currency sign, four decimals below one dollar.
+    const tradePrice = { format: value => value.toLocaleString(undefined, { minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }) };
     const text = (id, value) => { const node = el(id); if (node) node.textContent = value; };
     const { isStreaming, stopQuoteSocket, onQuoteView, mergeLiveQuote, quoteSocketSummary, resetQuoteView } = window.createDeskQuoteStream({
         getGeneration: () => generation, getSnapshot: () => snapshot, getSelected: () => selected,
         patchRow: row => patchRow(row), renderFocus: () => renderFocus(), updateHealth: () => updateHealth()
     });
-    const { dailyTechnical, dailyTechnicalDetail, showSessionVolume, renderDailyCells, formatRowDayChange, renderChangeHeader } =
+    const { dailyTechnical, dailyTechnicalDetail, showSessionVolume, renderDailyCells, renderTrendCell, formatRowDayChange, renderChangeHeader } =
         window.createDeskMarketView({ el, getSnapshot: () => snapshot, isConnected: () => connected });
-    const { deskReferencePrice, renderSmaPill, renderTodaySupportPill, renderAtrPill, renderVolatilityPill, toggleDeskHighlight,
+    const { renderStudyPills, renderTodaySupportPill, renderAtrPill, renderVolatilityPill, toggleDeskHighlight,
         updateFocusInfoTooltip, syncChart, clearChartTradePlan, syncChartTradePlan, disposeChart } = window.createDeskChartPanel({
         el, getSelectedRow: () => snapshot?.rows.find(x => x.membership.symbol === selected) || null,
         selectedStrategyChoice: () => selectedStrategyChoice(), spreadDetail: row => spreadDetail(row)
@@ -427,21 +429,47 @@
         if(!rows.length){el('empty').querySelector('strong').textContent=snapshot.selection.error?'Screen unavailable':filter?'No matching stocks':'No stocks in this view';el('empty').querySelector('p').textContent=snapshot.selection.error?'The failed screen is not being shown as a successful empty result.':filter?'Try a different symbol or clear the search.':'Add stocks to a stock group or select a screener to discover stocks.';}
         renderChangeHeader();renderFocus();renderNews();ageRows();updateHealth();
     }
-    // Builds one stock row: symbol, previous close, current midpoint, change since that close, strategy status, RVOL/ATR.
-    // Buy and Sell live in the chart header for the selected stock, news in the right column, technicals under the chart.
+    // Builds one stock row: symbol, current midpoint with its change, daily indicators, strategy status, RVOL/ATR, Sell and Buy.
+    // The same Sell and Buy stay in the chart header for the selected stock; news is in the right column.
     function createStockRow(symbol){
         const row=document.createElement('tr');
         row.dataset.symbol=symbol;
         row.innerHTML=`<td class="watch-col-stock"><button type="button" class="watch-symbol-button"></button></td>
-            <td class="watch-col-close num watch-row-close"></td>
-            <td class="watch-col-now num watch-row-price"><strong></strong></td>
-            <td class="watch-col-change num watch-row-change"><span class="watch-day-change"></span></td>
+            <td class="watch-col-price watch-row-price"><strong></strong> <span class="watch-day-change"></span></td>
+            <td class="watch-col-trend watch-row-trend"></td>
             <td class="watch-col-strategy watch-row-strategy"><strong></strong><small></small></td>
-            <td class="watch-col-rvol num watch-rvol"><strong></strong><small></small></td>`;
+            <td class="watch-col-rvol num watch-rvol"><strong></strong><small></small></td>
+            <td class="watch-col-trade"><button type="button" class="watch-row-trade" data-row-side="sell">Sell<b>—</b></button><button type="button" class="watch-row-trade" data-row-side="buy">Buy<b>—</b></button></td>`;
         const stock=row.querySelector('.watch-symbol-button');
         stock.textContent=symbol;
-        row.addEventListener('click',()=>selectStock(symbol,true));
+        row.addEventListener('click',event=>{
+            const button=event.target.closest('[data-row-side]');
+            if(button)openRowOrder(symbol,button.dataset.rowSide,button);
+            else selectStock(symbol,true);
+        });
         return row;
+    }
+    // Selects the row's stock and opens the existing order ticket for one side; without a quote it says why instead.
+    // It never sends an order: the ticket keeps every check.
+    function openRowOrder(symbol,side,button){
+        selectStock(symbol,false);
+        const row=snapshot?.rows.find(item=>item.membership.symbol===symbol);
+        if(!row)return;
+        const price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
+        if(price>0)openOrder(side,button);
+        else window.tradingFlowOrderPopup.unavailable(orderRestrictionHint(row,side),(side==='buy'?'Buy ':'Sell ')+symbol,button);
+    }
+    // Writes the bid on Sell and the ask on Buy; the tooltip names the price, its age and any current restriction.
+    function updateTradeButtons(node,row){
+        for(const button of node.querySelectorAll('[data-row-side]')){
+            const side=button.dataset.rowSide, price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
+            const quoted=price>0, name=(side==='buy'?'Buy ':'Sell ')+row.membership.symbol;
+            const amount=quoted?money(price):'no current quote', label=name+' at '+(side==='buy'?'ask ':'bid ')+amount;
+            button.querySelector('b').textContent=quoted?tradePrice.format(price):'—';
+            button.dataset.quoted=String(quoted);
+            button.title=[label,quoteAge(row),orderRestrictionHint(row,side)].filter(Boolean).join(' · ');
+            button.setAttribute('aria-label',label);
+        }
     }
     // Keep the whole workspace in view on desktop and focus the selected stock after explicit navigation.
     function selectStock(symbol,focus){
@@ -462,9 +490,6 @@
         node.dataset.selected=String(symbol===selected);
         stock.setAttribute('aria-pressed',String(symbol===selected));
         node.querySelector('.watch-row-price strong').textContent=money(row.quote?.midPrice);
-        const close=node.querySelector('.watch-row-close');
-        close.textContent=money(row.previousClose?.close);
-        close.title=row.previousClose?'Close on '+row.previousClose.sessionDate+' (New York session)':'Previous close unavailable';
         const dayChange=formatRowDayChange(row), dayNode=node.querySelector('.watch-day-change');
         if(dayNode){dayNode.textContent=dayChange.text;dayNode.title=dayChange.title;tone(dayNode,dayChange.value);}
         const outcome=signalOutcome(row);
@@ -473,6 +498,8 @@
         strategy.querySelector('small').textContent=row.strategyAssessment?signalReason(row):'';
         strategy.title=signalReason(row);
         renderDailyCells(node,row);
+        renderTrendCell(node,row);
+        updateTradeButtons(node,row);
     }
     // Shows one server check with the server's own sentence; an older record without one shows its readable code.
     function humanizeCheck(check) {
@@ -575,10 +602,8 @@
         text('quantity',accountStale?'Stale snapshot':row.holdingsKnown?row.holding?number(row.holding.quantity):'Not held':'Unknown');
         text('entry',money(row.holding?.averageEntry));text('value',money(row.holding?.marketValue));text('pl',money(row.holding?.unrealizedPl));tone(el('pl'),row.holding?.unrealizedPl);
         el('holding-block').title=(accountStale?'Stale: last observed values. ':'')+snapshot.account.detail+' · cost basis '+money(row.holding?.costBasis)+' · '+when(snapshot.account.readAtUtc);
-        const technical=dailyTechnical(row), techDetail=dailyTechnicalDetail(row), refPrice=deskReferencePrice(row);
-        renderSmaPill('sma20','SMA20',technical?.sma20,refPrice,techDetail);
-        renderSmaPill('sma50','SMA50',technical?.sma50,refPrice,techDetail);
-        renderSmaPill('sma200','SMA200',technical?.sma200,refPrice,techDetail);
+        const technical=dailyTechnical(row), techDetail=dailyTechnicalDetail(row);
+        renderStudyPills(row);
         renderTodaySupportPill(row);
         renderAtrPill(technical?.atr,techDetail);
         renderVolatilityPill(row);

@@ -181,7 +181,7 @@ public sealed partial class ChartEndpointTests
         Assert.Equal(baseline.SeriesKey, result.SeriesKey);
         Assert.Equal(500, result.Bars.Count);
         Assert.Equal(baseline.Bars[^1], result.Bars[^1]);
-        Assert.Equal(9, result.Indicators!.Count);
+        Assert.Equal(5, result.Indicators!.Count);
         Assert.Equal(baseline.Indicators![0].Samples[0][499], result.Indicators[0].Samples[0][499]);
         Assert.Equal(baseline.Indicators[0].SourceRevision, result.Indicators[0].SourceRevision);
         Assert.NotNull(result.HistoryCursor);
