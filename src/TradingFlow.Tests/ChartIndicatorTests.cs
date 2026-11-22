@@ -175,6 +175,7 @@ public sealed class ChartIndicatorTests
     [InlineData("ema251")]
     [InlineData("ema021")]
     [InlineData("rsi51")]
+    [InlineData("adx41")]
     [InlineData("bb4")]
     [InlineData("macd14")]
     [InlineData("wma20")]
@@ -222,6 +223,26 @@ public sealed class ChartIndicatorTests
     public void FirstShownCandleFollowsThePeriod(string id, int observations) =>
         Assert.Equal(observations, ChartIndicatorMath.Find(id)!.WarmObservations);
 
+    // The browser offers exactly the periods and intervals the server accepts.
+    [Fact]
+    public void BrowserLimitsMatchTheServer()
+    {
+        var script = File.ReadAllText(Path.Combine(TestRepository.FindRoot(), "src", "TradingFlow.Web", "wwwroot", "js", "stock-chart-indicators.js"));
+        var families = System.Text.RegularExpressions.Regex.Matches(script, @"(\w+): \{ label: '[^']+'[^\n]*?period: \[(\d+), (\d+), (\d+)\]");
+        Assert.Equal(["adx", "atr", "atrpct", "bb", "ema", "rsi", "sma"], families.Select(match => match.Groups[1].Value).Order());
+        foreach (var match in families.ToArray())
+        {
+            var (family, low, high) = (match.Groups[1].Value, Int32.Parse(match.Groups[2].Value), Int32.Parse(match.Groups[3].Value));
+            Assert.NotNull(ChartIndicatorMath.Find(family + low));
+            Assert.NotNull(ChartIndicatorMath.Find(family + high));
+            Assert.Null(ChartIndicatorMath.Find(family + (low - 1)));
+            Assert.Null(ChartIndicatorMath.Find(family + (high + 1)));
+            Assert.InRange(ChartIndicatorMath.Find(family + high)!.WarmObservations, 1, 470);
+        }
+        foreach (var interval in System.Text.RegularExpressions.Regex.Matches(script, @"'(\w+)': \[(\d+), '").ToArray())
+            Assert.Equal(Int32.Parse(interval.Groups[2].Value), ChartIndicatorProfile.Minutes(interval.Groups[1].Value));
+    }
+
     // At the first shown EMA candle, less than one percent of a completely wrong starting average is left.
     [Theory]
     [InlineData(2)]
@@ -246,12 +267,16 @@ public sealed class ChartIndicatorTests
         var formula = ChartIndicatorMath.Find("ema21")!;
         var young = daily[^74..];
         var listed = ChartIndicatorMath.Project(formula, young, new ChartBarProjector(calendar), daily[0].SessionDate, true,
-            young[^1].EndUtc, default);
+            young[^1].EndUtc, default, startsAtListing: true);
         Assert.NotNull(listed.Columns[0][^1]);
         Assert.Equal(young[0].Bar.Timestamp, listed.Clocks[^1]!.Value.AnchorUtc);
         Assert.Null(listed.Columns[0][formula.WarmObservations - 2]);
-        var clipped = ChartIndicatorMath.Project(formula, young[^73..], new ChartBarProjector(calendar), young[^73].SessionDate, true,
+        // The same candles without proof of absence are partly loaded history: a value would move when the older candles arrive.
+        var partlyLoaded = ChartIndicatorMath.Project(formula, young, new ChartBarProjector(calendar), daily[0].SessionDate, true,
             young[^1].EndUtc, default);
+        Assert.All(partlyLoaded.Columns[0], value => Assert.Null(value));
+        var clipped = ChartIndicatorMath.Project(formula, young[^73..], new ChartBarProjector(calendar), young[^73].SessionDate, true,
+            young[^1].EndUtc, default, startsAtListing: true);
         Assert.All(clipped.Columns[0], value => Assert.Null(value));
     }
 

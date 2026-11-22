@@ -460,13 +460,14 @@
         else window.tradingFlowOrderPopup.unavailable(orderRestrictionHint(row,side),(side==='buy'?'Buy ':'Sell ')+symbol,button);
     }
     // Writes the bid on Sell and the ask on Buy; the tooltip names the price, its age and any current restriction.
-    function updateTradeButtons(node,row){
+    function updateTradeButtons(node,row,stale){
         for(const button of node.querySelectorAll('[data-row-side]')){
             const side=button.dataset.rowSide, price=side==='buy'?row.quote?.askPrice:row.quote?.bidPrice;
             const quoted=price>0, name=(side==='buy'?'Buy ':'Sell ')+row.membership.symbol;
             const amount=quoted?money(price):'no current quote', label=name+' at '+(side==='buy'?'ask ':'bid ')+amount;
             button.querySelector('b').textContent=quoted?tradePrice.format(price):'—';
             button.dataset.quoted=String(quoted);
+            button.dataset.stale=String(stale);
             button.title=[label,quoteAge(row),orderRestrictionHint(row,side)].filter(Boolean).join(' · ');
             button.setAttribute('aria-label',label);
         }
@@ -499,7 +500,6 @@
         strategy.title=signalReason(row);
         renderDailyCells(node,row);
         renderTrendCell(node,row);
-        updateTradeButtons(node,row);
     }
     // Shows one server check with the server's own sentence; an older record without one shows its readable code.
     function humanizeCheck(check) {
@@ -686,7 +686,10 @@
         const price=node.querySelector('.watch-row-price');
         price.title=spreadDetail(row)+' · provider time '+when(row.quote?.timestamp);
         const streaming=isStreaming(row);
-        price.classList.toggle('watch-stale',(!connected&&!streaming)||Date.now()-Date.parse(row.quote?.timestamp)>120000);
+        const stale=(!connected&&!streaming)||Date.now()-Date.parse(row.quote?.timestamp)>120000;
+        price.classList.toggle('watch-stale',stale);
+        // The bid and ask on the buttons come from the same quote, so they age with it; their tooltip names the age.
+        updateTradeButtons(node,row,stale);
     }
     // Age observations without rebuilding rows or resetting the chart and focus.
     function ageRows(){

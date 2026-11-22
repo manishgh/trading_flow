@@ -46,19 +46,24 @@ window.createDeskMarketView = ({ el, getSnapshot, isConnected }) => {
         rvol.title='RVOL '+(Number.isFinite(relative)?number(relative)+'×':'—')+' · ATR '+money(atr)+' · '+detail;
     }
 
+    // True when the quote is more than two minutes old, the age at which the Desk marks prices as stale.
+    const quoteIsOld=row=>!(Date.now()-Date.parse(row.quote?.timestamp)<=120000);
     // The daily indicators of a Desk row, in column order.
     const rowTrends=[['ema21','E21','EMA 21'],['sma50','S50','SMA 50'],['sma200','S200','SMA 200']];
     // Shows for each daily indicator whether the current price is above (▲) or below (▼) it; "—" when it has no value yet.
     function renderTrendCell(node,row){
         const cell=node.querySelector('.watch-row-trend'), technical=dailyTechnical(row);
-        const price=row.quote?.midPrice>0?row.quote.midPrice:row.previousClose?.close;
+        const quoted=row.quote?.midPrice>0, price=quoted?row.quote.midPrice:row.previousClose?.close;
+        const priceName=quoted?'midpoint '+money(price)+(quoteIsOld(row)?' (older quote, '+when(row.quote.timestamp)+')':''):'previous close '+money(price);
+        const warming=row.observation?.state==='insufficient'?' · few daily candles, the value is still settling':'';
         if(!cell.childElementCount)cell.append(...rowTrends.map(()=>{const chip=document.createElement('span');chip.className='watch-trend-chip';return chip;}));
         rowTrends.forEach(([key,short,name],index)=>{
-            const chip=cell.children[index], value=technical?.[key];
+            // With fewer than 50 daily candles (no SMA 50 yet) an EMA 21 still follows its starting average too closely to show.
+            const chip=cell.children[index], value=key==='ema21'&&technical?.sma50==null?null:technical?.[key];
             const known=Number.isFinite(value)&&value>0&&price>0, above=known&&price>=value;
             chip.textContent=short+(known?above?'▲':'▼':'—');
             chip.dataset.trend=known?above?'above':'below':'none';
-            chip.title=known?name+' (day) '+money(value)+' · price '+money(price)+' is '+number(Math.abs(price/value-1)*100)+'% '+(above?'above':'below')+' · '+dailyTechnicalDetail(row)
+            chip.title=known?name+' (day) '+money(value)+' · '+priceName+' is '+number(Math.abs(price/value-1)*100)+'% '+(above?'above':'below')+warming+' · '+dailyTechnicalDetail(row)
                 :name+' (day) has no value yet · '+dailyTechnicalDetail(row);
         });
     }

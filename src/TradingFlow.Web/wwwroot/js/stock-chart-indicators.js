@@ -7,7 +7,8 @@
         sma: { label: 'SMA', group: 'Trend', display: 'price', unit: 'USD', period: [2, 250, 50], ownInterval: true, spare: [200, 20, 100],
             description: period => `Arithmetic mean of the last ${period} completed closes.` },
         ema: { label: 'EMA', group: 'Trend', display: 'price', unit: 'USD', period: [2, 250, 21], ownInterval: true, spare: [9, 50, 200],
-            description: period => `Exponential average of completed closes with a ${period}-bar period.` },
+            description: period => `Exponential average of completed closes with a ${period}-bar period.` +
+                (period > 107 ? ' Its first values still carry part of the starting average.' : '') },
         bb: { label: 'Bollinger Bands', group: 'Volatility', display: 'price', unit: 'USD', period: [5, 100, 20], ownInterval: true, suffix: '/2',
             description: period => `SMA ${period} with upper and lower bands two standard deviations from the average.` },
         vwap: { label: 'RTH VWAP', group: 'Volume', display: 'price', unit: 'USD', sourceInterval: '1m',
@@ -16,7 +17,7 @@
             description: period => `Relative strength of recent gains and losses over a ${period}-bar period. Reference lines at 30 and 70.` },
         macd: { label: 'MACD 12/26/9', group: 'Momentum', display: 'pane', unit: 'USD', ownInterval: true,
             description: () => 'Difference between the 12- and 26-period EMAs, its 9-period signal, and their difference.' },
-        adx: { label: 'ADX', group: 'Momentum', display: 'pane', unit: '0–100', period: [2, 50, 14], ownInterval: true, suffix: ' with +DI/−DI',
+        adx: { label: 'ADX', group: 'Momentum', display: 'pane', unit: '0–100', period: [2, 40, 14], ownInterval: true, suffix: ' with +DI/−DI',
             description: period => `Trend strength and positive and negative directional movement over a ${period}-bar period.` },
         atr: { label: 'ATR', group: 'Volatility', display: 'pane', unit: 'USD', period: [2, 50, 14], ownInterval: true, readout: true,
             description: period => `Smoothed true range over a ${period}-bar period, including price gaps.` },
@@ -186,7 +187,8 @@
                 else earlierUnavailable = true;
             }
             add(latest, meta);
-            return [{ ...study(token), ...meta, points, earlierUnavailable, separateHistory, slot, chartInterval: latest.seriesKey.interval }];
+            return [{ ...study(token), ...meta, points, earlierUnavailable, separateHistory, slot, chartInterval: latest.seriesKey.interval,
+                lastStart: Date.parse(latest.bars.at(-1)?.startUtc) }];
         });
     }
 
@@ -206,6 +208,8 @@
     function mount(get, on, element, timestamp, changed, paneChanged) {
         const media = matchMedia(mobileQuery);
         let selected = [];
+        // The list the user chose. It is kept while a candle interval makes two of its entries equal, so switching back restores it.
+        let chosen = [];
         let current = [];
         let mobilePane = '';
         let panePinned = false;
@@ -304,11 +308,9 @@
             return row;
         }
 
-        // Latest calculated values of one series, or null when there are none.
+        // Values of one series at the newest candle, or null when that candle has none; an older value is never called the latest.
         function latestValues(item) {
-            let start = -Infinity;
-            for (const key of item?.points?.keys() ?? []) if (key > start) start = key;
-            return start === -Infinity ? null : item.points.get(start).values;
+            return item?.points?.get(item.lastStart)?.values ?? null;
         }
 
         // Write component values with their units; empty when a value is missing.
@@ -383,7 +385,7 @@
         // Apply an edit and start just one new observation for the complete selection.
         function custom(tokens, message) {
             get('preset').value = 'custom';
-            selected = tokens;
+            selected = chosen = tokens;
             current = [];
             get('study-feedback').textContent = message;
             refreshPicker();
@@ -439,13 +441,15 @@
         function restore(tokens, preset) {
             const interval = get('interval').value;
             selectionInterval = interval === '1w' ? undefined : interval;
-            selected = normalize(tokens, interval);
+            // On one-minute candles every own interval is longer, so no two different entries are equal.
+            chosen = normalize(tokens, '1m');
+            selected = normalize(chosen, interval);
             current = [];
             mobilePane = '';
             panePinned = false;
             const matchesInterval = interval === '1w' || (preset === 'swing' ? interval === '1d' : interval !== '1d');
             const hasPreset = Object.hasOwn(presets, preset) && matchesInterval && [...selected].sort().join() === [...presets[preset]].sort().join();
-            if (hasPreset) selected = [...presets[preset]];
+            if (hasPreset) selected = chosen = [...presets[preset]];
             get('preset').value = hasPreset ? preset : 'custom';
             refreshPicker();
             render();
@@ -509,7 +513,7 @@
             // Suspend the existing studies on weekly candles and restore their calculations on return.
             intervalChanged() {
                 const interval = get('interval').value;
-                if (interval !== '1w' && interval !== selectionInterval) restore(selected, get('preset').value);
+                if (interval !== '1w' && interval !== selectionInterval) restore(chosen, get('preset').value);
                 else {
                     refreshPicker();
                     render();
@@ -517,6 +521,8 @@
             },
             // Return chart tokens in selection order for browser preferences and visible colors.
             tokens: () => [...selected],
+            // Return the complete chosen list for the saved preferences.
+            chosen: () => [...chosen],
             // Update status and evidence only from the currently accepted chart response.
             update(series) {
                 current = series;

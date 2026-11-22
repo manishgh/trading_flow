@@ -50,8 +50,8 @@
   <p id="watch-warning" class="watch-warning" role="status" hidden></p>
   <div class="watch-grid" data-active-pane="chart">
     <section class="watch-stocks" aria-label="Followed stocks">
-      <div class="watch-table-scroll" role="region" aria-label="Stock table" tabindex="0"><table class="watch-table" data-has-strategy="false"><caption class="sr-only">Stock prices: previous close, current midpoint and change, strategy status, relative volume and ATR</caption>
-        <colgroup><col class="watch-col-stock" /><col class="watch-col-close" /><col class="watch-col-now" /><col class="watch-col-change" /><col class="watch-col-strategy" /><col class="watch-col-rvol" /></colgroup>
+      <div class="watch-table-scroll" role="region" aria-label="Stock table" tabindex="0"><table class="watch-table" data-has-strategy="false"><caption class="sr-only">Stocks: current midpoint and change, daily indicators, strategy status, relative volume and ATR, sell and buy</caption>
+        <colgroup><col class="watch-col-stock" /><col class="watch-col-price" /><col class="watch-col-trend" /><col class="watch-col-strategy" /><col class="watch-col-rvol" /><col class="watch-col-trade" /></colgroup>
         <thead><tr><th scope="col" class="watch-col-stock">Stock</th><th scope="col" class="watch-col-price" id="watch-change-head" title="Bid/ask midpoint now and its percent change since the previous close">Price now</th><th scope="col" class="watch-col-trend" title="Completed daily EMA 21, SMA 50 and SMA 200: ▲ price above, ▼ price below">Indicators (day)</th><th scope="col" class="watch-col-strategy">Strategy</th><th scope="col" class="watch-col-rvol num" title="RVOL: completed daily volume vs its usual level · ATR: average true range in dollars">RVOL · ATR</th><th scope="col" class="watch-col-trade">Trade</th></tr></thead>
         <tbody id="watch-rows"></tbody>
       </table></div>

@@ -69,7 +69,7 @@ public sealed class ChartCrossSourceTests
         var archived = ChartStudyProjection.Calculate(key, studies, history, daily, merged, visible[..1], [],
             received, received, received.AddMinutes(2), "fixture-revision", default);
         Assert.Empty(Assert.Single(archived).Samples);
-        Assert.Contains("actually observed", archived[0].Reason);
+        Assert.Contains("recorded receipt", archived[0].Reason);
     }
 
     // A longer interval's value belongs to the candles from its completion until the next one completes; the first candles of a
@@ -107,6 +107,13 @@ public sealed class ChartCrossSourceTests
         Assert.Null(values[9]);
         Assert.Null(values[14]);
         Assert.Equal(112.5, values[19]);
+
+        // Without yesterday's closing five-minute candle there is no value to carry into today.
+        var lost = projector.Regular(dates[0])!.EndUtc.AddMinutes(-2);
+        var cut = Batch(projector, dates, rows.Where(row => row.Key != lost).ToDictionary());
+        var gap = Assert.Single(ChartStudyProjection.Calculate(key, ChartIndicatorProfile.Read(key), cut, null,
+            new MergedChartSource(cut.Bars, cut.Quiet, cut.BasisBreaks), visible, [], today.EndUtc, today.EndUtc, today.EndUtc, "gap", default));
+        Assert.Null(gap.Samples[0][0]);
     }
 
     // The cache's ordinary 15 sessions cannot provide RVOL; compatible already warm evidence can complete the cohort.

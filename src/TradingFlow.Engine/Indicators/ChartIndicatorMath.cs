@@ -7,7 +7,7 @@ namespace TradingFlow.Engine.Indicators;
 public sealed record ChartFormula(
     string Id, string Family, int Period, string Parameters, int SeedObservations, int WarmObservations, bool Recursive, string[] Columns)
 {
-    public const string PackageVersion = "skender-2.7.1-chart-v1";
+    public const string PackageVersion = "skender-2.7.1-chart-v2";
 }
 
 public readonly record struct ChartIndicatorClock(DateTimeOffset AvailableAtUtc, DateTimeOffset AnchorUtc, bool Reconstructed);
@@ -22,7 +22,7 @@ public static class ChartIndicatorMath
     private static readonly Dictionary<string, (int Minimum, int Maximum)> Periods = new(StringComparer.Ordinal)
     {
         ["sma"] = (2, 250), ["ema"] = (2, 250), ["bb"] = (5, 100),
-        ["rsi"] = (2, 50), ["atr"] = (2, 50), ["atrpct"] = (2, 50), ["adx"] = (2, 50)
+        ["rsi"] = (2, 50), ["atr"] = (2, 50), ["atrpct"] = (2, 50), ["adx"] = (2, 40)
     };
 
     private static readonly Dictionary<string, ChartFormula> Fixed = new(StringComparer.Ordinal)
@@ -54,7 +54,8 @@ public static class ChartIndicatorMath
     };
 
     // Candles after which less than 1% of an EMA still comes from its starting average: (1 - 2/(n+1))^k < 0.01. At most 250, and
-    // at most 470 candles in total, so the longest averages still fit the 500 daily candles a chart loads.
+    // at most 470 candles in total, so the longest averages still fit the 500 daily candles a chart loads. Averages above 107
+    // periods therefore start with more of it: about 8% at EMA 200 and 17% at EMA 250.
     private static int RunIn(int period) => Math.Min(Math.Min(250, 470 - period), (int)Math.Ceiling(2.3 * (period + 1)));
 
     // The same 1% for Wilder smoothing, which keeps (1 - 1/n) of the old value per candle.
@@ -63,7 +64,7 @@ public static class ChartIndicatorMath
     // Calculate invariant source points, including the full warm-up receipt and each independently anchored segment.
     public static ChartCalculatedIndicator Project(ChartFormula formula, IReadOnlyList<ChartCompletedBar> bars,
         ChartBarProjector calendar, DateOnly firstCoveredDate, bool daily, DateTimeOffset visibleFrom,
-        CancellationToken cancellationToken, int intervalMinutes = 1)
+        CancellationToken cancellationToken, int intervalMinutes = 1, bool startsAtListing = false)
     {
         var values = formula.Columns.Select(_ => new double?[bars.Count]).ToArray();
         var clocks = new ChartIndicatorClock?[bars.Count];
@@ -74,7 +75,7 @@ public static class ChartIndicatorMath
             var publishEnd = PublishEnd(formula, bars, publishStart, daily);
             if (bars[publishEnd - 1].EndUtc >= visibleFrom)
             {
-                var inputStart = InputStart(formula, bars, publishStart, firstCoveredDate, calendar, daily, intervalMinutes);
+                var inputStart = InputStart(formula, bars, publishStart, firstCoveredDate, calendar, daily, intervalMinutes, startsAtListing);
                 if (inputStart is { } start)
                     PublishSegment(formula, bars, start, publishStart, publishEnd, values, clocks);
             }
@@ -97,14 +98,14 @@ public static class ChartIndicatorMath
     }
 
     // A left-clipped recursive seed is unavailable; an observed coverage break inside the bounded source can restart it.
-    // A stock whose first candle lies after the seed, although the source covers the seed date, starts at its first candle.
+    // With proof that the source has no earlier candle (startsAtListing), a seed before the first candle starts at that candle.
     private static int? InputStart(ChartFormula formula, IReadOnlyList<ChartCompletedBar> bars, int publishStart,
-        DateOnly firstCoveredDate, ChartBarProjector calendar, bool daily, int intervalMinutes)
+        DateOnly firstCoveredDate, ChartBarProjector calendar, bool daily, int intervalMinutes, bool startsAtListing)
     {
         if (!formula.Recursive) return publishStart;
         var current = bars[publishStart];
-        // OBV has no run-in; it accumulates from as far back as before so its shape does not restart every block.
-        var reach = formula.Family == "obv" ? 360 : formula.WarmObservations;
+        // OBV has no run-in; it accumulates from a fixed 365 daily or 12 intraday sessions before the block.
+        var reach = formula.Family != "obv" ? formula.WarmObservations : daily ? 360 : 12 * 390;
         var seed = calendar.IndicatorSeed(current.SessionDate, daily, reach, intervalMinutes);
         if (seed is null) return null;
         var start = publishStart;
@@ -113,7 +114,7 @@ public static class ChartIndicatorMath
         var verifiedSeed = firstCoveredDate <= seed && bars[start].SessionDate == seed;
         var coveredRestart = start > 0 && bars[start - 1].SessionDate >= seed &&
             bars[start - 1].Continuity != current.Continuity;
-        var firstCandle = start == 0 && firstCoveredDate <= seed && bars[0].SessionDate > seed;
+        var firstCandle = startsAtListing && start == 0 && firstCoveredDate <= seed && bars[0].SessionDate > seed;
         return verifiedSeed || coveredRestart || firstCandle ? start : null;
     }
 

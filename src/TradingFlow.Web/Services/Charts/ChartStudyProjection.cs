@@ -63,13 +63,20 @@ internal static class ChartStudyProjection
             // A daily average can first become eligible during the next displayed exchange session.
             var calculationStart = cross ? first.AddDays(-10) : first;
             var calculated = ChartIndicatorMath.Project(formula, bars, batch.Projector, batch.Sessions[0],
-                isDaily || cross, calculationStart, token, ChartIndicatorProfile.Minutes(study.SourceInterval));
+                isDaily || cross, calculationStart, token, ChartIndicatorProfile.Minutes(study.SourceInterval),
+                (isDaily || cross) && StartsAtListing(batch, bars));
             result.Add(cross
                 ? JoinDaily(study, batch.Projector, bars, calculated, visible, merged.BasisBreaks, evidenceCutoff, revision)
                 : JoinPrimary(study, bars, calculated, visible, evidenceCutoff, revision));
         }
         return result;
     }
+
+    // True when a completed daily read found no candle on any earlier scheduled date, so the first candle is the stock's first one.
+    // A failed or unfinished read proves nothing: its dates were not answered, and a conflicting date has candles.
+    private static bool StartsAtListing(ChartHistoryBatch batch, IReadOnlyList<ChartCompletedBar> bars) =>
+        bars.Count > 0 && batch.Sessions.TakeWhile(date => date < bars[0].SessionDate).All(date =>
+            batch.RetryUnverifiedAfterUtc.ContainsKey(date) && batch.DailyConflicts?.Contains(date) != true);
 
     // A same-interval value belongs to the completed observation that produced it, with its actual dependency receipt.
     private static ChartIndicatorSeries JoinPrimary(ChartStudy study, IReadOnlyList<ChartCompletedBar> source,
@@ -89,8 +96,8 @@ internal static class ChartStudyProjection
     }
 
     // Gives each candle the value of the latest longer candle completed by the candle's own end: one that ended less than one
-    // longer interval ago in the same session segment, or the previous session's last one until the first of today completes.
-    // A price-basis break between the two leaves a gap.
+    // longer interval ago in the same session, or the previous session's closing one until the first of today completes.
+    // A price-basis break between the two, or a missing closing candle, leaves a gap.
     private static ChartIndicatorSeries JoinLonger(ChartStudy study, ChartBarProjector projector,
         IReadOnlyList<ChartCompletedBar> source, ChartCalculatedIndicator calculated, IReadOnlyList<ChartCompletedBar> visible,
         IReadOnlySet<DateTimeOffset> breaks, int minutes, bool extended, DateTimeOffset evidenceCutoff, string revision)
@@ -107,6 +114,7 @@ internal static class ChartStudyProjection
             var isCurrent = input.SessionDate == candle.SessionDate
                 ? candle.EndUtc - input.EndUtc < length
                 : input.SessionDate == projector.PriorTradingDates(candle.SessionDate, 1).LastOrDefault() &&
+                    (extended || input.EndUtc == projector.Regular(input.SessionDate)?.EndUtc) &&
                     candle.EndUtc - SessionStart(projector, candle.SessionDate, extended) < length;
             if (isCurrent && !breaks.Any(point => point > input.Bar.Timestamp && point <= candle.Bar.Timestamp) && IsDrawable(clock, candle.AvailableAtUtc))
                 builder.Add(index, clock, calculated.Columns, latest);
@@ -118,8 +126,9 @@ internal static class ChartStudyProjection
     private static DateTimeOffset SessionStart(ChartBarProjector projector, DateOnly date, bool extended) =>
         extended ? ChartBarProjector.At(date, new TimeOnly(4, 0)) : projector.Regular(date)?.StartUtc ?? DateTimeOffset.MinValue;
 
-    // A recorded receipt is respected: the value cannot be drawn before it arrived. Values computed from history that was
-    // downloaded later are drawn at their scheduled completion and marked as reconstructed, like the candles themselves.
+    // A value whose inputs all have recorded receipts cannot be drawn before the last one arrived. One input without a receipt
+    // (history downloaded later) makes the whole value reconstructed: it is drawn at its scheduled completion and marked so,
+    // like same-interval values and the candles themselves.
     private static bool IsDrawable(ChartIndicatorClock clock, DateTimeOffset drawnAt) =>
         clock.Reconstructed || clock.AvailableAtUtc <= drawnAt;
 
@@ -135,7 +144,7 @@ internal static class ChartStudyProjection
         if (previousBreak != default)
             reason = "The daily price basis could not be joined to the intraday candles across a source break.";
         else if (calculated.Clocks.Any(clock => clock is not null))
-            reason = "Daily values are unavailable on earlier intraday candles until the completed source was actually observed.";
+            reason = "A daily value with a recorded receipt appears only on candles that open after that receipt.";
 
         var previous = default(DateOnly);
         var session = default(DateOnly);
@@ -194,7 +203,7 @@ internal static class ChartStudyProjection
         for (var index = source.Count - 1; index >= 0 && source[index].Continuity == source[^1].Continuity; index--) available++;
         var text = available < needed
             ? $"Needs {needed} completed {study.SourceInterval} candles without a gap; {available} are available."
-            : $"Earlier candles have fewer than {needed} completed {study.SourceInterval} candles before them.";
+            : $"Shown only where the loaded history holds {needed} completed {study.SourceInterval} candles before the candle.";
         return study.Formula.Family == "adx" ? text + " ADX also needs price movement in one direction." : text;
     }
 

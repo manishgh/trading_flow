@@ -630,6 +630,13 @@
             get('latest').disabled = currentBars.length === 0;
         }
 
+        // Give the host the selected indicators, and end a highlight whose indicator is no longer selected.
+        function announceStudies() {
+            if (highlightedOverlay && highlightedOverlay !== 'support' && !studies.tokens().includes(highlightedOverlay))
+                setHighlightedOverlay(null, true);
+            onStudies?.(studies.summary(), key?.symbol, get('interval').value);
+        }
+
         // Update the visible baseline, combining only compatible earlier evidence.
         function paint(retainPosition) {
             currentBars = joinedBars(snapshot, olderPages);
@@ -648,7 +655,7 @@
             const selectedStudies = indicatorLibrary.joinedStudies(snapshot, olderPages.slice().reverse(), studies.tokens());
             earlierStudiesChanged = selectedStudies.some(study => study.earlierUnavailable);
             studies.update(selectedStudies);
-            onStudies?.(studies.summary(), snapshot.seriesKey.symbol, key.interval);
+            announceStudies();
             pointerMoved = false;
             plot.setData({ bars: currentBars, zones, levels: currentLevels, events, interval: key.interval,
                 basisBreaks: recent.flatMap(page => page.evidence.basisBreaks || []),
@@ -955,7 +962,7 @@
             indicatorLibrary.remember({
                 ...Object.fromEntries(Object.keys(defaults).map(name => [name, get(name).value])),
                 session: preservedSession ?? get('session').value,
-                preset: get('preset').value, indicators: studies.tokens(), layers
+                preset: get('preset').value, indicators: studies.chosen(), layers
             });
         }
 
@@ -996,7 +1003,7 @@
                 plot?.clearStudies();
                 inspect(selected);
                 startSelection(!snapshot || intervalChanged);
-                onStudies?.(studies.summary(), key?.symbol, get('interval').value);
+                announceStudies();
             }
             savePreferences();
         }, pane => {
@@ -1013,6 +1020,7 @@
         for (const picker of Object.keys(defaults)) on(get(picker), 'change', () => {
             if (picker === 'interval') studies.intervalChanged();
             startSelection();
+            announceStudies();
             savePreferences();
         });
         if (quickIntervalHost) {
@@ -1026,6 +1034,7 @@
                 select.value = next;
                 studies.intervalChanged();
                 startSelection();
+                announceStudies();
                 savePreferences();
             });
         }

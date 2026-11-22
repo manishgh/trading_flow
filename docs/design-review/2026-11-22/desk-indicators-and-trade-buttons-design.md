@@ -1,6 +1,6 @@
 # Design: editable chart indicators, Desk indicator column, bid and ask buttons
 
-Requested by the user on 22 November 2026. **Status: waiting for the user's approval; nothing is built.**
+Requested by the user on 22 November 2026. **Status: approved by the user ("Approve, build it") and built on 22 November 2026; see section 5 for differences.**
 Branch `ui/redesign-v2`.
 
 ## 1. Why the EMA 20 does not appear (reproduced on the preview)
@@ -73,3 +73,21 @@ EMA 21 is missing from it.
   reload; FPS, CRCL and MU; buttons with fresh quote, stale quote, paused trading, held and not held.
 - Two independent reviewers; preview (10089) first, operator site after your look.
 - Not included: last-trade price, orders without the ticket, changes to any strategy.
+
+## 5. What was built differently, and why
+
+- **Bid and ask on the buttons, price with up/down in the row:** the user's later message. "Price" is the bid/ask midpoint;
+  the last trade price is not read. Quotes older than two minutes stay visible in the stale colour instead of "—", because the
+  market is closed most of the day; the tooltip names their age. Without any quote the button shows "—" and explains why.
+- **Day indicators on intraday candles:** before, they never appeared for downloaded history, because its receipt time is the
+  download time. A value with any downloaded input is now drawn at its scheduled completion and marked as reconstructed. Values
+  whose inputs all have recorded receipts still wait for the last receipt.
+- **Young stocks** start at their first daily candle, but only when a completed read found no earlier candle; a failed or
+  unfinished read shows nothing, because its values would move when the older candles arrive. The full run-in still applies.
+- **Run-in limits:** at most 250 extra candles and 470 in total. EMA 200 (about 8 % of the starting average left at its first
+  value) is unchanged; EMA 250 keeps about 17 %. ADX periods end at 40 for the same reason. MACD and OBV are unchanged.
+- **Row EMA 21** comes from the engine's daily snapshot. It shows "—" below 50 daily candles and says in the tooltip when the
+  history is still short. The chart needs 72 candles, so a stock with 50–71 candles has a row value but no chart line.
+- **1h on intraday charts** has about 15 sessions of minutes: EMA 21 fits, EMA 50 and SMA 200 do not and say so.
+- **Switching the candle interval** keeps the chosen list; an entry that equals another one on the new interval is only hidden.
+- The chart column no longer covers the pills under it; a column that needs more height grows downwards.
