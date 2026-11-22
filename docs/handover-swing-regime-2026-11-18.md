@@ -168,10 +168,10 @@ Earlier (checkpoint 2): 121/121 affected browser specs with the test catalog.
    May–Oct 2026; report the five-minute bar count/size to the user **before** collecting (`evidence-plan-minute-bars`); run
    the three versions through the normal saved-plan workflow; deliver the full `.log`; report monthly per version; show
    listing coverage and the share of gap-inflated trades (reviewer conditions).
-   **State 22 Nov:** the user chose the top-500 screen (, 874 stocks, 8,785,604 five-minute
-   bars complete). Plan **36306** is saved on the operator site with all 10 strategies, not started: it needs about 4 GB of memory
-   (estimate) and about 0.8 GB was free. It covers only the full SPY+QQQ+VIX gate; the no-gate and SPY+QQQ versions need a design.
-   PSLV (a silver trust) is in the list although funds are excluded; flag its trades.
+   **State 22 Nov:** the user chose the top-500 screen (`swing-adr25-top500-20260501-20261030`, 874 stocks, 8,785,604
+   five-minute bars complete). Plan **36306** is saved on the operator site with all 10 strategies, not started: it needs about
+   4 GB of memory (estimate) and about 0.8 GB was free. It covers only the full SPY+QQQ+VIX gate; the no-gate and SPY+QQQ
+   versions need a design. PSLV (a silver trust) is in the list although funds are excluded; flag its trades.
 2. **Sector-fund rank labels on trades:** report only, in the first run's report (still open in the checklist above).
 
 Swing ORB on news, the 21-EMA pullback long with V2-01, the short mirrors and the web pages for research screens and
