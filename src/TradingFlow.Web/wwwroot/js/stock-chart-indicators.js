@@ -385,7 +385,10 @@
         // Apply an edit and start just one new observation for the complete selection.
         function custom(tokens, message) {
             get('preset').value = 'custom';
-            selected = chosen = tokens;
+            // Entries hidden on this candle interval stay in the chosen list while there is room for them.
+            const hidden = chosen.filter(token => !selected.includes(token) && !tokens.includes(token));
+            selected = tokens;
+            chosen = normalize([...tokens, ...hidden], '1m');
             current = [];
             get('study-feedback').textContent = message;
             refreshPicker();
