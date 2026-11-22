@@ -41,7 +41,8 @@ public sealed partial class AlpacaBrokerClient :
         _marketDataClient = new AlpacaMarketDataRestClient(marketDataHttpClient, options, rawArchiveWriter);
     }
 
-    // Capture marked equity and the broker's non-trade adjustment alongside other account facts.
+    // Capture marked equity and the broker's non-trade adjustment alongside other account facts. The archived response
+    // records which background loop asked, when one is known.
     public async Task<BrokerAccountSnapshot> GetAccountSnapshotAsync(
         CancellationToken cancellationToken)
     {
@@ -50,6 +51,9 @@ public sealed partial class AlpacaBrokerClient :
         var response = await _tradingClient.SendAsync(
             request,
             "broker-account-snapshot",
+            attributes: BrokerCallOrigin.Current is { } origin
+                ? new Dictionary<string, string>(StringComparer.Ordinal) { ["caller"] = origin }
+                : null,
             cancellationToken: cancellationToken);
         if (!response.IsSuccessStatusCode)
         {

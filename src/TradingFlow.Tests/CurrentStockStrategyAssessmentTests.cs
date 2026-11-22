@@ -112,6 +112,33 @@ public sealed class CurrentStockStrategyAssessmentTests
         Assert.Equal(0, h.Evidence.Calls);
     }
 
+    /// <summary>A second check of the same strategy with a new request key is a new job, not a duplicate-name insert failure.</summary>
+    [Fact]
+    public async Task SecondCheckOfTheSameStrategy_IsQueuedAsItsOwnJob()
+    {
+        await using var h = await Harness.CreateAsync();
+        var first = await h.Service.StartAsync("operator", h.Request("first-check", ["RGTI"]), default);
+        await h.Service.CancelAsync("operator", first.JobId, default);
+        await h.ProcessAsync();
+        var second = await h.Service.StartAsync("operator", h.Request("second-check", ["RGTI"]), default);
+        Assert.NotEqual(first.JobId, second.JobId);
+        Assert.Equal("queued", second.Status);
+        await using var db = h.Database.CreateDbContext();
+        Assert.Equal(2, await db.Jobs.CountAsync());
+        Assert.Equal(2, (await db.Jobs.Select(job => job.RunName).ToArrayAsync()).Distinct().Count());
+    }
+
+    /// <summary>A long strategy ID is shortened so the job ID, which makes the name unique, always survives whole.</summary>
+    [Fact]
+    public void RunName_StaysWithinTheColumnForLongStrategyIds()
+    {
+        var id = Guid.NewGuid();
+        var name = CurrentStockStrategyAssessmentService.RunNameFor(new string('s', 140), id);
+        Assert.Equal(100, name.Length);
+        Assert.EndsWith(id.ToString("N"), name);
+        Assert.Equal("short.id-" + id.ToString("N"), CurrentStockStrategyAssessmentService.RunNameFor("short.id", id));
+    }
+
     /// <summary>Losing the response after real server admission must retry the same stored request, not consume another queue slot.</summary>
     [Fact]
     public async Task LostAcceptedResponse_SharedClientRetainsAttemptKeyAndRecoversOneDurableJob()

@@ -52,7 +52,7 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
         if (!profile.Provider.Equals("alpaca", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Current strategy checks require the profile's Alpaca market-data provider, not historical CSV or screener prices.");
         var work = new Work(owner, stamp, requestHash, normalized, profile, PreparationJson.Hash(profile));
-        var job = new PersistedJob { Id = id, JobType = Type, RunName = normalized.Strategy.StrategyId,
+        var job = new PersistedJob { Id = id, JobType = Type, RunName = RunNameFor(normalized.Strategy.StrategyId, id),
             RequestJson = PreparationJson.Write(work), CreatedAt = clock.GetUtcNow() };
         if (!await jobs.TryEnqueueAsync(job, limits.Paper, token))
         {
@@ -62,6 +62,18 @@ public sealed class CurrentStockStrategyAssessmentService(IDurableJobRepository 
             throw new InvalidOperationException("The configured observation queue is full. Wait for an active job to finish or cancel it.");
         }
         return View(job, work);
+    }
+
+    /// <summary>
+    /// Names one check's job "{strategy}-{job id}". The Jobs table allows one row per job type and run name, so naming the
+    /// job after the strategy alone made every later check of the same strategy fail on insert (HTTP 500). The strategy
+    /// part is shortened so the whole name fits the 100-character column.
+    /// </summary>
+    internal static string RunNameFor(string strategyId, Guid jobId)
+    {
+        var suffix = "-" + jobId.ToString("N");
+        var prefix = strategyId.Length > 100 - suffix.Length ? strategyId[..(100 - suffix.Length)] : strategyId;
+        return prefix + suffix;
     }
 
     // Rechecks exact source availability before enqueue and before collecting any data for a queued assessment.

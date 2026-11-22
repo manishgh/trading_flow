@@ -50,6 +50,7 @@ public sealed class OrderDispatchRecoveryHealthTests
             Mock.Of<IBrokerClient>(),
             admission,
             new OrderDispatchOptions(10, 10, 1, 1),
+            new BrokerAccountBindingOptions(String.Empty, enforcementEnabled: false),
             time,
             NullLogger<OrderDispatchRecoveryHostedService>.Instance);
 
@@ -173,6 +174,7 @@ public sealed class OrderDispatchRecoveryHealthTests
             Mock.Of<IBrokerClient>(),
             admission,
             new OrderDispatchOptions(10, 10, 1, 1),
+            new BrokerAccountBindingOptions(String.Empty, enforcementEnabled: false),
             time,
             NullLogger<OrderDispatchRecoveryHostedService>.Instance);
 
@@ -226,6 +228,7 @@ public sealed class OrderDispatchRecoveryHealthTests
             Mock.Of<IBrokerClient>(),
             admission,
             new OrderDispatchOptions(10, 10, 1, 1),
+            new BrokerAccountBindingOptions(String.Empty, enforcementEnabled: false),
             time,
             NullLogger<OrderDispatchRecoveryHostedService>.Instance);
 
@@ -249,6 +252,177 @@ public sealed class OrderDispatchRecoveryHealthTests
             await service.StopAsync(CancellationToken.None);
             service.Dispose();
         }
+    }
+
+    // After one healthy full pass, an empty local journal must skip every broker-reading recovery yet stay healthy.
+    [Fact]
+    public async Task IdleCycle_AfterAHealthyFullPass_DoesNotRunBrokerRecoveries()
+    {
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var time = new RecoveryTestTimeProvider();
+        var (commands, dispatcher) = RecoveryMocks();
+        var service = CreateService(commands, dispatcher, time, out var admission);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var startSecond = await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+            VerifyFullPasses(commands, dispatcher, Times.Once());
+            startSecond();
+            await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+
+            VerifyFullPasses(commands, dispatcher, Times.Once());
+            dispatcher.Verify(value => value.HasRecoverableWorkAsync("bound-account", It.IsAny<CancellationToken>()), Times.Once);
+            commands.Verify(value => value.HasRecoverableWorkAsync("bound-account", It.IsAny<CancellationToken>()), Times.Once);
+            Assert.True(service.GetHealth().Healthy);
+            Assert.Contains("broker not contacted. Last full pass 2026-07-21 15:00:00 UTC.", service.GetHealth().Detail, StringComparison.Ordinal);
+            Assert.True(admission.GetSnapshot().EntriesAllowed);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            service.Dispose();
+        }
+    }
+
+    // Local work in either service must bring back the full pass, which validates the account before acting.
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task CycleWithLocalWork_RunsTheFullPass(bool dispatchWork, bool commandWork)
+    {
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var time = new RecoveryTestTimeProvider();
+        var (commands, dispatcher) = RecoveryMocks();
+        dispatcher.Setup(value => value.HasRecoverableWorkAsync("bound-account", It.IsAny<CancellationToken>())).ReturnsAsync(dispatchWork);
+        commands.Setup(value => value.HasRecoverableWorkAsync("bound-account", It.IsAny<CancellationToken>())).ReturnsAsync(commandWork);
+        var service = CreateService(commands, dispatcher, time, out _);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            (await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token))();
+            await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+            VerifyFullPasses(commands, dispatcher, Times.Exactly(2));
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            service.Dispose();
+        }
+    }
+
+    // A refused account must be retried in full, and stay blocked, even when the local journal looks empty.
+    [Fact]
+    public async Task CycleAfterARefusedAccount_RunsTheFullPassAgain()
+    {
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var time = new RecoveryTestTimeProvider();
+        var (commands, dispatcher) = RecoveryMocks();
+        dispatcher.SetupSequence(value => value.RecoverPendingAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new BrokerAccountMismatchException("bound-account", "other-account"))
+            .ReturnsAsync(0);
+        var service = CreateService(commands, dispatcher, time, out var admission);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var startSecond = await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+            Assert.False(service.GetHealth().Healthy);
+            Assert.False(admission.GetSnapshot().EntriesAllowed);
+            startSecond();
+            await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+            VerifyFullPasses(commands, dispatcher, Times.Exactly(2));
+            Assert.True(service.GetHealth().Healthy);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            service.Dispose();
+        }
+    }
+
+    // A local journal that cannot be read must block entries, as a failed full pass does.
+    [Fact]
+    public async Task UnreadableLocalJournal_FailsClosed()
+    {
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var time = new RecoveryTestTimeProvider();
+        var (commands, dispatcher) = RecoveryMocks();
+        commands.SetupSequence(value => value.HasRecoverableWorkAsync("bound-account", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("journal unreadable"))
+            .ReturnsAsync(false);
+        var service = CreateService(commands, dispatcher, time, out var admission);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            (await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token))();
+            var startThird = await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+            Assert.False(service.GetHealth().Healthy);
+            Assert.Contains("journal unreadable", service.GetHealth().Detail, StringComparison.Ordinal);
+            Assert.False(admission.GetSnapshot().EntriesAllowed);
+            VerifyFullPasses(commands, dispatcher, Times.Once());
+
+            // The cycle after the failed check runs the full pass without trusting the local journal.
+            startThird();
+            await time.WaitForTimerAsync(RecoveryInterval, watchdog.Token);
+            VerifyFullPasses(commands, dispatcher, Times.Exactly(2));
+            Assert.True(service.GetHealth().Healthy);
+            Assert.True(admission.GetSnapshot().EntriesAllowed);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            service.Dispose();
+        }
+    }
+
+    // The label follows the async flow below its scope, restores the outer label, and is absent outside any scope.
+    [Fact]
+    public async Task BrokerCallOrigin_LabelsOnlyItsOwnAsyncFlow()
+    {
+        Assert.Null(BrokerCallOrigin.Current);
+        using (BrokerCallOrigin.Begin(BrokerCallOrigin.OrderRecovery))
+        {
+            await Task.Yield();
+            Assert.Equal(BrokerCallOrigin.OrderRecovery, BrokerCallOrigin.Current);
+            using (BrokerCallOrigin.Begin(BrokerCallOrigin.OrderSynchronization))
+            {
+                Assert.Equal(BrokerCallOrigin.OrderSynchronization, await Task.Run(() => BrokerCallOrigin.Current));
+            }
+
+            Assert.Equal(BrokerCallOrigin.OrderRecovery, BrokerCallOrigin.Current);
+        }
+
+        Assert.Null(BrokerCallOrigin.Current);
+    }
+
+    // Recoveries that succeed with nothing to do, and an empty local journal, unless a test overrides them.
+    private static (Mock<IOrderCommandService> Commands, Mock<IOrderDispatchService> Dispatcher) RecoveryMocks()
+    {
+        var commands = new Mock<IOrderCommandService>();
+        commands.Setup(value => value.RecoverUnpreparedPositionExitsAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        commands.Setup(value => value.RecoverPendingCancellationsAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        commands.Setup(value => value.RecoverPendingProtectiveStopReplacementsAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        var dispatcher = new Mock<IOrderDispatchService>();
+        dispatcher.Setup(value => value.RecoverPendingAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        return (commands, dispatcher);
+    }
+
+    // The hosted service bound to one enforced account, on the manual clock.
+    private static OrderDispatchRecoveryHostedService CreateService(Mock<IOrderCommandService> commands,
+        Mock<IOrderDispatchService> dispatcher, RecoveryTestTimeProvider time, out EntryAdmissionControl admission)
+    {
+        admission = new EntryAdmissionControl();
+        return new OrderDispatchRecoveryHostedService(dispatcher.Object, commands.Object, Mock.Of<IBrokerClient>(), admission,
+            new OrderDispatchOptions(10, 10, 1, 1), new BrokerAccountBindingOptions("bound-account"), time,
+            NullLogger<OrderDispatchRecoveryHostedService>.Instance);
+    }
+
+    // Every broker-reading recovery ran the given number of times.
+    private static void VerifyFullPasses(Mock<IOrderCommandService> commands, Mock<IOrderDispatchService> dispatcher, Times times)
+    {
+        commands.Verify(value => value.RecoverUnpreparedPositionExitsAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()), times);
+        commands.Verify(value => value.RecoverPendingCancellationsAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()), times);
+        commands.Verify(value => value.RecoverPendingProtectiveStopReplacementsAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()), times);
+        dispatcher.Verify(value => value.RecoverPendingAsync(It.IsAny<IBrokerClient>(), It.IsAny<CancellationToken>()), times);
     }
 
     // Prove readiness remains pending until its own test-controlled timeout fires.
