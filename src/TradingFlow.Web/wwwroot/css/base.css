@@ -1678,8 +1678,8 @@ html[data-environment="live"] .topbar {
 .news-topic-labels[hidden] { display: none; }
 .news-topic-labels > span { display: contents; }
 .news-topic-badge { border: 1px solid var(--line); padding: 2px 5px; font-size: .75rem; }
-.news-timeline { display: grid; gap: 12px; }
-.news-body { display: grid; gap: var(--space-3); align-items: start; }
+.news-timeline { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.news-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 .news-body.has-stocks { grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem); }
 .news-feed-column,
 .news-stock-sidebar { min-width: 0; }
