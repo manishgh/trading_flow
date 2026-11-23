@@ -233,3 +233,10 @@ no grant being made. The folder-sealing test searches for two names only.
     at least 20 trades per version, no change to any version in between; only a variant that passes both is proposed as the
     next version for the normal promotion decision.
   This section is committed before any of the three comparison plans is run, so the rule is fixed in advance.
+
+### User decision on the rule, 23 November 2026
+The user chose the rule that was already accepted ("rule that performs better"): per strategy, a variant is proposed as the
+next version if its total of monthly returns over May-October 2026 is higher, its worst month is no worse, and both
+versions have at least 20 trades. The stricter amendment above is **not** adopted. The reviewer's warning stands on record:
+by chance alone several strategies may show a winner, so any replacement remains research and is re-checked on data
+collected after 30 October 2026 before any paper use. This rule is fixed before any comparison result is read.
