@@ -1,0 +1,84 @@
+# TEMPORARY COMPARISON VARIANT (23 November 2026) of technical.news-orb-breakdown@1.0.0 (news-orb-breakdown.bt-v1.yaml):
+# identical except the market gate: whole regime block removed (no market gate). Delete after the gate comparison unless it is proposed as the next version.
+# Swing opening-range breakdown on negative Tier-1 news (Option B: decide after close, enter next open), swing, short.
+# Design: docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md (approved 19 November 2026, Checkpoints 7 & 8).
+# Rules: Tier-1 negative catalyst (earnings, guidance, fda, downgrade) within 18 hours with conservative +5-minute
+# receipt delay on max(created, updated, observed), requiring negative direction cue or negative FinBERT (< 0) and
+# vetoing positive FinBERT (>= +0.15 across the window), opening gap down >= 0.75 * ATR(14)_{D-1}, first-30m
+# (09:30-10:00 NY) RVOL >= 2.0 vs prior 20-session median opening volume, first-30m bars stay <= session VWAP, daily
+# close below both 09:30-10:00 NY low and session VWAP, strategy-owned 20-session ADR% >= 2.5% and dollar volume >= $20M,
+# under the bearish SPY/QQQ falling 50-day SMA and short FRED VIXCLS sizing gate. Charges 1.0% annualized short-borrow
+# cost and enforces SEC Rule 201. Exits: 1.0 * ATR(14) initial stop, 2.5R target, 10-session time exit, next-open fill.
+strategy_id: research.news-orb-breakdown.bt-v1
+strategy_name: RESEARCH Swing ORB Breakdown on Negative News V1 (swing, short, Option B, Tier-1 negative news +5m delay, 30m ORB/RVOL/VWAP, SPY/QQQ/VIX short gate, as-traded bars)
+source: swing_orb_on_news_option_b_short_mirror_2026_11_19
+version: 1
+timeframe: 1d
+direction: short
+entry_rules:
+  setup_type: momentum
+  enable_short: true
+  short_setup_type: news_orb_breakdown
+  min_gap_down_atr: 0.75
+  opening_range_minutes: 30
+  min_opening_relative_volume: 2.0
+  require_opening_stays_at_or_below_vwap: true
+  require_daily_close_below_opening_range_low: true
+  require_daily_close_below_session_vwap: true
+  catalyst_receipt_delay_minutes: 5
+  max_news_age_hours: 18.0
+  allowed_catalyst_categories: earnings,guidance,fda,downgrade
+  veto_short_news_sentiment_at_or_above: 0.15
+  min_average_range_pct: 2.5
+  min_average_dollar_volume: 20000000
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  require_price_below_vwap_for_short: false
+  require_macd_bearish_for_short: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  require_positive_news: false
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 10
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+  short_borrow_apr_pct: 1.0
+  enforce_sec_rule_201: true
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30

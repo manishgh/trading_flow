@@ -39,6 +39,22 @@ public static class RuntimeHostedServiceRegistration
         return services;
     }
 
+    // Daily options readings run only when explicitly requested on a host with market feeds and Alpaca keys.
+    public static IServiceCollection AddOptionsDailyCollection(this IServiceCollection services, OptionsDailyCollectionOptions options)
+    {
+        services.AddSingleton(options);
+        if (options.Enabled)
+        {
+            services.AddSingleton(serviceProvider => new TradingFlow.Engine.Market.OptionsDailyCollector(
+                serviceProvider.GetRequiredService<TradingFlow.Engine.Abstractions.IOptionsSentimentSource>(),
+                serviceProvider.GetRequiredService<TimeProvider>(),
+                serviceProvider.GetRequiredService<ILogger<TradingFlow.Engine.Market.OptionsDailyCollector>>()));
+            services.AddSingleton<OptionsDailyCollectionScheduler>();
+            services.AddHostedService<OptionsDailyCollectionHostedService>();
+        }
+        return services;
+    }
+
     // Register runtime ownership ahead of the services that create orders or journal broker state.
     public static IServiceCollection AddTradingFlowRuntimeHostedServices(
         this IServiceCollection services,

@@ -411,13 +411,13 @@ public sealed class NewsOrbSwingTests
         Assert.Empty(catalog.GetSelectable(StrategySelectionMode.RunLive));
 
         Assert.Equal("ee56bf94bb160cbcd27dbde297cfe38ae366acb0911475d3ecee4f530ef9628d",
-            Assert.Single(artifacts, a => a.Identity.StrategyId == "technical.bollinger-squeeze-breakout").Identity.ContentSha256);
+            Assert.Single(artifacts, a => a.Identity.StrategyId == "technical.bollinger-squeeze-breakout" && a.Identity.SemanticVersion == "1.0.0").Identity.ContentSha256);
         Assert.Equal("0a2cac80c7a629eae0a9c1def135ae757a806210545e4d4ca9e5b9884452e72c",
             Assert.Single(artifacts, a => a.Identity.StrategyId == "technical.ema21-trend-pullback" && a.Identity.SemanticVersion == "1.0.0").Identity.ContentSha256);
         Assert.Equal("445cef6d533becfb1a76b87c1d4187a502a9f7bc39b0836fb90271aa72592eec",
             Assert.Single(artifacts, a => a.Identity.StrategyId == "technical.ema21-trend-pullback" && a.Identity.SemanticVersion == "1.1.0").Identity.ContentSha256);
         Assert.Equal("d556e04c828b9c2096be3c2e88ac3da937d076d47dac659f75c4a95e33b953c2",
-            Assert.Single(artifacts, a => a.Identity.StrategyId == "technical.rubber-band-reclaim").Identity.ContentSha256);
+            Assert.Single(artifacts, a => a.Identity.StrategyId == "technical.rubber-band-reclaim" && a.Identity.SemanticVersion == "1.0.0").Identity.ContentSha256);
     }
 
     // Verifies end-to-end StrategyDecisionKernel.Evaluate with a June 2026 Tier-1 catalyst whose observed HTTP
@@ -429,7 +429,7 @@ public sealed class NewsOrbSwingTests
         var ny = ResolveNewYork();
         var reader = new SimpleYamlReader();
         var catalog = new StrategyArtifactCatalog(Root, Path.Combine(Root, "configs", "strategy-catalog.json"), reader);
-        var artifact = Assert.Single(catalog.GetSnapshot().ExecutableArtifacts, a => a.Identity.StrategyId == "technical.news-orb-swing");
+        var artifact = Assert.Single(catalog.GetSnapshot().ExecutableArtifacts, a => a.Identity.StrategyId == "technical.news-orb-swing" && a.Identity.SemanticVersion == "1.0.0");
 
         // Build 21 weekday trading sessions (raw/sip provenance matching swing-daily-v2-as-traded-research-v1).
         var tradingDates = new List<DateOnly>(21);

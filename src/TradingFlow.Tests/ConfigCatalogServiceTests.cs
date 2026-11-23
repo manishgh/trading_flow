@@ -41,6 +41,7 @@ public sealed class ConfigCatalogServiceTests
                 "technical.rubber-band-reclaim@1.0.0"
             },
             strategies
+                .Where(item => !StrategyArtifactCatalogTests.IsTemporaryVariant(item.Identity))
                 .Select(item => $"{item.Identity.StrategyId}@{item.Identity.SemanticVersion}")
                 .Order(StringComparer.Ordinal));
         Assert.Empty(catalog.GetDisabledResearchStrategies());

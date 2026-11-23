@@ -18,6 +18,8 @@ public sealed record ProjectPaths(string RepositoryRoot, string DataRoot, string
     public string EvidenceObjectRoot => Path.Combine(EvidenceRoot, "objects");
     // Published research screens (research-daily-screen output folders holding screen-manifest.json).
     public string ResearchScreensRoot => Path.Combine(DataRoot, "research", "screens");
+    /// <summary>Sealed daily options readings (vix-and-options-plan.md step 4); no strategy reads this folder.</summary>
+    public string OptionsDailyRoot => Path.Combine(DataRoot, "research", "options-daily");
 
     public string ResolveRepositoryPath(string path)
     {

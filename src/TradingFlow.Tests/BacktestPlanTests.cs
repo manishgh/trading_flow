@@ -138,6 +138,21 @@ public sealed class BacktestPlanTests
             Cohorts = [new("Missing", [symbols[0]], 10000m)] }));
     }
 
+    /// <summary>Two versions of one strategy are refused before anything is saved; each version runs in its own plan.</summary>
+    [Fact]
+    public async Task TwoVersionsOfOneStrategy_AreRefusedBeforePreviewOrSave()
+    {
+        await using var fixture = await Fixture.CreateAsync(5, 1);
+        var original = fixture.Request.Strategies[0];
+        var request = fixture.Request with { Strategies = [original, original with { SemanticVersion = original.SemanticVersion + "-gate-off.1" }] };
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.PreviewAsync(new(request, 5)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SaveAsync(new(request, 5)));
+
+        Assert.Contains("one version per strategy", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(await fixture.Service.ListAsync());
+    }
+
     /// <summary>Preview and Save reject an unknown or changed exact artifact before persisting plans or generating execution files.</summary>
     [Fact]
     public async Task UnavailableStrategy_IsRejectedBeforePreviewOrSave()

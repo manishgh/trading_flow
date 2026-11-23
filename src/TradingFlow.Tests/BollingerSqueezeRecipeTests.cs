@@ -78,7 +78,7 @@ public sealed class BollingerSqueezeRecipeTests
         var catalog = new StrategyArtifactCatalog(Root, Path.Combine(Root, "configs", "strategy-catalog.json"), new SimpleYamlReader());
         var artifacts = catalog.GetSnapshot().ExecutableArtifacts;
 
-        var squeeze = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "technical.bollinger-squeeze-breakout");
+        var squeeze = Assert.Single(artifacts, artifact => artifact.Identity.StrategyId == "technical.bollinger-squeeze-breakout" && artifact.Identity.SemanticVersion == "1.0.0");
         Assert.Null(catalog.GetDisabledReason(squeeze));
         var selectable = catalog.GetSelectable(TradingFlow.Domain.Strategies.StrategySelectionMode.Backtest);
         Assert.Contains(selectable, item => item.Identity == squeeze.Identity);

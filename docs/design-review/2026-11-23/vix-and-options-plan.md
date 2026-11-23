@@ -131,3 +131,105 @@ a variant that is not better is deleted, and its results are kept.
 - **Sealed:** no strategy, gate or Desk rule reads this folder until you decide, after about 12 months of data.
 - **Before it starts:** I measure one day for 10 stocks and report requests, time and megabytes, then the full-day estimate, and you confirm.
 - Tests: calculation unchanged from the Desk, file format, holiday skip, failure rows, no strategy code references the folder.
+
+## 8. Built on 23 November 2026
+
+### Step 2: comparison variants
+- 20 files `configs/backtest/strategies/<original>.gate-spy-qqq.yaml` and `<original>.gate-off.yaml`, each a copy of the
+  original with a two-line header and only the `regime:` block changed (VIX lines removed, or the block removed). Checked by
+  `diff`: no other line differs.
+- 20 catalog entries, versions `<original>-gate-spy-qqq.1` and `<original>-gate-off.1` (the catalog accepts pre-release
+  versions), research only, `derivedFromIdentity` = the original's exact identity. The catalog loads all 30; the ten
+  originals keep their content hashes.
+- User instruction during the work: "variants will run and after success replace current one, we should not be writing
+  custom code, except the part option n vix". So no variant-specific code or test was added. Existing tests that picked a
+  strategy by ID alone now name its version; the two catalog list tests compare released versions only, and one general
+  test requires every pre-release version to be a research-only copy of an exact catalog version.
+- While the variants exist, the stock page's strategy picker also lists them (each with its version).
+
+### Step 4: daily options readings
+- `src/TradingFlow.Engine/Market/OptionsDailyCollector.cs`: one request at a time through the Desk's
+  `IOptionsSentimentSource` (raw responses archived by the client), one JSON line per stock, resumes after a restart.
+  Lines are `ok` (the calculator reading; a stock without options carries `no_liquid_options`) or `failed` (the provider
+  error or exception text, no values).
+- `src/TradingFlow.Web/Services/OptionsDailyCollection.cs`: every 5 minutes; on a New York trading day at or after 16:30
+  it collects active wishlist stocks plus the stocks of the research screen named by `OptionsDaily:ScreenName` /
+  `TRADINGFLOW_OPTIONS_DAILY_SCREEN`. Off unless `TRADINGFLOW_ENABLE_OPTIONS_DAILY=true`, market feeds on and Alpaca keys set.
+- Deviation from section 7: it runs as a scheduled service like the Finviz capture and the database backup, not as a durable
+  queue job. The day file itself is the record of progress, so a restart continues where it stopped; a queue job would add a
+  handler, worker settings and job-type permissions without changing that.
+- `options-daily-collect` command (same collector, explicit stocks and folders), used for the measurement below.
+
+### Measurement (10 stocks spread over the 874-stock screen `swing-adr25-top500-20260501-20261030`)
+Run 23 November 2026 at about 04:40 New York (before the open, so volumes and prices are Friday's), folder
+`V:\trading_flow\data\research\options-daily-measurement-20261123-premarket-run2` (kept; provider data).
+
+| | 10 stocks | Estimate for about 900 stocks |
+|---|---|---|
+| Requests | 20 (one stock snapshot and one OPRA page each) | about 1,800; up to about 6,300 if every stock needed all follow-up pages |
+| Time | 3.2 s | about 5 minutes; up to about 15 minutes |
+| Raw provider responses kept | 0.72 MB | about 65 MB a day, about 16 GB a year (V: has 962 GB free) |
+| Readings file | 7.6 KB | about 0.7 MB a day |
+| Result | 10 ok, 0 failed | |
+
+Before the open several stocks had no implied volatility or skew (no liquid contracts near the money); the after-close
+run will show how many have them. The first attempt (folder without `-run2`) failed for 9 of 10 stocks because the
+command reused a connection object the client closes after each stock; the command was fixed and that folder is kept.
+
+### Reviews of 23 November 2026 (code and design reviewer; plan and quant reviewer)
+Both: accept with conditions. Fixed:
+- One failed attempt no longer ends a stock's day. Only `ok` lines count as done; a failed stock is asked again on later
+  passes, 30 minutes apart, at most 3 attempts, not from 20:00 New York on. Every attempt keeps its line; readers take the
+  last line per stock.
+- An unreadable research screen is logged and left out; the wishlist stocks are still collected.
+- Each pass appends a request record (`<date>.requests.jsonl`: stocks asked for, wishlist names, screen name and manifest
+  fingerprint, or why the screen was left out), because the screen is a fixed past cohort and the wishlists change.
+- The command labels readings only with today's New York date.
+- `ObservedAtUtc` inside a reading is when the provider data was read. The Desk and the collector share the client's
+  5-minute cache, so a reading can be up to 5 minutes older than the line's request time.
+
+Open, for the user's decision before collection is switched on or the comparison is read:
+1. Scheduled service instead of the approved durable queue job (reasons above). Without a queue job, there is no Jobs-page
+   entry and no lease, so two hosts with the switch on would both collect.
+2. Price used to choose at-the-money options: today the client uses the latest stock trade. At 16:30 that is an
+   after-hours trade, which after an earnings release can differ a lot from the 16:00 close. Proposed: one batched request
+   for all stocks' 15:55-16:00 five-minute bars through the existing market-data provider, passing that bar's close as the
+   price; the reading records which price was used.
+3. Two versions of one strategy in one backtest plan crash the run summary (maps keyed by strategy name in
+   `BacktestRunner.Diagnostics.cs:131`, `MonthlyRunResultWriter.cs:121`, `IntradayPortfolioExecution.cs:173`). The
+   comparison uses one plan per version, so it is not affected. Proposed general fix: refuse such a selection when a plan
+   is saved.
+4. Decision rule for the gate comparison, to be fixed before the results are read (May-October 2026 is already spent; three
+   versions times ten strategies is thirty tries on six months). Proposed: a variant is proposed as the next version only if,
+   per strategy, it has a higher total of monthly returns and no deeper worst month, with at least 20 trades in both versions,
+   and the report shows on how many days each gate blocked entries. Any replacement stays research and is re-checked on data
+   collected after 30 October 2026.
+Also noted: a pre-release version cannot be blocked from a paper grant by code; it relies on the research lifecycle and on
+no grant being made. The folder-sealing test searches for two names only.
+
+### User decision, 23 November 2026: "Accept all four"
+1. Scheduled service instead of a durable queue job: accepted as built.
+2. Price input: built. Each pass reads every stock's last regular-session 5-minute bar (bar start = session close minus
+   5 minutes, so early closes are handled) through the site's market-data provider, in batches of 100 stocks, and passes its
+   close to the options client. Each line records `regularClose` and `spotBasis`: `regular_close` when the reading used it,
+   `provider_latest` when the stock had no closing bar, the bar request failed, or the shared 5-minute cache returned a
+   recent Desk reading. Also fixed after the re-check: the 20:00 cut-off stops only re-asks (a site that was down at 16:30
+   still takes a first pass that evening), and any screen-reading error leaves the wishlist stocks collected.
+3. Built: a backtest start or saved plan that selects two versions of one strategy ID is refused with "Select one version
+   per strategy. Run another version of the same strategy in its own plan." (`RunWorkflowService.ValidateBacktest`).
+4. Frozen decision rule for the gate comparison, before any result is read: per strategy, a variant is proposed as the next
+   version only if its total of monthly returns over May-October 2026 is higher than the original's, its worst month is no
+   worse, and both versions have at least 20 trades. The report shows, per gate, on how many days it blocked new entries.
+   A replacement stays research and is re-checked on data collected after 30 October 2026 before any paper use.
+
+### Final plan/quant re-check (23 November 2026): accept, with a condition on the decision rule
+- Wording: the price input is the close of the 15:55-16:00 bar, the last regular-session trade before 16:00. It normally
+  excludes the closing auction print, so it is not the official close. Adequate for choosing the at-the-money strike.
+- Condition: the accepted rule ("higher total by any margin") lets chance pick a winner for roughly 4-6 of the 10 strategies,
+  and the later re-check has no period, trade minimum or pass rule. Amendment proposed to the user (not yet accepted):
+  - a variant must be better in at least 4 of the 6 months **and** have a higher total and no worse worst month, with at
+    least 20 trades in each version;
+  - the re-check uses the same rule on 2 November 2026 - 30 April 2027 (six months, data collected after the current window),
+    at least 20 trades per version, no change to any version in between; only a variant that passes both is proposed as the
+    next version for the normal promotion decision.
+  This section is committed before any of the three comparison plans is run, so the rule is fixed in advance.

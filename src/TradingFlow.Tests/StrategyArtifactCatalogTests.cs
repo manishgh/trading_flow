@@ -29,6 +29,7 @@ public sealed class StrategyArtifactCatalogTests
                 "technical.rubber-band-reclaim@1.0.0"
             },
             snapshot.ExecutableArtifacts
+                .Where(artifact => !IsTemporaryVariant(artifact.Identity))
                 .Select(artifact => $"{artifact.Identity.StrategyId}@{artifact.Identity.SemanticVersion}")
                 .Order(StringComparer.Ordinal));
         Assert.Empty(snapshot.ArchivedArtifacts);
@@ -70,6 +71,7 @@ public sealed class StrategyArtifactCatalogTests
                 "technical.rubber-band-reclaim@1.0.0"
             },
             artifacts
+                .Where(item => !IsTemporaryVariant(item.Identity))
                 .Select(item => $"{item.Identity.StrategyId}@{item.Identity.SemanticVersion}")
                 .Order(StringComparer.Ordinal));
         Assert.DoesNotContain(artifacts, item => item.Identity.StrategyId.StartsWith("swing.", StringComparison.Ordinal));
@@ -150,6 +152,31 @@ public sealed class StrategyArtifactCatalogTests
         Assert.Equal(source.Identity, authorized.Identity);
         Assert.Equal(StrategyArtifactDisposition.Research, authorized.Disposition);
     }
+
+    // A temporary strategy variant (pre-release version such as 1.0.0-gate-off.1, user rule of 23 November 2026) is a
+    // research-only copy that names the exact catalog version it was copied from; it is never offered to paper or live.
+    [Fact]
+    public void TemporaryVariants_AreResearchOnlyCopiesOfAnExactCatalogVersion()
+    {
+        var catalog = CreateCatalog();
+        var artifacts = catalog.GetSnapshot().ExecutableArtifacts;
+        var released = artifacts.Where(artifact => !IsTemporaryVariant(artifact.Identity)).Select(artifact => artifact.Identity).ToHashSet();
+
+        Assert.All(artifacts.Where(artifact => IsTemporaryVariant(artifact.Identity)), variant =>
+        {
+            Assert.Equal(StrategyLifecycleState.Research, variant.EffectiveLifecycle);
+            Assert.NotNull(variant.DerivedFromIdentity);
+            Assert.Contains(variant.DerivedFromIdentity, released);
+            Assert.Equal(variant.DerivedFromIdentity!.StrategyId, variant.Identity.StrategyId);
+            Assert.StartsWith(variant.DerivedFromIdentity.SemanticVersion + "-", variant.Identity.SemanticVersion, StringComparison.Ordinal);
+        });
+        Assert.Empty(catalog.GetSelectable(StrategySelectionMode.RunPaperShadow));
+        Assert.Empty(catalog.GetSelectable(StrategySelectionMode.RunLive));
+    }
+
+    /// <summary>True for a pre-release semantic version, which marks a temporary strategy variant under comparison.</summary>
+    internal static bool IsTemporaryVariant(StrategyArtifactIdentity identity) =>
+        identity.SemanticVersion.Split('+')[0].Contains('-', StringComparison.Ordinal);
 
     private static StrategyArtifactCatalog CreateCatalog()
     {

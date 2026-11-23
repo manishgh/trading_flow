@@ -115,6 +115,10 @@ public sealed partial class RunWorkflowService(
             request.CachePolicy is not ("use_cache" or "refresh") || request.Strategies is null || request.Strategies.Count == 0 ||
             request.Strategies.Any(item => item is null) || request.Strategies.Distinct().Count() != request.Strategies.Count)
             throw new InvalidOperationException("Select valid backtest dates, distinct strategies, positive portfolio limits, cache policy and full retention.");
+        // Run summaries match results to a strategy by name, so two versions of one strategy in one run would collide
+        // (user decision, 23 November 2026). Each version is compared in its own plan.
+        if (request.Strategies.Select(item => item.StrategyId).Distinct(StringComparer.Ordinal).Count() != request.Strategies.Count)
+            throw new InvalidOperationException("Select one version per strategy. Run another version of the same strategy in its own plan.");
     }
 
     /// <summary>

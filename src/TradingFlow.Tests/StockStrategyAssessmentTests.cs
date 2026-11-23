@@ -113,7 +113,7 @@ public sealed class StockStrategyAssessmentTests
         var root = TestRepository.FindRoot();
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root, "configs", "strategy-catalog.json")))!;
         var parked = manifest["strategies"]!.AsArray()
-            .Single(item => item!["strategyId"]!.GetValue<string>() == "technical.parabolic-exhaustion-short")!;
+            .Single(item => item!["strategyId"]!.GetValue<string>() == "technical.parabolic-exhaustion-short" && item["semanticVersion"]!.GetValue<string>() == "1.0.0")!;
         parked["enabled"] = false;
         parked["disabledReason"] = "Disabled in test fixture.";
         var manifestPath = Path.Combine(temp.Path, "strategy-catalog.json");
@@ -132,7 +132,7 @@ public sealed class StockStrategyAssessmentTests
         Assert.Contains(choices, choice => choice.CandidateRunId is null && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakout" && choice.Direction == "long");
         Assert.Contains(choices, choice => choice.CandidateRunId is null && choice.Strategy.StrategyId == "technical.bollinger-squeeze-breakdown" && choice.Direction == "short");
         Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "swing.connors-rsi2");
-        Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "technical.parabolic-exhaustion-short");
+        Assert.DoesNotContain(choices, choice => choice.Strategy.StrategyId == "technical.parabolic-exhaustion-short" && choice.Strategy.SemanticVersion == "1.0.0");
 
         // Persisted SQLite rows remain intact and directly readable by exact run/strategy identity.
         await using var after = database.CreateDbContext();
@@ -173,7 +173,7 @@ public sealed class StockStrategyAssessmentTests
         var choices = await service.ChoicesAsync(default);
 
         // Current catalog entry is NOT labeled "older version" and keeps its catalog "long" direction.
-        var currentCatalog = Assert.Single(choices, c => c.CandidateRunId is null && c.Strategy.StrategyId == "technical.bollinger-squeeze-breakout");
+        var currentCatalog = Assert.Single(choices, c => c.CandidateRunId is null && c.Strategy.StrategyId == "technical.bollinger-squeeze-breakout" && c.Strategy.SemanticVersion == "1.0.0");
         Assert.Equal("long", currentCatalog.Direction);
         Assert.DoesNotContain("older version", currentCatalog.Name, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("current", currentCatalog.Mode);

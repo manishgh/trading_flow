@@ -77,7 +77,7 @@ public sealed class BacktestJobServiceTests : IAsyncLifetime
         var manifestPath = Path.Combine(testRoot, "configs", "strategy-catalog.json");
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!;
         var target = manifest["strategies"]!.AsArray()
-            .Single(item => item!["strategyId"]!.GetValue<string>() == "technical.bollinger-squeeze-breakout")!;
+            .Single(item => item!["strategyId"]!.GetValue<string>() == "technical.bollinger-squeeze-breakout" && item["semanticVersion"]!.GetValue<string>() == "1.0.0")!;
         target["enabled"] = true;
         await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
         var run = (await File.ReadAllTextAsync(configPath))

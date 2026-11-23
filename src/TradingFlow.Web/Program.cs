@@ -759,6 +759,15 @@ builder.Services.AddTradingFlowRuntimeHostedServices(new RuntimeHostedServiceOpt
     EnableChartAcceptance: chartAcceptanceEnabled));
 builder.Services.AddFinvizScreenCapture(new TradingFlow.Web.Services.ScreenCaptures.FinvizScreenCaptureOptions(
     finvizCaptureRequested, marketFeedsEnabled, !String.IsNullOrWhiteSpace(finvizApiKey), uiTestMode));
+// Sealed daily options readings (vix-and-options-plan.md step 4): off unless the host asks for them.
+builder.Services.AddOptionsDailyCollection(new OptionsDailyCollectionOptions(
+    String.Equals(Environment.GetEnvironmentVariable("TRADINGFLOW_ENABLE_OPTIONS_DAILY"), "true", StringComparison.OrdinalIgnoreCase),
+    marketFeedsEnabled,
+    new AlpacaCredentialProvider(builder.Configuration).IsConfigured,
+    uiTestMode,
+    builder.Configuration["OptionsDaily:ScreenName"] ?? Environment.GetEnvironmentVariable("TRADINGFLOW_OPTIONS_DAILY_SCREEN"),
+    new TimeOnly(16, 30),
+    new TimeOnly(20, 0)));
 builder.Services.AddSingleton<TradingFlow.Domain.Audit.IDecisionAuditRepository, TradingFlow.Data.Audit.SqliteDecisionAuditRepository>();
 builder.Services.AddSingleton<TradingFlow.Domain.Persistence.ICandidateAuditEvidenceRepository, TradingFlow.Data.Orders.SqliteCandidateAuditEvidenceRepository>();
 builder.Services.AddSingleton<TradingFlow.Data.Application.SqliteApplicationWorkflowRepository>();

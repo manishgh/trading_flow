@@ -948,7 +948,7 @@ public sealed class SwingShortArchetypesTests
         var reader = new SimpleYamlReader();
         var catalog = new StrategyArtifactCatalog(repoRoot, Path.Combine(repoRoot, "configs", "strategy-catalog.json"), reader);
         var baseArtifact = catalog.GetSnapshot().ExecutableArtifacts
-            .First(a => a.Identity.StrategyId == "technical.bollinger-squeeze-breakdown");
+            .First(a => a.Identity.StrategyId == "technical.bollinger-squeeze-breakdown" && a.Identity.SemanticVersion == "1.0.0");
         var derived = catalog.CreateDerivedArtifact(baseArtifact, strategy, "1.0.1-test");
         var runtime = new AuthorizedRuntimeStrategy(
             derived.Identity,

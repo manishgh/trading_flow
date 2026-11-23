@@ -124,6 +124,286 @@
       "enabled": true,
       "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
       "reason": "Approved 19 November 2026 (docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md, Checkpoints 7 & 8): Parabolic exhaustion shooting-star breakdown. Prior bar spikes >= 2.5 * ATR(14)_{D-1} above EMA(21)_{D-1} on a shooting star (upper wick >= 2.0 * max(|Close - Open|, 0.01), CLV <= 0.35), trigger closes below prior bar low, strategy-owned ADR% >= 2.5% and dollar volume >= $20M, under bearish SPY/QQQ falling 50-day SMA gate and short FRED VIXCLS sizing. Charges 1.0% annualized short-borrow fee and enforces SEC Rule 201. Next-open short entry, 1.0 ATR(14) stop, 2.5R target, 10-session time exit, as-traded bars. Diagnostic backtest research only."
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.bollinger-squeeze-breakout",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "bollinger-squeeze-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.bollinger-squeeze-breakout@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.bollinger-squeeze-breakout",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "ee56bf94bb160cbcd27dbde297cfe38ae366acb0911475d3ecee4f530ef9628d"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakout.bt-v1.gate-off.yaml",
+      "strategyId": "technical.bollinger-squeeze-breakout",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "bollinger-squeeze-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.bollinger-squeeze-breakout@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.bollinger-squeeze-breakout",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "ee56bf94bb160cbcd27dbde297cfe38ae366acb0911475d3ecee4f530ef9628d"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-trend-pullback.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.ema21-trend-pullback",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-trend-pullback@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-trend-pullback",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "0a2cac80c7a629eae0a9c1def135ae757a806210545e4d4ca9e5b9884452e72c"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-trend-pullback.bt-v1.gate-off.yaml",
+      "strategyId": "technical.ema21-trend-pullback",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-trend-pullback@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-trend-pullback",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "0a2cac80c7a629eae0a9c1def135ae757a806210545e4d4ca9e5b9884452e72c"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-trend-pullback-mtr14.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.ema21-trend-pullback",
+      "semanticVersion": "1.1.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-trend-pullback@1.1.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-trend-pullback",
+        "semanticVersion": "1.1.0",
+        "contentSha256": "445cef6d533becfb1a76b87c1d4187a502a9f7bc39b0836fb90271aa72592eec"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-trend-pullback-mtr14.bt-v1.gate-off.yaml",
+      "strategyId": "technical.ema21-trend-pullback",
+      "semanticVersion": "1.1.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-trend-pullback@1.1.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-trend-pullback",
+        "semanticVersion": "1.1.0",
+        "contentSha256": "445cef6d533becfb1a76b87c1d4187a502a9f7bc39b0836fb90271aa72592eec"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/rubber-band-reclaim.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.rubber-band-reclaim",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.rubber-band-reclaim@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.rubber-band-reclaim",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "d556e04c828b9c2096be3c2e88ac3da937d076d47dac659f75c4a95e33b953c2"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/rubber-band-reclaim.bt-v1.gate-off.yaml",
+      "strategyId": "technical.rubber-band-reclaim",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.rubber-band-reclaim@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.rubber-band-reclaim",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "d556e04c828b9c2096be3c2e88ac3da937d076d47dac659f75c4a95e33b953c2"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/news-orb-swing.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.news-orb-swing",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.news-orb-swing@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.news-orb-swing",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "15a4a43efd2b65e520603647856f4d4c6fa9c5b3fc383581e504fe12975d26f2"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/news-orb-swing.bt-v1.gate-off.yaml",
+      "strategyId": "technical.news-orb-swing",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.news-orb-swing@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.news-orb-swing",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "15a4a43efd2b65e520603647856f4d4c6fa9c5b3fc383581e504fe12975d26f2"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakdown.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.bollinger-squeeze-breakdown",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.bollinger-squeeze-breakdown@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.bollinger-squeeze-breakdown",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "2f72d5dff08f71c823c887999cb763f70dfee95eddde13885ca59c8977a205e5"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/bollinger-squeeze-breakdown.bt-v1.gate-off.yaml",
+      "strategyId": "technical.bollinger-squeeze-breakdown",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.bollinger-squeeze-breakdown@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.bollinger-squeeze-breakdown",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "2f72d5dff08f71c823c887999cb763f70dfee95eddde13885ca59c8977a205e5"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/news-orb-breakdown.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.news-orb-breakdown",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.news-orb-breakdown@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.news-orb-breakdown",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "140f1027c608f3c3509cd98491a498910bb63ea31da378525d3fc638632ad1a0"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/news-orb-breakdown.bt-v1.gate-off.yaml",
+      "strategyId": "technical.news-orb-breakdown",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.news-orb-breakdown@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.news-orb-breakdown",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "140f1027c608f3c3509cd98491a498910bb63ea31da378525d3fc638632ad1a0"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-rejection-short.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.ema21-rejection-short",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-rejection-short@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-rejection-short",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "068587fa5c09f965bf991433f106832f7f7f64b5bb0731ecdebbf2dee7913994"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-rejection-short.bt-v1.gate-off.yaml",
+      "strategyId": "technical.ema21-rejection-short",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-rejection-short@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-rejection-short",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "068587fa5c09f965bf991433f106832f7f7f64b5bb0731ecdebbf2dee7913994"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-rejection-short-mtr14.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.ema21-rejection-short",
+      "semanticVersion": "1.1.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-rejection-short@1.1.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-rejection-short",
+        "semanticVersion": "1.1.0",
+        "contentSha256": "f174c30aa46c88ef1985770a91295443e778ab968d3d8c517d55dcfaa2dc3a21"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/ema21-rejection-short-mtr14.bt-v1.gate-off.yaml",
+      "strategyId": "technical.ema21-rejection-short",
+      "semanticVersion": "1.1.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.ema21-rejection-short@1.1.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.ema21-rejection-short",
+        "semanticVersion": "1.1.0",
+        "contentSha256": "f174c30aa46c88ef1985770a91295443e778ab968d3d8c517d55dcfaa2dc3a21"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/parabolic-exhaustion-short.bt-v1.gate-spy-qqq.yaml",
+      "strategyId": "technical.parabolic-exhaustion-short",
+      "semanticVersion": "1.0.0-gate-spy-qqq.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.parabolic-exhaustion-short@1.0.0 with SPY/QQQ 50-day gate kept, the VIX sizing lines removed. Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.parabolic-exhaustion-short",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "aa65f8ee25f2878de87bae6c739aa36165d7b45c42c01e611c93550e8c801ac7"
+      }
+    },
+    {
+      "sourcePath": "configs/backtest/strategies/parabolic-exhaustion-short.bt-v1.gate-off.yaml",
+      "strategyId": "technical.parabolic-exhaustion-short",
+      "semanticVersion": "1.0.0-gate-off.1",
+      "lifecycle": "research",
+      "enabled": true,
+      "admissionProfileId": "swing-daily-v2-as-traded-research-v1",
+      "reason": "Temporary comparison variant, 23 Nov 2026 (docs/design-review/2026-11-23/vix-and-options-plan.md section 7, step 2): technical.parabolic-exhaustion-short@1.0.0 with whole regime block removed (no market gate). Measures the effect of the market gate; deleted after the comparison unless proposed as the next version. Diagnostic backtest research only.",
+      "derivedFromIdentity": {
+        "strategyId": "technical.parabolic-exhaustion-short",
+        "semanticVersion": "1.0.0",
+        "contentSha256": "aa65f8ee25f2878de87bae6c739aa36165d7b45c42c01e611c93550e8c801ac7"
+      }
     }
   ]
 }

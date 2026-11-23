@@ -1,0 +1,73 @@
+# TEMPORARY COMPARISON VARIANT (23 November 2026) of technical.ema21-trend-pullback@1.0.0 (ema21-trend-pullback.bt-v1.yaml):
+# identical except the market gate: whole regime block removed (no market gate). Delete after the gate comparison unless it is proposed as the next version.
+# 21-EMA trend pullback (ATR-14 control), swing, long.
+# Design: docs/design-review/2026-11-19/swing-8-strategies-and-ui-design.md (approved 19 November 2026, Checkpoint 5).
+# Rules: stock above a rising 50-day SMA (higher than 20 sessions earlier), 1-5 bar low-volume pullback (RVOL < 0.85)
+# into within 0.5 * ATR(14) of the 21-day EMA while every pullback and trigger low stays at or above the 50-day SMA,
+# followed by a trigger bar closing above both the 21-day EMA and the prior session's high. Strategy-owned 20-session
+# ADR% >= 2.5% and average daily dollar volume >= $20M apply identically in backtests and paper trading.
+# Regime gate: SPY above rising 50-day SMA (+ QQQ for Nasdaq listings) and FRED VIXCLS previous-session sizing.
+# Exits: 1.0 * ATR(14) initial stop, 2.5R target, 10-session time exit, next-open entry on as-traded daily bars.
+strategy_id: research.ema21-trend-pullback.bt-v1
+strategy_name: RESEARCH 21-EMA Trend Pullback V1 (swing, ATR-14 control, SPY/QQQ rising-average gate, VIX sizing, as-traded bars)
+source: minervini_2013_and_oneil_ema21_trend_pullback
+version: 1
+timeframe: 1d
+direction: long
+entry_rules:
+  setup_type: ema21_pullback_reclaim
+  pullback_lookback_bars: 5
+  max_ema21_pullback_atr: 0.5
+  max_pullback_relative_volume: 0.85
+  require_pullback_low_above_sma50: true
+  require_price_above_sma50: true
+  sma50_rising_lookback_bars: 20
+  min_average_range_pct: 2.5
+  min_average_dollar_volume: 20000000
+  min_volume_spike: 0.0
+  volume_confirmation_mode: none
+  min_entry_rsi: 0.0
+  max_entry_rsi: 100.0
+  trend_filter: none
+  macd_filter: none
+  require_price_above_bb_middle: false
+  require_macd_histogram_positive: false
+  require_price_above_vwap: false
+  require_price_above_ema20: false
+  require_price_above_ema50: false
+  require_ema20_above_ema50: false
+  require_price_above_sma200: false
+  portfolio_rank_mode: none
+  max_vwap_extension_atr:
+  require_positive_news: false
+confluence:
+  enabled: false
+  timeframe: 1d
+  ema_period: 200
+  macd_filter: none
+exit_rules:
+  stop_atr_multiple: 1.0
+  target_r_multiple: 2.5
+  max_hold_hours: 10000.0
+  max_hold_bars: 10
+  exit_on_rsi2_above:
+  exit_on_close_above_sma5: false
+  enable_atr_trailing_stop: false
+  trailing_stop_atr_multiple: 2.0
+  trailing_activation_r: 1.0
+  exit_on_close_below_ema20: false
+  exit_on_close_below_vwap: false
+  exit_on_macd_histogram_negative: false
+  min_hold_bars_before_technical_exit: 1
+  initial_stop_mode: atr
+  profit_target_mode: r_multiple
+  allow_same_bar_stop_target: false
+execution:
+  timeframe: 1d
+  slippage_bps: 5.0
+  opening_gap_policy: keep_and_exit_next_open
+session:
+  exchange_timezone: America/New_York
+  quiet_minutes_after_open: 0
+  close_buffer_minutes: 30
+  friday_close_buffer_minutes: 30
