@@ -1,5 +1,7 @@
 # Handover — swing strategies, market regime and VIX (state at 22 November 2026)
 
+**Newer state (23 November 2026): see `docs/handover-vix-options-2026-11-23.md`** (gate comparison variants, daily options readings, one open fix before plan 36306 can start).
+
 For the next session. `ui/redesign-v2` was merged into `main` and pushed on 22 November 2026 at the user's request; later syncs need a new request.
 The user's own uncommitted edit `docs/research/tradingflow-audit-2026-11-14.md` must stay untouched and unstaged.
 
