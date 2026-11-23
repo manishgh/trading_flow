@@ -97,3 +97,37 @@ information helps at all. I do not give investment advice; the tests will show w
 | 5, options trading | only after your decision | |
 
 Each step: your approval of its detail, two independent reviewers, focused tests, install on 10088.
+
+## 7. Detailed design for steps 2 and 4 (user approved steps 1, 2 and 4 on 23 November 2026)
+
+User rule, same day: ideas are tested as **temporary strategy variants**. A variant proven better replaces the original under
+the same name (as the next version of the same strategy ID, with the old version retired through the normal promotion decision);
+a variant that is not better is deleted, and its results are kept.
+
+### Step 2: comparison variants (replaces the "plan setting" idea of section 4)
+
+- For each of the ten strategies, two temporary variant files next to the original, copied unchanged except for the `regime:` block:
+  - `<file>.gate-spy-qqq.yaml`: SPY + QQQ rule kept, the four `vix_*` lines removed;
+  - `<file>.gate-off.yaml`: the whole `regime:` block removed.
+- Same strategy ID; version `<original>-gate-spy-qqq.1` and `<original>-gate-off.1` (to be checked against the catalog's version
+  rules; a plain next version is used if pre-release versions are refused); `derivedFromIdentity` points to the original.
+- 20 catalog entries, research only, with the reason "temporary comparison variant, 23 Nov 2026". Original files and their hashes
+  do not change.
+- One saved plan per version (full gate = plan 36306, then SPY+QQQ, then off), same screen, window and money settings, run one after another.
+- After the three runs: monthly results per strategy and version side by side. A variant that does better is proposed to you as the next
+  version; the rest are deleted (files and catalog entries), results kept.
+- Tests: the catalog accepts the 20 variants, their hashes differ from the originals only by the regime block, and the originals' hashes are unchanged.
+
+### Step 4: daily options readings, stored and sealed
+
+- **What:** for each stock, once per trading day at 16:30 New York, one reading from the existing Alpaca OPRA client and calculator (the same
+  numbers as the Desk options strip): at-the-money implied volatility, 25-delta put minus call skew, near versus 30-day volatility,
+  call and put volume, implied move, contracts used, plus the raw provider responses (already archived before parsing by the client).
+- **Which stocks:** the members of your stock groups plus the newest published research screen's stocks (about 900 today).
+- **Where:** `V:\trading_flow\data\research\options-daily\<yyyy>\<yyyy-mm-dd>.jsonl`, one line per stock with request, receipt and
+  calculation times; failures recorded as failures, never as zero.
+- **How it runs:** a daily job in the operator site, using the existing durable job queue and schedule pattern, one request
+  at a time with the provider's rate limit; it does nothing on market holidays.
+- **Sealed:** no strategy, gate or Desk rule reads this folder until you decide, after about 12 months of data.
+- **Before it starts:** I measure one day for 10 stocks and report requests, time and megabytes, then the full-day estimate, and you confirm.
+- Tests: calculation unchanged from the Desk, file format, holiday skip, failure rows, no strategy code references the folder.
