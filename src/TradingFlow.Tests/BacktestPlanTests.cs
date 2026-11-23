@@ -138,18 +138,58 @@ public sealed class BacktestPlanTests
             Cohorts = [new("Missing", [symbols[0]], 10000m)] }));
     }
 
-    /// <summary>Two versions of one strategy are refused before anything is saved; each version runs in its own plan.</summary>
+    /// <summary>A saved comparison retains both exact versions and prepares a separate independently funded job for each.</summary>
     [Fact]
-    public async Task TwoVersionsOfOneStrategy_AreRefusedBeforePreviewOrSave()
+    public async Task TwoVersionsOfOneStrategy_PreviewSaveAndStartInSeparateJobs()
     {
         await using var fixture = await Fixture.CreateAsync(5, 1);
         var original = fixture.Request.Strategies[0];
-        var request = fixture.Request with { Strategies = [original, original with { SemanticVersion = original.SemanticVersion + "-gate-off.1" }] };
+        var revised = original with { SemanticVersion = "1.1.0", ContentSha256 = new string('c', 64) };
+        var request = fixture.Request with { Strategies = [original, revised] };
 
-        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.PreviewAsync(new(request, 5)));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service.SaveAsync(new(request, 5)));
+        var preview = await fixture.Service.PreviewAsync(new(request, 5));
+        Assert.Equal(request.Strategies, preview.Run.Strategies);
+        Assert.Equal(2, preview.ExecutionCount);
+        var saved = await fixture.Service.SaveAsync(new(request, 5));
+        var reopened = (await fixture.Service.GetAsync(saved.PlanId))!;
+        Assert.Equal(request.Strategies, reopened.Run.Strategies);
+        Assert.Empty(fixture.Written);
+        Assert.Empty(await fixture.Jobs.GetAllJobsAsync(default));
 
-        Assert.Contains("one version per strategy", refused.Message, StringComparison.Ordinal);
+        var started = await fixture.Service.StartAsync(saved.PlanId, new("1.0", "compare-versions"));
+        Assert.Equal(2, started.Jobs.Count);
+        Assert.Equal(2, started.Jobs.Select(job => job.JobId).Distinct().Count());
+        Assert.Equal(request.Strategies, started.Jobs.Select(job => Assert.Single(job.Provenance!.Strategies)));
+        Assert.All(started.Jobs, job => {
+            Assert.Equal(Assert.Single(job.Provenance!.Strategies), job.Cohort!.Strategy);
+            Assert.Equal(request.StartingCapital, job.Cohort.StartingCapital);
+        });
+        Assert.Equal(request.Strategies, fixture.Written.Select(item => Assert.Single(item.Run.Strategies)));
+        Assert.All(fixture.Written, item => Assert.Equal(request.StartingCapital, item.Run.StartingCapital));
+        Assert.Equal(2, (await fixture.Jobs.GetAllJobsAsync(default)).Count);
+    }
+
+    /// <summary>A direct shared-book start refuses two versions before configuration, research registration, files or jobs.</summary>
+    [Fact]
+    public async Task TwoVersionsOfOneStrategy_DirectStartIsRefusedBeforeSideEffects()
+    {
+        var registry = new Mock<IResearchStartRegistry>(MockBehavior.Strict);
+        await using var fixture = await Fixture.CreateAsync(5, 1, registry: registry.Object);
+        var original = fixture.Request.Strategies[0];
+        var revised = original with { SemanticVersion = "1.1.0", ContentSha256 = new string('c', 64) };
+        var request = fixture.Request with { Strategies = [original, revised] };
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Workflow.StartAsync(request));
+
+        Assert.Equal("Select one version per strategy for a direct start. Compare versions in a saved plan, which runs each version in its own job.", refused.Message);
+        fixture.Configuration.VerifyNoOtherCalls();
+        registry.VerifyNoOtherCalls();
+        fixture.Identities.VerifyNoOtherCalls();
+        Assert.Empty(fixture.Written);
+        Assert.Empty(fixture.PreparedRequests);
+        Assert.Empty(fixture.VerificationScopes);
+        Assert.Empty(fixture.ExistingInputs);
+        Assert.Empty(await fixture.Jobs.GetAllJobsAsync(default));
         Assert.Empty(await fixture.Service.ListAsync());
     }
 
@@ -465,6 +505,7 @@ public sealed class BacktestPlanTests
         public DecisionContextEvidenceSummary? Evidence { get; set; }
         public BacktestResolvedSettingsResponse? Settings { get; set; }
         public Mock<IStrategyIdentityResolver> Identities { get; } = new();
+        public Mock<IWorkflowRunConfiguration> Configuration { get; } = new(MockBehavior.Strict);
         public List<(StartBacktestRequest Run, UniversePreviewResponse Source)> Written { get; } = [];
         public List<TradingFlow.Domain.Backtesting.PreparedMarketDataRequestReference> PreparedRequests { get; } = [];
         public List<VerificationScope> VerificationScopes { get; } = [];
@@ -495,7 +536,7 @@ public sealed class BacktestPlanTests
             fixture.Request = new("1.0", "cohorts", fixture.Source.UniverseSnapshotId,
                 Enumerable.Range(0, strategies).Select(index => new StrategyReference("strategy-" + index, "1.0.0", new string('b', 64))).ToArray(),
                 fixture.Clock.Now.AddMonths(-6), fixture.Clock.Now.AddDays(-1), 10000, 1, 25, 5, "use_cache", "full", "saved", "fixture.yaml");
-            var configuration = new Mock<IWorkflowRunConfiguration>(MockBehavior.Strict);
+            var configuration = fixture.Configuration;
             // Retain fixture commands unchanged unless a test explicitly supplies a resolved execution choice.
             configuration.Setup(item => item.NormalizeBacktestRequestAsync(It.IsAny<StartBacktestRequest>(), It.IsAny<CancellationToken>()))
                 .Returns<StartBacktestRequest, CancellationToken>((request, _) => Task.FromResult(

@@ -215,8 +215,12 @@ no grant being made. The folder-sealing test searches for two names only.
    `provider_latest` when the stock had no closing bar, the bar request failed, or the shared 5-minute cache returned a
    recent Desk reading. Also fixed after the re-check: the 20:00 cut-off stops only re-asks (a site that was down at 16:30
    still takes a first pass that evening), and any screen-reading error leaves the wishlist stocks collected.
-3. Built: a backtest start or saved plan that selects two versions of one strategy ID is refused with "Select one version
-   per strategy. Run another version of the same strategy in its own plan." (`RunWorkflowService.ValidateBacktest`).
+3. Corrected: only a direct backtest start selecting two versions of one strategy ID is refused, before configuration,
+   research registration, files or jobs, in `RunWorkflowService.StartAsync`. Its message is "Select one version per strategy
+   for a direct start. Compare versions in a saved plan, which runs each version in its own job." Direct starts share one
+   run whose result maps use strategy IDs. Saved plans may preview, save and start several versions together because
+   `BacktestPlanService.PrepareExecutionsAsync` gives each exact version its own job and capital pool; their results do not
+   share those maps. The earlier check in shared `ValidateBacktest` applied the rule too broadly and prevented these comparisons.
 4. Frozen decision rule for the gate comparison, before any result is read: per strategy, a variant is proposed as the next
    version only if its total of monthly returns over May-October 2026 is higher than the original's, its worst month is no
    worse, and both versions have at least 20 trades. The report shows, per gate, on how many days it blocked new entries.
@@ -240,3 +244,15 @@ next version if its total of monthly returns over May-October 2026 is higher, it
 versions have at least 20 trades. The stricter amendment above is **not** adopted. The reviewer's warning stands on record:
 by chance alone several strategies may show a winner, so any replacement remains research and is re-checked on data
 collected after 30 October 2026 before any paper use. This rule is fixed before any comparison result is read.
+
+### Verification of the saved-plan correction, 23 November 2026
+
+The independent plan reviewer checked the two-version comparison against plan 36306 and approved the change.
+The independent engineering reviewer traced the exact strategy identity through job creation, capital allocation and
+result attribution, and approved the code and tests. Neither reviewer found an issue requiring a change.
+
+The Release build of `src/TradingFlow.Tests` succeeded with `--disable-build-servers`, zero warnings and zero errors.
+The focused `dotnet test` filter `BacktestPlan|RunWorkflow|BacktestJobService|ResearchScreenWebWorkflow|UniverseCandidateWorkflowTests`
+passed all 59 tests. The new tests exercised preview, save, reopen and job creation for two versions in a synthetic plan,
+and checked that a direct start refused the same pair before preparing files or queuing work. Verification covered the
+affected workflows. The full suite and economic strategy replays were outside this component check.

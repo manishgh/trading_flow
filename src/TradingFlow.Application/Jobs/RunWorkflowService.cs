@@ -59,10 +59,13 @@ public sealed partial class RunWorkflowService(
 
     internal ResearchQueue Research => research;
 
-    /// <summary>Admits the selected research book with its exact requested dates and a comparison-wide immutable input request.</summary>
+    /// <summary>Refuses colliding strategy versions before side effects, then admits one research book with immutable inputs.</summary>
     public async Task<RunJobResponse> StartAsync(StartBacktestRequest request, CancellationToken token = default)
     {
         ValidateBacktest(request, clock.GetUtcNow());
+        // Direct starts share one book whose result maps use strategy IDs; saved plans give each version its own book.
+        if (request.Strategies.Select(item => item.StrategyId).Distinct(StringComparer.Ordinal).Count() != request.Strategies.Count)
+            throw new InvalidOperationException("Select one version per strategy for a direct start. Compare versions in a saved plan, which runs each version in its own job.");
         request = await configuration.NormalizeBacktestRequestAsync(request with { IdempotencyKey = request.IdempotencyKey.Trim() }, token);
         var profileHash = await configuration.GetBacktestConfigurationHashAsync(request.ConfigurationKey, token);
         if (request.ConfigurationSha256 is { } reviewed && !profileHash.Equals(reviewed, StringComparison.OrdinalIgnoreCase))
@@ -115,10 +118,6 @@ public sealed partial class RunWorkflowService(
             request.CachePolicy is not ("use_cache" or "refresh") || request.Strategies is null || request.Strategies.Count == 0 ||
             request.Strategies.Any(item => item is null) || request.Strategies.Distinct().Count() != request.Strategies.Count)
             throw new InvalidOperationException("Select valid backtest dates, distinct strategies, positive portfolio limits, cache policy and full retention.");
-        // Run summaries match results to a strategy by name, so two versions of one strategy in one run would collide
-        // (user decision, 23 November 2026). Each version is compared in its own plan.
-        if (request.Strategies.Select(item => item.StrategyId).Distinct(StringComparer.Ordinal).Count() != request.Strategies.Count)
-            throw new InvalidOperationException("Select one version per strategy. Run another version of the same strategy in its own plan.");
     }
 
     /// <summary>
